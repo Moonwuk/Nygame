@@ -1,6 +1,7 @@
 import type { GameModule } from '../kernel/module';
 import type { Fleet } from '../state/gameState';
 import type { GameData } from '../data/schemas';
+import { timeScaleOf } from '../action/types';
 
 const MS_PER_HOUR = 3_600_000;
 
@@ -55,8 +56,8 @@ export const movementModule: GameModule = {
       if (fleet.owner !== action.playerId) {
         return h.reject('E_FORBIDDEN'); // not your fleet
       }
-      if (fleet.location === null || fleet.movement !== null) {
-        return h.reject('E_FLEET_BUSY'); // already in transit
+      if (fleet.location === null || fleet.movement !== null || fleet.battleId) {
+        return h.reject('E_FLEET_BUSY'); // already in transit or engaged in battle
       }
       if (payload.to === fleet.location) {
         return h.reject('E_SAME_LOCATION');
@@ -77,7 +78,9 @@ export const movementModule: GameModule = {
         return h.reject('E_FLEET_IMMOBILE');
       }
 
-      const travelMs = (distance(origin.position, dest.position) / speed) * MS_PER_HOUR;
+      // timeScale compresses all real-time durations (GDD §3.1).
+      const travelHours = distance(origin.position, dest.position) / speed;
+      const travelMs = (travelHours * MS_PER_HOUR) / timeScaleOf(h.ctx);
       const arrivesAt = h.ctx.now + travelMs;
 
       fleet.location = null;

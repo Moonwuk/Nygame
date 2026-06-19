@@ -252,9 +252,13 @@ export class Kernel {
     const queue: DomainEvent[] = [];
     let processed = 0;
 
+    // Handlers see the time of THIS step (the event/segment instant), not the
+    // final advance target — so `ctx.now` and `state.time` always agree.
+    const stepCtx: Context = ctx.now === stepTime ? ctx : { ...ctx, now: stepTime };
+
     const h: HandlerContext = {
       state: draft,
-      ctx,
+      ctx: stepCtx,
       rng,
       emit: (type, payload) => {
         const event: DomainEvent = { type, payload: payload ?? null };

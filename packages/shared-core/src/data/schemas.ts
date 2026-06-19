@@ -19,12 +19,16 @@ export const UnitStatsSchema = z
     attack: z.number(),
     defense: z.number(),
     speed: z.number(),
+    /** Hit points per ship — aggregate fleet HP = Σ count × hp (GDD §7.1). */
+    hp: z.number().nonnegative().default(1),
   })
   .catchall(z.number());
 
 export const UnitDefSchema = z.object({
   faction: z.string(),
   stats: UnitStatsSchema,
+  /** Damage-receiving line (GDD §7.2). `artillery` trait overrides this. */
+  line: z.enum(['front', 'mid', 'rear']).default('front'),
   traits: z.array(z.string()).default([]),
   abilities: z.array(z.string()).default([]),
   cost: ResourceBagSchema.default({}),

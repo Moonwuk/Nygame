@@ -24,6 +24,12 @@ export interface Action {
   issuedAt: number;
 }
 
+/** Match-pinned configuration, versioned with the match (GDD §3.1 / §5.2). */
+export interface MatchConfig {
+  /** Global multiplier on all real-time durations (×1 / ×2 / ×4). */
+  timeScale: number;
+}
+
 /**
  * Everything the reducer is allowed to read besides the state itself. Time is
  * passed in (never Date.now() — docs/architecture.md §4.2), and game data is
@@ -34,6 +40,14 @@ export interface Context {
   now: number;
   /** Validated, immutable game data. */
   data: GameData;
+  /** Match config (timeScale, …). Absent ⇒ defaults (timeScale 1). */
+  config?: MatchConfig;
+}
+
+/** Reads the match time-scale from a context, defaulting to ×1. */
+export function timeScaleOf(ctx: Context): number {
+  const scale = ctx.config?.timeScale;
+  return scale && scale > 0 ? scale : 1;
 }
 
 /** A fact the simulation announces; modules may react, or it harmlessly fades

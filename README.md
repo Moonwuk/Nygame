@@ -45,7 +45,7 @@
 | `action/`  | Контракт действия (`Action`/`Context`/`ApplyResult`), `Rejection`, парсер id                 |
 | `kernel/`  | Микроядро: `createKernel`, `applyAction`, `advanceTo` (модель времени), шина, хуки, манифест |
 | `data/`    | zod-схемы игровых данных + `parseGameData` (валидация всего входа)                           |
-| `modules/` | Базовые модули-плагины: `economyModule`, `movementModule`                                    |
+| `modules/` | Базовые модули-плагины: `economyModule`, `movementModule`, `combatModule`                    |
 | `util/`    | `deepClone`/`deepFreeze` для immutable-контракта редьюсера                                   |
 
 ## Разработка
@@ -71,8 +71,9 @@ CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) гоняет lint,
 
 - **Этап 0 (Каркас)** — ✅ готово.
 - **Этап 1 (Ядро)** — 🚧 заложен фундамент (kernel + шина + реестр модулей + `GameState` +
-  seeded RNG + `applyAction`) и **модель времени `advanceTo`** (real-time: запланированные
-  события + континуальное накопление) плюс первые **базовые модули-плагины**
-  (движение флотов, экономика). Дальше — бой, движок трейтов.
+  seeded RNG + `applyAction`), **модель времени `advanceTo`** (real-time: запланированные
+  события + континуальное накопление) и **базовые модули-плагины** (движение, экономика,
+  **бой** §7: линии + почасовые раунды) плюс `timeScale`. Дальше — захват планет
+  (орбита→десант), очки/победа, герои.
 
 См. [`docs/roadmap.md`](./docs/roadmap.md) — раздел «Статус реализации».

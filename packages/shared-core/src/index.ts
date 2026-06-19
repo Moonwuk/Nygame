@@ -17,12 +17,14 @@ export {
   type Planet,
   type Fleet,
   type FleetMovement,
+  type Battle,
   type ScheduledEvent,
   type UnitStack,
   type ResourceBag,
   type PlayerId,
   type PlanetId,
   type FleetId,
+  type BattleId,
   type ResourceId,
   type UnitId,
   type BuildingId,
@@ -33,8 +35,10 @@ export {
 export {
   Rejection,
   parseActionId,
+  timeScaleOf,
   type Action,
   type Context,
+  type MatchConfig,
   type DomainEvent,
   type ApplyResult,
   type AdvanceResult,
@@ -80,3 +84,4 @@ export { deepClone, deepFreeze } from './util/clone';
 // Base modules (plugins) — opt-in via the manifest passed to createKernel.
 export { economyModule } from './modules/economy';
 export { movementModule } from './modules/movement';
+export { combatModule } from './modules/combat';

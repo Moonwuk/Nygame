@@ -13,6 +13,7 @@ import { seedRng, type RngState } from '../rng/rng';
 export type PlayerId = string;
 export type PlanetId = string;
 export type FleetId = string;
+export type BattleId = string;
 export type ResourceId = string;
 export type UnitId = string;
 export type BuildingId = string;
@@ -25,6 +26,9 @@ export type ResourceBag = Record<ResourceId, number>;
 export interface UnitStack {
   unit: UnitId;
   count: number;
+  /** Remaining HP pool of this stack during a battle (≤ count × def.hp).
+   *  Undefined outside combat = full health. */
+  hp?: number;
 }
 
 export interface Player {
@@ -61,6 +65,22 @@ export interface Fleet {
   movement: FleetMovement | null;
   units: UnitStack[];
   traits: TraitId[];
+  /** Id of the battle this fleet is engaged in; absent/null when free to move. */
+  battleId?: BattleId | null;
+}
+
+/**
+ * An ongoing battle — a stateful entity that resolves over real hours, one
+ * round per `combat.tick` (GDD §7). First increment: orbital, fleet vs fleet.
+ */
+export interface Battle {
+  id: BattleId;
+  /** Contested planet where the engagement happens. */
+  location: PlanetId;
+  attacker: FleetId;
+  defender: FleetId;
+  /** Rounds resolved so far. */
+  round: number;
 }
 
 /**
@@ -107,6 +127,9 @@ export interface GameState {
   players: Record<PlayerId, Player>;
   planets: Record<PlanetId, Planet>;
   fleets: Record<FleetId, Fleet>;
+  battles: Record<BattleId, Battle>;
+  /** Monotonic counter handing each battle its id. */
+  battleSeq: number;
   /** Pending timeline, processed in (at, seq) order by `advanceTo`. */
   scheduled: ScheduledEvent[];
   /** Monotonic counter handing each scheduled event its deterministic `seq`. */
@@ -126,6 +149,8 @@ export function createInitialState(params: {
     players: {},
     planets: {},
     fleets: {},
+    battles: {},
+    battleSeq: 0,
     scheduled: [],
     scheduleSeq: 0,
   };
