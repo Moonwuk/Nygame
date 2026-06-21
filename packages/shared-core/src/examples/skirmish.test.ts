@@ -132,7 +132,7 @@ function planet(n: Node): Planet {
     links: n.links,
     sectorType: n.sectorType,
     resources: {},
-    buildings: n.buildings ?? [],
+    buildings: (n.buildings ?? []).map((type) => ({ type, level: 1, hp: 0 })),
     garrison: (n.garrison ?? []).map(([unit, count]) => ({ unit, count })),
     traits: [],
   };

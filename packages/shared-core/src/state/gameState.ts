@@ -31,6 +31,15 @@ export interface UnitStack {
   hp?: number;
 }
 
+/** A constructed building on a planet. Buildings are leveled (1..maxLevel) and
+ *  carry structural HP that orbital bombardment / ground assault wear down
+ *  (GDD §7.4); a destroyed building is removed and stops granting its bonus. */
+export interface BuildingInstance {
+  type: BuildingId;
+  level: number;
+  hp: number;
+}
+
 export interface Player {
   id: PlayerId;
   name: string;
@@ -52,7 +61,7 @@ export interface Planet {
    *  /debuffs are applied through hooks. Undefined = plain space, no modifier. */
   sectorType?: string;
   resources: ResourceBag;
-  buildings: BuildingId[];
+  buildings: BuildingInstance[];
   garrison: UnitStack[];
   traits: TraitId[];
 }

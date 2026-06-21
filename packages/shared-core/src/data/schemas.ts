@@ -50,11 +50,30 @@ export const FactionDefSchema = z.object({
   abilities: z.array(z.string()).default([]),
 });
 
+/** Per-level stats of a building (level 2..N). Level 1 uses the base fields. */
+export const BuildingLevelSchema = z.object({
+  cost: ResourceBagSchema.default({}),
+  buildTimeHours: z.number().nonnegative().default(0),
+  produces: ResourceBagSchema.default({}),
+  /** Structural HP at this level. */
+  hp: z.number().nonnegative().default(0),
+  /** Ground-defense bonus this level grants the garrison (0.01 = +1%). */
+  defenseBonus: z.number().default(0.01),
+});
+
 export const BuildingDefSchema = z.object({
   name: z.string(),
   cost: ResourceBagSchema.default({}),
   buildTimeHours: z.number().nonnegative().default(0),
   produces: ResourceBagSchema.default({}),
+  /** Structural HP — bombarded from orbit and stormed on the ground (GDD §7.4);
+   *  a destroyed building stops granting its defense bonus. */
+  hp: z.number().nonnegative().default(0),
+  /** Ground-defense bonus the building grants the garrison (0.01 = +1%); a
+   *  fortress grants much more, and it grows with level. */
+  defenseBonus: z.number().default(0.01),
+  /** Overrides for levels 2..N (index 0 = level 2). maxLevel = 1 + length. */
+  upgrades: z.array(BuildingLevelSchema).default([]),
   traits: z.array(z.string()).default([]),
 });
 
@@ -97,9 +116,25 @@ export type UnitStats = z.infer<typeof UnitStatsSchema>;
 export type UnitDef = z.infer<typeof UnitDefSchema>;
 export type FactionDef = z.infer<typeof FactionDefSchema>;
 export type BuildingDef = z.infer<typeof BuildingDefSchema>;
+export type BuildingLevel = z.infer<typeof BuildingLevelSchema>;
 export type EffectRule = z.infer<typeof EffectRuleSchema>;
 export type SectorTypeDef = z.infer<typeof SectorTypeDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
+
+/** Stats of a building at a given level (1-based). Level 1 = the base fields;
+ *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
+export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
+  if (level <= 1) {
+    const { cost, buildTimeHours, produces, hp, defenseBonus } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus };
+  }
+  return def.upgrades[level - 2] ?? buildingLevel(def, 1);
+}
+
+/** Highest level this building can reach (level 1 plus its upgrades). */
+export function buildingMaxLevel(def: BuildingDef): number {
+  return 1 + def.upgrades.length;
+}
 
 /** Parses and validates a full game-data bundle, throwing on invalid input. */
 export function parseGameData(raw: unknown): GameData {

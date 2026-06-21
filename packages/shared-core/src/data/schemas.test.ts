@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData, safeParseGameData } from './schemas';
+import { parseGameData, safeParseGameData, buildingLevel } from './schemas';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const dataDir = path.join(repoRoot, 'data');
@@ -36,6 +36,19 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.events.reanimate_on_kill?.trigger).toBe('unit_dies_in_battle');
     expect(data.sectors.asteroid_field?.speedBonus).toBeCloseTo(-0.25);
     expect(data.sectors.asteroid_field?.hpBonus).toBeCloseTo(0.1);
+  });
+
+  it('builds the fortress up to level 3 (HP and defense both grow)', () => {
+    const data = parseGameData(loadShippedBundle());
+    const fort = data.buildings.fort;
+    expect(fort).toBeDefined();
+    // "от 35 до 65 на 3 уровне" — both HP and the ground-defense bonus scale.
+    expect(buildingLevel(fort!, 1).hp).toBe(35);
+    expect(buildingLevel(fort!, 3).hp).toBe(65);
+    expect(buildingLevel(fort!, 1).defenseBonus).toBeCloseTo(0.35);
+    expect(buildingLevel(fort!, 3).defenseBonus).toBeCloseTo(0.65);
+    // Every ordinary building still grants the baseline +1%.
+    expect(buildingLevel(data.buildings.barracks!, 1).defenseBonus).toBeCloseTo(0.01);
   });
 
   it('applies defaults for omitted optional fields', () => {

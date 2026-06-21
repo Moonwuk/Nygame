@@ -35,7 +35,7 @@ function planet(
     owner,
     position: { x, y },
     resources: { metal: 0 },
-    buildings,
+    buildings: buildings.map((type) => ({ type, level: 1, hp: 0 })),
     garrison: [],
     traits: [],
   };

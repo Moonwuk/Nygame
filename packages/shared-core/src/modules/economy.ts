@@ -1,21 +1,24 @@
 import type { GameModule } from '../kernel/module';
 import type { GameState, Planet, UnitStack } from '../state/gameState';
 import type { GameData, ResourceBag } from '../data/schemas';
+import { buildingLevel } from '../data/schemas';
 import { timeScaleOf } from '../action/types';
 
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
 
-/** Base hourly production of a planet = the sum of its buildings' `produces`. */
+/** Base hourly production of a planet = the sum of its buildings' `produces`,
+ *  each at its current level. */
 function baseProduction(planet: Planet, data: GameData): ResourceBag {
   const out: Record<string, number> = {};
   for (const building of planet.buildings) {
-    const def = data.buildings[building];
+    const def = data.buildings[building.type];
     if (!def) {
       continue;
     }
-    for (const res of Object.keys(def.produces)) {
-      out[res] = (out[res] ?? 0) + (def.produces[res] ?? 0);
+    const produces = buildingLevel(def, building.level).produces;
+    for (const res of Object.keys(produces)) {
+      out[res] = (out[res] ?? 0) + (produces[res] ?? 0);
     }
   }
   return out;

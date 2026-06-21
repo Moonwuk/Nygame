@@ -1,9 +1,14 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { UnitStack } from '../state/gameState';
-import type { ResourceBag } from '../data/schemas';
+import type { BuildingInstance, Planet, Player, UnitStack } from '../state/gameState';
+import type { GameData, ResourceBag } from '../data/schemas';
+import { buildingLevel, buildingMaxLevel } from '../data/schemas';
+import type { Action } from '../action/types';
 import { timeScaleOf } from '../action/types';
 
 const MS_PER_HOUR = 3_600_000;
+/** Share of the ground assault's round damage that also wears down the planet's
+ *  structures (the rest is spent on the defending garrison). Tunable. */
+const STRUCTURE_DAMAGE_SHARE = 0.5;
 
 interface ConstructBuildingPayload {
   planetId: string;
@@ -17,13 +22,16 @@ interface BuildUnitPayload {
 /** Payload of the internal `construction.complete` schedule (we author it, so
  *  it is well-formed; the handler still guards types and is fail-secure). */
 interface CompletePayload {
-  kind?: 'building' | 'unit';
+  kind?: 'building' | 'unit' | 'upgrade';
   planetId?: string;
   playerId?: string;
   building?: string;
   unit?: string;
   count?: number;
+  level?: number;
 }
+
+// --- treasury helpers --------------------------------------------------------
 
 /** True if the treasury can cover every line of `cost`. */
 function canAfford(treasury: ResourceBag, cost: ResourceBag): boolean {
@@ -72,19 +80,89 @@ function scheduleCompletion(h: HandlerContext, hours: number, payload: CompleteP
   h.schedule(h.ctx.now + ms, 'construction.complete', payload);
 }
 
+/** Resolves the acting player and a planet they own, or rejects with a stable
+ *  code (E_NO_PLANET / E_FORBIDDEN). Shared by every build / upgrade order. */
+function ownedPlanet(
+  h: HandlerContext,
+  action: Action,
+  planetId: string,
+): { planet: Planet; player: Player } {
+  const planet = h.state.planets[planetId];
+  if (!planet) {
+    h.reject('E_NO_PLANET');
+  }
+  if (planet.owner !== action.playerId) {
+    h.reject('E_FORBIDDEN');
+  }
+  const player = h.state.players[action.playerId];
+  if (!player) {
+    h.reject('E_FORBIDDEN'); // no treasury / not a participant
+  }
+  return { planet, player };
+}
+
+// --- building combat helpers -------------------------------------------------
+
+/** Total ground-defense bonus a planet's standing buildings grant its garrison. */
+function totalDefenseBonus(planet: Planet, data: GameData): number {
+  let bonus = 0;
+  for (const b of planet.buildings) {
+    const def = data.buildings[b.type];
+    if (def) {
+      bonus += buildingLevel(def, b.level).defenseBonus;
+    }
+  }
+  return bonus;
+}
+
+/** Wears `amount` of structural damage across a planet's buildings (array order,
+ *  carrying overflow). Buildings with no modelled HP are untouched; ones whose
+ *  HP reaches zero are removed and announced via `building.destroyed`. `owner` is
+ *  passed in (not read from the planet) because a capture may have already
+ *  flipped `planet.owner` by the time the round's damage is applied. */
+function damageBuildings(
+  h: HandlerContext,
+  planet: Planet,
+  amount: number,
+  owner: string | null,
+): void {
+  let remaining = amount;
+  const survivors: BuildingInstance[] = [];
+  for (const b of planet.buildings) {
+    const def = h.ctx.data.buildings[b.type];
+    const maxHp = def ? buildingLevel(def, b.level).hp : 0;
+    if (maxHp <= 0) {
+      survivors.push(b); // not modelled as destructible
+      continue;
+    }
+    const absorbed = Math.min(remaining, b.hp);
+    b.hp -= absorbed;
+    remaining -= absorbed;
+    if (b.hp > 0) {
+      survivors.push(b);
+    } else {
+      h.emit('building.destroyed', { planetId: planet.id, building: b.type, owner });
+    }
+  }
+  planet.buildings = survivors;
+}
+
 /**
- * Construction — a base module (docs/modulesystem.md). Turns the intents
- * `building.construct` and `unit.build` into real-time projects paid from the
- * ordering player's treasury (`Player.resources`):
+ * Buildings — a base module (docs/modulesystem.md). It owns everything about
+ * planet structures:
  *
- *   - cost is charged up-front (fail-secure: an unaffordable or unauthorized
- *     order is rejected and charges nothing — OWASP A10);
- *   - the project finishes after `buildTimeHours` (timeScale-scaled) via a
- *     scheduled `construction.complete`, at which point the building is added to
- *     the planet or the units join its garrison.
- *
- * Delivery is gated on still owning the planet: lose it mid-build and the
- * investment is forfeited — we never reinforce whoever captured it.
+ *   - orders: `building.construct` / `building.upgrade` / `unit.build`, each
+ *     paid up-front from the ordering player's treasury (`Player.resources`) and
+ *     finished after `buildTimeHours` (timeScale-scaled) via a scheduled
+ *     `construction.complete`. Fail-secure: an unaffordable / unauthorized order
+ *     is rejected and charges nothing (OWASP A10). Delivery is gated on still
+ *     owning the planet — lose it mid-build and the investment is forfeited.
+ *   - defense: each standing building toughens the garrison through the
+ *     `combat.damage` hook (the `defenseBonus`, +1% by default, more for a
+ *     fortress, growing with level — GDD §7).
+ *   - destruction: the ground assault wears down building HP each round; a
+ *     destroyed building stops granting its bonus (GDD §7.4). (A distinct
+ *     orbital-bombardment pass, with its own magnitude, is a future refinement.)
  */
 export const constructionModule: GameModule = {
   id: 'construction',
@@ -95,26 +173,20 @@ export const constructionModule: GameModule = {
       if (typeof payload?.planetId !== 'string' || typeof payload?.building !== 'string') {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const planet = h.state.planets[payload.planetId];
-      if (!planet) {
-        return h.reject('E_NO_PLANET');
-      }
-      if (planet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      const player = h.state.players[action.playerId];
-      if (!player) {
-        return h.reject('E_FORBIDDEN'); // no treasury / not a participant
-      }
+      const { planet, player } = ownedPlanet(h, action, payload.planetId);
       const def = h.ctx.data.buildings[payload.building];
       if (!def) {
         return h.reject('E_UNKNOWN_BUILDING');
       }
-      if (!canAfford(player.resources, def.cost)) {
+      if (planet.buildings.some((b) => b.type === payload.building)) {
+        return h.reject('E_ALREADY_BUILT'); // one of each type; grow it with building.upgrade
+      }
+      const level1 = buildingLevel(def, 1);
+      if (!canAfford(player.resources, level1.cost)) {
         return h.reject('E_INSUFFICIENT');
       }
-      payCost(player.resources, def.cost);
-      scheduleCompletion(h, def.buildTimeHours, {
+      payCost(player.resources, level1.cost);
+      scheduleCompletion(h, level1.buildTimeHours, {
         kind: 'building',
         planetId: planet.id,
         playerId: action.playerId,
@@ -128,6 +200,45 @@ export const constructionModule: GameModule = {
       });
     });
 
+    api.onAction('building.upgrade', (action, h) => {
+      const payload = action.payload as Partial<ConstructBuildingPayload>;
+      if (typeof payload?.planetId !== 'string' || typeof payload?.building !== 'string') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const { planet, player } = ownedPlanet(h, action, payload.planetId);
+      const instance = planet.buildings.find((b) => b.type === payload.building);
+      if (!instance) {
+        return h.reject('E_NO_BUILDING'); // nothing of that type to upgrade
+      }
+      const def = h.ctx.data.buildings[instance.type];
+      if (!def) {
+        return h.reject('E_UNKNOWN_BUILDING');
+      }
+      const nextLevel = instance.level + 1;
+      if (nextLevel > buildingMaxLevel(def)) {
+        return h.reject('E_MAX_LEVEL');
+      }
+      const next = buildingLevel(def, nextLevel);
+      if (!canAfford(player.resources, next.cost)) {
+        return h.reject('E_INSUFFICIENT');
+      }
+      payCost(player.resources, next.cost);
+      scheduleCompletion(h, next.buildTimeHours, {
+        kind: 'upgrade',
+        planetId: planet.id,
+        playerId: action.playerId,
+        building: instance.type,
+        level: nextLevel,
+      });
+      h.emit('construction.started', {
+        kind: 'upgrade',
+        planetId: planet.id,
+        building: instance.type,
+        level: nextLevel,
+        playerId: action.playerId,
+      });
+    });
+
     api.onAction('unit.build', (action, h) => {
       const payload = action.payload as Partial<BuildUnitPayload>;
       if (typeof payload?.planetId !== 'string' || typeof payload?.unit !== 'string') {
@@ -137,17 +248,7 @@ export const constructionModule: GameModule = {
       if (!Number.isSafeInteger(count) || count <= 0) {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const planet = h.state.planets[payload.planetId];
-      if (!planet) {
-        return h.reject('E_NO_PLANET');
-      }
-      if (planet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      const player = h.state.players[action.playerId];
-      if (!player) {
-        return h.reject('E_FORBIDDEN');
-      }
+      const { planet, player } = ownedPlanet(h, action, payload.planetId);
       const def = h.ctx.data.units[payload.unit];
       if (!def) {
         return h.reject('E_UNKNOWN_UNIT');
@@ -180,13 +281,36 @@ export const constructionModule: GameModule = {
       }
       const planet = h.state.planets[p.planetId];
       if (!planet || planet.owner !== p.playerId) {
-        return; // planet gone or captured mid-build → reinforcement forfeited
+        return; // planet gone or captured mid-build → investment forfeited
       }
       if (p.kind === 'building' && typeof p.building === 'string') {
-        planet.buildings.push(p.building);
+        if (planet.buildings.some((b) => b.type === p.building)) {
+          return; // already present (e.g. a duplicate queued order) → no-op
+        }
+        const def = h.ctx.data.buildings[p.building];
+        const hp = def ? buildingLevel(def, 1).hp : 0;
+        planet.buildings.push({ type: p.building, level: 1, hp });
         h.emit('building.constructed', {
           planetId: planet.id,
           building: p.building,
+          owner: p.playerId,
+        });
+      } else if (
+        p.kind === 'upgrade' &&
+        typeof p.building === 'string' &&
+        typeof p.level === 'number'
+      ) {
+        const instance = planet.buildings.find((b) => b.type === p.building);
+        const def = h.ctx.data.buildings[p.building];
+        if (!instance || !def || instance.level !== p.level - 1) {
+          return; // building gone or already changed → drop
+        }
+        instance.level = p.level;
+        instance.hp = buildingLevel(def, p.level).hp;
+        h.emit('building.upgraded', {
+          planetId: planet.id,
+          building: p.building,
+          level: p.level,
           owner: p.playerId,
         });
       } else if (p.kind === 'unit' && typeof p.unit === 'string' && typeof p.count === 'number') {
@@ -198,6 +322,51 @@ export const constructionModule: GameModule = {
           owner: p.playerId,
         });
       }
+    });
+
+    // Standing buildings toughen the garrison: reduce the damage it takes in the
+    // ground phase by the planet's total defense bonus (the side being damaged
+    // owns the planet ⇒ it is the garrison).
+    api.hook<number>('combat.damage', (dmg, args, h) => {
+      const a = args as { phase?: string; location?: string; defender?: string };
+      if (a.phase !== 'ground' || !a.location) {
+        return dmg;
+      }
+      const planet = h.state.planets[a.location];
+      if (!planet || planet.owner !== a.defender) {
+        return dmg;
+      }
+      const bonus = totalDefenseBonus(planet, h.ctx.data);
+      return bonus > 0 ? dmg / (1 + bonus) : dmg;
+    });
+
+    // The ground assault wears down the contested planet's structures each round
+    // (GDD §7.4). The event carries the location and the defending owner, so this
+    // still fires correctly on the round that ENDS the battle — by which point
+    // combat has already removed the battle and may have flipped `planet.owner`.
+    api.on('combat.round', (event, h) => {
+      const p = event.payload as {
+        phase?: string;
+        location?: string;
+        defender?: string;
+        dmgToDefender?: number;
+      };
+      if (p.phase !== 'ground' || typeof p.location !== 'string') {
+        return; // only the ground assault wears structures (orbital is fleet-vs-fleet)
+      }
+      if (typeof p.dmgToDefender !== 'number' || p.dmgToDefender <= 0) {
+        return;
+      }
+      const planet = h.state.planets[p.location];
+      if (!planet) {
+        return;
+      }
+      damageBuildings(
+        h,
+        planet,
+        p.dmgToDefender * STRUCTURE_DAMAGE_SHARE,
+        p.defender ?? planet.owner,
+      );
     });
   },
 };

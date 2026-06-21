@@ -431,6 +431,9 @@ export const combatModule: GameModule = {
         battleId,
         round: battle.round,
         phase: battle.phase,
+        location: battle.location,
+        attacker: battle.attacker.owner,
+        defender: battle.defender.owner,
         dmgToAttacker,
         dmgToDefender,
       });
