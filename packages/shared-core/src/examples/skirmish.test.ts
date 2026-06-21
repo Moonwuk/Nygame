@@ -3,7 +3,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createKernel } from '../kernel/kernel';
-import { createInitialState, type Fleet, type GameState, type Planet } from '../state/gameState';
+import {
+  createInitialState,
+  type Fleet,
+  type GameState,
+  type Planet,
+  type Player,
+} from '../state/gameState';
 import { parseGameData, type GameData } from '../data/schemas';
 import type { Action, Context, DomainEvent } from '../action/types';
 import { economyModule } from '../modules/economy';
@@ -29,9 +35,24 @@ const data: GameData = parseGameData({
   version: '0.1.0',
   resources: ['metal'],
   units: {
-    cruiser: { faction: 'x', stats: { attack: 20, defense: 12, speed: 5, hp: 40 }, line: 'front' },
-    marine: { faction: 'x', stats: { attack: 20, defense: 10, speed: 5, hp: 40 }, line: 'front' },
-    militia: { faction: 'x', stats: { attack: 5, defense: 8, speed: 1, hp: 15 }, line: 'front' },
+    cruiser: {
+      faction: 'x',
+      stats: { attack: 20, defense: 12, speed: 5, hp: 40 },
+      line: 'front',
+      upkeep: { credits: 10 },
+    },
+    marine: {
+      faction: 'x',
+      stats: { attack: 20, defense: 10, speed: 5, hp: 40 },
+      line: 'front',
+      upkeep: { credits: 5 },
+    },
+    militia: {
+      faction: 'x',
+      stats: { attack: 5, defense: 8, speed: 1, hp: 15 },
+      line: 'front',
+      upkeep: { credits: 3 },
+    },
   },
   factions: {},
   buildings: { mine: { name: 'Mine', produces: { metal: 10 }, buildTimeHours: 0 } },
@@ -142,7 +163,23 @@ function buildState(): GameState {
     BLUE: fleet('BLUE', 'p1', 'HOME', [['cruiser', 3]], [['marine', 2]]),
     RED: fleet('RED', 'p2', 'BASTION', [['cruiser', 2]]),
   };
-  return { ...s, planets, fleets };
+  const players: Record<string, Player> = {
+    p1: {
+      id: 'p1',
+      name: 'Blue',
+      faction: 'vanguard',
+      status: 'active',
+      resources: { credits: 500 },
+    },
+    p2: {
+      id: 'p2',
+      name: 'Red',
+      faction: 'vanguard',
+      status: 'active',
+      resources: { credits: 500 },
+    },
+  };
+  return { ...s, players, planets, fleets };
 }
 
 const move = (fleetId: string, to: string, playerId: string): Action => ({
@@ -231,6 +268,13 @@ function runSkirmish(): { timeline: string[]; frames: Frame[]; final: GameState 
     }
 
     if ([8, 12, 16, 22, 32].includes(hour)) frames.push({ hour, state });
+  }
+
+  // Final economy snapshot — production accrued and upkeep paid over the run.
+  for (const pid of ['p1', 'p2']) {
+    const res = state.players[pid]?.resources ?? {};
+    const parts = Object.entries(res).map(([k, v]) => `${k} ${Math.round(v)}`);
+    timeline.push(`--  ${pid} treasury: ${parts.join(', ')}`);
   }
 
   return { timeline, frames, final: state };

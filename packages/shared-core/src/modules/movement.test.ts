@@ -175,7 +175,10 @@ describe('movement module — orders & validation (OWASP A01)', () => {
 describe('movement + economy — real-time end to end', () => {
   it('a fleet is in transit for real hours while planets keep producing', () => {
     const kernel = createKernel([economyModule, movementModule]);
-    const state = baseState(fieldAB(), [fleet('F', 'p1', 'A', ['scout'])]);
+    const state: GameState = {
+      ...baseState(fieldAB(), [fleet('F', 'p1', 'A', ['scout'])]),
+      players: { p1: { id: 'p1', name: 'Blue', faction: 'x', status: 'active', resources: {} } },
+    };
 
     // Server flow: apply the order at t=0 …
     const departed = okApply(kernel.applyAction(state, move('F', 'B'), ctx(0)));
@@ -188,8 +191,8 @@ describe('movement + economy — real-time end to end', () => {
     expect(arrived.state.fleets.F?.location).toBe('B');
     expect(arrived.state.fleets.F?.movement).toBe(null);
     expect(arrived.events.map((e) => e.type)).toContain('fleet.arrived');
-    // Planet A produced 10 metal/h for the full 3h the journey took.
-    expect(arrived.state.planets.A?.resources.metal).toBe(30);
+    // Planet A produced 10 metal/h for the full 3h the journey took → p1 treasury.
+    expect(arrived.state.players.p1?.resources.metal).toBe(30);
   });
 });
 

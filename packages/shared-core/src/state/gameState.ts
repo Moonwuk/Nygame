@@ -36,6 +36,8 @@ export interface Player {
   name: string;
   faction: string;
   status: 'active' | 'defeated';
+  /** The player's treasury — production accrues here, upkeep/costs drain it. */
+  resources: ResourceBag;
 }
 
 export interface Planet {
