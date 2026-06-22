@@ -90,14 +90,14 @@ function ownedPlanet(
 ): { planet: Planet; player: Player } {
   const planet = h.state.planets[planetId];
   if (!planet) {
-    h.reject('E_NO_PLANET');
+    return h.reject('E_NO_PLANET');
   }
   if (planet.owner !== action.playerId) {
-    h.reject('E_FORBIDDEN');
+    return h.reject('E_FORBIDDEN');
   }
   const player = h.state.players[action.playerId];
   if (!player) {
-    h.reject('E_FORBIDDEN'); // no treasury / not a participant
+    return h.reject('E_FORBIDDEN'); // no treasury / not a participant
   }
   return { planet, player };
 }
