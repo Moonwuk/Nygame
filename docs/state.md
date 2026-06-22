@@ -67,10 +67,10 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze)
-  modules/       economy, movement, sector, planetType, combat, construction, army, victory  (+ *.test.ts)
+  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory  (+ *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
-data/            manifest, resources, units, buildings, factions, events, sectors (.json)
+data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
 docs/            architecture, modulesystem, roadmap, deep-technical-roadmap, engineering-risks, gdd, metagame, state(этот)
 prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.mjs, dist/ (артефакт, в .gitignore)
 ```
