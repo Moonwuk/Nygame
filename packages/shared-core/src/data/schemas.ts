@@ -114,6 +114,21 @@ export const SectorTypeDefSchema = z.object({
   hpBonus: z.number().default(0),
 });
 
+/**
+ * A planet type — the world's own nature (terran / barren / volcanic / oceanic /
+ * gas giant …), distinct from the sector it sits in. Like a sector it carries
+ * buffs/debuffs applied purely through hooks, never hard-coded in the core.
+ */
+export const PlanetTypeDefSchema = z.object({
+  name: z.string().optional(),
+  /** Multiplier on the world's production, e.g. 0.25 = +25% (rich), −0.25 = poor. */
+  productionBonus: z.number().default(0),
+  /** Ground-defense edge for the owner's garrison: incoming assault damage is
+   *  divided by (1 + this). Positive = defensible world, negative = exposed.
+   *  Stacks with building defense. */
+  defenseBonus: z.number().default(0),
+});
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -122,6 +137,7 @@ export const GameDataSchema = z.object({
   buildings: z.record(z.string(), BuildingDefSchema),
   events: z.record(z.string(), EffectRuleSchema),
   sectors: z.record(z.string(), SectorTypeDefSchema).default({}),
+  planetTypes: z.record(z.string(), PlanetTypeDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -132,6 +148,7 @@ export type BuildingDef = z.infer<typeof BuildingDefSchema>;
 export type BuildingLevel = z.infer<typeof BuildingLevelSchema>;
 export type EffectRule = z.infer<typeof EffectRuleSchema>;
 export type SectorTypeDef = z.infer<typeof SectorTypeDefSchema>;
+export type PlanetTypeDef = z.infer<typeof PlanetTypeDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;

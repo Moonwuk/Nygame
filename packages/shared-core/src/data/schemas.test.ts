@@ -22,6 +22,7 @@ function loadShippedBundle(): Record<string, unknown> {
     buildings: readJson('buildings.json'),
     events: readJson('events.json'),
     sectors: readJson('sectors.json'),
+    planetTypes: readJson('planetTypes.json'),
   };
 }
 
@@ -44,6 +45,10 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.events.reanimate_on_kill?.trigger).toBe('unit_dies_in_battle');
     expect(data.sectors.asteroid_field?.speedBonus).toBeCloseTo(-0.25);
     expect(data.sectors.asteroid_field?.hpBonus).toBeCloseTo(0.1);
+    // planet types: production multiplier + ground-defense edge (data-driven).
+    expect(data.planetTypes.volcanic?.productionBonus).toBeCloseTo(0.25);
+    expect(data.planetTypes.terran?.defenseBonus).toBeCloseTo(0.1);
+    expect(data.planetTypes.barren?.defenseBonus).toBe(0); // schema default
   });
 
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {

@@ -633,10 +633,19 @@ function panelHtml(): string {
   const owner = p.owner ?? 'null';
   const mine = p.owner === ME;
   const sec = data.sectors[p.sectorType ?? '']?.name ?? p.sectorType ?? '—';
+  const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
+  const ptName = pt?.name ?? p.planetType ?? '—';
   const gcount = p.garrison.reduce((a, st) => a + st.count, 0);
   let h =
-    cardHeader(COLOR[owner], p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${sec}`) +
+    cardHeader(COLOR[owner], p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${ptName} · ${sec}`) +
     `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>▣ ${p.buildings.length} built</span></div>`;
+  if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
+    const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
+    const parts: string[] = [];
+    if (pt.productionBonus !== 0) parts.push(`prod ${pct(pt.productionBonus)}`);
+    if (pt.defenseBonus !== 0) parts.push(`def ${pct(pt.defenseBonus)}`);
+    h += `<div class="row dim">${ptName} world — ${parts.join(' · ')}</div>`;
+  }
 
   // buildings
   h += `<div class="sec">Buildings</div>`;

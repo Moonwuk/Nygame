@@ -15,6 +15,7 @@ import {
   movementModule,
   combatModule,
   sectorModule,
+  planetTypeModule,
   constructionModule,
   armyModule,
   type GameData,
@@ -115,6 +116,13 @@ export const data: GameData = parseGameData({
     asteroid_field: { name: 'Asteroid field', speedBonus: -0.25, hpBonus: 0.1 },
     nebula: { name: 'Nebula', speedBonus: -0.1, hpBonus: 0.05 },
   },
+  planetTypes: {
+    terran: { name: 'Terran', productionBonus: 0, defenseBonus: 0.1 },
+    barren: { name: 'Barren', productionBonus: -0.25, defenseBonus: 0 },
+    oceanic: { name: 'Oceanic', productionBonus: 0.15, defenseBonus: 0.05 },
+    volcanic: { name: 'Volcanic', productionBonus: 0.25, defenseBonus: -0.05 },
+    gas_giant: { name: 'Gas Giant', productionBonus: 0.35, defenseBonus: -0.15 },
+  },
 });
 
 // --- the map -----------------------------------------------------------------
@@ -125,6 +133,7 @@ export interface MapNode {
   x: number;
   y: number;
   sector: string;
+  type?: string;
   links: string[];
   buildings?: Array<{ type: string; level?: number }>;
   garrison?: Array<[string, number]>;
@@ -137,6 +146,7 @@ export const MAP: MapNode[] = [
     x: 130,
     y: 330,
     sector: 'empty_space',
+    type: 'terran',
     links: ['FORGE', 'RELAY'],
     buildings: [{ type: 'mine' }],
     garrison: [['marine', 3]],
@@ -147,6 +157,7 @@ export const MAP: MapNode[] = [
     x: 320,
     y: 165,
     sector: 'asteroid_field',
+    type: 'volcanic',
     links: ['HOME', 'NEXUS'],
     garrison: [['marine', 2]],
   },
@@ -156,6 +167,7 @@ export const MAP: MapNode[] = [
     x: 320,
     y: 480,
     sector: 'empty_space',
+    type: 'barren',
     links: ['HOME', 'NEXUS'],
     garrison: [['marine', 1]],
   },
@@ -165,6 +177,7 @@ export const MAP: MapNode[] = [
     x: 520,
     y: 320,
     sector: 'nebula',
+    type: 'oceanic',
     links: ['FORGE', 'RELAY', 'OUTPOST', 'CRIMSON'],
     buildings: [{ type: 'fort' }],
     garrison: [['marine', 3], ['cruiser', 1]],
@@ -175,6 +188,7 @@ export const MAP: MapNode[] = [
     x: 740,
     y: 175,
     sector: 'asteroid_field',
+    type: 'volcanic',
     links: ['NEXUS', 'CRIMSON'],
     buildings: [{ type: 'mine' }],
     garrison: [['marine', 3]],
@@ -185,6 +199,7 @@ export const MAP: MapNode[] = [
     x: 830,
     y: 380,
     sector: 'empty_space',
+    type: 'terran',
     links: ['NEXUS', 'OUTPOST'],
     buildings: [{ type: 'fort' }, { type: 'mine' }],
     garrison: [['marine', 4], ['orbital_aa', 1]],
@@ -272,6 +287,7 @@ export function newGame(): GameState {
       position: { x: n.x, y: n.y },
       links: n.links,
       sectorType: n.sector,
+      planetType: n.type,
       resources: {},
       buildings: (n.buildings ?? []).map((b) => {
         const def = data.buildings[b.type];
@@ -300,11 +316,12 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
   const out: Record<string, number> = {};
   for (const p of Object.values(state.planets)) {
     if (p.owner !== playerId || isBombarded(state, p.id)) continue;
+    const mult = 1 + (p.planetType ? (data.planetTypes[p.planetType]?.productionBonus ?? 0) : 0);
     for (const b of p.buildings) {
       const def = data.buildings[b.type];
       if (!def) continue;
       const produces = buildingLevel(def, b.level).produces;
-      for (const res of Object.keys(produces)) out[res] = (out[res] ?? 0) + (produces[res] ?? 0);
+      for (const res of Object.keys(produces)) out[res] = (out[res] ?? 0) + (produces[res] ?? 0) * mult;
     }
   }
   const addUpkeep = (stacks: Array<{ unit: string; count: number }>) => {
@@ -334,6 +351,7 @@ export function hpOfLevel(type: string, level: number): number {
 
 export const MODULES: GameModule[] = [
   sectorModule,
+  planetTypeModule,
   economyModule,
   movementModule,
   combatModule,

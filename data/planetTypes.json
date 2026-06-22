@@ -1,0 +1,27 @@
+{
+  "terran": {
+    "name": "Terran",
+    "productionBonus": 0,
+    "defenseBonus": 0.1
+  },
+  "barren": {
+    "name": "Barren",
+    "productionBonus": -0.25,
+    "defenseBonus": 0
+  },
+  "oceanic": {
+    "name": "Oceanic",
+    "productionBonus": 0.15,
+    "defenseBonus": 0.05
+  },
+  "volcanic": {
+    "name": "Volcanic",
+    "productionBonus": 0.25,
+    "defenseBonus": -0.05
+  },
+  "gas_giant": {
+    "name": "Gas Giant",
+    "productionBonus": 0.35,
+    "defenseBonus": -0.15
+  }
+}

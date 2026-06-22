@@ -60,6 +60,10 @@ export interface Planet {
   /** Sector terrain type id (resolved against game data `sectors`); its buffs
    *  /debuffs are applied through hooks. Undefined = plain space, no modifier. */
   sectorType?: string;
+  /** Planet type id — the world's nature (resolved against game data
+   *  `planetTypes`); production/defense modifiers are applied through hooks.
+   *  Undefined = generic world, no modifier. */
+  planetType?: string;
   resources: ResourceBag;
   buildings: BuildingInstance[];
   garrison: UnitStack[];

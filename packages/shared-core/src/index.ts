@@ -76,6 +76,7 @@ export {
   BuildingLevelSchema,
   EffectRuleSchema,
   SectorTypeDefSchema,
+  PlanetTypeDefSchema,
   ResourceBagSchema,
   UnitStatsSchema,
   type GameData,
@@ -85,6 +86,7 @@ export {
   type BuildingLevel,
   type EffectRule,
   type SectorTypeDef,
+  type PlanetTypeDef,
   type UnitStats,
 } from './data/schemas';
 
@@ -96,5 +98,6 @@ export { economyModule } from './modules/economy';
 export { movementModule } from './modules/movement';
 export { combatModule } from './modules/combat';
 export { sectorModule } from './modules/sector';
+export { planetTypeModule } from './modules/planetType';
 export { constructionModule } from './modules/construction';
 export { armyModule } from './modules/army';
