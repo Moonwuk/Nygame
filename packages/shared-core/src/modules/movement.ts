@@ -2,8 +2,8 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Fleet, GameState, PlanetId } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { timeScaleOf } from '../action/types';
-
-const MS_PER_HOUR = 3_600_000;
+import { MS_PER_HOUR } from '../util/time';
+import { requireOwnedIdleFleet } from '../util/fleet';
 
 interface MovePayload {
   fleetId: string;
@@ -138,16 +138,7 @@ export const movementModule: GameModule = {
       if (typeof payload?.fleetId !== 'string' || typeof payload?.to !== 'string') {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[payload.fleetId];
-      if (!fleet) {
-        return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      if (fleet.location === null || fleet.movement !== null || fleet.battleId) {
-        return h.reject('E_FLEET_BUSY');
-      }
+      const fleet = requireOwnedIdleFleet(h, payload.fleetId, action.playerId);
       if (payload.to === fleet.location) {
         return h.reject('E_SAME_LOCATION');
       }

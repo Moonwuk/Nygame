@@ -1,12 +1,12 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { BuildingInstance, Planet, Player, UnitStack } from '../state/gameState';
+import type { BuildingInstance, Planet, Player } from '../state/gameState';
 import type { GameData, ResourceBag } from '../data/schemas';
 import { buildingLevel, buildingMaxLevel } from '../data/schemas';
 import { isBombarded } from '../state/orbit';
 import type { Action } from '../action/types';
 import { timeScaleOf } from '../action/types';
-
-const MS_PER_HOUR = 3_600_000;
+import { MS_PER_HOUR } from '../util/time';
+import { addUnits } from '../util/stacks';
 /** Share of the ground assault's round damage that also wears down the planet's
  *  structures (the rest is spent on the defending garrison). Tunable. */
 const STRUCTURE_DAMAGE_SHARE = 0.5;
@@ -61,17 +61,6 @@ function scaleCost(cost: ResourceBag, count: number): ResourceBag {
     out[res] = (cost[res] ?? 0) * count;
   }
   return out;
-}
-
-/** Adds units to a garrison, merging into a healthy (non-combat) stack of the
- *  same unit when one exists, else appending a fresh stack. */
-function reinforce(garrison: UnitStack[], unit: string, count: number): void {
-  const stack = garrison.find((s) => s.unit === unit && s.hp === undefined);
-  if (stack) {
-    stack.count += count;
-  } else {
-    garrison.push({ unit, count });
-  }
 }
 
 /** Schedules a build to finish after `hours`, scaled by the match timeScale
@@ -329,7 +318,7 @@ export const constructionModule: GameModule = {
           owner: p.playerId,
         });
       } else if (p.kind === 'unit' && typeof p.unit === 'string' && typeof p.count === 'number') {
-        reinforce(planet.garrison, p.unit, p.count);
+        addUnits(planet.garrison, p.unit, p.count);
         h.emit('unit.built', {
           planetId: planet.id,
           unit: p.unit,

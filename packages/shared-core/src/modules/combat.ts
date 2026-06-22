@@ -2,8 +2,9 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Battle, CombatantRef, Fleet, GameState, UnitStack } from '../state/gameState';
 import type { GameData, UnitDef } from '../data/schemas';
 import { timeScaleOf, type Context } from '../action/types';
-
-const MS_PER_HOUR = 3_600_000;
+import { MS_PER_HOUR } from '../util/time';
+import { sumUnitStat } from '../util/stacks';
+import { requireOwnedIdleFleet } from '../util/fleet';
 /** Hard cap on rounds so a zero-damage stalemate can't run forever (fail-secure). */
 const MAX_COMBAT_ROUNDS = 240;
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
@@ -77,17 +78,7 @@ function sideDamage(
   stat: 'attack' | 'defense',
 ): number {
   const units = sideUnits(state, ref);
-  if (!units) {
-    return 0;
-  }
-  let dmg = 0;
-  for (const stack of units) {
-    const def = data.units[stack.unit];
-    if (def) {
-      dmg += stack.count * def.stats[stat];
-    }
-  }
-  return dmg;
+  return units ? sumUnitStat(units, data, stat) : 0;
 }
 
 function isHostile(h: HandlerContext, a: string, b: string): boolean {
@@ -379,12 +370,7 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
 
 /** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage`. */
 function aaStrengthAt(planet: { garrison: UnitStack[] }, data: GameData): number {
-  let aa = 0;
-  for (const s of planet.garrison) {
-    const def = data.units[s.unit];
-    if (def) aa += s.count * def.stats.aaDamage;
-  }
-  return aa;
+  return sumUnitStat(planet.garrison, data, 'aaDamage');
 }
 
 /** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`. */
@@ -405,12 +391,7 @@ function nearOrbitHostile(h: HandlerContext, planetId: string, owner: string | n
 
 /** Bombardment firepower a fleet rains on the planet = Σ ship attack × fraction. */
 function bombardPower(fleet: Fleet, data: GameData): number {
-  let atk = 0;
-  for (const s of fleet.units) {
-    const def = data.units[s.unit];
-    if (def) atk += s.count * def.stats.attack;
-  }
-  return atk * BOMBARD_FRACTION;
+  return sumUnitStat(fleet.units, data, 'attack') * BOMBARD_FRACTION;
 }
 
 /** Resolves the orbital layer over one continuous time span: planetary AA fires
@@ -493,16 +474,7 @@ export const combatModule: GameModule = {
       if (typeof fleetId !== 'string' || (orbit !== 'near' && orbit !== 'far')) {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[fleetId];
-      if (!fleet) {
-        return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      if (fleet.location === null || fleet.movement || fleet.battleId) {
-        return h.reject('E_FLEET_BUSY');
-      }
+      const fleet = requireOwnedIdleFleet(h, fleetId, action.playerId);
       fleet.orbit = orbit;
       if (orbit === 'far') {
         fleet.bombarding = false; // can't bombard from the far orbit
@@ -516,16 +488,7 @@ export const combatModule: GameModule = {
       if (typeof fleetId !== 'string') {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[fleetId];
-      if (!fleet) {
-        return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      if (fleet.location === null || fleet.movement || fleet.battleId) {
-        return h.reject('E_FLEET_BUSY');
-      }
+      const fleet = requireOwnedIdleFleet(h, fleetId, action.playerId);
       if (fleet.orbit !== 'near') {
         return h.reject('E_WRONG_ORBIT'); // descend to the near orbit first
       }
@@ -543,16 +506,7 @@ export const combatModule: GameModule = {
       if (typeof fleetId !== 'string' || typeof on !== 'boolean') {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[fleetId];
-      if (!fleet) {
-        return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
-      }
-      if (fleet.location === null || fleet.movement || fleet.battleId) {
-        return h.reject('E_FLEET_BUSY');
-      }
+      const fleet = requireOwnedIdleFleet(h, fleetId, action.playerId);
       if (on) {
         if (fleet.orbit !== 'near') {
           return h.reject('E_WRONG_ORBIT');
