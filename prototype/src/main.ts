@@ -28,7 +28,13 @@ import {
   type StepOut,
 } from './game';
 import { buildingMaxLevel } from '../../packages/shared-core/src/index';
-import type { GameState, Fleet, Planet, Action, DomainEvent } from '../../packages/shared-core/src/index';
+import type {
+  GameState,
+  Fleet,
+  Planet,
+  Action,
+  DomainEvent,
+} from '../../packages/shared-core/src/index';
 
 // --- constants ---------------------------------------------------------------
 
@@ -43,6 +49,7 @@ const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
 const BUILDABLE = ['mine', 'refinery', 'barracks', 'fort'];
 const BUILD_UNITS = ['marine', 'orbital_aa', 'cruiser', 'scout', 'siege'];
+const BUILD_ICON: Record<string, string> = { mine: '⬢', refinery: '◇', barracks: '▤', fort: '⬡' };
 const ME = 'p1';
 
 /** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
@@ -61,6 +68,7 @@ let speed = 2; // game-hours per real second (0 = paused)
 let banner: string | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
+let selFleets = new Set<string>();
 const logLines: string[] = [];
 let lastAiAt = 0;
 let lastPanelHtml = '';
@@ -185,7 +193,8 @@ function zoomAt(fx: number, fy: number, factor: number) {
 
 // --- helpers -----------------------------------------------------------------
 
-const planet = (id: string | null | undefined): Planet | undefined => (id ? s.planets[id] : undefined);
+const planet = (id: string | null | undefined): Planet | undefined =>
+  id ? s.planets[id] : undefined;
 const isShip = (u: string) => !data.units[u]?.traits.includes('ground');
 const isGround = (u: string) => data.units[u]?.domain === 'ground';
 const floor = Math.floor;
@@ -225,6 +234,8 @@ function note(msg: string) {
 }
 function apply(out: StepOut) {
   s = out.state;
+  if (selFleet && !s.fleets[selFleet]) selFleet = null;
+  selFleets = new Set([...selFleets].filter((id) => s.fleets[id]?.owner === ME));
   handleEvents(out.events);
 }
 
@@ -237,6 +248,20 @@ function playerOrder(action: Action) {
 }
 
 const NAME: Record<string, string> = { p1: 'Azure', p2: 'Crimson' };
+function setFleetSelection(ids: string[]) {
+  const picked = ids.filter((id) => s.fleets[id]?.owner === ME);
+  selFleets = new Set(picked);
+  selFleet = picked.length === 1 ? (picked[0] ?? null) : null;
+  const first = picked[0] ? s.fleets[picked[0]] : undefined;
+  if (first?.location) selPlanet = first.location;
+  lastPanelHtml = '';
+}
+function clearSelection() {
+  selFleet = null;
+  selPlanet = null;
+  selFleets = new Set();
+  lastPanelHtml = '';
+}
 function handleEvents(events: DomainEvent[]) {
   for (const e of events) {
     const p = e.payload as Record<string, unknown>;
@@ -245,7 +270,9 @@ function handleEvents(events: DomainEvent[]) {
         note(`⚔️ battle at ${p.location} (${p.phase})`);
         break;
       case 'battle.resolved':
-        note(`battle at ${p.location} ended — ${p.winner ? NAME[p.winner as string] + ' won' : 'stalemate'}`);
+        note(
+          `battle at ${p.location} ended — ${p.winner ? NAME[p.winner as string] + ' won' : 'stalemate'}`,
+        );
         break;
       case 'planet.captured':
         note(`🚩 ${NAME[p.owner as string]} captured ${p.planetId}`);
@@ -378,6 +405,8 @@ function targetBrackets(x: number, y: number, r: number, t: number) {
   cx.restore();
 }
 
+let selectionBox: { x1: number; y1: number; x2: number; y2: number } | null = null;
+
 function render() {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   drawScope();
@@ -446,6 +475,30 @@ function render() {
       cx.stroke();
     }
 
+    if (p.buildings.length) {
+      cx.save();
+      cx.font = '11px ui-monospace,Menlo,monospace';
+      cx.textAlign = 'center';
+      cx.textBaseline = 'middle';
+      const start = c.x - ((p.buildings.length - 1) * 13) / 2;
+      for (let i = 0; i < p.buildings.length; i++) {
+        const b = p.buildings[i];
+        if (!b) continue;
+        const bx = start + i * 13;
+        const by = c.y + R + 19;
+        cx.fillStyle = 'rgba(2,9,13,.78)';
+        cx.strokeStyle = rgba(col, 0.55);
+        cx.lineWidth = 1;
+        cx.beginPath();
+        cx.rect(bx - 5, by - 5, 10, 10);
+        cx.fill();
+        cx.stroke();
+        cx.fillStyle = rgba(col, 0.9);
+        cx.fillText(BUILD_ICON[b.type] ?? '▪', bx, by + 0.5);
+      }
+      cx.restore();
+    }
+
     // wireframe body + glow + bright core
     cx.save();
     cx.shadowColor = col;
@@ -488,7 +541,8 @@ function render() {
     const g = p.garrison.reduce((a, st) => a + st.count, 0);
     cx.fillStyle = 'rgba(150,210,205,0.6)';
     cx.font = '10px ui-monospace,Menlo,monospace';
-    cx.fillText(`G:${g}  B:${p.buildings.length}`, c.x + R + 12, c.y + 12);
+    const icons = p.buildings.map((b) => BUILD_ICON[b.type] ?? '▪').join('');
+    cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + 12);
     cx.restore();
   }
 
@@ -541,11 +595,27 @@ function render() {
     cx.stroke();
     cx.restore();
 
-    if (selFleet === f.id) targetBrackets(c.x, c.y - lift, 12, performance.now());
+    if (selFleet === f.id || selFleets.has(f.id))
+      targetBrackets(c.x, c.y - lift, 12, performance.now());
 
     cx.fillStyle = rgba(col, 0.95);
     cx.font = '700 10px ui-monospace,Menlo,monospace';
     cx.fillText(`${ships}${troops ? '+' + troops : ''}`, c.x, c.y - lift + 20);
+  }
+
+  if (selectionBox) {
+    const x = Math.min(selectionBox.x1, selectionBox.x2);
+    const y = Math.min(selectionBox.y1, selectionBox.y2);
+    const w = Math.abs(selectionBox.x2 - selectionBox.x1);
+    const h = Math.abs(selectionBox.y2 - selectionBox.y1);
+    cx.save();
+    cx.fillStyle = 'rgba(53,214,230,.08)';
+    cx.strokeStyle = LOCK;
+    cx.setLineDash([5, 4]);
+    cx.lineWidth = 1.2;
+    cx.fillRect(x, y, w, h);
+    cx.strokeRect(x, y, w, h);
+    cx.restore();
   }
 }
 
@@ -563,6 +633,28 @@ function cardHeader(color: string, title: string, sub: string): string {
 }
 
 function panelHtml(): string {
+  const group = [...selFleets].map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
+  if (group.length > 1) {
+    const ships = group.reduce((a, f) => a + f.units.reduce((b, u) => b + u.count, 0), 0);
+    const troops = group.reduce(
+      (a, f) => a + (f.landing ?? []).reduce((b, u) => b + u.count, 0),
+      0,
+    );
+    let h = cardHeader(
+      COLOR[ME],
+      'TASK GROUP',
+      `${group.length} fleets · ${ships} ships · ${troops} troops`,
+    );
+    h += `<div class="hint">Tap a destination world to move all selected fleets. Shift-drag on the map selects a fleet group.</div>`;
+    for (const f of group) {
+      const loc = f.location ?? (f.movement ? `${f.movement.from}→${f.movement.to}` : '—');
+      const nShips = f.units.reduce((a, u) => a + u.count, 0);
+      const nTr = (f.landing ?? []).reduce((a, u) => a + u.count, 0);
+      h += `<div class="row" style="color:${COLOR[f.owner]}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
+    }
+    h += btn('cancel', '', 'Deselect group', true);
+    return h;
+  }
   if (selFleet) {
     const f = s.fleets[selFleet];
     if (f) {
@@ -620,7 +712,8 @@ function panelHtml(): string {
             for (const st of carried) h += btn('unload', st.unit, `▼ Unload ${st.unit}`, true);
             h += `</div>`;
           }
-          if (!groundHere.length && !carried.length) h += `<div class="row dim">no ground army here</div>`;
+          if (!groundHere.length && !carried.length)
+            h += `<div class="row dim">no ground army here</div>`;
         }
       }
       h += `<div class="hint">Tap a destination world to move this fleet.</div>`;
@@ -653,7 +746,7 @@ function panelHtml(): string {
   for (const b of p.buildings) {
     const def = data.buildings[b.type];
     const max = def ? buildingMaxLevel(def) : 1;
-    h += `<div class="row">${def?.name ?? b.type} <span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
+    h += `<div class="row"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span>${def?.name ?? b.type} <span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
     if (mine && b.level < max) {
       const c = def?.upgrades[b.level - 1]?.cost;
       h += ' ' + btn('upgrade', b.type, `▲ ${cost(c)}`, afford(c));
@@ -666,7 +759,12 @@ function panelHtml(): string {
       h += `<div class="row" style="margin-top:4px">`;
       for (const t of missing) {
         const c = data.buildings[t]?.cost;
-        h += btn('build', t, `+${data.buildings[t]?.name ?? t} ${cost(c)}`, afford(c));
+        h += btn(
+          'build',
+          t,
+          `${BUILD_ICON[t] ?? '+'} ${data.buildings[t]?.name ?? t} ${cost(c)}`,
+          afford(c),
+        );
       }
       h += `</div>`;
     }
@@ -727,12 +825,12 @@ side.addEventListener('click', (ev) => {
   const act = t.dataset.act;
   const arg = t.dataset.arg ?? '';
   if (act === 'close') {
-    selFleet = null;
-    selPlanet = null;
+    clearSelection();
   } else if (act === 'cancel') {
     selFleet = null;
+    selFleets = new Set();
   } else if (act === 'selfleet') {
-    selFleet = arg;
+    setFleetSelection([arg]);
   } else if (act === 'build') {
     playerOrder(buildBuilding(ME, selPlanet!, arg));
   } else if (act === 'upgrade') {
@@ -766,27 +864,28 @@ function selectAt(mx: number, my: number) {
     const c = world(mp);
     const fy = c.y - (f.location ? 22 : 0);
     if (Math.hypot(mx - c.x, my - fy) < 16 && f.owner === ME) {
-      selFleet = f.id;
-      selPlanet = f.location ?? selPlanet;
-      lastPanelHtml = '';
+      setFleetSelection([f.id]);
       return;
     }
   }
   for (const n of MAP) {
     const c = world(n);
     if (Math.hypot(mx - c.x, my - c.y) < 24) {
-      if (selFleet) {
-        const f = s.fleets[selFleet];
-        if (f && f.location !== n.id) apply(order(s, moveFleet(ME, selFleet, n.id), s.time));
+      const moving = selFleets.size ? [...selFleets] : selFleet ? [selFleet] : [];
+      if (moving.length) {
+        for (const fleetId of moving) {
+          const f = s.fleets[fleetId];
+          if (f && f.location !== n.id) apply(order(s, moveFleet(ME, fleetId, n.id), s.time));
+        }
         selFleet = null;
+        selFleets = new Set();
       }
       selPlanet = n.id;
       lastPanelHtml = '';
       return;
     }
   }
-  selFleet = null;
-  selPlanet = null; // empty space → close the dossier
+  clearSelection(); // empty space → close the dossier
 }
 
 // --- camera control: drag-pan, pinch-zoom, wheel-zoom, tap-select ------------
@@ -795,6 +894,7 @@ const pointers = new Map<number, { x: number; y: number }>();
 let dragStart: { x: number; y: number } | null = null;
 let dragged = false;
 let pinchDist = 0;
+let boxSelecting = false;
 const ptXY = (ev: PointerEvent) => {
   const r = canvas.getBoundingClientRect();
   return { x: ((ev.clientX - r.left) / r.width) * VW, y: ((ev.clientY - r.top) / r.height) * VH };
@@ -805,6 +905,8 @@ canvas.addEventListener('pointerdown', (ev) => {
   pointers.set(ev.pointerId, p);
   if (pointers.size === 1) {
     dragStart = p;
+    boxSelecting = ev.shiftKey;
+    selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
   } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -822,6 +924,9 @@ canvas.addEventListener('pointermove', (ev) => {
     if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
     pinchDist = d;
     dragged = true;
+  } else if (boxSelecting && dragStart) {
+    selectionBox = { x1: dragStart.x, y1: dragStart.y, x2: p.x, y2: p.y };
+    if (Math.hypot(p.x - dragStart.x, p.y - dragStart.y) > 6) dragged = true;
   } else {
     cam.x += p.x - prev.x;
     cam.y += p.y - prev.y;
@@ -831,6 +936,29 @@ canvas.addEventListener('pointermove', (ev) => {
 function endPointer(ev: PointerEvent) {
   const single = pointers.size === 1;
   const p = pointers.get(ev.pointerId);
+  if (single && boxSelecting && selectionBox) {
+    const x1 = Math.min(selectionBox.x1, selectionBox.x2);
+    const x2 = Math.max(selectionBox.x1, selectionBox.x2);
+    const y1 = Math.min(selectionBox.y1, selectionBox.y2);
+    const y2 = Math.max(selectionBox.y1, selectionBox.y2);
+    const picked: string[] = [];
+    for (const f of Object.values(s.fleets)) {
+      if (f.owner !== ME) continue;
+      const mp = fleetPos(f);
+      if (!mp) continue;
+      const c = world(mp);
+      const fy = c.y - (f.location ? 22 : 0);
+      if (c.x >= x1 && c.x <= x2 && fy >= y1 && fy <= y2) picked.push(f.id);
+    }
+    if (picked.length) setFleetSelection(picked);
+    else {
+      selFleets = new Set();
+      selFleet = null;
+      lastPanelHtml = '';
+    }
+    selectionBox = null;
+    boxSelecting = false;
+  }
   pointers.delete(ev.pointerId);
   if (pointers.size < 2) pinchDist = 0;
   if (single && !dragged && p) selectAt(p.x, p.y);
@@ -839,6 +967,8 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', (ev) => {
   pointers.delete(ev.pointerId);
   pinchDist = 0;
+  selectionBox = null;
+  boxSelecting = false;
 });
 canvas.addEventListener(
   'wheel',
@@ -914,5 +1044,7 @@ function frame(nowReal: number) {
   requestAnimationFrame(frame);
 }
 
-note('Welcome, Commander. Take FORGE & RELAY, then crack NEXUS and march on CRIMSON.');
+note(
+  'Welcome, Commander. Secure FORGE/RELAY/ANCHOR, flank through VEIL or HARBOR, then crack CRIMSON.',
+);
 requestAnimationFrame(frame);

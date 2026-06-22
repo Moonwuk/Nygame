@@ -70,7 +70,7 @@ packages/shared-core/src/
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors (.json)
-docs/            architecture, modulesystem, roadmap, gdd, metagame, state(этот)
+docs/            architecture, modulesystem, roadmap, engineering-risks, gdd, metagame, state(этот)
 prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.mjs, dist/ (артефакт, в .gitignore)
 ```
 

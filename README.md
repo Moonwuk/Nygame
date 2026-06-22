@@ -22,7 +22,7 @@
 
 Подробности — в [`docs/`](./docs): [`gdd.md`](./docs/gdd.md) (игровой дизайн),
 [`architecture.md`](./docs/architecture.md), [`modulesystem.md`](./docs/modulesystem.md),
-[`roadmap.md`](./docs/roadmap.md).
+[`roadmap.md`](./docs/roadmap.md), [`engineering-risks.md`](./docs/engineering-risks.md).
 
 ## Структура монорепы
 

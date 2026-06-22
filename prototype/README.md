@@ -2,7 +2,7 @@
 
 A first **playable** slice that drives the real `@void/shared-core` simulation
 (kernel + all base modules + zod-validated data) in the browser. It is a
-throwaway demo to *see and feel* the core, not the Stage-4 client.
+throwaway demo to _see and feel_ the core, not the Stage-4 client.
 
 ## Play
 
@@ -21,6 +21,8 @@ via esbuild, so you can double-click it or send it anywhere.
 - **Real-time:** the world runs continuously. Top bar: ⏸ pause · ▶ 2 game-hours/sec · ⏩ fast.
 - Click a **planet** to inspect it; click your **fleet (▲)** then a destination planet to send it.
   Fleets route along the star lanes; running into a hostile fleet or world starts a battle.
+- **Shift-drag** a box over several of your fleets to select a task group; click a destination
+  planet to move the whole group.
 - On **your** planets: build mines/refineries (economy), a **fort** (defense, upgradeable to a
   fortress), and units. Built units join the **garrison**; **Launch fleet** turns a garrison's
   ships + troops into a mobile force.
@@ -29,7 +31,8 @@ via esbuild, so you can double-click it or send it anywhere.
 
 ## What it exercises
 
-Movement + Dijkstra lane routing, sector buffs/debuffs, the player treasury with
+Movement + Dijkstra lane routing, sector buffs/debuffs, a larger linked star map,
+fleet selection/task groups, building iconography, the player treasury with
 production & upkeep, construction/upgrade of buildings, building HP + the
 ground-defense bonus + structural destruction, two-phase orbital→ground capture,
 and a small prototype-only `fleet.launch` action (raise a fleet from a garrison —

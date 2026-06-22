@@ -147,7 +147,7 @@ export const MAP: MapNode[] = [
     y: 330,
     sector: 'empty_space',
     type: 'terran',
-    links: ['FORGE', 'RELAY'],
+    links: ['FORGE', 'RELAY', 'ANCHOR'],
     buildings: [{ type: 'mine' }],
     garrison: [['marine', 3]],
   },
@@ -158,7 +158,7 @@ export const MAP: MapNode[] = [
     y: 165,
     sector: 'asteroid_field',
     type: 'volcanic',
-    links: ['HOME', 'NEXUS'],
+    links: ['HOME', 'NEXUS', 'VEIL'],
     garrison: [['marine', 2]],
   },
   {
@@ -168,8 +168,33 @@ export const MAP: MapNode[] = [
     y: 480,
     sector: 'empty_space',
     type: 'barren',
-    links: ['HOME', 'NEXUS'],
+    links: ['HOME', 'NEXUS', 'ANCHOR', 'HARBOR'],
     garrison: [['marine', 1]],
+  },
+  {
+    id: 'ANCHOR',
+    owner: 'p1',
+    x: 190,
+    y: 560,
+    sector: 'empty_space',
+    type: 'oceanic',
+    links: ['HOME', 'RELAY'],
+    buildings: [{ type: 'refinery' }],
+    garrison: [
+      ['marine', 2],
+      ['orbital_aa', 1],
+    ],
+  },
+  {
+    id: 'VEIL',
+    owner: null,
+    x: 560,
+    y: 125,
+    sector: 'nebula',
+    type: 'gas_giant',
+    links: ['FORGE', 'NEXUS', 'OUTPOST'],
+    buildings: [{ type: 'refinery' }],
+    garrison: [['marine', 2]],
   },
   {
     id: 'NEXUS',
@@ -178,9 +203,23 @@ export const MAP: MapNode[] = [
     y: 320,
     sector: 'nebula',
     type: 'oceanic',
-    links: ['FORGE', 'RELAY', 'OUTPOST', 'CRIMSON'],
+    links: ['FORGE', 'RELAY', 'VEIL', 'HARBOR', 'OUTPOST', 'CRIMSON'],
     buildings: [{ type: 'fort' }],
-    garrison: [['marine', 3], ['cruiser', 1]],
+    garrison: [
+      ['marine', 3],
+      ['cruiser', 1],
+    ],
+  },
+  {
+    id: 'HARBOR',
+    owner: null,
+    x: 610,
+    y: 545,
+    sector: 'empty_space',
+    type: 'oceanic',
+    links: ['RELAY', 'NEXUS', 'CRIMSON'],
+    buildings: [{ type: 'barracks' }],
+    garrison: [['marine', 2]],
   },
   {
     id: 'OUTPOST',
@@ -189,9 +228,23 @@ export const MAP: MapNode[] = [
     y: 175,
     sector: 'asteroid_field',
     type: 'volcanic',
-    links: ['NEXUS', 'CRIMSON'],
+    links: ['VEIL', 'NEXUS', 'CRIMSON', 'BASTION'],
     buildings: [{ type: 'mine' }],
     garrison: [['marine', 3]],
+  },
+  {
+    id: 'BASTION',
+    owner: 'p2',
+    x: 930,
+    y: 255,
+    sector: 'asteroid_field',
+    type: 'barren',
+    links: ['OUTPOST', 'CRIMSON'],
+    buildings: [{ type: 'fort' }],
+    garrison: [
+      ['marine', 3],
+      ['scout', 1],
+    ],
   },
   {
     id: 'CRIMSON',
@@ -200,13 +253,21 @@ export const MAP: MapNode[] = [
     y: 380,
     sector: 'empty_space',
     type: 'terran',
-    links: ['NEXUS', 'OUTPOST'],
+    links: ['NEXUS', 'HARBOR', 'OUTPOST', 'BASTION'],
     buildings: [{ type: 'fort' }, { type: 'mine' }],
-    garrison: [['marine', 4], ['orbital_aa', 1]],
+    garrison: [
+      ['marine', 4],
+      ['orbital_aa', 1],
+    ],
   },
 ];
 
-function player(id: string, name: string, faction: string, resources: Record<string, number>): Player {
+function player(
+  id: string,
+  name: string,
+  faction: string,
+  resources: Record<string, number>,
+): Player {
   return { id, name, faction, status: 'active', resources };
 }
 
@@ -252,8 +313,12 @@ export const fleetLaunchModule: GameModule = {
         return h.reject('E_EMPTY_GARRISON');
       }
       // A fleet can't sit where one is already stationed-and-idle? Allow stacking.
-      const units = planet.garrison.filter((s) => !h.ctx.data.units[s.unit]?.traits.includes('ground'));
-      const landing = planet.garrison.filter((s) => h.ctx.data.units[s.unit]?.traits.includes('ground'));
+      const units = planet.garrison.filter(
+        (s) => !h.ctx.data.units[s.unit]?.traits.includes('ground'),
+      );
+      const landing = planet.garrison.filter((s) =>
+        h.ctx.data.units[s.unit]?.traits.includes('ground'),
+      );
       if (units.length === 0) {
         return h.reject('E_NO_SHIPS'); // need at least one ship to form a fleet
       }
@@ -278,7 +343,10 @@ export const fleetLaunchModule: GameModule = {
 // --- assembling the match ----------------------------------------------------
 
 export function newGame(): GameState {
-  const base = createInitialState({ seed: 'prototype-1', version: { data: '0.1.0', manifest: '1' } });
+  const base = createInitialState({
+    seed: 'prototype-1',
+    version: { data: '0.1.0', manifest: '1' },
+  });
   const planets: Record<string, Planet> = {};
   for (const n of MAP) {
     planets[n.id] = {
@@ -304,7 +372,16 @@ export function newGame(): GameState {
     p2: player('p2', 'Crimson Hegemony', 'red', { credits: 240, metal: 300 }),
   };
   const fleets: Record<string, Fleet> = {
-    'blue-1': fleet('blue-1', 'p1', 'HOME', [['cruiser', 2], ['scout', 1]], [['marine', 3]]),
+    'blue-1': fleet(
+      'blue-1',
+      'p1',
+      'HOME',
+      [
+        ['cruiser', 2],
+        ['scout', 1],
+      ],
+      [['marine', 3]],
+    ),
     'red-1': fleet('red-1', 'p2', 'CRIMSON', [['cruiser', 2]], [['marine', 3]]),
   };
   return { ...base, players, planets, fleets };
@@ -321,7 +398,8 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
       const def = data.buildings[b.type];
       if (!def) continue;
       const produces = buildingLevel(def, b.level).produces;
-      for (const res of Object.keys(produces)) out[res] = (out[res] ?? 0) + (produces[res] ?? 0) * mult;
+      for (const res of Object.keys(produces))
+        out[res] = (out[res] ?? 0) + (produces[res] ?? 0) * mult;
     }
   }
   const addUpkeep = (stacks: Array<{ unit: string; count: number }>) => {
