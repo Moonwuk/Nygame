@@ -104,6 +104,10 @@ data. You should not need to touch the kernel.
   the code you'll touch (read the relevant modules/data). Make the change and get the
   gate green, _then_ update the state artifact (`docs/state.md`) so it matches what
   actually landed — documentation follows the working code, not the other way around.
+- **Verify docs against reality before writing them.** Any documentation change or new
+  doc is gated on checking it against the actual code/behaviour first: read the source,
+  run the gate, confirm names / counts / signatures. Never document from memory or
+  assumption; if a claim can't be verified against the codebase, don't write it.
 - Run `pnpm run check` before committing; keep CI green.
 - When you finish a roadmap milestone, update the "Статус реализации" section in
   `docs/roadmap.md`.
