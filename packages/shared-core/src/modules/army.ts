@@ -59,37 +59,37 @@ export const armyModule: GameModule = {
     const resolve = (action: { playerId: string; payload: unknown }, h: HandlerContext) => {
       const p = action.payload as Partial<TransferPayload>;
       if (typeof p?.fleetId !== 'string' || typeof p?.unit !== 'string') {
-        h.reject('E_BAD_PAYLOAD');
+        return h.reject('E_BAD_PAYLOAD');
       }
       const count = p.count ?? 1;
       if (!Number.isSafeInteger(count) || count <= 0) {
-        h.reject('E_BAD_PAYLOAD');
+        return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[p.fleetId as string];
+      const fleet = h.state.fleets[p.fleetId];
       if (!fleet) {
-        h.reject('E_NO_FLEET');
+        return h.reject('E_NO_FLEET');
       }
       if (fleet.owner !== action.playerId) {
-        h.reject('E_FORBIDDEN');
+        return h.reject('E_FORBIDDEN');
       }
       if (fleet.location === null || fleet.movement || fleet.battleId) {
-        h.reject('E_FLEET_BUSY'); // must be docked at a planet, idle
+        return h.reject('E_FLEET_BUSY'); // must be docked at a planet, idle
       }
       const planet = h.state.planets[fleet.location];
       if (!planet) {
-        h.reject('E_NO_PLANET');
+        return h.reject('E_NO_PLANET');
       }
       if (planet.owner !== action.playerId) {
-        h.reject('E_FORBIDDEN'); // load from / unload onto your own world
+        return h.reject('E_FORBIDDEN'); // load from / unload onto your own world
       }
-      const def = h.ctx.data.units[p.unit as string];
+      const def = h.ctx.data.units[p.unit];
       if (!def) {
-        h.reject('E_UNKNOWN_UNIT');
+        return h.reject('E_UNKNOWN_UNIT');
       }
       if (def.domain !== 'ground') {
-        h.reject('E_NOT_GROUND'); // only the ground army is transported as cargo
+        return h.reject('E_NOT_GROUND'); // only the ground army is transported as cargo
       }
-      return { fleet, planet, def, unit: p.unit as string, count };
+      return { fleet, planet, def, unit: p.unit, count };
     };
 
     api.onAction('army.load', (action, h) => {

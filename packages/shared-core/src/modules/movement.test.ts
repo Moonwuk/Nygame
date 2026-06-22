@@ -222,6 +222,35 @@ describe('movement — routing along lanes (the map graph)', () => {
   });
 });
 
+describe('movement — stranded fleet (beginLeg failure mid-journey)', () => {
+  it('emits fleet.stranded when the next leg cannot start (speed zeroed by hook)', () => {
+    // A hook that kills speed for legs entering planet C → beginLeg fails at B.
+    const blocker: GameModule = {
+      id: 'blocker',
+      version: '1.0.0',
+      setup(api) {
+        api.hook<number>('fleet.speed', (speed, args) => {
+          const { to } = args as { to?: string };
+          return to === 'C' ? 0 : speed;
+        });
+      },
+    };
+    const kernel = createKernel([movementModule, blocker]);
+    const st = baseState(chainABC(), [fleet('F', 'p1', 'A', ['scout'])]);
+    const ordered = okApply(kernel.applyAction(st, move('F', 'C'), ctx(0)));
+
+    // Advance past the first hop (A→B takes 3h); arrival at B tries to start B→C
+    // but the hook zeroes the speed, so the fleet is stranded at B.
+    const r = okAdvance(kernel.advanceTo(ordered.state, ctx(6 * HOUR)));
+    expect(r.state.fleets.F?.location).toBe('B');
+    expect(r.state.fleets.F?.movement).toBe(null);
+    expect(r.events.map((e) => e.type)).toContain('fleet.stranded');
+    const stranded = r.events.find((e) => e.type === 'fleet.stranded');
+    expect((stranded?.payload as { fleetId: string; at: string }).fleetId).toBe('F');
+    expect((stranded?.payload as { fleetId: string; at: string }).at).toBe('B');
+  });
+});
+
 describe('movement + combat — collision on a lane triggers battle', () => {
   it('halts mid-journey and fights an enemy fleet blocking the path', () => {
     const kernel = createKernel([combatModule, movementModule]);

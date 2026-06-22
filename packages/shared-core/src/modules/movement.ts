@@ -184,7 +184,9 @@ export const movementModule: GameModule = {
         // collision starts a battle, it nulls this fleet's movement and this
         // next leg's scheduled arrival is ignored.
         h.emit('fleet.transit', { fleetId, at });
-        beginLeg(h, fleet, at, remaining);
+        if (!fleet.battleId && !beginLeg(h, fleet, at, remaining)) {
+          h.emit('fleet.stranded', { fleetId, at });
+        }
       }
     });
   },
