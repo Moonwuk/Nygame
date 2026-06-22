@@ -3,10 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Authoritative game server (Stage 3 — see docs/roadmap.md). Placeholder.",
+  "description": "Authoritative game server (Stage 3) with an in-memory WebSocket multiplayer slice.",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@void/shared-core": "workspace:*",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
+  }
 }

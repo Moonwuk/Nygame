@@ -1,9 +1,25 @@
-// Authoritative game server — Stage 3 of docs/roadmap.md.
-//
-// Will host: Fastify, PostgreSQL (JSONB GameState), Redis + BullMQ (event
-// scheduler), the WebSocket diff layer, the per-player action queue, and
-// fog-of-war filtering. It consumes @void/shared-core as the single source of
-// simulation truth (server-authority — docs/architecture.md §5).
-//
-// Intentionally empty until Stage 2 (action layer) is in place.
-export {};
+export {
+  MatchRoom,
+  type ActionReceipt,
+  type MatchRoomOptions,
+  type RoomPeer,
+  type SubmitResult,
+} from './matchRoom';
+export {
+  createMultiplayerServer,
+  type MultiplayerServerHandle,
+  type MultiplayerServerOptions,
+} from './wsServer';
+export type {
+  ClientActionMessage,
+  ClientMessage,
+  ClientPingMessage,
+  ServerErrorCode,
+  ServerErrorMessage,
+  ServerMessage,
+  ServerPongMessage,
+  ServerRejectionMessage,
+  ServerStateMessage,
+  ServerWelcomeMessage,
+} from './protocol';
+export { parseClientMessage, serializeServerMessage } from './protocol';
