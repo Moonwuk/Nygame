@@ -9,6 +9,8 @@ import {
   createKernel,
   createInitialState,
   parseGameData,
+  buildingLevel,
+  isBombarded,
   economyModule,
   movementModule,
   combatModule,
@@ -289,6 +291,36 @@ export function newGame(): GameState {
     'red-1': fleet('red-1', 'p2', 'CRIMSON', [['cruiser', 2]], [['marine', 3]]),
   };
   return { ...base, players, planets, fleets };
+}
+
+/** Net per-hour income for a player: production from owned, un-bombarded worlds
+ *  minus unit/garrison upkeep (daily ÷ 24). Drives the HUD's `+/h` deltas. */
+export function netIncome(state: GameState, playerId: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of Object.values(state.planets)) {
+    if (p.owner !== playerId || isBombarded(state, p.id)) continue;
+    for (const b of p.buildings) {
+      const def = data.buildings[b.type];
+      if (!def) continue;
+      const produces = buildingLevel(def, b.level).produces;
+      for (const res of Object.keys(produces)) out[res] = (out[res] ?? 0) + (produces[res] ?? 0);
+    }
+  }
+  const addUpkeep = (stacks: Array<{ unit: string; count: number }>) => {
+    for (const st of stacks) {
+      const def = data.units[st.unit];
+      if (!def) continue;
+      for (const res of Object.keys(def.upkeep))
+        out[res] = (out[res] ?? 0) - ((def.upkeep[res] ?? 0) * st.count) / 24;
+    }
+  };
+  for (const f of Object.values(state.fleets))
+    if (f.owner === playerId) {
+      addUpkeep(f.units);
+      if (f.landing) addUpkeep(f.landing);
+    }
+  for (const p of Object.values(state.planets)) if (p.owner === playerId) addUpkeep(p.garrison);
+  return out;
 }
 
 /** Max HP of a building level (mirrors the core's per-level data). */

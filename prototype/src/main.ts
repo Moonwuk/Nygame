@@ -14,6 +14,7 @@ import {
   HOUR,
   DAY,
   hpOfLevel,
+  netIncome,
   moveFleet,
   orbitFleet,
   assaultFleet,
@@ -42,7 +43,7 @@ let s: GameState = newGame();
 let speed = 2; // game-hours per real second (0 = paused)
 let banner: string | null = null;
 let selFleet: string | null = null;
-let selPlanet: string | null = 'HOME';
+let selPlanet: string | null = null;
 const logLines: string[] = [];
 let lastAiAt = 0;
 let lastPanelHtml = '';
@@ -57,6 +58,8 @@ const logEl = $('log');
 const clock = $('clock');
 const purse = $('purse');
 const bannerEl = $('banner');
+const dayTimer = $('daytimer');
+const alertBadge = $('alertbadge');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -66,9 +69,19 @@ function viewW(): number {
 function viewH(): number {
   return typeof window !== 'undefined' ? window.innerHeight : 720;
 }
+let VW = 1280; // viewport size in CSS pixels (drives layout + projection)
+let VH = 720;
+let DPR = 1;
+let MOBILE = false;
 function resize() {
-  canvas.width = viewW();
-  canvas.height = viewH();
+  VW = viewW();
+  VH = viewH();
+  DPR = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
+  MOBILE = VW < 720;
+  canvas.width = Math.round(VW * DPR);
+  canvas.height = Math.round(VH * DPR);
+  canvas.style.width = VW + 'px';
+  canvas.style.height = VH + 'px';
 }
 if (typeof window !== 'undefined') window.addEventListener('resize', resize);
 resize();
@@ -88,8 +101,8 @@ const NEBULA: Array<[number, number, number, string]> = [
 ];
 
 function drawGalaxy() {
-  const w = canvas.width;
-  const h = canvas.height;
+  const w = VW;
+  const h = VH;
   cx.fillStyle = '#04060d';
   cx.fillRect(0, 0, w, h);
   for (const [nx, ny, r, col] of NEBULA) {
@@ -123,14 +136,14 @@ for (const n of MAP) {
   MAXY = Math.max(MAXY, n.y);
 }
 function proj(p: { x: number; y: number }): { x: number; y: number } {
-  // Keep the node cluster clear of the left rail, the right dossier and the
-  // bottom dispatches log.
-  const left = RAIL + 80;
-  const right = canvas.width - 372;
-  const top = TOP + 80;
-  const bottom = canvas.height - 150;
-  const aw = Math.max(80, right - left);
-  const ah = Math.max(80, bottom - top);
+  // Keep the node cluster clear of the HUD: the left rail, the right dossier
+  // (desktop only — on mobile it's a bottom sheet) and the bottom strip.
+  const left = (MOBILE ? 40 : RAIL) + (MOBILE ? 18 : 80);
+  const right = VW - (MOBILE ? 24 : 372);
+  const top = TOP + (MOBILE ? 54 : 80);
+  const bottom = VH - (MOBILE ? 96 : 150);
+  const aw = Math.max(60, right - left);
+  const ah = Math.max(60, bottom - top);
   const sx = (p.x - MINX) / (MAXX - MINX || 1);
   const sy = (p.y - MINY) / (MAXY - MINY || 1);
   return { x: left + sx * aw, y: top + sy * ah };
@@ -143,6 +156,11 @@ const isShip = (u: string) => !data.units[u]?.traits.includes('ground');
 const floor = Math.floor;
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
+/** Compact number like Iron Order's bar: 15.7k, 728, … */
+function kfmt(n: number): string {
+  const v = Math.round(n);
+  return Math.abs(v) >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(v);
+}
 
 function cost(bag: Record<string, number> | undefined): string {
   if (!bag) return 'free';
@@ -282,6 +300,7 @@ function checkEnd() {
 // --- rendering ---------------------------------------------------------------
 
 function render() {
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   drawGalaxy();
   // star lanes
   cx.strokeStyle = LANE;
@@ -482,6 +501,12 @@ function panelHtml(): string {
 }
 
 function renderPanel() {
+  const open = selFleet !== null || selPlanet !== null;
+  side.style.display = open ? 'block' : 'none';
+  if (!open) {
+    lastPanelHtml = '';
+    return;
+  }
   const html = panelHtml();
   if (html !== lastPanelHtml) {
     side.innerHTML = html;
@@ -515,8 +540,8 @@ side.addEventListener('click', (ev) => {
 
 canvas.addEventListener('click', (ev) => {
   const rect = canvas.getBoundingClientRect();
-  const mx = ((ev.clientX - rect.left) / rect.width) * canvas.width;
-  const my = ((ev.clientY - rect.top) / rect.height) * canvas.height;
+  const mx = ((ev.clientX - rect.left) / rect.width) * VW;
+  const my = ((ev.clientY - rect.top) / rect.height) * VH;
   // hit a fleet?
   for (const f of Object.values(s.fleets)) {
     const mp = fleetPos(f);
@@ -572,19 +597,30 @@ function frame(nowReal: number) {
   }
   render();
   renderPanel();
-  // top bar
+  // top bar (Iron Order-style resource readouts with +/h deltas)
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   clock.textContent = `Day ${d} · ${String(h).padStart(2, '0')}:00`;
+  dayTimer.textContent = `Day ${d} — next cycle in ${24 - h}h`;
   const r = s.players[ME]?.resources ?? {};
+  const inc = netIncome(s, ME);
   const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
   const myFleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
-  const chip = (icon: string, val: number | string) => `<span class="res"><i>${icon}</i><b>${val}</b></span>`;
+  const chip = (icon: string, val: string, delta?: number) => {
+    const dh =
+      delta === undefined
+        ? ''
+        : `<em class="${delta >= 0 ? 'up' : 'dn'}">${delta >= 0 ? '+' : ''}${Math.round(delta)}/h</em>`;
+    return `<span class="res"><i>${icon}</i><span class="rv"><b>${val}</b>${dh}</span></span>`;
+  };
   purse.innerHTML =
-    chip('⬡', floor(r.metal ?? 0)) +
-    chip('◎', floor(r.credits ?? 0)) +
-    chip('◉', worlds) +
-    chip('▲', myFleets);
+    chip('🔩', kfmt(r.metal ?? 0), inc.metal ?? 0) +
+    chip('🪙', kfmt(r.credits ?? 0), inc.credits ?? 0) +
+    chip('🪐', String(worlds)) +
+    chip('🚀', String(myFleets));
+  const battles = Object.keys(s.battles).length;
+  alertBadge.style.display = battles > 0 ? 'grid' : 'none';
+  alertBadge.textContent = String(battles);
   logEl.innerHTML = logLines.map((l) => `<div>${l}</div>`).join('');
   if (banner) {
     bannerEl.textContent = banner;
