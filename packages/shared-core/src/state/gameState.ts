@@ -87,8 +87,16 @@ export interface Fleet {
   location: PlanetId | null;
   movement: FleetMovement | null;
   units: UnitStack[];
-  /** Landing troops carried for ground assault (separate from ship `units`). */
+  /** Ground army carried as cargo (the landing force of a ground assault),
+   *  bounded by the ships' transport capacity — see the `army` module. */
   landing?: UnitStack[];
+  /** Which orbit the fleet holds while stationed at a planet (GDD §7.4):
+   *  `far` is a safe standoff (set on arrival); `near` lets it bombard / land
+   *  but exposes it to the planet's orbital AA. Undefined while in transit. */
+  orbit?: 'near' | 'far';
+  /** Whether the fleet is actively bombarding the planet below (near orbit,
+   *  hostile). Damages structures and freezes the owner's production. */
+  bombarding?: boolean;
   traits: TraitId[];
   /** Id of the battle this fleet is engaged in; absent/null when free to move. */
   battleId?: BattleId | null;

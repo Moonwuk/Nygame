@@ -225,62 +225,73 @@ function startBattle(h: HandlerContext, battle: Battle): void {
 }
 
 /**
- * Resolves what a fleet does on reaching node `at` (GDD §7.4). A collision with
- * a hostile fleet always triggers an orbital battle (even mid-journey — it
- * cancels the rest of the move). On a clean *arrival* (`allowCapture`) it then
- * tries to take the planet: storm a defended garrison with landing troops, or
- * occupy an undefended hostile/neutral world. Passing *through* a node
- * (transit) only fights — it never captures.
+ * Auto-resolves a fleet-vs-fleet collision at node `at`: a hostile enemy fleet
+ * sharing the node always triggers an orbital battle (even mid-journey — it pins
+ * the fleet and cancels the rest of its move). Taking the planet itself is a
+ * separate, deliberate act from the near orbit (`fleet.assault`), so simply
+ * arriving never captures — the fleet holds the far orbit (GDD §7.4).
  */
-function engage(h: HandlerContext, fleetId: string, at: string, allowCapture: boolean): void {
+function engageFleets(h: HandlerContext, fleetId: string, at: string): void {
   const fleet = h.state.fleets[fleetId];
   if (!fleet || fleet.battleId) {
     return;
   }
-
   const enemy = findEnemyFleetAt(h, at, fleet.owner, fleetId);
-  if (enemy) {
-    pinToNode(fleet, at);
+  if (!enemy) {
+    return;
+  }
+  pinToNode(fleet, at);
+  startBattle(h, {
+    id: `battle:${h.state.battleSeq++}`,
+    location: at,
+    phase: 'orbital',
+    attacker: { ref: { kind: 'fleet', fleetId: fleet.id }, owner: fleet.owner },
+    defender: { ref: { kind: 'fleet', fleetId: enemy.id }, owner: enemy.owner },
+    round: 0,
+  });
+}
+
+/**
+ * A ground assault / occupation ordered from the near orbit (`fleet.assault`):
+ * storm a defended garrison with the carried landing force, or walk into an
+ * undefended hostile/neutral world. Returns a reject code, or null on success
+ * (a ground battle was started or the planet was occupied).
+ */
+function assaultPlanet(h: HandlerContext, fleet: Fleet): string | null {
+  const at = fleet.location;
+  if (at === null) {
+    return 'E_FLEET_BUSY';
+  }
+  const planet = h.state.planets[at];
+  if (!planet) {
+    return 'E_NO_PLANET';
+  }
+  if (planet.owner === fleet.owner) {
+    return 'E_OWN_PLANET';
+  }
+  if (planet.owner !== null && !isHostile(h, fleet.owner, planet.owner)) {
+    return 'E_FORBIDDEN'; // an ally's world
+  }
+  if (findEnemyFleetAt(h, at, fleet.owner, fleet.id)) {
+    return 'E_ORBIT_CONTESTED'; // beat the defending fleet first
+  }
+  const defended = (planet.garrison ?? []).some((s) => s.count > 0);
+  if (defended) {
+    if (!(fleet.landing ?? []).some((s) => s.count > 0)) {
+      return 'E_NO_TROOPS'; // a defended world needs a landing force
+    }
     startBattle(h, {
       id: `battle:${h.state.battleSeq++}`,
       location: at,
-      phase: 'orbital',
-      attacker: { ref: { kind: 'fleet', fleetId: fleet.id }, owner: fleet.owner },
-      defender: { ref: { kind: 'fleet', fleetId: enemy.id }, owner: enemy.owner },
+      phase: 'ground',
+      attacker: { ref: { kind: 'landing', fleetId: fleet.id }, owner: fleet.owner },
+      defender: { ref: { kind: 'garrison', planetId: at }, owner: planet.owner },
       round: 0,
     });
-    return;
+    return null;
   }
-
-  if (!allowCapture) {
-    return; // just passing through, orbit clear
-  }
-
-  pinToNode(fleet, at);
-  const planet = h.state.planets[at];
-  if (!planet || planet.owner === fleet.owner) {
-    return;
-  }
-  if (planet.owner !== null && !isHostile(h, fleet.owner, planet.owner)) {
-    return; // ally's planet — left alone
-  }
-
-  const defended = (planet.garrison ?? []).some((s) => s.count > 0);
-  if (defended) {
-    if ((fleet.landing ?? []).some((s) => s.count > 0)) {
-      startBattle(h, {
-        id: `battle:${h.state.battleSeq++}`,
-        location: at,
-        phase: 'ground',
-        attacker: { ref: { kind: 'landing', fleetId: fleet.id }, owner: fleet.owner },
-        defender: { ref: { kind: 'garrison', planetId: at }, owner: planet.owner },
-        round: 0,
-      });
-    }
-    return; // defended but no troops → planet holds
-  }
-
-  capturePlanet(h, at, fleet.id, planet.owner, false); // occupy, keep troops aboard
+  capturePlanet(h, at, fleet.id, planet.owner, false); // undefended → occupy
+  return null;
 }
 
 function capturePlanet(
@@ -353,7 +364,9 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
 
   if (battle.phase === 'orbital') {
     if (battle.attacker.ref.kind === 'fleet' && aAlive) {
-      engage(h, battle.attacker.ref.fleetId, battle.location, true); // clear next defender / take planet
+      const f = h.state.fleets[battle.attacker.ref.fleetId];
+      if (f) f.orbit = 'far'; // victor holds the far orbit — take the planet via fleet.assault
+      engageFleets(h, battle.attacker.ref.fleetId, battle.location); // clear any other defender
     }
   } else if (aAlive && !dAlive && battle.attacker.ref.kind === 'landing') {
     capturePlanet(h, battle.location, battle.attacker.ref.fleetId, battle.defender.owner, true);
@@ -375,12 +388,65 @@ export const combatModule: GameModule = {
   setup(api) {
     api.on('fleet.arrived', (event, h) => {
       const { fleetId, at } = event.payload as { fleetId: string; at: string };
-      engage(h, fleetId, at, true);
+      const fleet = h.state.fleets[fleetId];
+      if (fleet && !fleet.battleId) {
+        fleet.orbit = 'far'; // arrive into the safe far orbit; assault is deliberate
+      }
+      engageFleets(h, fleetId, at);
     });
 
     api.on('fleet.transit', (event, h) => {
       const { fleetId, at } = event.payload as { fleetId: string; at: string };
-      engage(h, fleetId, at, false);
+      engageFleets(h, fleetId, at);
+    });
+
+    // Shift between the far orbit (safe standoff) and the near orbit (lets the
+    // fleet bombard / land, but exposes it to the planet's orbital AA).
+    api.onAction('fleet.orbit', (action, h) => {
+      const { fleetId, orbit } = action.payload as { fleetId?: string; orbit?: string };
+      if (typeof fleetId !== 'string' || (orbit !== 'near' && orbit !== 'far')) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const fleet = h.state.fleets[fleetId];
+      if (!fleet) {
+        return h.reject('E_NO_FLEET');
+      }
+      if (fleet.owner !== action.playerId) {
+        return h.reject('E_FORBIDDEN');
+      }
+      if (fleet.location === null || fleet.movement || fleet.battleId) {
+        return h.reject('E_FLEET_BUSY');
+      }
+      fleet.orbit = orbit;
+      if (orbit === 'far') {
+        fleet.bombarding = false; // can't bombard from the far orbit
+      }
+      h.emit('fleet.orbit', { fleetId, orbit, owner: action.playerId });
+    });
+
+    // Land the carried army on the contested world below (near orbit only).
+    api.onAction('fleet.assault', (action, h) => {
+      const { fleetId } = action.payload as { fleetId?: string };
+      if (typeof fleetId !== 'string') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const fleet = h.state.fleets[fleetId];
+      if (!fleet) {
+        return h.reject('E_NO_FLEET');
+      }
+      if (fleet.owner !== action.playerId) {
+        return h.reject('E_FORBIDDEN');
+      }
+      if (fleet.location === null || fleet.movement || fleet.battleId) {
+        return h.reject('E_FLEET_BUSY');
+      }
+      if (fleet.orbit !== 'near') {
+        return h.reject('E_WRONG_ORBIT'); // descend to the near orbit first
+      }
+      const code = assaultPlanet(h, fleet);
+      if (code) {
+        return h.reject(code);
+      }
     });
 
     api.on('combat.tick', (event, h) => {

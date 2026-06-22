@@ -15,6 +15,8 @@ import {
   DAY,
   hpOfLevel,
   moveFleet,
+  orbitFleet,
+  assaultFleet,
   launchFleet,
   buildBuilding,
   upgradeBuilding,
@@ -169,6 +171,23 @@ function runAI() {
     const redFleets = Object.values(s.fleets).filter((f) => f.owner === 'p2').length;
     const capHasShip = cap.garrison.some((st) => isShip(st.unit));
     if (redFleets < 2 && capHasShip) apply(order(s, launchFleet('p2', 'CRIMSON'), s.time));
+  }
+}
+
+// Stopgap until the orbit UI lands: any idle fleet sitting over a hostile world
+// with a clear orbit descends and lands automatically (preserves the capture
+// loop on the new manual-engagement combat model).
+function autoEngage() {
+  for (const f of Object.values(s.fleets)) {
+    if (f.location == null || f.movement || f.battleId) continue;
+    const here = s.planets[f.location];
+    if (!here || here.owner === f.owner) continue;
+    const enemyHere = Object.values(s.fleets).some(
+      (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
+    );
+    if (enemyHere) continue; // let the auto orbital battle settle first
+    if (f.orbit !== 'near') apply(order(s, orbitFleet(f.owner, f.id, 'near'), s.time));
+    apply(order(s, assaultFleet(f.owner, f.id), s.time));
   }
 }
 
@@ -473,6 +492,7 @@ function frame(nowReal: number) {
   if (speed > 0 && !banner) {
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
+    autoEngage();
     runAI();
     checkEnd();
   }

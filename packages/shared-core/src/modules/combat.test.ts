@@ -113,10 +113,32 @@ function move(fleetId: string, to: string, playerId = 'p1'): Action {
     issuedAt: 0,
   };
 }
+function orbit(fleetId: string, o: 'near' | 'far', playerId = 'p1'): Action {
+  return {
+    id: `s:${playerId}:2`,
+    type: 'fleet.orbit',
+    playerId,
+    payload: { fleetId, orbit: o },
+    issuedAt: 0,
+  };
+}
+function assault(fleetId: string, playerId = 'p1'): Action {
+  return {
+    id: `s:${playerId}:3`,
+    type: 'fleet.assault',
+    playerId,
+    payload: { fleetId },
+    issuedAt: 0,
+  };
+}
 
 function okApply(r: ApplyResult) {
   if (!r.ok) throw new Error(`apply failed: ${r.code}`);
   return r;
+}
+function rej(r: ApplyResult): string {
+  if (r.ok) throw new Error('expected rejection, got ok');
+  return r.code;
 }
 function okAdvance(r: AdvanceResult) {
   if (!r.ok) throw new Error(`advance failed: ${r.code}`);
@@ -284,7 +306,7 @@ describe('combat — hooks & graceful degradation', () => {
 });
 
 describe('combat — integration with movement', () => {
-  it('a fleet flies to a hostile planet and fights on arrival', () => {
+  it('flies to a hostile planet, beats its fleet, then lands from the near orbit', () => {
     const kernel = createKernel([movementModule, combatModule]);
     const q = planet('Q', 'p1', 0, 0);
     const p = planet('P', 'p2', 10, 0); // 10 apart, fighter speed 10 → 1h
@@ -295,46 +317,54 @@ describe('combat — integration with movement', () => {
       [q, p],
     );
     const ordered = okApply(kernel.applyAction(st, move('A', 'P'), ctx(0)));
-    const r = okAdvance(kernel.advanceTo(ordered.state, ctx(3 * HOUR)));
+    const arrived = okAdvance(kernel.advanceTo(ordered.state, ctx(3 * HOUR)));
 
-    expect(r.state.fleets.A?.location).toBe('P');
-    expect(r.state.fleets.A?.battleId).toBe(null);
-    expect(r.state.fleets.D).toBeUndefined();
-    expect(r.state.planets.P?.owner).toBe('p1'); // undefended after the fight → captured
-    expect(types(r.events)).toEqual(
-      expect.arrayContaining([
-        'fleet.arrived',
-        'battle.started',
-        'battle.resolved',
-        'planet.captured',
-      ]),
+    // Auto orbital battle on arrival; the victor then holds the far orbit and
+    // the world is NOT taken just by arriving.
+    expect(arrived.state.fleets.A?.location).toBe('P');
+    expect(arrived.state.fleets.A?.orbit).toBe('far');
+    expect(arrived.state.fleets.D).toBeUndefined();
+    expect(arrived.state.planets.P?.owner).toBe('p2');
+    expect(types(arrived.events)).toEqual(
+      expect.arrayContaining(['fleet.arrived', 'battle.started', 'battle.resolved']),
     );
+
+    // Descend and land: the world is undefended now → occupied.
+    const near = okApply(kernel.applyAction(arrived.state, orbit('A', 'near'), ctx(3 * HOUR)));
+    const taken = okApply(kernel.applyAction(near.state, assault('A'), ctx(3 * HOUR)));
+    expect(taken.state.planets.P?.owner).toBe('p1');
+    expect(types(taken.events)).toContain('planet.captured');
   });
 });
 
 describe('combat — two-phase planet capture (GDD §7.4)', () => {
-  it('occupies an undefended hostile world without a fight', () => {
+  it('occupies an undefended hostile world from the near orbit, without a fight', () => {
     const kernel = createKernel([combatModule, arrivalModule]);
     const st = baseState([fleet('A', 'p1', 'P', [['fighter', 1]])], [planet('P', 'p2')]);
-    const r = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    const arrived = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    expect(arrived.state.planets.P?.owner).toBe('p2'); // arriving alone does not capture
 
+    const near = okApply(kernel.applyAction(arrived.state, orbit('A', 'near'), ctx(0)));
+    const r = okApply(kernel.applyAction(near.state, assault('A'), ctx(0)));
     expect(r.state.planets.P?.owner).toBe('p1');
     expect(types(r.events)).toContain('planet.captured');
     expect(types(r.events)).not.toContain('battle.started');
     expect(Object.keys(r.state.battles)).toHaveLength(0);
   });
 
-  it('storms a garrison with landing troops and captures the planet', () => {
+  it('storms a garrison from the near orbit and captures the planet', () => {
     const kernel = createKernel([combatModule, arrivalModule]);
     const st = baseState(
       [fleet('A', 'p1', 'P', [['fighter', 1]], [['marine', 2]])], // 2 marines as landing
       [planet('P', 'p2', 0, 0, [['militia', 1]])], // 1 militia garrison
     );
-    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    const arrived = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    const near = okApply(kernel.applyAction(arrived.state, orbit('A', 'near'), ctx(0)));
+    const started = okApply(kernel.applyAction(near.state, assault('A'), ctx(0)));
     const r = okAdvance(kernel.advanceTo(started.state, ctx(2 * HOUR)));
 
     expect(r.state.planets.P?.owner).toBe('p1');
-    expect(types(r.events)).toContain('planet.captured');
+    expect(types([...started.events, ...r.events])).toContain('planet.captured');
     // Surviving marines become the new garrison; the fleet keeps its ships.
     const garrisonMarine = (r.state.planets.P?.garrison ?? []).find((s) => s.unit === 'marine');
     expect(garrisonMarine?.count).toBe(2);
@@ -342,20 +372,19 @@ describe('combat — two-phase planet capture (GDD §7.4)', () => {
     expect(r.state.fleets.A?.units[0]?.unit).toBe('fighter');
   });
 
-  it('cannot take a defended world without landing troops', () => {
+  it('cannot storm a defended world without a landing force', () => {
     const kernel = createKernel([combatModule, arrivalModule]);
     const st = baseState(
       [fleet('A', 'p1', 'P', [['fighter', 1]])], // no landing troops
       [planet('P', 'p2', 0, 0, [['militia', 1]])],
     );
-    const r = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
-
-    expect(r.state.planets.P?.owner).toBe('p2'); // holds
-    expect(types(r.events)).not.toContain('planet.captured');
-    expect(Object.keys(r.state.battles)).toHaveLength(0);
+    const arrived = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    const near = okApply(kernel.applyAction(arrived.state, orbit('A', 'near'), ctx(0)));
+    expect(rej(kernel.applyAction(near.state, assault('A'), ctx(0)))).toBe('E_NO_TROOPS');
+    expect(near.state.planets.P?.owner).toBe('p2'); // holds
   });
 
-  it('runs both phases: clear orbit, then land and capture', () => {
+  it('runs both phases: auto orbital on arrival, then a deliberate landing', () => {
     const kernel = createKernel([combatModule, arrivalModule]);
     const st = baseState(
       [
@@ -364,18 +393,38 @@ describe('combat — two-phase planet capture (GDD §7.4)', () => {
       ],
       [planet('P', 'p2', 0, 0, [['militia', 1]])],
     );
-    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
-    const r = okAdvance(kernel.advanceTo(started.state, ctx(5 * HOUR)));
-    // Orbital battle starts at arrival (applyAction), ground battle later (advanceTo).
-    const allEvents = [...started.events, ...r.events];
+    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0))); // orbital battle starts
+    const afterOrbital = okAdvance(kernel.advanceTo(started.state, ctx(3 * HOUR)));
+    expect(afterOrbital.state.fleets.D).toBeUndefined(); // orbital phase cleared the defender
+    expect(afterOrbital.state.planets.P?.owner).toBe('p2'); // not captured yet
 
-    expect(r.state.fleets.D).toBeUndefined(); // orbital phase destroyed the defender
-    expect(r.state.planets.P?.owner).toBe('p1'); // ground phase captured the world
+    const near = okApply(kernel.applyAction(afterOrbital.state, orbit('A', 'near'), ctx(3 * HOUR)));
+    const land = okApply(kernel.applyAction(near.state, assault('A'), ctx(3 * HOUR))); // ground battle
+    const final = okAdvance(kernel.advanceTo(land.state, ctx(8 * HOUR)));
+
+    expect(final.state.planets.P?.owner).toBe('p1'); // ground phase captured the world
+    const allEvents = [...started.events, ...afterOrbital.events, ...land.events, ...final.events];
     const phases = allEvents
       .filter((e) => e.type === 'battle.started')
       .map((e) => (e.payload as { phase: string }).phase);
     expect(phases).toEqual(['orbital', 'ground']);
     expect(types(allEvents)).toContain('planet.captured');
+  });
+
+  it('arrives into the far orbit; assault needs the near orbit and an idle, owned fleet', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    const st = baseState([fleet('A', 'p1', 'P', [['fighter', 1]])], [planet('P', 'p2')]);
+    const arrived = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    expect(arrived.state.fleets.A?.orbit).toBe('far');
+    expect(rej(kernel.applyAction(arrived.state, assault('A'), ctx(0)))).toBe('E_WRONG_ORBIT');
+
+    const moving = fleet('B', 'p1', null, [['fighter', 1]]);
+    moving.movement = { from: 'Q', to: 'P', departedAt: 0, arrivesAt: 10 * HOUR };
+    const st2 = baseState([moving], [planet('P', 'p2')]);
+    expect(rej(kernel.applyAction(st2, orbit('B', 'near'), ctx(0)))).toBe('E_FLEET_BUSY');
+    expect(rej(kernel.applyAction(arrived.state, orbit('A', 'near', 'p2'), ctx(0)))).toBe(
+      'E_FORBIDDEN',
+    );
   });
 });
 

@@ -338,6 +338,10 @@ const act = (playerId: string, type: string, payload: unknown): Action => ({
 
 export const moveFleet = (playerId: string, fleetId: string, to: string) =>
   act(playerId, 'fleet.move', { fleetId, to });
+export const orbitFleet = (playerId: string, fleetId: string, orbit: 'near' | 'far') =>
+  act(playerId, 'fleet.orbit', { fleetId, orbit });
+export const assaultFleet = (playerId: string, fleetId: string) =>
+  act(playerId, 'fleet.assault', { fleetId });
 export const launchFleet = (playerId: string, planetId: string) =>
   act(playerId, 'fleet.launch', { planetId });
 export const buildBuilding = (playerId: string, planetId: string, building: string) =>

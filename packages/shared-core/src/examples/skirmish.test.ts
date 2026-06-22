@@ -189,6 +189,20 @@ const move = (fleetId: string, to: string, playerId: string): Action => ({
   payload: { fleetId, to },
   issuedAt: 0,
 });
+const orbitTo = (fleetId: string, o: 'near' | 'far', playerId: string): Action => ({
+  id: `s:${playerId}:2`,
+  type: 'fleet.orbit',
+  playerId,
+  payload: { fleetId, orbit: o },
+  issuedAt: 0,
+});
+const assault = (fleetId: string, playerId: string): Action => ({
+  id: `s:${playerId}:3`,
+  type: 'fleet.assault',
+  playerId,
+  payload: { fleetId },
+  issuedAt: 0,
+});
 
 // Events worth narrating, with a one-line formatter.
 const NARRATED = new Set([
@@ -243,29 +257,53 @@ function runSkirmish(): { timeline: string[]; frames: Frame[]; final: GameState 
     state = r.state;
     record(r.events, hour);
   };
+  // Non-throwing variant for the reactive "player" (timing-dependent orders).
+  const tryOrder = (action: Action, hour: number): boolean => {
+    const r = kernel.applyAction(state, action, ctx(hour * HOUR));
+    if (!r.ok) return false;
+    state = r.state;
+    record(r.events, hour);
+    return true;
+  };
 
   // t=0: both sides move on NEXUS, the central junction.
   apply(move('BLUE', 'NEXUS', 'p1'), 0);
   apply(move('RED', 'NEXUS', 'p2'), 0);
   frames.push({ hour: 0, state });
 
-  const END = 34;
+  const END = 40;
   let pushedOn = false;
+  // Reactive "player" for Blue: storm whatever hostile world it sits over
+  // (descend to the near orbit, then land), and once NEXUS is ours, march on.
+  const blueOrder = (hour: number) => {
+    const blue = state.fleets.BLUE;
+    if (!blue || blue.location == null || blue.movement || blue.battleId) return;
+    const here = state.planets[blue.location];
+    if (!here) return;
+    const enemyHere = Object.values(state.fleets).some(
+      (f) => f.owner !== 'p1' && f.location === blue.location && f.units.some((s) => s.count > 0),
+    );
+    if (enemyHere) return; // let the auto orbital battle settle first
+    if (here.owner !== 'p1') {
+      if (blue.orbit !== 'near') tryOrder(orbitTo('BLUE', 'near', 'p1'), hour);
+      tryOrder(assault('BLUE', 'p1'), hour);
+      return;
+    }
+    if (blue.location === 'NEXUS' && !pushedOn) {
+      if (tryOrder(move('BLUE', 'BASTION', 'p1'), hour)) {
+        timeline.push(`t=${String(hour).padStart(2)}h  Blue presses on toward BASTION`);
+        pushedOn = true;
+      }
+    }
+  };
+
   for (let hour = 1; hour <= END; hour++) {
     const r = kernel.advanceTo(state, ctx(hour * HOUR));
     if (!r.ok) throw new Error(`advance failed: ${r.code}`);
     state = r.state;
     record(r.events, hour);
 
-    // Reactive "player": once Blue has won NEXUS and is idle, press the attack.
-    const blue = state.fleets.BLUE;
-    if (!pushedOn && blue && blue.location === 'NEXUS' && !blue.movement && !blue.battleId) {
-      if (state.planets.NEXUS?.owner === 'p1') {
-        apply(move('BLUE', 'BASTION', 'p1'), hour);
-        timeline.push(`t=${String(hour).padStart(2)}h  Blue presses on toward BASTION`);
-        pushedOn = true;
-      }
-    }
+    blueOrder(hour);
 
     if ([8, 12, 16, 22, 32].includes(hour)) frames.push({ hour, state });
   }
