@@ -29,13 +29,27 @@ import type { GameState, Fleet, Planet, DomainEvent } from '../../packages/share
 
 // --- constants ---------------------------------------------------------------
 
-const COLOR: Record<string, string> = { p1: '#2e86d8', p2: '#e23b3b', null: '#9aa3ad' };
-const LANE = 'rgba(214,222,232,0.30)';
+// Tactical-display palette: cyan = friendly, red = hostile, steel = neutral,
+// phosphor-green accent = targeting/HUD. Everything reads on near-black.
+const COLOR: Record<string, string> = { p1: '#35d6e6', p2: '#ff5a4d', null: '#6f8a93' };
+const LANE = 'rgba(73,196,206,0.20)';
+const GRID = 'rgba(46,150,160,0.07)';
+const LOCK = '#7df0d0'; // selection / targeting reticle accent
+const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
 const BUILDABLE = ['mine', 'refinery', 'barracks', 'fort'];
 const BUILD_UNITS = ['marine', 'orbital_aa', 'cruiser', 'scout', 'siege'];
 const ME = 'p1';
+
+/** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
+function rgba(hex: string, a: number): string {
+  const v = hex.replace('#', '');
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 // --- state -------------------------------------------------------------------
 
@@ -60,6 +74,7 @@ const purse = $('purse');
 const bannerEl = $('banner');
 const dayTimer = $('daytimer');
 const alertBadge = $('alertbadge');
+const threat = $('threat');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -86,42 +101,64 @@ function resize() {
 if (typeof window !== 'undefined') window.addEventListener('resize', resize);
 resize();
 
-// Deterministic starfield + nebula clouds (normalized 0..1), drawn each frame.
-const STARS = Array.from({ length: 620 }, (_, i) => {
+// Deterministic faint starfield (normalized 0..1), drawn as dim vector ticks.
+const STARS = Array.from({ length: 280 }, (_, i) => {
   const r1 = (Math.sin(i * 12.9898) * 43758.5453) % 1;
   const r2 = (Math.sin(i * 78.233) * 12543.1234) % 1;
   const r3 = (Math.sin(i * 3.71) * 9281.77) % 1;
-  return { x: (r1 + 1) % 1, y: (r2 + 1) % 1, b: 0.25 + ((r3 + 1) % 1) * 0.75 };
+  return { x: (r1 + 1) % 1, y: (r2 + 1) % 1, b: 0.12 + ((r3 + 1) % 1) * 0.45 };
 });
-const NEBULA: Array<[number, number, number, string]> = [
-  [0.46, 0.46, 0.6, 'rgba(70,90,170,0.16)'],
-  [0.6, 0.4, 0.42, 'rgba(150,70,150,0.13)'],
-  [0.38, 0.6, 0.5, 'rgba(40,120,150,0.10)'],
-  [0.5, 0.48, 0.16, 'rgba(220,210,235,0.16)'], // bright core
-];
 
-function drawGalaxy() {
+// The map is a radar plotting table: a coordinate grid that pans and scales with
+// the camera, faint star ticks, and a slow sensor sweep for ambience.
+function drawScope() {
   const w = VW;
   const h = VH;
-  cx.fillStyle = '#04060d';
+  cx.fillStyle = '#02060c';
   cx.fillRect(0, 0, w, h);
-  for (const [nx, ny, r, col] of NEBULA) {
-    const cx0 = nx * w;
-    const cy0 = ny * h;
-    const rad = r * Math.min(w, h);
-    const g = cx.createRadialGradient(cx0, cy0, 0, cx0, cy0, rad);
-    g.addColorStop(0, col);
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    cx.fillStyle = g;
-    cx.fillRect(0, 0, w, h);
+
+  // panning / zooming coordinate grid
+  const gap = Math.max(28, 56 * cam.scale);
+  const gx = ((cam.x % gap) + gap) % gap;
+  const gy = ((cam.y % gap) + gap) % gap;
+  cx.lineWidth = 1;
+  cx.strokeStyle = GRID;
+  cx.beginPath();
+  for (let x = gx; x <= w; x += gap) {
+    cx.moveTo(x, 0);
+    cx.lineTo(x, h);
   }
+  for (let y = gy; y <= h; y += gap) {
+    cx.moveTo(0, y);
+    cx.lineTo(w, y);
+  }
+  cx.stroke();
+
+  // star ticks
   for (const st of STARS) {
-    cx.globalAlpha = st.b;
-    cx.fillStyle = '#dfe8ff';
-    const sz = st.b > 0.9 ? 1.6 : 1;
-    cx.fillRect(st.x * w, st.y * h, sz, sz);
+    cx.fillStyle = rgba('#9fe6e0', st.b);
+    cx.fillRect(st.x * w, st.y * h, 1, 1);
   }
-  cx.globalAlpha = 1;
+
+  // slow radar sweep from the viewport centre (subtle)
+  const a = (performance.now() / 9000) % TAU;
+  const R = Math.hypot(w, h);
+  cx.save();
+  cx.translate(w / 2, h / 2);
+  cx.rotate(a);
+  cx.fillStyle = 'rgba(53,214,230,0.035)';
+  cx.beginPath();
+  cx.moveTo(0, 0);
+  cx.arc(0, 0, R, -0.5, 0);
+  cx.closePath();
+  cx.fill();
+  cx.strokeStyle = 'rgba(53,214,230,0.10)';
+  cx.lineWidth = 1.5;
+  cx.beginPath();
+  cx.moveTo(0, 0);
+  cx.lineTo(R, 0);
+  cx.stroke();
+  cx.restore();
 }
 
 // Project a map-space point into the on-screen play area (inside the HUD insets).
@@ -314,12 +351,54 @@ function checkEnd() {
 
 // --- rendering ---------------------------------------------------------------
 
+/** A regular polygon path centred at (x,y) — fort/station containment marker. */
+function poly(x: number, y: number, r: number, sides: number, rot = 0) {
+  cx.beginPath();
+  for (let i = 0; i < sides; i++) {
+    const a = rot + (i / sides) * TAU;
+    const px = x + Math.cos(a) * r;
+    const py = y + Math.sin(a) * r;
+    if (i) cx.lineTo(px, py);
+    else cx.moveTo(px, py);
+  }
+  cx.closePath();
+}
+
+/** Four slowly-rotating corner brackets — the "locked target" selection reticle. */
+function targetBrackets(x: number, y: number, r: number, t: number) {
+  cx.save();
+  cx.translate(x, y);
+  cx.rotate(t / 1600);
+  cx.strokeStyle = LOCK;
+  cx.lineWidth = 1.6;
+  cx.shadowColor = LOCK;
+  cx.shadowBlur = 8;
+  const len = 6;
+  for (const [sx, sy] of [
+    [1, 1],
+    [-1, 1],
+    [-1, -1],
+    [1, -1],
+  ] as const) {
+    cx.beginPath();
+    cx.moveTo(sx * r - sx * len, sy * r);
+    cx.lineTo(sx * r, sy * r);
+    cx.lineTo(sx * r, sy * r - sy * len);
+    cx.stroke();
+  }
+  cx.restore();
+}
+
 function render() {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
-  drawGalaxy();
-  // star lanes
+  drawScope();
+
+  // jump lanes — thin glowing vectors
+  cx.save();
   cx.strokeStyle = LANE;
-  cx.lineWidth = 1.4;
+  cx.lineWidth = 1;
+  cx.shadowColor = 'rgba(53,214,230,0.5)';
+  cx.shadowBlur = 4;
   for (const n of MAP) {
     for (const l of n.links) {
       if (n.id < l && s.planets[l]) {
@@ -332,101 +411,152 @@ function render() {
       }
     }
   }
-  // battles (pulse)
+  cx.restore();
+
+  // battles — pulsing red contact ring
   const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
   for (const b of Object.values(s.battles)) {
     const pp = s.planets[b.location];
     if (!pp) continue;
     const c = world(pp.position);
-    cx.strokeStyle = `rgba(245,185,66,${0.45 + 0.45 * pulse})`;
-    cx.lineWidth = 2.5;
+    cx.save();
+    cx.strokeStyle = rgba('#ff5a4d', 0.4 + 0.45 * pulse);
+    cx.lineWidth = 1.6;
+    cx.shadowColor = '#ff5a4d';
+    cx.shadowBlur = 10;
     cx.beginPath();
-    cx.arc(c.x, c.y, 26 + 5 * pulse, 0, Math.PI * 2);
+    cx.arc(c.x, c.y, 24 + 7 * pulse, 0, TAU);
     cx.stroke();
+    cx.restore();
   }
-  // planets (bright node + dark ring + white label to the right)
+
+  // planets — wireframe blips with sensor rings + monospace callouts
   cx.textAlign = 'left';
-  const R = 16;
+  const R = 13;
   for (const n of MAP) {
     const p = s.planets[n.id];
     if (!p) continue;
     const c = world(n);
-    const owner = p.owner ?? 'null';
-    if (selPlanet === n.id) {
-      cx.strokeStyle = '#e8cd84';
-      cx.lineWidth = 3;
-      cx.beginPath();
-      cx.arc(c.x, c.y, R + 7, 0, Math.PI * 2);
+    const col = COLOR[p.owner ?? 'null'];
+
+    // sensor-range ring (dashed, faint)
+    cx.save();
+    cx.setLineDash([3, 5]);
+    cx.strokeStyle = rgba(col, 0.22);
+    cx.lineWidth = 1;
+    cx.beginPath();
+    cx.arc(c.x, c.y, R + 14, 0, TAU);
+    cx.stroke();
+    cx.restore();
+
+    // fort = hex containment ring
+    if (p.buildings.some((b) => b.type === 'fort')) {
+      cx.strokeStyle = rgba(col, 0.5);
+      cx.lineWidth = 1;
+      poly(c.x, c.y, R + 6, 6, Math.PI / 6);
       cx.stroke();
     }
+
+    // wireframe body + glow + bright core
     cx.save();
-    cx.shadowColor = COLOR[owner];
-    cx.shadowBlur = 14;
-    cx.fillStyle = COLOR[owner];
+    cx.shadowColor = col;
+    cx.shadowBlur = 12;
+    cx.strokeStyle = col;
+    cx.lineWidth = 2;
     cx.beginPath();
-    cx.arc(c.x, c.y, R, 0, Math.PI * 2);
+    cx.arc(c.x, c.y, R, 0, TAU);
+    cx.stroke();
+    cx.fillStyle = col;
+    cx.beginPath();
+    cx.arc(c.x, c.y, 2.4, 0, TAU);
     cx.fill();
     cx.restore();
-    cx.strokeStyle = 'rgba(5,10,20,0.85)';
-    cx.lineWidth = 3;
+
+    // N/E/S/W crosshair ticks
+    cx.strokeStyle = rgba(col, 0.7);
+    cx.lineWidth = 1.2;
     cx.beginPath();
-    cx.arc(c.x, c.y, R, 0, Math.PI * 2);
+    for (const [dx, dy] of [
+      [0, -1],
+      [0, 1],
+      [-1, 0],
+      [1, 0],
+    ] as const) {
+      cx.moveTo(c.x + dx * (R - 3), c.y + dy * (R - 3));
+      cx.lineTo(c.x + dx * (R + 5), c.y + dy * (R + 5));
+    }
     cx.stroke();
-    if (p.buildings.some((b) => b.type === 'fort')) {
-      cx.strokeStyle = '#e8cd84';
-      cx.lineWidth = 1.5;
-      cx.beginPath();
-      cx.arc(c.x, c.y, R + 3, 0, Math.PI * 2);
-      cx.stroke();
-    }
+
+    if (selPlanet === n.id) targetBrackets(c.x, c.y, R + 10, performance.now());
+
+    // callout: id + garrison/buildings, monospace
     cx.save();
-    cx.shadowColor = 'rgba(0,0,0,0.9)';
-    cx.shadowBlur = 4;
-    cx.fillStyle = '#ffffff';
-    cx.font = '700 15px system-ui,sans-serif';
-    cx.fillText(n.id, c.x + R + 9, c.y + 5);
-    cx.restore();
+    cx.shadowColor = 'rgba(0,0,0,0.85)';
+    cx.shadowBlur = 3;
+    cx.fillStyle = p.owner ? col : '#9fc9c4';
+    cx.font = '700 12px ui-monospace,Menlo,monospace';
+    cx.fillText(n.id, c.x + R + 12, c.y - 1);
     const g = p.garrison.reduce((a, st) => a + st.count, 0);
-    const meta = [g > 0 ? `⚔ ${g}` : '', p.buildings.length ? `▣ ${p.buildings.length}` : '']
-      .filter(Boolean)
-      .join('   ');
-    if (meta) {
-      cx.fillStyle = 'rgba(214,224,236,0.72)';
-      cx.font = '11px system-ui';
-      cx.fillText(meta, c.x + R + 9, c.y + 21);
-    }
+    cx.fillStyle = 'rgba(150,210,205,0.6)';
+    cx.font = '10px ui-monospace,Menlo,monospace';
+    cx.fillText(`G:${g}  B:${p.buildings.length}`, c.x + R + 12, c.y + 12);
+    cx.restore();
   }
-  // fleets
+
+  // fleets — glowing chevrons oriented to heading, with a fading contact trail
   cx.textAlign = 'center';
   for (const f of Object.values(s.fleets)) {
     const mp = fleetPos(f);
     if (!mp) continue;
     const c = world(mp);
+    const col = COLOR[f.owner];
     const ships = f.units.reduce((a, st) => a + st.count, 0);
     const troops = (f.landing ?? []).reduce((a, st) => a + st.count, 0);
-    cx.save();
-    cx.translate(c.x, c.y - (f.location ? 26 : 0));
-    if (selFleet === f.id) {
-      cx.strokeStyle = '#e8cd84';
-      cx.lineWidth = 2;
-      cx.beginPath();
-      cx.arc(0, 0, 11, 0, Math.PI * 2);
-      cx.stroke();
+
+    // heading from the movement vector (default: pointing up)
+    let ang = -Math.PI / 2;
+    if (f.movement) {
+      const a = s.planets[f.movement.from]?.position;
+      const b = s.planets[f.movement.to]?.position;
+      if (a && b) {
+        const wa = world(a);
+        const wb = world(b);
+        ang = Math.atan2(wb.y - wa.y, wb.x - wa.x);
+      }
     }
-    cx.fillStyle = COLOR[f.owner];
-    cx.strokeStyle = 'rgba(5,10,20,0.8)';
-    cx.lineWidth = 1.5;
+    const lift = f.location ? 22 : 0; // lift off the node when stationed in orbit
+
+    // contact trail while moving
+    if (f.movement) {
+      for (let i = 1; i <= 4; i++) {
+        cx.fillStyle = rgba(col, 0.3 - 0.06 * i);
+        cx.beginPath();
+        cx.arc(c.x - Math.cos(ang) * i * 9, c.y - Math.sin(ang) * i * 9, 2.4 - 0.3 * i, 0, TAU);
+        cx.fill();
+      }
+    }
+
+    cx.save();
+    cx.translate(c.x, c.y - lift);
+    cx.rotate(ang + Math.PI / 2);
+    cx.shadowColor = col;
+    cx.shadowBlur = 9;
+    cx.strokeStyle = col;
+    cx.lineWidth = 1.8;
     cx.beginPath();
     cx.moveTo(0, -8);
-    cx.lineTo(7, 7);
-    cx.lineTo(-7, 7);
+    cx.lineTo(6, 7);
+    cx.lineTo(0, 3.5);
+    cx.lineTo(-6, 7);
     cx.closePath();
-    cx.fill();
     cx.stroke();
-    cx.fillStyle = '#fff';
-    cx.font = '700 10px system-ui';
-    cx.fillText(`${ships}${troops ? '+' + troops : ''}`, 0, 19);
     cx.restore();
+
+    if (selFleet === f.id) targetBrackets(c.x, c.y - lift, 12, performance.now());
+
+    cx.fillStyle = rgba(col, 0.95);
+    cx.font = '700 10px ui-monospace,Menlo,monospace';
+    cx.fillText(`${ships}${troops ? '+' + troops : ''}`, c.x, c.y - lift + 20);
   }
 }
 
@@ -577,7 +707,7 @@ function selectAt(mx: number, my: number) {
     const mp = fleetPos(f);
     if (!mp) continue;
     const c = world(mp);
-    const fy = c.y - (f.location ? 26 : 0);
+    const fy = c.y - (f.location ? 22 : 0);
     if (Math.hypot(mx - c.x, my - fy) < 16 && f.owner === ME) {
       selFleet = f.id;
       selPlanet = f.location ?? selPlanet;
@@ -712,13 +842,17 @@ function frame(nowReal: number) {
     return `<span class="res"><i>${icon}</i><span class="rv"><b>${val}</b>${dh}</span></span>`;
   };
   purse.innerHTML =
-    chip('🔩', kfmt(r.metal ?? 0), inc.metal ?? 0) +
-    chip('🪙', kfmt(r.credits ?? 0), inc.credits ?? 0) +
-    chip('🪐', String(worlds)) +
-    chip('🚀', String(myFleets));
+    chip('MTL', kfmt(r.metal ?? 0), inc.metal ?? 0) +
+    chip('CRD', kfmt(r.credits ?? 0), inc.credits ?? 0) +
+    chip('WLD', String(worlds)) +
+    chip('FLT', String(myFleets));
   const battles = Object.keys(s.battles).length;
   alertBadge.style.display = battles > 0 ? 'grid' : 'none';
   alertBadge.textContent = String(battles);
+  // cold-war threat readout: peace = DEFCON 5, escalates as battles ignite
+  const lvl = battles >= 2 ? 1 : battles === 1 ? 3 : 5;
+  threat.textContent = 'DEFCON ' + lvl;
+  threat.className = 'threat d' + lvl;
   logEl.innerHTML = logLines.map((l) => `<div>${l}</div>`).join('');
   if (banner) {
     bannerEl.textContent = banner;

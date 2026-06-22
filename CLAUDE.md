@@ -100,6 +100,10 @@ data. You should not need to touch the kernel.
 
 ## Working agreements
 
+- **Update the state artifact _before_ writing code.** `docs/state.md` is the living
+  context anchor — refresh the part of it your change will touch (the planned/active
+  direction) before you start editing code, so context survives an interruption, then
+  finalize it with the change.
 - Run `pnpm run check` before committing; keep CI green.
 - When you finish a roadmap milestone, update the "Статус реализации" section in
   `docs/roadmap.md`.
