@@ -901,7 +901,7 @@ function panelHtml(): string {
       'TASK GROUP',
       `${group.length} fleets · ${ships} ships · ${troops} troops`,
     );
-    h += `<div class="hint">Tap a destination world to move all selected fleets. Shift-drag on the map selects a fleet group.</div>`;
+    h += `<div class="hint">Press <b>Move</b>, then tap a destination to send all selected fleets (they route and stop). Shift-drag on the map selects a fleet group.</div>`;
     for (const f of group) {
       const loc = f.location ?? (f.movement ? `${f.movement.from}→${f.movement.to}` : '—');
       const nShips = f.units.reduce((a, u) => a + u.count, 0);
@@ -972,7 +972,7 @@ function panelHtml(): string {
             h += `<div class="row dim">no ground army here</div>`;
         }
       }
-      h += `<div class="hint">Tap a destination world to move this fleet.</div>`;
+      h += `<div class="hint">Press <b>Move</b> (command bar), then tap a destination — the fleet routes along the lanes there and stops. Tap a world without Move to inspect it.</div>`;
       h += btn('cancel', '', 'Deselect', true);
       return h;
     }
@@ -1175,30 +1175,33 @@ cmdbar.addEventListener('click', (ev) => {
 
 // Tap/click selection at a screen point (drag-aware — see the pointer handlers).
 function selectAt(mx: number, my: number) {
-  // a friendly fleet under the cursor → select it
-  for (const f of Object.values(s.fleets)) {
-    if (f.owner !== ME) continue;
-    const a = fleetAnchor(f);
-    if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
-      setFleetSelection([f.id]);
-      aiming = false;
-      return;
+  // Plain tap = selection. Movement happens only when "Move" is armed (aiming), so a
+  // fleet selection never blocks picking a planet (and vice versa).
+  if (!aiming) {
+    for (const f of Object.values(s.fleets)) {
+      if (f.owner !== ME) continue;
+      const a = fleetAnchor(f);
+      if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
+        setFleetSelection([f.id]); // (clears any selected planet)
+        return;
+      }
     }
   }
-  // a world under the cursor → order the selected fleets there, else open its dossier
   for (const n of MAP) {
     const c = world(n);
     if (Math.hypot(mx - c.x, my - c.y) < 24) {
-      const moving = selectedFleetIds();
-      if (moving.length) {
-        for (const fleetId of moving) {
+      if (aiming) {
+        // Move armed → send the selected fleet(s) here; they route along the lanes to
+        // this world and stop. Keep them selected for follow-up orders.
+        for (const fleetId of selectedFleetIds()) {
           const f = s.fleets[fleetId];
           if (f && f.location !== n.id) playerOrder(moveFleet(ME, fleetId, n.id));
         }
         aiming = false;
-        lastPanelHtml = ''; // keep the fleet(s) selected → route + command bar stay up
+        lastPanelHtml = '';
         return;
       }
+      // plain tap → select the planet (mutually exclusive with a fleet)
       selPlanet = n.id;
       selFleet = null;
       selFleets = new Set();
@@ -1206,7 +1209,12 @@ function selectAt(mx: number, my: number) {
       return;
     }
   }
-  clearSelection(); // empty space → close the dossier
+  // empty space: cancel an armed move, otherwise clear the selection
+  if (aiming) {
+    aiming = false;
+    return;
+  }
+  clearSelection();
 }
 
 // --- camera control: drag-pan, pinch-zoom, wheel-zoom, tap-select ------------
