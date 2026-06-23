@@ -782,9 +782,70 @@ function drawAimPreview() {
 
 let selectionBox: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
+/**
+ * Province field — space is partitioned into sector "provinces": every point
+ * belongs to the nearest node's sector (a Voronoi map). Lanes thread through the
+ * provinces, and the borders show exactly where a travelling fleet crosses from
+ * one sector into the next. Drawn faint, underneath the lanes and blips.
+ */
+function drawProvinces(): void {
+  const cell = 16;
+  const pts = MAP.map((n) => {
+    const c = world(n);
+    return { x: c.x, y: c.y, sector: n.sector };
+  });
+  const cols = Math.ceil(VW / cell) + 1;
+  const rows = Math.ceil(VH / cell) + 1;
+  const field: string[] = new Array<string>(cols * rows);
+  cx.save();
+  // faint tint, a touch stronger near a node core so provinces read as regions
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const px = c * cell + cell / 2;
+      const py = r * cell + cell / 2;
+      let best = Infinity;
+      let sec = 'empty_space';
+      for (const p of pts) {
+        const d = (px - p.x) ** 2 + (py - p.y) ** 2;
+        if (d < best) {
+          best = d;
+          sec = p.sector;
+        }
+      }
+      field[r * cols + c] = sec;
+      const glow = SECTOR_GLOW[sec] ?? SECTOR_GLOW.empty_space;
+      const a = 0.025 + 0.045 * Math.max(0, 1 - Math.sqrt(best) / 260);
+      cx.fillStyle = rgba(glow, a);
+      cx.fillRect(c * cell, r * cell, cell, cell);
+    }
+  }
+  // province borders — edges between cells that fall in different sectors
+  cx.beginPath();
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const sec = field[r * cols + c];
+      if (c > 0 && field[r * cols + c - 1] !== sec) {
+        cx.moveTo(c * cell, r * cell);
+        cx.lineTo(c * cell, r * cell + cell);
+      }
+      if (r > 0 && field[(r - 1) * cols + c] !== sec) {
+        cx.moveTo(c * cell, r * cell);
+        cx.lineTo(c * cell + cell, r * cell);
+      }
+    }
+  }
+  cx.setLineDash([3, 4]);
+  cx.lineWidth = 1;
+  cx.strokeStyle = rgba('#7df0d0', 0.13);
+  cx.stroke();
+  cx.setLineDash([]);
+  cx.restore();
+}
+
 function render(now: number) {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   drawScope(now);
+  drawProvinces();
 
   // jump lanes — cached links with animated energy packets
   for (const [from, to] of MAP_LINKS) {
