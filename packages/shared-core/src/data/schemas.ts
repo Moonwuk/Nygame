@@ -54,6 +54,11 @@ export const UnitDefSchema = z.object({
   buildTimeHours: z.number().nonnegative().default(0),
   /** Daily upkeep paid to keep the unit (per day). */
   upkeep: ResourceBagSchema.default({}),
+  /** A unit of special significance. Only super-units contribute to the match
+   *  score (ordinary military never does); see the victory module. */
+  superUnit: z.boolean().default(false),
+  /** Victory-score worth of one such unit (only counted when `superUnit`). */
+  scoreValue: z.number().nonnegative().default(0),
 });
 
 export const FactionDefSchema = z.object({
@@ -88,6 +93,10 @@ export const BuildingDefSchema = z.object({
   /** Overrides for levels 2..N (index 0 = level 2). maxLevel = 1 + length. */
   upgrades: z.array(BuildingLevelSchema).default([]),
   traits: z.array(z.string()).default([]),
+  /** Victory-score worth of this building; the victory module multiplies it by
+   *  the instance's level, so investing in upgrades raises (and losing the
+   *  building lowers) the owner's score. */
+  scoreValue: z.number().nonnegative().default(0),
 });
 
 /**
@@ -112,6 +121,9 @@ export const SectorTypeDefSchema = z.object({
   speedBonus: z.number().default(0),
   /** Effective fleet HP change for battles in this sector, e.g. 0.1 = +10%. */
   hpBonus: z.number().default(0),
+  /** Victory-score worth of controlling a node in this sector (terrain like an
+   *  asteroid field is worth holding even without a habitable planet). */
+  scoreValue: z.number().nonnegative().default(0),
 });
 
 /**
@@ -127,6 +139,9 @@ export const PlanetTypeDefSchema = z.object({
    *  divided by (1 + this). Positive = defensible world, negative = exposed.
    *  Stacks with building defense. */
   defenseBonus: z.number().default(0),
+  /** Victory-score worth of owning a world of this type (a developed terran
+   *  world is worth more than a barren rock); added on top of the base. */
+  scoreValue: z.number().nonnegative().default(0),
 });
 
 export const TechnologyUnlocksSchema = z.object({

@@ -6,11 +6,13 @@
   "asteroid_field": {
     "name": "Asteroid Field",
     "speedBonus": -0.25,
-    "hpBonus": 0.1
+    "hpBonus": 0.1,
+    "scoreValue": 5
   },
   "nebula": {
     "name": "Nebula",
     "speedBonus": -0.1,
-    "hpBonus": 0.05
+    "hpBonus": 0.05,
+    "scoreValue": 3
   }
 }

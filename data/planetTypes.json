@@ -2,26 +2,31 @@
   "terran": {
     "name": "Terran",
     "productionBonus": 0,
-    "defenseBonus": 0.1
+    "defenseBonus": 0.1,
+    "scoreValue": 40
   },
   "barren": {
     "name": "Barren",
     "productionBonus": -0.25,
-    "defenseBonus": 0
+    "defenseBonus": 0,
+    "scoreValue": 5
   },
   "oceanic": {
     "name": "Oceanic",
     "productionBonus": 0.15,
-    "defenseBonus": 0.05
+    "defenseBonus": 0.05,
+    "scoreValue": 35
   },
   "volcanic": {
     "name": "Volcanic",
     "productionBonus": 0.25,
-    "defenseBonus": -0.05
+    "defenseBonus": -0.05,
+    "scoreValue": 20
   },
   "gas_giant": {
     "name": "Gas Giant",
     "productionBonus": 0.35,
-    "defenseBonus": -0.15
+    "defenseBonus": -0.15,
+    "scoreValue": 10
   }
 }

@@ -5,6 +5,7 @@
     "buildTimeHours": 6,
     "produces": { "metal": 20 },
     "hp": 15,
+    "scoreValue": 8,
     "traits": []
   },
   "mine_t2": {
@@ -13,6 +14,7 @@
     "buildTimeHours": 18,
     "produces": { "metal": 55 },
     "hp": 25,
+    "scoreValue": 8,
     "traits": []
   },
   "shipyard": {
@@ -21,6 +23,7 @@
     "buildTimeHours": 24,
     "produces": {},
     "hp": 30,
+    "scoreValue": 12,
     "traits": []
   },
   "biomass_pit": {
@@ -29,6 +32,7 @@
     "buildTimeHours": 8,
     "produces": { "biomass": 30 },
     "hp": 15,
+    "scoreValue": 8,
     "traits": ["infected"]
   },
   "barracks": {
@@ -36,6 +40,7 @@
     "cost": { "metal": 120 },
     "buildTimeHours": 8,
     "hp": 20,
+    "scoreValue": 6,
     "traits": []
   },
   "spaceport": {
@@ -43,6 +48,7 @@
     "cost": { "metal": 200, "credits": 80 },
     "buildTimeHours": 12,
     "hp": 25,
+    "scoreValue": 6,
     "traits": []
   },
   "fort": {
@@ -51,6 +57,7 @@
     "buildTimeHours": 10,
     "hp": 35,
     "defenseBonus": 0.35,
+    "scoreValue": 20,
     "upgrades": [
       {
         "cost": { "metal": 300, "credits": 100 },

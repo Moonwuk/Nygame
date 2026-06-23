@@ -1,30 +1,29 @@
 import type { MatchEndReason, MatchScore, PlayerId, UnitStack } from '../state/gameState';
+import type { GameData } from '../data/schemas';
 import type { HandlerContext, GameModule } from '../kernel/module';
 
 const DEFAULT_DOMINATION_PERCENT = 0.6;
-const PLANET_POINTS = 100;
-const FLEET_POINTS = 25;
-const UNIT_POINTS = 10;
+/** Score for merely controlling a node — even a planetless system is worth holding. */
+const CONTROL_BASE = 10;
 
 function emptyScore(): MatchScore {
   return { controlledPlanets: 0, fleets: 0, units: 0, total: 0 };
 }
 
-function addUnits(score: MatchScore, stacks: readonly UnitStack[]): void {
+/** Tallies a unit list: every unit raises the headcount (used for the alive
+ *  check), but only super-units add to the score (ordinary military never does). */
+function addUnits(score: MatchScore, stacks: readonly UnitStack[], data: GameData): void {
   for (const stack of stacks) {
     score.units += stack.count;
+    const def = data.units[stack.unit];
+    if (def?.superUnit) {
+      score.total += def.scoreValue * stack.count;
+    }
   }
 }
 
-function finalize(score: MatchScore): MatchScore {
-  score.total =
-    score.controlledPlanets * PLANET_POINTS +
-    score.fleets * FLEET_POINTS +
-    score.units * UNIT_POINTS;
-  return score;
-}
-
 function computeScores(h: HandlerContext): Record<PlayerId, MatchScore> {
+  const data = h.ctx.data;
   const scores: Record<PlayerId, MatchScore> = {};
   for (const playerId of Object.keys(h.state.players)) {
     scores[playerId] = emptyScore();
@@ -39,7 +38,24 @@ function computeScores(h: HandlerContext): Record<PlayerId, MatchScore> {
       continue;
     }
     score.controlledPlanets += 1;
-    addUnits(score, planet.garrison);
+    // Territory worth: base control + planet nature + sector terrain + structures
+    // (a building scales with its level, so investment — and its loss — shows).
+    score.total += CONTROL_BASE;
+    const planetType = planet.planetType ? data.planetTypes[planet.planetType] : undefined;
+    if (planetType) {
+      score.total += planetType.scoreValue;
+    }
+    const sector = planet.sectorType ? data.sectors[planet.sectorType] : undefined;
+    if (sector) {
+      score.total += sector.scoreValue;
+    }
+    for (const building of planet.buildings) {
+      const def = data.buildings[building.type];
+      if (def) {
+        score.total += def.scoreValue * building.level;
+      }
+    }
+    addUnits(score, planet.garrison, data);
   }
 
   for (const fleet of Object.values(h.state.fleets)) {
@@ -48,14 +64,18 @@ function computeScores(h: HandlerContext): Record<PlayerId, MatchScore> {
       continue;
     }
     score.fleets += 1;
-    addUnits(score, fleet.units);
-    addUnits(score, fleet.landing ?? []);
+    addUnits(score, fleet.units, data);
+    addUnits(score, fleet.landing ?? [], data);
   }
 
-  for (const score of Object.values(scores)) {
-    finalize(score);
-  }
   return scores;
+}
+
+/** A player is still in the running while they hold any asset — a planet, a
+ *  fleet or any units. Kept independent of `total` so the score formula (where
+ *  ordinary military scores nothing) can't mistake a fleet-only player for dead. */
+function hasAssets(score: MatchScore): boolean {
+  return score.controlledPlanets + score.fleets + score.units > 0;
 }
 
 function highestScore(
@@ -107,7 +127,10 @@ function evaluateVictory(h: HandlerContext): void {
     return;
   }
 
-  const contenders = activeBefore.filter((playerId) => (scores[playerId]?.total ?? 0) > 0);
+  const contenders = activeBefore.filter((playerId) => {
+    const score = scores[playerId];
+    return score ? hasAssets(score) : false;
+  });
   if (contenders.length > 0) {
     for (const playerId of activeBefore) {
       if (!contenders.includes(playerId)) {

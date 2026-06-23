@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 213 зелёных.**
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 214 зелёных.**
 
 ---
 
@@ -223,21 +223,33 @@ unloaded`.
 лимит счёта (`scoreLimit`) и тайм-аут (`endsAt`, победитель = лучший счёт; ничья =
 `winner:null`).
 
+**Счёт — data-driven.** `total` = территория + супер-юниты, по полям данных:
+очки узла = база за контроль (`CONTROL_BASE` = 10) + `planetType.scoreValue` +
+`sectorType.scoreValue` + Σ `building.scoreValue × level` (вложение в апгрейды растит
+счёт, разрушение — снижает). Армия очков **не даёт**, кроме помеченных
+`UnitDef.superUnit` (тогда `scoreValue × count`, где бы юнит ни был — гарнизон/флот/
+десант). `controlledPlanets`/`fleets`/`units` остаются счётчиками; «жив ли игрок» для
+elimination считается по ним (планеты+флоты+юниты > 0), **независимо** от `total` —
+флот без территории не считается «мёртвым».
+
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
 - **resources:** `credits, metal, biomass, dark_matter, artifacts, premium_shard`.
 - **units** (схема `UnitDef`): `domain('space'|'ground')`, `stats{attack, defense,
 speed, hp, range, cargoCapacity, cargoSize, aaDamage}` (+ любые доп. числа),
-  `line, traits, abilities, cost, buildTimeHours, upkeep`. Есть: `scout_drone,
+  `line, traits, abilities, cost, buildTimeHours, upkeep`, `superUnit`+`scoreValue`
+  (очки даёт только супер-юнит; обычные — 0). Есть: `scout_drone,
 cruiser, siege_lance(artillery,range), dropship(cargoCapacity 12), militia,
 drop_infantry, tank(cargoSize 3), orbital_aa(aaDamage), infected_cruiser,
-reanimated_drone`.
+reanimated_drone` (супер-юнитов пока нет — добавятся позже).
 - **buildings** (`BuildingDef`): `cost, buildTimeHours, produces, hp,
-defenseBonus, upgrades[{…}], traits`. Есть: `mine_t1, mine_t2, shipyard,
+defenseBonus, upgrades[{…}], traits, scoreValue`. Есть: `mine_t1, mine_t2, shipyard,
 biomass_pit, barracks, spaceport, fort` (форт — 3 уровня: HP 35→50→65,
-  defenseBonus 0.35→0.50→0.65).
-- **sectors:** `empty_space(+скорость), asteroid_field(−скорость/+живучесть),
-nebula`.
+  defenseBonus 0.35→0.50→0.65). `scoreValue`: fort 20·уровень, shipyard 12,
+  mine/biomass 8, barracks/spaceport 6.
+- **sectors:** `empty_space(+скорость), asteroid_field(−скорость/+живучесть/score 5),
+nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
+volcanic 20, gas_giant 10, barren 5).
 - **factions:** `vanguard, swarm, necromancer` (пока флейвор/трейты).
 - **events:** `reanimate_on_kill, infect_planet, void_anomaly` (правила
   trigger→effect; движок трейтов пока не построен).
@@ -339,7 +351,7 @@ golden; модель времени `advanceTo`; экономика (казна 
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 213 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 214 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```
