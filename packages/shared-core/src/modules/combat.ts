@@ -353,6 +353,19 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
         ? battle.defender.owner
         : null;
 
+  // Ground capture must happen BEFORE releaseOrDestroyFleet — a fleet whose
+  // ships were lost but whose landing troops won the assault would otherwise be
+  // deleted (units.length === 0) before capturePlanet can deposit them as the
+  // new garrison.
+  if (
+    battle.phase === 'ground' &&
+    aAlive &&
+    !dAlive &&
+    battle.attacker.ref.kind === 'landing'
+  ) {
+    capturePlanet(h, battle.location, battle.attacker.ref.fleetId, battle.defender.owner, true);
+  }
+
   releaseOrDestroyFleet(h, battle.attacker.ref);
   releaseOrDestroyFleet(h, battle.defender.ref);
   delete h.state.battles[battle.id];
@@ -370,8 +383,6 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
       if (f) f.orbit = 'far'; // victor holds the far orbit — take the planet via fleet.assault
       engageFleets(h, battle.attacker.ref.fleetId, battle.location); // clear any other defender
     }
-  } else if (aAlive && !dAlive && battle.attacker.ref.kind === 'landing') {
-    capturePlanet(h, battle.location, battle.attacker.ref.fleetId, battle.defender.owner, true);
   }
 }
 

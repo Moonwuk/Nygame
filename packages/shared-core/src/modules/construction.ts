@@ -206,6 +206,17 @@ export const constructionModule: GameModule = {
       if (planet.buildings.some((b) => b.type === payload.building)) {
         return h.reject('E_ALREADY_BUILT'); // one of each type; grow it with building.upgrade
       }
+      if (
+        h.state.scheduled.some(
+          (e) =>
+            e.type === 'construction.complete' &&
+            (e.payload as CompletePayload).kind === 'building' &&
+            (e.payload as CompletePayload).planetId === planet.id &&
+            (e.payload as CompletePayload).building === payload.building,
+        )
+      ) {
+        return h.reject('E_ALREADY_QUEUED');
+      }
       const level1 = buildingLevel(def, 1);
       if (!canAfford(player.resources, level1.cost)) {
         return h.reject('E_INSUFFICIENT');
@@ -245,6 +256,17 @@ export const constructionModule: GameModule = {
       const nextLevel = instance.level + 1;
       if (nextLevel > buildingMaxLevel(def)) {
         return h.reject('E_MAX_LEVEL');
+      }
+      if (
+        h.state.scheduled.some(
+          (e) =>
+            e.type === 'construction.complete' &&
+            (e.payload as CompletePayload).kind === 'upgrade' &&
+            (e.payload as CompletePayload).planetId === planet.id &&
+            (e.payload as CompletePayload).building === instance.type,
+        )
+      ) {
+        return h.reject('E_ALREADY_QUEUED');
       }
       const next = buildingLevel(def, nextLevel);
       if (!canAfford(player.resources, next.cost)) {
