@@ -262,6 +262,25 @@ export const MAP: MapNode[] = [
   },
 ];
 
+/**
+ * Empty-space provinces — large, uncapturable void sectors that frame the
+ * populated core. They are not planets (no garrison, no city, nothing to take):
+ * fleets only *pass through* them. Positioned outside the planet cluster so
+ * their regions claim the map's edges; rendering treats the whole map as a
+ * tiling of provinces (planet provinces + these voids), Bytro/Paradox-style.
+ */
+export interface VoidSector {
+  id: string;
+  x: number;
+  y: number;
+}
+export const VOID_SECTORS: VoidSector[] = [
+  { id: 'CORONA REACH', x: 520, y: -60 }, // northern deep space
+  { id: 'THE ABYSS', x: 470, y: 720 }, // southern deep space
+  { id: 'WESTERN RIFT', x: -110, y: 350 }, // western rift
+  { id: 'OUTER EXPANSE', x: 1140, y: 430 }, // eastern expanse
+];
+
 function player(
   id: string,
   name: string,

@@ -11,6 +11,7 @@ import {
   order,
   data,
   MAP,
+  VOID_SECTORS,
   HOUR,
   DAY,
   hpOfLevel,
@@ -39,9 +40,16 @@ import type {
 
 // --- constants ---------------------------------------------------------------
 
-// Tactical-display palette: cyan = friendly, red = hostile, steel = neutral,
-// phosphor-green accent = targeting/HUD. Everything reads on near-black.
-const COLOR: Record<string, string> = { p1: '#35d6e6', p2: '#ff5a4d', null: '#6f8a93' };
+// Political palette (Bytro/Paradox-style): YOU = green, ally = blue, neutral =
+// gray, enemy = red — used for fleets/planets and to tint each owner's province.
+// Cyan stays the console-chrome accent (grid, borders, targeting reticle).
+const COLOR: Record<string, string> = {
+  p1: '#3ad17a', // you — green
+  p2: '#ff5a4d', // enemy — red
+  ally: '#4a8cff', // ally — blue (latent: no allied player in the skirmish yet)
+  null: '#6f8a93', // neutral — gray
+};
+const VOID_COLOR = '#46606e'; // empty-space provinces — uncapturable void
 const LANE = 'rgba(73,196,206,0.20)';
 const GRID = 'rgba(46,150,160,0.07)';
 const LOCK = '#7df0d0'; // selection / targeting reticle accent
@@ -788,62 +796,79 @@ function drawAimPreview() {
 let selectionBox: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
 /**
- * Province field — space is partitioned into sector "provinces": every point
- * belongs to the nearest node's sector (a Voronoi map). Lanes thread through the
- * provinces, and the borders show exactly where a travelling fleet crosses from
- * one sector into the next. Drawn faint, underneath the lanes and blips.
+ * Province field — the whole map is a tiling of provinces (Bytro/Paradox-style):
+ * every point belongs to the nearest seed. Seeds are planets (capturable, tinted
+ * in their owner's colour — green/blue/gray/red) or empty-space voids
+ * (uncapturable, neutral). Lanes thread through provinces; the borders show
+ * where a travelling fleet crosses from one into the next. Different-owner seams
+ * are drawn as bold frontiers, internal seams stay faint. Under the lanes/blips.
  */
 function drawProvinces(): void {
   const cell = 16;
-  const pts = MAP.map((n) => {
+  // seeds: live-owned planets + uncapturable void sectors
+  const seeds = MAP.map((n) => {
     const c = world(n);
-    return { x: c.x, y: c.y, sector: n.sector };
+    return { x: c.x, y: c.y, key: s.planets[n.id]?.owner ?? 'null', col: COLOR[s.planets[n.id]?.owner ?? 'null'] };
   });
+  for (const v of VOID_SECTORS) {
+    const c = world(v);
+    seeds.push({ x: c.x, y: c.y, key: 'void', col: VOID_COLOR });
+  }
   const cols = Math.ceil(VW / cell) + 1;
   const rows = Math.ceil(VH / cell) + 1;
-  const field: string[] = new Array<string>(cols * rows);
+  const owner: string[] = new Array<string>(cols * rows);
+  const seedOf: number[] = new Array<number>(cols * rows);
   cx.save();
-  // faint tint, a touch stronger near a node core so provinces read as regions
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const px = c * cell + cell / 2;
       const py = r * cell + cell / 2;
       let best = Infinity;
-      let sec = 'empty_space';
-      for (const p of pts) {
-        const d = (px - p.x) ** 2 + (py - p.y) ** 2;
+      let si = 0;
+      for (let i = 0; i < seeds.length; i++) {
+        const d = (px - seeds[i]!.x) ** 2 + (py - seeds[i]!.y) ** 2;
         if (d < best) {
           best = d;
-          sec = p.sector;
+          si = i;
         }
       }
-      field[r * cols + c] = sec;
-      const glow = SECTOR_GLOW[sec] ?? SECTOR_GLOW.empty_space;
-      const a = 0.025 + 0.045 * Math.max(0, 1 - Math.sqrt(best) / 260);
-      cx.fillStyle = rgba(glow, a);
+      const seed = seeds[si]!;
+      const idx = r * cols + c;
+      owner[idx] = seed.key;
+      seedOf[idx] = si;
+      // void stays a flat dim wash; owned territory tints a bit stronger near its core
+      const a = seed.key === 'void' ? 0.03 : 0.07 + 0.06 * Math.max(0, 1 - Math.sqrt(best) / 300);
+      cx.fillStyle = rgba(seed.col, a);
       cx.fillRect(c * cell, r * cell, cell, cell);
     }
   }
-  // province borders — edges between cells that fall in different sectors
-  cx.beginPath();
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const sec = field[r * cols + c];
-      if (c > 0 && field[r * cols + c - 1] !== sec) {
-        cx.moveTo(c * cell, r * cell);
-        cx.lineTo(c * cell, r * cell + cell);
-      }
-      if (r > 0 && field[(r - 1) * cols + c] !== sec) {
-        cx.moveTo(c * cell, r * cell);
-        cx.lineTo(c * cell + cell, r * cell);
+  // borders — faint between provinces, bold where owners differ (a frontier).
+  // Two passes (internal seams, then frontiers) so each gets its own stroke style.
+  const strokeEdges = (frontierPass: boolean): void => {
+    cx.beginPath();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        if (c > 0 && seedOf[idx - 1] !== seedOf[idx] && (owner[idx - 1] !== owner[idx]) === frontierPass) {
+          cx.moveTo(c * cell, r * cell);
+          cx.lineTo(c * cell, r * cell + cell);
+        }
+        if (r > 0 && seedOf[idx - cols] !== seedOf[idx] && (owner[idx - cols] !== owner[idx]) === frontierPass) {
+          cx.moveTo(c * cell, r * cell);
+          cx.lineTo(c * cell + cell, r * cell);
+        }
       }
     }
-  }
+    cx.stroke();
+  };
   cx.setLineDash([3, 4]);
   cx.lineWidth = 1;
   cx.strokeStyle = rgba('#7df0d0', 0.13);
-  cx.stroke();
+  strokeEdges(false);
   cx.setLineDash([]);
+  cx.lineWidth = 1.4;
+  cx.strokeStyle = rgba('#dff7ee', 0.34);
+  strokeEdges(true);
   cx.restore();
 }
 

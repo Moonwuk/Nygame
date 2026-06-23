@@ -191,9 +191,9 @@ body.sheet-open #log{display:none;}
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:56vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
 
-  /* speed control folds into the top bar; bottom edge stays clear for the command bar */
-  #speedbar{top:6px;right:8px;bottom:auto;z-index:32;padding:3px 4px;background:transparent;border:0;box-shadow:none;}
-  #purse{margin-right:104px;}
+  /* speed control sits at the bottom-right; it hides under the sheet, and a
+     selection opens the sheet, so it never collides with the command bar */
+  #speedbar{right:10px;bottom:12px;top:auto;padding:4px 6px;}
   body.sheet-open #speedbar{display:none;}
 
   #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
@@ -203,7 +203,6 @@ body.sheet-open #log{display:none;}
 }
 @media (max-width:430px){
   .res .rv em{display:none;}
-  #topclock{display:none;}
 }
 `;
 
