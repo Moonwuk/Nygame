@@ -5,8 +5,8 @@
 > `modulesystem.md`, `gdd.md`, `roadmap.md`, `backlog.md` (кирпичики задач),
 > `deep-technical-roadmap.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
-> **Ветка:** `claude/awesome-bohr-ygnunp` · **PR #1** (draft).
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 209 зелёных.**
+> **Ветка:** feature-ветка · **PR:** создаётся после изменений.
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 213 зелёных.**
 
 ---
 
@@ -68,10 +68,10 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze)
-  modules/       economy, movement, sector, planetType, combat, construction, army, victory  (+ *.test.ts)
+  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory  (+ *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
-data/            manifest, resources, units, buildings, factions, events, sectors (.json)
+data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
 docs/            architecture, modulesystem, roadmap, deep-technical-roadmap, engineering-risks, gdd, metagame, state(этот)
 prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.mjs, dist/ (артефакт, в .gitignore)
 ```
@@ -80,7 +80,8 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 
 - `version {data, manifest}`, `time`, `rng`.
 - `players: Record<id, Player>` — `Player.resources: ResourceBag` = **казна
-  игрока** (производство копится сюда, содержание/стоимости списываются).
+  игрока** (производство копится сюда, содержание/стоимости списываются),
+  `technologies?` = сессионные исследования (`completed[]`, `active`).
 - `planets: Record<id, Planet>` — `owner|null`, `position{x,y}`, `links?`
   (лейны графа), `sectorType?`, `resources`, **`buildings: BuildingInstance[]`**
   (`{type, level, hp}`), `garrison: UnitStack[]` (наземная армия мира), `traits`.
@@ -100,7 +101,7 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 
 ## 5. Модули ядра (что делают)
 
-Порядок в кернелах обычно: `sector, planet-type, economy, movement, combat, construction, army`.
+Порядок в кернелах обычно: `sector, planet-type, technology, economy, movement, combat, construction, army`.
 
 ### economy (`economy`)
 
@@ -134,6 +135,22 @@ E_NO_DESTINATION, E_NO_ROUTE, E_FLEET_IMMOBILE`.
 ÷(1+defenseBonus); знак учитывается — защищённый мир делит, открытый усиливает),
 складывается со зданиями. Типы: terran/barren/oceanic/volcanic/gas_giant. Без
 модуля — без эффекта (мягкая деградация). Действий нет.
+
+### technology (`technology`) — сессионное дерево технологий
+
+Действие **`technology.research {technology}`** запускает одно активное
+исследование игрока в рамках матча: стоимость списывается из казны сразу,
+завершение планируется как `technology.complete` с учётом `timeScale`. Состояние
+лежит в `Player.technologies` (`completed[]`, `active`). Коды: `E_BAD_PAYLOAD,
+E_FORBIDDEN, E_UNKNOWN_TECHNOLOGY, E_ALREADY_RESEARCHED, E_RESEARCH_BUSY,
+E_PREREQUISITE, E_INSUFFICIENT`.
+
+Данные `data/technologies.json` задают tier, cost, researchTimeHours,
+prerequisites, unlocks и effects. Модуль подключается только через хуки:
+`construction.requirement` закрывает юниты/здания, перечисленные в unlocks, пока
+нужная технология не завершена; `economy.production`, `fleet.speed` и
+`combat.damage` применяют сессионные бонусы. Без модуля unlock-гейт мягко
+деградирует: строительство остаётся открытым.
 
 ### combat (`combat`) — бой, орбиты, ПВО, бомбардировка
 
@@ -214,6 +231,10 @@ nebula`.
 - **factions:** `vanguard, swarm, necromancer` (пока флейвор/трейты).
 - **events:** `reanimate_on_kill, infect_planet, void_anomaly` (правила
   trigger→effect; движок трейтов пока не построен).
+- **technologies:** сессионное дерево (`industrial_automation`,
+  `orbital_logistics`, `siege_doctrine`, `fortified_infrastructure`): стоимость,
+  длительность, prerequisite-цепочки, unlocks юнитов/зданий и бонусы к
+  production/speed/damage.
 
 ## 7. Прототип (`prototype/`)
 

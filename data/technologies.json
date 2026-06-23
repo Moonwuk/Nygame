@@ -1,0 +1,39 @@
+{
+  "industrial_automation": {
+    "name": "Industrial Automation",
+    "description": "Session research that upgrades planetary logistics and unlocks higher-output extractors.",
+    "tier": 1,
+    "cost": { "credits": 120, "metal": 80 },
+    "researchTimeHours": 4,
+    "unlocks": { "buildings": ["mine_t2"] },
+    "effects": { "productionBonus": 0.1 }
+  },
+  "orbital_logistics": {
+    "name": "Orbital Logistics",
+    "description": "Standardizes dropship operations and makes fleets faster across the session map.",
+    "tier": 1,
+    "cost": { "credits": 160, "metal": 120 },
+    "researchTimeHours": 6,
+    "unlocks": { "units": ["dropship"] },
+    "effects": { "fleetSpeedBonus": 0.12 }
+  },
+  "siege_doctrine": {
+    "name": "Siege Doctrine",
+    "description": "Advanced assault calculations for long-range siege lances.",
+    "tier": 2,
+    "cost": { "credits": 260, "metal": 220 },
+    "researchTimeHours": 10,
+    "prerequisites": ["orbital_logistics"],
+    "unlocks": { "units": ["siege_lance"] },
+    "effects": { "combatDamageBonus": 0.08 }
+  },
+  "fortified_infrastructure": {
+    "name": "Fortified Infrastructure",
+    "description": "Session doctrine for hardened frontier worlds and formal fortress construction.",
+    "tier": 2,
+    "cost": { "credits": 180, "metal": 240 },
+    "researchTimeHours": 8,
+    "prerequisites": ["industrial_automation"],
+    "unlocks": { "buildings": ["fort"] }
+  }
+}

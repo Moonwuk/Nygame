@@ -129,6 +129,36 @@ export const PlanetTypeDefSchema = z.object({
   defenseBonus: z.number().default(0),
 });
 
+export const TechnologyUnlocksSchema = z.object({
+  units: z.array(z.string()).default([]),
+  buildings: z.array(z.string()).default([]),
+  abilities: z.array(z.string()).default([]),
+});
+
+export const TechnologyEffectsSchema = z.object({
+  /** Multiplier on owned planetary production, e.g. 0.1 = +10%. */
+  productionBonus: z.number().default(0),
+  /** Multiplier on owned fleet movement speed, e.g. 0.15 = +15%. */
+  fleetSpeedBonus: z.number().default(0),
+  /** Multiplier on outgoing combat damage, e.g. 0.1 = +10%. */
+  combatDamageBonus: z.number().default(0),
+});
+
+export const TechnologyDefSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  tier: z.number().int().positive().default(1),
+  cost: ResourceBagSchema.default({}),
+  researchTimeHours: z.number().nonnegative().default(0),
+  prerequisites: z.array(z.string()).default([]),
+  unlocks: TechnologyUnlocksSchema.default({ units: [], buildings: [], abilities: [] }),
+  effects: TechnologyEffectsSchema.default({
+    productionBonus: 0,
+    fleetSpeedBonus: 0,
+    combatDamageBonus: 0,
+  }),
+});
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -138,6 +168,7 @@ export const GameDataSchema = z.object({
   events: z.record(z.string(), EffectRuleSchema),
   sectors: z.record(z.string(), SectorTypeDefSchema).default({}),
   planetTypes: z.record(z.string(), PlanetTypeDefSchema).default({}),
+  technologies: z.record(z.string(), TechnologyDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -149,6 +180,9 @@ export type BuildingLevel = z.infer<typeof BuildingLevelSchema>;
 export type EffectRule = z.infer<typeof EffectRuleSchema>;
 export type SectorTypeDef = z.infer<typeof SectorTypeDefSchema>;
 export type PlanetTypeDef = z.infer<typeof PlanetTypeDefSchema>;
+export type TechnologyUnlocks = z.infer<typeof TechnologyUnlocksSchema>;
+export type TechnologyEffects = z.infer<typeof TechnologyEffectsSchema>;
+export type TechnologyDef = z.infer<typeof TechnologyDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;

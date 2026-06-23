@@ -17,6 +17,7 @@ export type BattleId = string;
 export type ResourceId = string;
 export type UnitId = string;
 export type BuildingId = string;
+export type TechnologyId = string;
 export type TraitId = string;
 
 /** A dynamic resource ledger. The engine never assumes a fixed set of
@@ -47,6 +48,18 @@ export interface Player {
   status: 'active' | 'defeated';
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
+  technologies?: PlayerTechnologyState;
+}
+
+export interface ActiveResearch {
+  technology: TechnologyId;
+  startedAt: number;
+  completesAt: number;
+}
+
+export interface PlayerTechnologyState {
+  completed: TechnologyId[];
+  active?: ActiveResearch;
 }
 
 export type MatchStatus = 'ongoing' | 'ended';

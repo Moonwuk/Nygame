@@ -31,6 +31,10 @@ interface CompletePayload {
   count?: number;
   level?: number;
 }
+interface ConstructionRequirement {
+  allowed: boolean;
+  code?: string;
+}
 
 // --- treasury helpers --------------------------------------------------------
 
@@ -79,6 +83,22 @@ function reinforce(garrison: UnitStack[], unit: string, count: number): void {
 function scheduleCompletion(h: HandlerContext, hours: number, payload: CompletePayload): void {
   const ms = (hours * MS_PER_HOUR) / timeScaleOf(h.ctx);
   h.schedule(h.ctx.now + ms, 'construction.complete', payload);
+}
+
+function requireUnlocked(
+  h: HandlerContext,
+  playerId: string,
+  kind: 'unit' | 'building',
+  id: string,
+): void {
+  const requirement = h.hook<ConstructionRequirement>(
+    'construction.requirement',
+    { allowed: true },
+    { playerId, kind, id },
+  );
+  if (!requirement.allowed) {
+    return h.reject(requirement.code ?? 'E_LOCKED');
+  }
 }
 
 /** Resolves the acting player and a planet they own, or rejects with a stable
@@ -182,6 +202,7 @@ export const constructionModule: GameModule = {
       if (!def) {
         return h.reject('E_UNKNOWN_BUILDING');
       }
+      requireUnlocked(h, action.playerId, 'building', payload.building);
       if (planet.buildings.some((b) => b.type === payload.building)) {
         return h.reject('E_ALREADY_BUILT'); // one of each type; grow it with building.upgrade
       }
@@ -263,6 +284,7 @@ export const constructionModule: GameModule = {
       if (!def) {
         return h.reject('E_UNKNOWN_UNIT');
       }
+      requireUnlocked(h, action.playerId, 'unit', payload.unit);
       const cost = scaleCost(def.cost, count);
       if (!canAfford(player.resources, cost)) {
         return h.reject('E_INSUFFICIENT');

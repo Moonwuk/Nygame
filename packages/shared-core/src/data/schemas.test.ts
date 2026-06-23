@@ -23,6 +23,7 @@ function loadShippedBundle(): Record<string, unknown> {
     events: readJson('events.json'),
     sectors: readJson('sectors.json'),
     planetTypes: readJson('planetTypes.json'),
+    technologies: readJson('technologies.json'),
   };
 }
 
@@ -49,6 +50,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.planetTypes.volcanic?.productionBonus).toBeCloseTo(0.25);
     expect(data.planetTypes.terran?.defenseBonus).toBeCloseTo(0.1);
     expect(data.planetTypes.barren?.defenseBonus).toBe(0); // schema default
+    expect(data.technologies.orbital_logistics?.unlocks.units).toContain('dropship');
+    expect(data.technologies.siege_doctrine?.prerequisites).toEqual(['orbital_logistics']);
+    expect(data.technologies.industrial_automation?.effects.productionBonus).toBeCloseTo(0.1);
   });
 
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {

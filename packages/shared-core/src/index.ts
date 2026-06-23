@@ -23,6 +23,8 @@ export {
   type ScheduledEvent,
   type UnitStack,
   type BuildingInstance,
+  type ActiveResearch,
+  type PlayerTechnologyState,
   type ResourceBag,
   type PlayerId,
   type PlanetId,
@@ -31,6 +33,7 @@ export {
   type ResourceId,
   type UnitId,
   type BuildingId,
+  type TechnologyId,
   type TraitId,
   type MatchStatus,
   type MatchEndReason,
@@ -82,6 +85,9 @@ export {
   EffectRuleSchema,
   SectorTypeDefSchema,
   PlanetTypeDefSchema,
+  TechnologyDefSchema,
+  TechnologyEffectsSchema,
+  TechnologyUnlocksSchema,
   ResourceBagSchema,
   UnitStatsSchema,
   type GameData,
@@ -92,6 +98,9 @@ export {
   type EffectRule,
   type SectorTypeDef,
   type PlanetTypeDef,
+  type TechnologyDef,
+  type TechnologyEffects,
+  type TechnologyUnlocks,
   type UnitStats,
 } from './data/schemas';
 
@@ -105,5 +114,6 @@ export { combatModule } from './modules/combat';
 export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
 export { constructionModule } from './modules/construction';
+export { technologyModule } from './modules/technology';
 export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
