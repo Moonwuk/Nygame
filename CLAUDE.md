@@ -112,6 +112,11 @@ data. You should not need to touch the kernel.
 - When you finish a roadmap milestone, update the "Статус реализации" section in
   `docs/roadmap.md`.
 - Development happens on the feature branch; open a PR (draft) after pushing.
+- **Team workflow & tasks.** `main` is the only integration point — branch off it,
+  keep PRs small and single-zone, get the gate green, PR back to `main`. Full regimen
+  is in `CONTRIBUTING.md`. The assignable task list ("кирпичики", one brick ≈ one PR ≈
+  one session) is `docs/backlog.md` — take a brick scoped to one package/module so
+  parallel work can't collide.
 
 ## Behavioral guidelines
 

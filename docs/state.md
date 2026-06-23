@@ -2,7 +2,8 @@
 
 > Живой «якорь контекста»: что готово, как работает, что дальше. Обновляется по
 > мере разработки (после крупных изменений). Парные документы: `architecture.md`,
-> `modulesystem.md`, `gdd.md`, `roadmap.md`, `deep-technical-roadmap.md`, `metagame.md`, корневой `CLAUDE.md`.
+> `modulesystem.md`, `gdd.md`, `roadmap.md`, `backlog.md` (кирпичики задач),
+> `deep-technical-roadmap.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** `claude/awesome-bohr-ygnunp` · **PR #1** (draft).
 > **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 209 зелёных.**
