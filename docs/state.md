@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 213 зелёных** (209 + 4 regression).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 217 зелёных** (213 + 4 багфикс-регрессии).
 
 ---
 
@@ -335,14 +335,12 @@ golden; модель времени `advanceTo`; экономика (казна 
 - ✅ ~~Стройка: два одинаковых заказа до завершения спишут ресурсы дважды~~ —
   **исправлено**: `building.construct` и `building.upgrade` проверяют pending
   `construction.complete` в `scheduled[]` и отклоняют дубль (`E_ALREADY_QUEUED`).
-- Один предсуществующий ESLint-warning в `skirmish.test.ts` (лишний `eslint-disable
-no-console`), не падает гейт.
 
 ## 10. Команды и качество
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 213 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 217 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```

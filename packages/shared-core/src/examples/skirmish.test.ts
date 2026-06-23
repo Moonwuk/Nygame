@@ -418,7 +418,6 @@ describe('demo skirmish — map, paths, movement and collisions (GDD §1, §7)',
     const { timeline, frames, final } = runSkirmish();
 
     if (process.env.VD_DEMO) {
-      // eslint-disable-next-line no-console
       console.log(['', '=== Skirmish timeline ===', ...timeline, ''].join('\n'));
       const here = path.dirname(fileURLToPath(import.meta.url));
       const outDir = path.resolve(here, '../../../../examples');
