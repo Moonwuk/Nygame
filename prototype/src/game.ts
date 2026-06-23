@@ -290,25 +290,38 @@ export const MAP: MapNode[] = [
 ];
 
 /**
- * Empty-space provinces — large, uncapturable void sectors that frame the
- * populated core. They are not planets (no garrison, no city, nothing to take):
- * fleets only *pass through* them. Positioned outside the planet cluster so
- * their regions claim the map's edges; rendering treats the whole map as a
- * tiling of provinces (planet provinces + these voids), Bytro/Paradox-style.
+ * Empty-space provinces — uncapturable void sectors. They are not planets (no
+ * garrison, no city, nothing to take): fleets only *pass through* them. Generated
+ * as a jittered grid that tiles the whole map, with any cell sitting on top of a
+ * planet/junction dropped — so the map is one continuous tiling of provinces
+ * (planet/junction provinces carved out of a field of empty cells), Bytro/Paradox-style.
  */
 export interface VoidSector {
   id: string;
   x: number;
   y: number;
 }
-export const VOID_SECTORS: VoidSector[] = [
-  { id: 'AURORA RIFT', x: 390, y: 300 }, // void between AURORA and MERIDIAN
-  { id: 'MERIDIAN GULF', x: 750, y: 320 }, // void between MERIDIAN and EMBER
-  { id: 'NORTHERN VOID', x: 560, y: -80 }, // deep space, north
-  { id: 'SOUTHERN VOID', x: 560, y: 720 }, // deep space, south
-  { id: 'WESTERN EXPANSE', x: -110, y: 330 }, // western edge
-  { id: 'OUTER DARK', x: 1170, y: 360 }, // eastern edge
-];
+function emptySectorGrid(): VoidSector[] {
+  // stable hash → deterministic jitter (no Math.random; layout never shifts)
+  const hash = (a: number, b: number): number => {
+    const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const step = 120;
+  const cells: VoidSector[] = [];
+  let i = 0;
+  for (let gx = -40; gx <= 1140; gx += step) {
+    for (let gy = -20; gy <= 600; gy += step) {
+      const x = gx + (hash(gx, gy) - 0.5) * 70;
+      const y = gy + (hash(gy, gx) - 0.5) * 70;
+      // a planet/junction owns its own cell — don't drop an empty centre on it
+      if (MAP.some((n) => Math.hypot(n.x - x, n.y - y) < 85)) continue;
+      cells.push({ id: `VOID-${i++}`, x, y });
+    }
+  }
+  return cells;
+}
+export const VOID_SECTORS: VoidSector[] = emptySectorGrid();
 
 /**
  * Stars — the suns each system orbits. Visual anchors only (not part of the

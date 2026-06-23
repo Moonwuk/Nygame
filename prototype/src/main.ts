@@ -1006,11 +1006,36 @@ function nearestStar(x: number, y: number): (typeof STAR_SYSTEMS)[number] | null
 }
 
 /**
- * Stars — each system's sun, drawn under the lanes/planets. Faint orbital rings
- * (each planet circling its nearest star) sell the "objects orbit a star, abstracted
- * into game conventions" layout; the suns themselves glow in their stellar colour.
+ * Stars + empty-sector markers, under the lanes/planets. Each planet rides a faint
+ * orbital ring around its star (the "objects orbit a star" layout); each star shows
+ * a small ✦; each empty (void) cell shows a faint survey tick at its centre, so the
+ * whole map reads as one continuous tiling of sectors.
  */
 function drawStars(): void {
+  // empty-sector centres — a faint survey tick + dot at each void cell's seed
+  cx.save();
+  cx.lineWidth = 1;
+  for (const v of VOID_SECTORS) {
+    const c = world(v);
+    if (!visible(c, 24)) continue;
+    cx.strokeStyle = rgba(VOID_COLOR, 0.5);
+    cx.beginPath();
+    for (const [dx, dy] of [
+      [0, -1],
+      [0, 1],
+      [-1, 0],
+      [1, 0],
+    ] as const) {
+      cx.moveTo(c.x + dx * 1.5, c.y + dy * 1.5);
+      cx.lineTo(c.x + dx * 3.5, c.y + dy * 3.5);
+    }
+    cx.stroke();
+    cx.fillStyle = rgba(VOID_COLOR, 0.6);
+    cx.beginPath();
+    cx.arc(c.x, c.y, 1, 0, TAU);
+    cx.fill();
+  }
+  cx.restore();
   // orbital rings — one faint ring per planet, centred on its star
   cx.save();
   cx.lineWidth = 1;
@@ -1052,9 +1077,6 @@ function drawStars(): void {
     cx.beginPath();
     cx.arc(sc.x, sc.y, 1.6, 0, TAU);
     cx.fill();
-    cx.fillStyle = rgba(star.color, 0.5);
-    cx.font = '700 8px ui-monospace,Menlo,monospace';
-    cx.fillText(star.id, sc.x, sc.y - 11);
     cx.restore();
   }
 }
