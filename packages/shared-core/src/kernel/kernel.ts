@@ -54,18 +54,27 @@ function byOrder(a: OrderedEntry, b: OrderedEntry): number {
   return a.priority - b.priority || a.index - b.index;
 }
 
-/** Earliest scheduled event with `at <= now`, ties broken by `seq`. */
+/** Earliest scheduled event with `at <= now`. The `scheduled` array is kept
+ *  sorted by `(at, seq)`, so this is O(1) — just check the head. */
 function earliestDue(scheduled: readonly ScheduledEvent[], now: number): ScheduledEvent | null {
-  let best: ScheduledEvent | null = null;
-  for (const e of scheduled) {
-    if (e.at > now) {
-      continue;
-    }
-    if (best === null || e.at < best.at || (e.at === best.at && e.seq < best.seq)) {
-      best = e;
+  const first = scheduled[0];
+  return first !== undefined && first.at <= now ? first : null;
+}
+
+/** Binary-search insertion point in a `(at, seq)`-sorted scheduled array. */
+function scheduledInsertPos(arr: readonly ScheduledEvent[], at: number, seq: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    const m = arr[mid]!;
+    if (m.at < at || (m.at === at && m.seq < seq)) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
     }
   }
-  return best;
+  return lo;
 }
 
 /**
@@ -172,7 +181,16 @@ export class Kernel {
       return { ok: false, code: 'E_TIME_BACKWARDS' };
     }
 
-    let committed = state;
+    // Normalize: ensure the scheduled array is (at, seq)-sorted so that
+    // earliestDue is O(1).  After this initial sort the kernel's sorted
+    // insert (binary-search splice) keeps the invariant for all new events.
+    let committed: GameState =
+      state.scheduled.length > 1
+        ? {
+            ...state,
+            scheduled: [...state.scheduled].sort((a, b) => a.at - b.at || a.seq - b.seq),
+          }
+        : state;
     const events: DomainEvent[] = [];
     const failures: AdvanceFailure[] = [];
     let guard = 0;
@@ -188,11 +206,11 @@ export class Kernel {
         if (next.at > committed.time) {
           committed = this.accrue(committed, ctx, next.at, events, failures);
         }
-        // Remove the event before dispatch so a failing handler cannot get the
-        // timeline stuck — it is dead-lettered instead.
+        // Remove the head event (always at index 0 in sorted order) before
+        // dispatch so a failing handler cannot get the timeline stuck.
         const base: GameState = {
           ...committed,
-          scheduled: committed.scheduled.filter((e) => e.id !== next.id),
+          scheduled: committed.scheduled.slice(1),
         };
         const step = this.runStep(base, ctx, next.at, (h) => h.emit(next.type, next.payload));
         if (step.ok) {
@@ -268,7 +286,10 @@ export class Kernel {
       schedule: (at, type, payload) => {
         const safeAt = at < draft.time ? draft.time : at;
         const seq = draft.scheduleSeq++;
-        draft.scheduled.push({ id: `evt:${seq}`, at: safeAt, type, payload: payload ?? null, seq });
+        const event: ScheduledEvent = { id: `evt:${seq}`, at: safeAt, type, payload: payload ?? null, seq };
+        // Sorted insert keeps the array in (at, seq) order so earliestDue is O(1).
+        const pos = scheduledInsertPos(draft.scheduled, safeAt, seq);
+        draft.scheduled.splice(pos, 0, event);
       },
       hook: <T>(name: string, baseValue: T, args?: unknown): T => {
         const entries = this.hooks.get(name);

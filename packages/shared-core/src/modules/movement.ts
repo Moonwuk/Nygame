@@ -88,6 +88,29 @@ function shortestPath(state: GameState, fromId: PlanetId, toId: PlanetId): Plane
   return cur === fromId ? path : null;
 }
 
+/**
+ * Lazily-built route cache. The map topology (planet positions + links) is
+ * static within a match, so each (from, to) pair is computed once with
+ * Dijkstra and then served from the cache — O(V² log V) amortized over all
+ * `fleet.move` orders, versus O(V² log V) per order without it.
+ */
+class RouteCache {
+  private readonly cache = new Map<string, PlanetId[] | null>();
+
+  lookup(state: GameState, from: PlanetId, to: PlanetId): PlanetId[] | null {
+    const key = `${from}\0${to}`;
+    if (this.cache.has(key)) {
+      const cached = this.cache.get(key)!;
+      // Return a copy so the caller can't mutate our cache.
+      return cached ? [...cached] : null;
+    }
+    const result = shortestPath(state, from, to);
+    this.cache.set(key, result);
+    // Return a copy; the cache holds the authoritative reference.
+    return result ? [...result] : null;
+  }
+}
+
 /** Starts the next leg of a journey from `originId` along `hops`. */
 function beginLeg(h: HandlerContext, fleet: Fleet, originId: PlanetId, hops: PlanetId[]): boolean {
   const nextHop = hops[0];
@@ -133,6 +156,9 @@ export const movementModule: GameModule = {
   id: 'movement',
   version: '1.0.0',
   setup(api) {
+    // Closure-scoped cache: topology is static within a kernel's lifetime.
+    const routes = new RouteCache();
+
     api.onAction('fleet.move', (action, h) => {
       const payload = action.payload as Partial<MovePayload>;
       if (typeof payload?.fleetId !== 'string' || typeof payload?.to !== 'string') {
@@ -154,7 +180,7 @@ export const movementModule: GameModule = {
       if (!h.state.planets[payload.to]) {
         return h.reject('E_NO_DESTINATION');
       }
-      const path = shortestPath(h.state, fleet.location, payload.to);
+      const path = routes.lookup(h.state, fleet.location, payload.to);
       if (!path || path.length === 0) {
         return h.reject('E_NO_ROUTE'); // not connected by lanes
       }

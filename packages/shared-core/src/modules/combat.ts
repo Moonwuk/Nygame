@@ -387,12 +387,18 @@ function aaStrengthAt(planet: { garrison: UnitStack[] }, data: GameData): number
   return aa;
 }
 
-/** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`. */
-function nearOrbitHostile(h: HandlerContext, planetId: string, owner: string | null): Fleet | null {
+/** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`.
+ *  If a pre-built `localFleets` index is supplied it avoids an O(all-fleets) scan. */
+function nearOrbitHostile(
+  h: HandlerContext,
+  planetId: string,
+  owner: string | null,
+  localFleets?: readonly Fleet[],
+): Fleet | null {
+  const candidates = localFleets ?? Object.values(h.state.fleets).filter((f) => f.location === planetId);
   let best: Fleet | null = null;
-  for (const id of Object.keys(h.state.fleets)) {
-    const f = h.state.fleets[id];
-    if (!f || f.location !== planetId || f.orbit !== 'near' || f.battleId) {
+  for (const f of candidates) {
+    if (f.orbit !== 'near' || f.battleId) {
       continue;
     }
     if (!f.units.some((s) => s.count > 0) || owner === null || !isHostile(h, owner, f.owner)) {
@@ -416,22 +422,41 @@ function bombardPower(fleet: Fleet, data: GameData): number {
 /** Resolves the orbital layer over one continuous time span: planetary AA fires
  *  at near-orbit attackers (unless a ground assault keeps it busy), and each
  *  bombarding fleet wears the world's structures (and freezes its production —
- *  enforced in economy/construction via `isBombarded`). */
+ *  enforced in economy/construction via `isBombarded`).
+ *
+ *  Optimized with a fleet-by-location index and a ground-assault set so the
+ *  cost is O(planets + fleets + battles) instead of O(planets × fleets). */
 function runOrbital(h: HandlerContext, hours: number): void {
   const data = h.ctx.data;
+
+  // Pre-index fleets by location — O(fleets).
+  const fleetsByLocation = new Map<string, Fleet[]>();
+  for (const f of Object.values(h.state.fleets)) {
+    if (f.location !== null) {
+      const arr = fleetsByLocation.get(f.location);
+      if (arr) arr.push(f);
+      else fleetsByLocation.set(f.location, [f]);
+    }
+  }
+
+  // Pre-index planets with an active ground assault — O(battles).
+  const groundAssaults = new Set<string>();
+  for (const b of Object.values(h.state.battles)) {
+    if (b.phase === 'ground') groundAssaults.add(b.location);
+  }
+
   for (const planetId of Object.keys(h.state.planets)) {
     const planet = h.state.planets[planetId];
     if (!planet) {
       continue;
     }
-    const groundAssault = Object.values(h.state.battles).some(
-      (b) => b.location === planetId && b.phase === 'ground',
-    );
+    const localFleets = fleetsByLocation.get(planetId);
+
     // Orbital AA — anti-ship, only when not defending the ground.
-    if (planet.owner !== null && !groundAssault) {
+    if (planet.owner !== null && !groundAssaults.has(planetId)) {
       const aa = aaStrengthAt(planet, data);
       if (aa > 0) {
-        const target = nearOrbitHostile(h, planetId, planet.owner);
+        const target = nearOrbitHostile(h, planetId, planet.owner, localFleets);
         if (target) {
           applyDamageToSide(h, { kind: 'fleet', fleetId: target.id }, aa * hours, data, planetId);
           const after = h.state.fleets[target.id];
@@ -443,16 +468,17 @@ function runOrbital(h: HandlerContext, hours: number): void {
       }
     }
     // Bombardment — each hostile bombarding fleet shells the structures below.
-    for (const f of Object.values(h.state.fleets)) {
-      if (
-        f.bombarding &&
-        f.location === planetId &&
-        f.orbit === 'near' &&
-        f.owner !== planet.owner
-      ) {
-        const power = bombardPower(f, data) * hours;
-        if (power > 0) {
-          h.emit('planet.bombarded', { planetId, power, owner: planet.owner, by: f.owner });
+    if (localFleets) {
+      for (const f of localFleets) {
+        if (
+          f.bombarding &&
+          f.orbit === 'near' &&
+          f.owner !== planet.owner
+        ) {
+          const power = bombardPower(f, data) * hours;
+          if (power > 0) {
+            h.emit('planet.bombarded', { planetId, power, owner: planet.owner, by: f.owner });
+          }
         }
       }
     }

@@ -40,7 +40,7 @@ export {
   type MatchScore,
   type MatchState,
 } from './state/gameState';
-export { isBombarded } from './state/orbit';
+export { isBombarded, bombardedPlanets } from './state/orbit';
 
 // Action contract
 export {
