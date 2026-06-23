@@ -138,6 +138,9 @@ const bannerEl = $('banner');
 const dayTimer = $('daytimer');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
+const burger = $('burger');
+const scrim = $('scrim');
+const topClock = $('topclock');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -247,7 +250,9 @@ for (const n of MAP) {
 }
 // Base fit: map-space → screen, fitting the cluster inside the HUD insets.
 function projBase(p: { x: number; y: number }): { x: number; y: number } {
-  const left = (MOBILE ? 40 : RAIL) + (MOBILE ? 18 : 80);
+  // Mobile no longer reserves the left rail (it folds into the drawer) → the map
+  // claims that space; desktop keeps the rail + label gutter.
+  const left = MOBILE ? 14 : RAIL + 80;
   const right = VW - (MOBILE ? 24 : 372);
   const top = TOP + (MOBILE ? 54 : 80);
   const bottom = VH - (MOBILE ? 96 : 150);
@@ -1638,6 +1643,11 @@ for (const b of Array.from(document.querySelectorAll('[data-speed]'))) {
   });
 }
 
+// Mobile: hamburger toggles the slide-in drawer (rail + log + comms); the scrim
+// behind it closes on tap. No-op on desktop, where the drawer is always shown.
+burger.addEventListener('click', () => document.body.classList.toggle('drawer-open'));
+scrim.addEventListener('click', () => document.body.classList.remove('drawer-open'));
+
 // --- loop --------------------------------------------------------------------
 
 let lastReal = performance.now();
@@ -1661,6 +1671,7 @@ function frame(nowReal: number) {
   const clockText = `Day ${d} · ${String(h).padStart(2, '0')}:00`;
   if (clockText !== lastClockText) {
     clock.textContent = clockText;
+    topClock.textContent = clockText;
     lastClockText = clockText;
   }
   const dayTimerText = `Day ${d} — next cycle in ${24 - h}h`;

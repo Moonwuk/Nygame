@@ -152,30 +152,58 @@ body.sheet-open #log{display:none;}
   box-shadow:0 0 40px rgba(53,214,230,.25),inset 0 0 30px rgba(53,214,230,.06);
   clip-path:polygon(0 12px,12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);}
 
+/* mobile chrome: hamburger + slide-in drawer. On desktop the drawer is a layout
+   no-op (display:contents) so the rail / log / comms keep their fixed spots. */
+#burger{display:none;flex:0 0 auto;width:42px;height:100%;border:0;border-right:1px solid var(--line);
+  background:transparent;color:var(--cyan);font-size:18px;cursor:pointer;align-items:center;justify-content:center;}
+#burger:active{background:rgba(53,214,230,.14);}
+#topclock{display:none;flex:0 0 auto;padding:0 10px;color:var(--grn);font-size:11px;letter-spacing:.5px;
+  white-space:nowrap;font-variant-numeric:tabular-nums;}
+#scrim{display:none;position:fixed;inset:44px 0 0 0;z-index:34;background:rgba(1,5,9,.58);}
+#drawer{display:contents;}
+.rlabel{display:none;}
+
 @media (max-width:720px){
   #top{height:44px;}
   .who{display:none;}
-  .crest{padding:0 10px;}
+  .crest{padding:0 8px;}
+  #burger{display:flex;}
+  #topclock{display:block;}
   .res{padding:0 9px;gap:5px;}
   #devline{display:none;}
-  #rail{top:44px;width:40px;}
-  #rail button{height:38px;font-size:15px;}
+
+  /* left rail + event log + comms collapse into a slide-in drawer */
+  #drawer{display:flex;flex-direction:column;position:fixed;left:0;top:44px;bottom:0;width:80vw;max-width:300px;
+    z-index:35;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;
+    background:var(--glass);border-right:1px solid var(--cyan);box-shadow:0 0 40px rgba(0,0,0,.7);}
+  body.drawer-open #drawer{transform:none;}
+  body.drawer-open #scrim{display:block;}
+  #drawer #rail{position:static;width:auto;flex-direction:column;align-items:stretch;gap:0;padding:6px 0;
+    background:transparent;border:0;border-bottom:1px solid var(--line);}
+  #drawer #rail button{width:100%;height:46px;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:17px;}
+  #drawer #rail button:active{background:rgba(53,214,230,.1);}
+  #drawer #rail .rlabel{display:inline;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;}
+  #drawer #rail .badge{left:auto;right:14px;top:50%;transform:translateY(-50%);}
+  #drawer #log{position:static;left:auto;right:auto;bottom:auto;width:auto;height:150px;margin:0;border:0;
+    border-bottom:1px solid var(--line);}
+  #drawer #botleft{position:static;left:auto;bottom:auto;padding:12px 16px;}
+
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:56vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
-  #log{left:48px;right:8px;width:auto;bottom:54px;height:66px;}
-  #botleft{left:46px;bottom:6px;}
-  .chat{width:38px;height:38px;}
-  #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
-  body.sheet-open #log,body.sheet-open #botleft{display:none;}
-  button.b{padding:7px 12px;font-size:12px;}
-  #speedbar{bottom:auto;top:48px;right:6px;padding:3px 5px;}
+
+  /* speed control folds into the top bar; bottom edge stays clear for the command bar */
+  #speedbar{top:6px;right:8px;bottom:auto;z-index:32;padding:3px 4px;background:transparent;border:0;box-shadow:none;}
+  #purse{margin-right:104px;}
   body.sheet-open #speedbar{display:none;}
+
+  #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
+  button.b{padding:7px 12px;font-size:12px;}
   #cmdbar{bottom:10px;}
   body.sheet-open #cmdbar{bottom:calc(56vh + 8px);}
 }
 @media (max-width:430px){
   .res .rv em{display:none;}
-  #log{display:none;}
+  #topclock{display:none;}
 }
 `;
 
@@ -186,26 +214,31 @@ const html = `<!doctype html>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
+  <button id="burger" title="Menu" aria-label="Menu">☰</button>
   <div class="crest"><span class="dia"></span>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
+  <span id="topclock">Day 1</span>
   <div id="purse"></div>
 </header>
 <div id="devline">VOID CORE v0.1 · SESSION skirmish-1 · GRID sector-7 · <span id="clock">Day 1</span></div>
-<nav id="rail">
-  <button title="Dispatches">≡</button>
-  <button title="Diplomacy (soon)">⬡</button>
-  <button title="Economy">¤</button>
-  <button title="Military">△</button>
-  <button title="Army">▤</button>
-  <button title="Espionage (soon)">◎</button>
-  <button title="Markers">⚑</button>
-  <button title="Research (soon)">✛</button>
-  <button title="Alerts">⚠<span class="badge" id="alertbadge" style="display:none">0</span></button>
-</nav>
+<div id="scrim"></div>
+<div id="drawer">
+  <nav id="rail">
+    <button title="Dispatches">≡<span class="rlabel">Dispatches</span></button>
+    <button title="Diplomacy (soon)">⬡<span class="rlabel">Diplomacy</span></button>
+    <button title="Economy">¤<span class="rlabel">Economy</span></button>
+    <button title="Military">△<span class="rlabel">Military</span></button>
+    <button title="Army">▤<span class="rlabel">Army</span></button>
+    <button title="Espionage (soon)">◎<span class="rlabel">Espionage</span></button>
+    <button title="Markers">⚑<span class="rlabel">Markers</span></button>
+    <button title="Research (soon)">✛<span class="rlabel">Research</span></button>
+    <button title="Alerts">⚠<span class="rlabel">Alerts</span><span class="badge" id="alertbadge" style="display:none">0</span></button>
+  </nav>
+  <div id="log"></div>
+  <footer id="botleft"><button class="chat" title="Comms">◈</button><span id="daytimer">Day 1</span></footer>
+</div>
 <aside id="side"></aside>
-<footer id="botleft"><button class="chat" title="Comms">◈</button><span id="daytimer">Day 1</span></footer>
-<div id="log"></div>
 <div id="speedbar" class="spd">
   <button data-speed="0">‖</button><button data-speed="2" class="on">▶</button><button data-speed="6">▶▶</button>
 </div>
