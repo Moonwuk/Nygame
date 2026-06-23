@@ -334,14 +334,12 @@ golden; модель времени `advanceTo`; экономика (казна 
   (releaseOrDestroyFleet удаляет пустой флот раньше capturePlanet) — редкий кейс.
 - Стройка: два одинаковых заказа до завершения спишут ресурсы дважды (идемпотентность
   — зона Этапа 2 action-layer).
-- Один предсуществующий ESLint-warning в `skirmish.test.ts` (лишний `eslint-disable
-no-console`), не падает гейт.
 
 ## 10. Команды и качество
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 209 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 213 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```
