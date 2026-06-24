@@ -18,6 +18,37 @@ This is the first server-authoritative multiplayer slice. It is intentionally sm
 - Cross-player spoofing is rejected with `E_FORBIDDEN`.
 - `@void/client` exposes `MultiplayerClient`, a small transport adapter that sends actions and consumes `welcome`/`state`/`delta`/`rejection` messages (applying deltas onto its last snapshot).
 
+## Running a two-player test
+
+A runnable dev harness boots the **real** simulation core (the full base-module
+manifest) as a two-player match — `green` and `red`, each with a homeworld and an
+idle fleet — and serves it over WebSocket. State is in-memory and the `?player=`
+handshake is unauthenticated, so this is for local testing, not production.
+
+```bash
+pnpm dev:server                          # 127.0.0.1:8787, match id "dev"
+HOST=0.0.0.0 PORT=9000 pnpm dev:server   # reachable from other LAN devices
+```
+
+It prints the connect URLs and a health route:
+
+```
+health : http://127.0.0.1:8787/health
+green  : ws://127.0.0.1:8787/matches/dev?player=green
+red    : ws://127.0.0.1:8787/matches/dev?player=red
+```
+
+Connecting as an unknown player is refused at the upgrade (HTTP 403). For a test
+across the internet, bind `HOST=0.0.0.0` and tunnel the port, or host the server
+(Fly.io/Railway, per `docs/roadmap.md`).
+
+The wire is covered headlessly by `packages/server/src/scenario.test.ts` (part of
+`pnpm test`): it connects two real WebSocket clients to the dev match, has each
+issue a `fleet.orbit` order, and asserts every action is broadcast to **both**
+peers and that a peer reconstructs the exact authoritative state from `welcome` +
+deltas. The construction (data loader + `createDevMatch`) lives in
+`packages/server/src/scenario.ts`, reused by both the runner and the test.
+
 ## Protocol
 
 Client → server:

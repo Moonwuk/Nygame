@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Authoritative game server (Stage 3) with an in-memory WebSocket multiplayer slice.",
   "scripts": {
+    "dev": "node dev.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

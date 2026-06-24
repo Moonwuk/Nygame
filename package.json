@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "typecheck": "pnpm -r --if-present run typecheck",
     "prototype": "node prototype/build.mjs",
+    "dev:server": "node packages/server/dev.mjs",
     "audit": "pnpm audit --audit-level=high",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
   },
