@@ -22,7 +22,7 @@
 
 Подробности — в [`docs/`](./docs): [`gdd.md`](./docs/gdd.md) (игровой дизайн),
 [`architecture.md`](./docs/architecture.md), [`modulesystem.md`](./docs/modulesystem.md),
-[`roadmap.md`](./docs/roadmap.md), [`deep-technical-roadmap.md`](./docs/deep-technical-roadmap.md), [`engineering-risks.md`](./docs/engineering-risks.md).
+[`roadmap.md`](./docs/roadmap.md), [`deep-technical-roadmap.md`](./docs/deep-technical-roadmap.md), [`multiplayer.md`](./docs/multiplayer.md), [`engineering-risks.md`](./docs/engineering-risks.md).
 
 ## Структура монорепы
 
@@ -31,8 +31,8 @@
 ├── packages/
 │   ├── shared-core/   # детерминированное ядро-симуляция (готовится первым)
 │   ├── action-layer/  # Stage 2: envelope validation, auth, idempotency, sequence
-│   ├── server/        # авторитетный сервер — Stage 3 (плейсхолдер)
-│   └── client/        # React Native клиент — Stage 4 (плейсхолдер)
+│   ├── server/        # авторитетный сервер — Stage 3 (in-memory multiplayer slice)
+│   └── client/        # React Native клиент — Stage 4 (transport adapter slice)
 ├── data/              # игровой контент (data-driven): units, factions, buildings, events, resources
 └── docs/              # проектные документы
 ```
