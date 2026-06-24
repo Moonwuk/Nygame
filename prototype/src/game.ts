@@ -177,34 +177,75 @@ export interface MapNode {
   garrison?: Array<[string, number]>;
 }
 
-// One connected graph of sectors (free layout). Empty sectors are real nodes you
-// travel through; only non-empty types can be owned. Links are bidirectional.
-export const MAP: MapNode[] = [
+type KeyNode = Omit<MapNode, 'links'>;
+
+// Curated sectors — fixed positions / types / owners / garrisons. The rest of the
+// map is filled in around them and everything is wired up by proximity below.
+const KEY: KeyNode[] = [
   // home region (west)
-  { id: 'HOME', owner: 'p1', x: 150, y: 250, sector: 'planet', type: 'terran', links: ['FORGE', 'RELAY', 'ANCHOR'], buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
-  { id: 'ANCHOR', owner: 'p1', x: 130, y: 440, sector: 'planet', type: 'oceanic', links: ['HOME', 'RELAY', 'VOID_W'], buildings: [{ type: 'refinery' }], garrison: [['marine', 2], ['orbital_aa', 1]] },
-  { id: 'RELAY', owner: null, x: 320, y: 360, sector: 'planet', type: 'barren', links: ['HOME', 'ANCHOR', 'FORGE', 'VOID_HM'], garrison: [['marine', 1]] },
-  { id: 'FORGE', owner: null, x: 250, y: 175, sector: 'asteroid', links: ['HOME', 'RELAY', 'VOID_HU'] },
+  { id: 'HOME', owner: 'p1', x: 150, y: 250, sector: 'planet', type: 'terran', buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
+  { id: 'ANCHOR', owner: 'p1', x: 130, y: 440, sector: 'planet', type: 'oceanic', buildings: [{ type: 'refinery' }], garrison: [['marine', 2], ['orbital_aa', 1]] },
+  { id: 'RELAY', owner: null, x: 320, y: 360, sector: 'planet', type: 'barren', garrison: [['marine', 1]] },
+  { id: 'FORGE', owner: null, x: 250, y: 175, sector: 'asteroid' },
   // contested region (centre)
-  { id: 'NEXUS', owner: null, x: 560, y: 250, sector: 'nebula', type: 'oceanic', links: ['VOID_HM', 'VEIL', 'HARBOR', 'DRIFT'], buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['cruiser', 1]] },
-  { id: 'VEIL', owner: null, x: 470, y: 430, sector: 'nebula', type: 'gas_giant', links: ['VOID_HM', 'NEXUS', 'HARBOR', 'VOID_S'], buildings: [{ type: 'refinery' }], garrison: [['marine', 2]] },
-  { id: 'HARBOR', owner: null, x: 660, y: 430, sector: 'planet', type: 'oceanic', links: ['NEXUS', 'VEIL', 'VOID_ME', 'VOID_S'], buildings: [{ type: 'barracks' }], garrison: [['marine', 2]] },
-  { id: 'DRIFT', owner: null, x: 560, y: 150, sector: 'asteroid', links: ['VOID_HU', 'NEXUS', 'VOID_MU', 'VOID_N'] },
+  { id: 'NEXUS', owner: null, x: 560, y: 250, sector: 'nebula', type: 'oceanic', buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['cruiser', 1]] },
+  { id: 'VEIL', owner: null, x: 470, y: 430, sector: 'nebula', type: 'gas_giant', buildings: [{ type: 'refinery' }], garrison: [['marine', 2]] },
+  { id: 'HARBOR', owner: null, x: 660, y: 430, sector: 'planet', type: 'oceanic', buildings: [{ type: 'barracks' }], garrison: [['marine', 2]] },
+  { id: 'DRIFT', owner: null, x: 560, y: 150, sector: 'asteroid' },
   // enemy region (east)
-  { id: 'OUTPOST', owner: 'p2', x: 850, y: 250, sector: 'planet', type: 'volcanic', links: ['VOID_ME', 'VOID_MU', 'CRIMSON', 'BASTION'], buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
-  { id: 'BASTION', owner: 'p2', x: 930, y: 440, sector: 'nebula', type: 'barren', links: ['OUTPOST', 'CRIMSON', 'SLAG'], buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['scout', 1]] },
-  { id: 'CRIMSON', owner: 'p2', x: 970, y: 260, sector: 'planet', type: 'terran', links: ['OUTPOST', 'BASTION', 'SLAG', 'VOID_E'], buildings: [{ type: 'fort' }, { type: 'mine' }], garrison: [['marine', 4], ['orbital_aa', 1]] },
-  { id: 'SLAG', owner: null, x: 1020, y: 390, sector: 'asteroid', links: ['CRIMSON', 'BASTION', 'VOID_E'] },
-  // empty space — uncapturable, but part of the graph (you travel through it)
-  { id: 'VOID_W', owner: null, x: 70, y: 380, sector: 'empty', links: ['ANCHOR'] },
-  { id: 'VOID_HM', owner: null, x: 425, y: 335, sector: 'empty', links: ['RELAY', 'NEXUS', 'VEIL'] },
-  { id: 'VOID_HU', owner: null, x: 405, y: 150, sector: 'empty', links: ['FORGE', 'DRIFT'] },
-  { id: 'VOID_S', owner: null, x: 565, y: 545, sector: 'empty', links: ['VEIL', 'HARBOR'] },
-  { id: 'VOID_N', owner: null, x: 560, y: 40, sector: 'empty', links: ['DRIFT'] },
-  { id: 'VOID_ME', owner: null, x: 755, y: 335, sector: 'empty', links: ['HARBOR', 'OUTPOST'] },
-  { id: 'VOID_MU', owner: null, x: 710, y: 180, sector: 'empty', links: ['DRIFT', 'OUTPOST'] },
-  { id: 'VOID_E', owner: null, x: 1110, y: 330, sector: 'empty', links: ['CRIMSON', 'SLAG'] },
+  { id: 'OUTPOST', owner: 'p2', x: 850, y: 250, sector: 'planet', type: 'volcanic', buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
+  { id: 'BASTION', owner: 'p2', x: 930, y: 440, sector: 'nebula', type: 'barren', buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['scout', 1]] },
+  { id: 'CRIMSON', owner: 'p2', x: 970, y: 260, sector: 'planet', type: 'terran', buildings: [{ type: 'fort' }, { type: 'mine' }], garrison: [['marine', 4], ['orbital_aa', 1]] },
+  { id: 'SLAG', owner: null, x: 1020, y: 390, sector: 'asteroid' },
 ];
+
+// Fill the rest of the map with sectors on a jittered lattice: mostly empty space,
+// with the occasional neutral field/world to seize. Deterministic; bump the grid
+// density to get more sectors.
+function fillSectors(): KeyNode[] {
+  const hash = (a: number, b: number): number => {
+    const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const out: KeyNode[] = [];
+  let i = 0;
+  for (let gx = 60; gx <= 1130; gx += 120) {
+    for (let gy = 50; gy <= 520; gy += 120) {
+      const x = gx + (hash(gx, gy) - 0.5) * 70;
+      const y = gy + (hash(gy, gx) - 0.5) * 70;
+      if (KEY.some((k) => Math.hypot(k.x - x, k.y - y) < 90)) continue;
+      const r = hash(x * 0.37, y * 0.71);
+      const sector = r < 0.1 ? 'asteroid' : r < 0.18 ? 'nebula' : 'empty';
+      const node: KeyNode = { id: `S${i++}`, owner: null, x, y, sector };
+      if (sector === 'nebula') node.type = 'barren';
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+// Wire sectors up by proximity: each links to its nearest neighbours within range
+// (symmetric, degree-capped) — "every sector has N paths, joined or not to its
+// neighbours". This is what makes the whole map one traversable graph.
+function withProximityLinks(nodes: KeyNode[]): MapNode[] {
+  const range = 215;
+  const cap = 6;
+  const adj = new Map<string, Set<string>>(nodes.map((n) => [n.id, new Set<string>()]));
+  const dist = (a: KeyNode, b: KeyNode): number => Math.hypot(a.x - b.x, a.y - b.y);
+  for (const n of nodes) {
+    const near = nodes
+      .filter((m) => m.id !== n.id && dist(m, n) <= range)
+      .sort((a, b) => dist(a, n) - dist(b, n))
+      .slice(0, cap);
+    for (const m of near) {
+      adj.get(n.id)!.add(m.id);
+      adj.get(m.id)!.add(n.id);
+    }
+  }
+  return nodes.map((n) => ({ ...n, links: [...adj.get(n.id)!] }));
+}
+
+export const MAP: MapNode[] = withProximityLinks([...KEY, ...fillSectors()]);
 
 function player(
   id: string,

@@ -586,8 +586,29 @@ function handleEvents(events: DomainEvent[]) {
       case 'fleet.destroyed':
         note(`☠️ a ${NAME[p.owner as string]} fleet was destroyed`);
         break;
+      case 'fleet.transit':
+      case 'fleet.arrived':
+        seizeSector(p.at as string, p.fleetId as string);
+        break;
     }
   }
+}
+
+// A fleet moving through (or stopping at) a capturable sector that is undefended
+// and uncontested takes it on the spot — the province recolours. Defended sectors
+// (a garrison or fortress) need a real assault; empty space can't be owned at all.
+function seizeSector(at: string, fleetId: string) {
+  const f = s.fleets[fleetId];
+  const pl = s.planets[at];
+  if (!f || !pl || pl.owner === f.owner) return;
+  if (!SECTOR_TYPES[SECTOR_OF[at]]?.capturable) return;
+  if ((pl.garrison ?? []).some((u) => u.count > 0)) return;
+  const contested = Object.values(s.fleets).some(
+    (g) => g.owner !== f.owner && g.location === at && g.units.some((u) => u.count > 0),
+  );
+  if (contested) return;
+  pl.owner = f.owner;
+  note(`🚩 ${NAME[f.owner] ?? f.owner} seized ${at}`);
 }
 
 // --- red AI ------------------------------------------------------------------
@@ -639,26 +660,6 @@ function autoEngage() {
       (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
     );
     if (enemyHere) continue; // let the auto orbital battle settle first
-    if (f.orbit !== 'near') apply(order(s, orbitFleet(f.owner, f.id, 'near'), s.time));
-    apply(order(s, assaultFleet(f.owner, f.id), s.time));
-  }
-}
-
-// Undefended asteroid junctions are taken by simply arriving: an idle fleet over a
-// neutral/hostile junction with no garrison and no contesting enemy occupies it
-// (orbit in, walk in) via the core's capture path. A fortress garrisons AA → the
-// junction becomes defended → this skips it, so it must be stormed like a city.
-function autoCaptureJunctions() {
-  for (const f of Object.values(s.fleets)) {
-    if (f.location == null || f.movement || f.battleId) continue;
-    if (SECTOR_OF[f.location] !== 'asteroid') continue;
-    const pl = s.planets[f.location];
-    if (!pl || pl.owner === f.owner) continue;
-    if ((pl.garrison ?? []).some((u) => u.count > 0)) continue; // fortified → storm it instead
-    const contested = Object.values(s.fleets).some(
-      (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
-    );
-    if (contested) continue;
     if (f.orbit !== 'near') apply(order(s, orbitFleet(f.owner, f.id, 'near'), s.time));
     apply(order(s, assaultFleet(f.owner, f.id), s.time));
   }
@@ -1915,7 +1916,6 @@ function frame(nowReal: number) {
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
     autoEngage();
-    autoCaptureJunctions();
     runAI();
     pumpBuildQueues();
     checkEnd();
