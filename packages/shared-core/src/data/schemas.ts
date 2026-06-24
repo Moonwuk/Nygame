@@ -59,6 +59,12 @@ export const UnitDefSchema = z.object({
   superUnit: z.boolean().default(false),
   /** Victory-score worth of one such unit (only counted when `superUnit`). */
   scoreValue: z.number().nonnegative().default(0),
+  /** Radar "signature": how detectable the unit is. A fleet's signature is the
+   *  sum of count × signature; radar reveals a coarse size bucket, never the
+   *  exact composition (fog-of-war — `visibleState`). */
+  signature: z.number().nonnegative().default(1),
+  /** Radar reach (in jumps) the unit projects as a radar-ship (0 = none). */
+  radarRange: z.number().nonnegative().default(0),
 });
 
 export const FactionDefSchema = z.object({
@@ -97,6 +103,9 @@ export const BuildingDefSchema = z.object({
    *  the instance's level, so investing in upgrades raises (and losing the
    *  building lowers) the owner's score. */
   scoreValue: z.number().nonnegative().default(0),
+  /** Radar reach (in jumps) the building projects from the world it sits on
+   *  (0 = none). Drives signature detection in `visibleState`. */
+  radarRange: z.number().nonnegative().default(0),
 });
 
 /**
