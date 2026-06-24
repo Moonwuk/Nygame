@@ -3,6 +3,7 @@ import { timeScaleOf } from '../action/types';
 import type { GameData, ResourceBag, TechnologyDef } from '../data/schemas';
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Player, PlayerTechnologyState } from '../state/gameState';
+import { canAfford, payCost } from '../util/treasury';
 
 const MS_PER_HOUR = 3_600_000;
 
@@ -37,24 +38,6 @@ interface SpeedArgs {
 
 interface DamageArgs {
   attacker?: string | null;
-}
-
-function canAfford(treasury: ResourceBag, cost: ResourceBag): boolean {
-  for (const res of Object.keys(cost)) {
-    if ((treasury[res] ?? 0) < (cost[res] ?? 0)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function payCost(treasury: ResourceBag, cost: ResourceBag): void {
-  for (const res of Object.keys(cost)) {
-    const amount = cost[res] ?? 0;
-    if (amount !== 0) {
-      treasury[res] = (treasury[res] ?? 0) - amount;
-    }
-  }
 }
 
 function technologyState(player: Player): PlayerTechnologyState {

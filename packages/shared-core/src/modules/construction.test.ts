@@ -397,3 +397,50 @@ describe('construction module — buildings in combat (GDD §7.4)', () => {
     expect(r.events.map((e) => e.type)).toContain('building.destroyed');
   });
 });
+
+describe('construction module — double-spend prevention (bug fix)', () => {
+  it('rejects a duplicate building.construct while the first is still pending', () => {
+    const kernel = createKernel([constructionModule]);
+    const st = stateWith({ players: [player('p1', { metal: 200 })], planets: [planet('A', 'p1')] });
+    const first = okApply(kernel.applyAction(st, construct('mine'), ctx(0)));
+    expect(first.state.players.p1?.resources.metal).toBe(150); // charged once
+
+    const second = kernel.applyAction(first.state, { ...construct('mine'), id: 's:p1:2' }, ctx(0));
+    expect(errCode(second)).toBe('E_ALREADY_QUEUED');
+    // Treasury unchanged after rejection.
+    expect(first.state.players.p1?.resources.metal).toBe(150);
+  });
+
+  it('rejects a duplicate building.upgrade while the first is still pending', () => {
+    const kernel = createKernel([constructionModule]);
+    const a = planet('A', 'p1');
+    a.buildings = [{ type: 'fort', level: 1, hp: 30 }];
+    const st = stateWith({
+      players: [player('p1', { metal: 200, credits: 100 })],
+      planets: [a],
+    });
+    const first = okApply(kernel.applyAction(st, upgrade('fort'), ctx(0)));
+    expect(first.state.players.p1?.resources.metal).toBe(160); // charged once
+
+    const second = kernel.applyAction(first.state, { ...upgrade('fort'), id: 's:p1:2' }, ctx(0));
+    expect(errCode(second)).toBe('E_ALREADY_QUEUED');
+    expect(first.state.players.p1?.resources.metal).toBe(160);
+  });
+
+  it('allows building.construct after the pending one completes', () => {
+    const kernel = createKernel([constructionModule]);
+    const st = stateWith({
+      players: [player('p1', { metal: 200, credits: 100 })],
+      planets: [planet('A', 'p1')],
+    });
+    const first = okApply(kernel.applyAction(st, construct('mine'), ctx(0)));
+    // Complete the first build.
+    const done = okAdvance(kernel.advanceTo(first.state, ctx(4 * HOUR)));
+    expect(done.state.planets.A?.buildings).toHaveLength(1);
+    // Now a second construct of a DIFFERENT building should succeed (mine already built).
+    const second = okApply(
+      kernel.applyAction(done.state, { ...construct('fort'), id: 's:p1:2' }, ctx(4 * HOUR)),
+    );
+    expect(second.state.players.p1?.resources.metal).toBe(130); // 150 − 20 for fort
+  });
+});

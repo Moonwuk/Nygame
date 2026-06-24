@@ -11,6 +11,7 @@ import {
   order,
   data,
   MAP,
+  SECTOR_TYPES,
   HOUR,
   DAY,
   hpOfLevel,
@@ -39,9 +40,16 @@ import type {
 
 // --- constants ---------------------------------------------------------------
 
-// Tactical-display palette: cyan = friendly, red = hostile, steel = neutral,
-// phosphor-green accent = targeting/HUD. Everything reads on near-black.
-const COLOR: Record<string, string> = { p1: '#35d6e6', p2: '#ff5a4d', null: '#6f8a93' };
+// Political palette (Bytro/Paradox-style): YOU = green, ally = blue, neutral =
+// gray, enemy = red — used for fleets/planets and to tint each owner's province.
+// Cyan stays the console-chrome accent (grid, borders, targeting reticle).
+const COLOR: Record<string, string> = {
+  p1: '#3ad17a', // you — green
+  p2: '#ff5a4d', // enemy — red
+  ally: '#4a8cff', // ally — blue (latent: no allied player in the skirmish yet)
+  null: '#6f8a93', // neutral — gray
+};
+const VOID_COLOR = '#46606e'; // empty-space provinces — uncapturable void
 // Dev-only fog: colour for a node whose contents are outside sensor range.
 const FOG_COL = '#3a4852';
 const LANE = 'rgba(73,196,206,0.20)';
@@ -52,13 +60,57 @@ const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
 const BUILDABLE = ['mine', 'refinery', 'barracks', 'fort'];
 const BUILD_UNITS = ['marine', 'orbital_aa', 'cruiser', 'scout', 'siege'];
-const BUILD_ICON: Record<string, string> = { mine: '⬢', refinery: '◇', barracks: '▤', fort: '⬡' };
-const SECTOR_GLOW: Record<string, string> = {
-  asteroid_field: '#d6a645',
-  nebula: '#8f6dff',
-  empty_space: '#35d6e6',
+const BUILD_ICON: Record<string, string> = {
+  mine: '⬢',
+  refinery: '◇',
+  barracks: '▤',
+  fort: '⬡',
+  starfort: '✦',
 };
+const UNIT_ICON: Record<string, string> = {
+  marine: '◆',
+  orbital_aa: '⌁',
+  cruiser: '▲',
+  scout: '◌',
+  siege: '✦',
+};
+/** Accent colour for a sector type (from the data-driven registry). */
+const sectorColor = (type: string): string => SECTOR_TYPES[type]?.color ?? '#35d6e6';
 const ME = 'p1';
+type PlanetTab = 'ground' | 'ships' | 'buildings';
+type BuildLane = 'buildings' | 'units';
+type BuildKind = 'building' | 'upgrade' | 'unit';
+
+interface QueuedBuild {
+  kind: BuildKind;
+  id: string;
+  count: number;
+}
+
+interface PlanetBuildQueue {
+  buildings: QueuedBuild[];
+  units: QueuedBuild[];
+}
+
+interface ConstructionPayload {
+  kind?: 'building' | 'unit' | 'upgrade';
+  planetId?: string;
+  building?: string;
+  unit?: string;
+  count?: number;
+  level?: number;
+}
+
+interface ActiveBuild {
+  at: number;
+  seq: number;
+  payload: ConstructionPayload;
+}
+
+/** Escape untrusted strings before inserting into innerHTML (XSS prevention). */
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 /** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
 function rgba(hex: string, a: number): string {
@@ -68,6 +120,19 @@ function rgba(hex: string, a: number): string {
   const b = parseInt(v.slice(4, 6), 16);
   return `rgba(${r},${g},${b},${a})`;
 }
+
+/** Total count across a stack of units (ships, garrison or landing troops). */
+const sumUnits = (stacks: ReadonlyArray<{ count: number }>): number =>
+  stacks.reduce((a, s) => a + s.count, 0);
+
+// Map-marker geometry / palette, shared so every blip reads the same way.
+const CARDINAL: ReadonlyArray<readonly [number, number]> = [
+  [0, -1],
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+];
+const ORBIT_COLOR = { near: '#ffb15f', far: '#7df0d0' } as const; // hot zone / safe ring
 
 // --- state -------------------------------------------------------------------
 
@@ -79,6 +144,8 @@ let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
+let planetTab: PlanetTab = 'buildings';
+const buildQueues: Record<string, PlanetBuildQueue> = {};
 const logLines: string[] = [];
 let lastAiAt = 0;
 let lastPanelHtml = '';
@@ -107,6 +174,9 @@ const bannerEl = $('banner');
 const dayTimer = $('daytimer');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
+const burger = $('burger');
+const scrim = $('scrim');
+const topClock = $('topclock');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -216,7 +286,9 @@ for (const n of MAP) {
 }
 // Base fit: map-space → screen, fitting the cluster inside the HUD insets.
 function projBase(p: { x: number; y: number }): { x: number; y: number } {
-  const left = (MOBILE ? 40 : RAIL) + (MOBILE ? 18 : 80);
+  // Mobile no longer reserves the left rail (it folds into the drawer) → the map
+  // claims that space; desktop keeps the rail + label gutter.
+  const left = MOBILE ? 14 : RAIL + 80;
   const right = VW - (MOBILE ? 24 : 372);
   const top = TOP + (MOBILE ? 54 : 80);
   const bottom = VH - (MOBILE ? 96 : 150);
@@ -234,6 +306,8 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const MAP_LINKS = MAP.flatMap((n) =>
   n.links.filter((l) => n.id < l).map((l) => [n.id, l] as const),
 );
+// node sector type by id — drives asteroid-junction rendering + capture-by-arrival
+const SECTOR_OF: Record<string, string> = Object.fromEntries(MAP.map((n) => [n.id, n.sector]));
 function world(p: { x: number; y: number }): { x: number; y: number } {
   const b = projBase(p);
   return { x: b.x * cam.scale + cam.x, y: b.y * cam.scale + cam.y };
@@ -274,6 +348,136 @@ function afford(bag: Record<string, number> | undefined): boolean {
   for (const [r, n] of Object.entries(bag ?? {})) if ((res[r] ?? 0) < n) return false;
   return true;
 }
+function unitIcon(unit: string): string {
+  return UNIT_ICON[unit] ?? (isGround(unit) ? '◆' : '▲');
+}
+function displayUnit(unit: string): string {
+  return unit.replace(/_/g, ' ');
+}
+function queueOf(planetId: string): PlanetBuildQueue {
+  return (buildQueues[planetId] ??= { buildings: [], units: [] });
+}
+function laneOf(kind: BuildKind): BuildLane {
+  return kind === 'unit' ? 'units' : 'buildings';
+}
+function buildCost(planetId: string, q: QueuedBuild): Record<string, number> | undefined {
+  if (q.kind === 'unit') {
+    return data.units[q.id]?.cost;
+  }
+  if (q.kind === 'building') {
+    return data.buildings[q.id]?.cost;
+  }
+  const pl = s.planets[planetId];
+  const inst = pl?.buildings.find((b) => b.type === q.id);
+  return inst ? data.buildings[q.id]?.upgrades[inst.level - 1]?.cost : undefined;
+}
+function canStartQueued(planetId: string, q: QueuedBuild): boolean {
+  return afford(buildCost(planetId, q));
+}
+function constructionPayload(payload: unknown): ConstructionPayload | null {
+  const p = payload as ConstructionPayload;
+  return typeof p?.planetId === 'string' ? p : null;
+}
+function activeConstruction(planetId: string, lane: BuildLane): ActiveBuild | null {
+  let best: ActiveBuild | null = null;
+  for (const event of s.scheduled) {
+    if (event.type !== 'construction.complete') {
+      continue;
+    }
+    const payload = constructionPayload(event.payload);
+    if (!payload || payload.planetId !== planetId) {
+      continue;
+    }
+    const kind = payload.kind === 'unit' ? 'units' : 'buildings';
+    if (kind !== lane) {
+      continue;
+    }
+    if (!best || event.at < best.at || (event.at === best.at && event.seq < best.seq)) {
+      best = { at: event.at, seq: event.seq, payload };
+    }
+  }
+  return best;
+}
+function constructionLabel(p: ConstructionPayload): string {
+  if (p.kind === 'unit' && p.unit) {
+    return `${p.count ?? 1}× ${unitIcon(p.unit)} ${displayUnit(p.unit)}`;
+  }
+  if (p.kind === 'upgrade' && p.building) {
+    return `${BUILD_ICON[p.building] ?? '▣'} ${data.buildings[p.building]?.name ?? p.building} → L${p.level ?? '?'}`;
+  }
+  if (p.building) {
+    return `${BUILD_ICON[p.building] ?? '▣'} ${data.buildings[p.building]?.name ?? p.building}`;
+  }
+  return 'unknown order';
+}
+function buildDurationHours(p: ConstructionPayload): number {
+  if (p.kind === 'unit' && p.unit) {
+    return data.units[p.unit]?.buildTimeHours ?? 0;
+  }
+  if (p.kind === 'upgrade' && p.building && typeof p.level === 'number') {
+    return data.buildings[p.building]?.upgrades[p.level - 2]?.buildTimeHours ?? 0;
+  }
+  if (p.building) {
+    return data.buildings[p.building]?.buildTimeHours ?? 0;
+  }
+  return 0;
+}
+function timeLeft(at: number): string {
+  const hours = Math.max(0, (at - s.time) / HOUR);
+  return hours >= 1 ? `${hours.toFixed(1)}h` : `${Math.ceil(hours * 60)}m`;
+}
+function progressPct(active: ActiveBuild): number {
+  const duration = buildDurationHours(active.payload) * HOUR;
+  if (duration <= 0) {
+    return 100;
+  }
+  return Math.max(0, Math.min(100, 100 - ((active.at - s.time) / duration) * 100));
+}
+function queuedLabel(q: QueuedBuild): string {
+  if (q.kind === 'unit') {
+    return `${q.count}× ${unitIcon(q.id)} ${displayUnit(q.id)}`;
+  }
+  if (q.kind === 'upgrade') {
+    return `${BUILD_ICON[q.id] ?? '▣'} ${data.buildings[q.id]?.name ?? q.id} upgrade`;
+  }
+  return `${BUILD_ICON[q.id] ?? '▣'} ${data.buildings[q.id]?.name ?? q.id}`;
+}
+function enqueueBuild(planetId: string, order: QueuedBuild): void {
+  queueOf(planetId)[laneOf(order.kind)].push(order);
+  note(`queued ${queuedLabel(order)} at ${planetId}`);
+  pumpBuildQueues();
+}
+function submitQueued(planetId: string, queued: QueuedBuild): StepOut {
+  const action =
+    queued.kind === 'unit'
+      ? buildUnit(ME, planetId, queued.id, queued.count)
+      : queued.kind === 'upgrade'
+        ? upgradeBuilding(ME, planetId, queued.id)
+        : buildBuilding(ME, planetId, queued.id);
+  const out = order(s, action, s.time);
+  apply(out);
+  return out;
+}
+function pumpBuildQueues(): void {
+  for (const planetId of Object.keys(buildQueues)) {
+    const q = buildQueues[planetId];
+    const p = s.planets[planetId];
+    if (!p || p.owner !== ME) {
+      continue;
+    }
+    for (const lane of ['buildings', 'units'] as const) {
+      const next = q[lane][0];
+      if (!next || activeConstruction(planetId, lane) || !canStartQueued(planetId, next)) {
+        continue;
+      }
+      q[lane].shift();
+      const r = submitQueued(planetId, next);
+      if (r.error) {
+        note(`${queuedLabel(next)} failed: ${r.error}`);
+      }
+    }
+  }
+}
 function fleetPos(f: Fleet): { x: number; y: number } | null {
   if (f.location) return s.planets[f.location]?.position ?? null;
   const m = f.movement;
@@ -290,7 +494,7 @@ function selectedFleetIds(): string[] {
   return selFleet && s.fleets[selFleet]?.owner === ME ? [selFleet] : [];
 }
 
-const ORBIT_R: Record<'near' | 'far', number> = { near: 26, far: 46 };
+const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
 
 /** Screen anchor (+ heading) for a fleet's chevron: the interpolated lane
  *  position while moving, or a slot on its near/far orbit ring while stationed
@@ -371,6 +575,17 @@ function apply(out: StepOut) {
   handleEvents(out.events);
 }
 
+// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario
+// rule). The garrison unit makes the junction "defended" — it can no longer be
+// walked into, only stormed — and its AA now fires on near-orbit attackers.
+function installFortressAA(planetId: string) {
+  const pl = s.planets[planetId];
+  if (!pl) return;
+  const aa = pl.garrison.find((u) => u.unit === 'orbital_aa' && u.hp === undefined);
+  if (aa) aa.count += 1;
+  else pl.garrison.push({ unit: 'orbital_aa', count: 1 });
+}
+
 /** Apply a player-issued order and surface a rejection in the log (so a denied
  *  click — wrong orbit, no capacity, can't afford — isn't silently swallowed). */
 function playerOrder(action: Action) {
@@ -410,6 +625,7 @@ function handleEvents(events: DomainEvent[]) {
         break;
       case 'building.constructed':
         note(`🏗️ ${p.building} built at ${p.planetId}`);
+        if (p.building === 'starfort') installFortressAA(p.planetId as string);
         break;
       case 'building.upgraded':
         note(`⬆️ ${p.building} → L${p.level} at ${p.planetId}`);
@@ -426,8 +642,29 @@ function handleEvents(events: DomainEvent[]) {
       case 'fleet.destroyed':
         note(`☠️ a ${NAME[p.owner as string]} fleet was destroyed`);
         break;
+      case 'fleet.transit':
+      case 'fleet.arrived':
+        seizeSector(p.at as string, p.fleetId as string);
+        break;
     }
   }
+}
+
+// A fleet moving through (or stopping at) a capturable sector that is undefended
+// and uncontested takes it on the spot — the province recolours. Defended sectors
+// (a garrison or fortress) need a real assault; empty space can't be owned at all.
+function seizeSector(at: string, fleetId: string) {
+  const f = s.fleets[fleetId];
+  const pl = s.planets[at];
+  if (!f || !pl || pl.owner === f.owner) return;
+  if (!SECTOR_TYPES[SECTOR_OF[at]]?.capturable) return;
+  if ((pl.garrison ?? []).some((u) => u.count > 0)) return;
+  const contested = Object.values(s.fleets).some(
+    (g) => g.owner !== f.owner && g.location === at && g.units.some((u) => u.count > 0),
+  );
+  if (contested) return;
+  pl.owner = f.owner;
+  note(`🚩 ${NAME[f.owner] ?? f.owner} seized ${at}`);
 }
 
 // --- red AI ------------------------------------------------------------------
@@ -472,6 +709,7 @@ function runAI() {
 function autoEngage() {
   for (const f of Object.values(s.fleets)) {
     if (f.owner === ME || f.location == null || f.movement || f.battleId) continue;
+    if (!SECTOR_TYPES[SECTOR_OF[f.location]]?.capturable) continue; // empty space can't be taken
     const here = s.planets[f.location];
     if (!here || here.owner === f.owner) continue;
     const enemyHere = Object.values(s.fleets).some(
@@ -509,6 +747,41 @@ function poly(x: number, y: number, r: number, sides: number, rot = 0) {
     else cx.moveTo(px, py);
   }
   cx.closePath();
+}
+
+// Stable asteroid cluster for an asteroid-field junction — built once and seeded
+// by the node position, so the rocks never shimmer or move between frames.
+interface Rock {
+  dx: number;
+  dy: number;
+  r: number;
+  rot: number;
+  sides: number;
+}
+const asteroidCache = new Map<string, Rock[]>();
+function asteroidsFor(id: string, x: number, y: number): Rock[] {
+  const hit = asteroidCache.get(id);
+  if (hit) return hit;
+  let seed = (Math.floor(x * 3457) ^ Math.floor(y * 8761) ^ 0x9e3779b9) >>> 0;
+  const rnd = (): number => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0xffffffff;
+  };
+  const rocks: Rock[] = [];
+  const count = 9 + Math.floor(rnd() * 4);
+  for (let i = 0; i < count; i++) {
+    const ang = rnd() * TAU;
+    const dist = 7 + rnd() * 21;
+    rocks.push({
+      dx: Math.cos(ang) * dist,
+      dy: Math.sin(ang) * dist * 0.72, // slightly flattened → reads as a belt
+      r: 1.5 + rnd() * 2.8,
+      rot: rnd() * TAU,
+      sides: 3 + Math.floor(rnd() * 3),
+    });
+  }
+  asteroidCache.set(id, rocks);
+  return rocks;
 }
 
 /** Four slowly-rotating corner brackets — the "locked target" selection reticle. */
@@ -652,9 +925,128 @@ function drawAimPreview() {
 
 let selectionBox: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
+/**
+ * Province field — the whole map is a tiling of provinces (Bytro/Paradox-style):
+ * every point belongs to the nearest seed (planets = capturable territory tinted
+ * in the owner's colour; empty-space voids = uncapturable, neutral). The tiling is
+ * computed as vector Voronoi cells (half-plane clipping) in base space and filled
+ * under the camera each frame — so it covers the whole map, scales without
+ * stretching, and never shimmers. Rebuilt only on viewport / ownership change.
+ */
+interface ProvCell {
+  owner: string;
+  col: string;
+  poly: Array<[number, number]>;
+}
+let provCells: ProvCell[] = [];
+let provSig = '';
+
+/** Clip a convex polygon to the half-plane a*x + b*y + c <= 0 (Sutherland–Hodgman). */
+function clipHalfPlane(
+  poly: Array<[number, number]>,
+  a: number,
+  b: number,
+  c: number,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < poly.length; i++) {
+    const cur = poly[i]!;
+    const nxt = poly[(i + 1) % poly.length]!;
+    const dc = a * cur[0] + b * cur[1] + c;
+    const dn = a * nxt[0] + b * nxt[1] + c;
+    if (dc <= 0) out.push(cur);
+    if ((dc < 0) !== (dn < 0)) {
+      const t = dc / (dc - dn);
+      out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
+    }
+  }
+  return out;
+}
+
+function buildProvinces(): void {
+  const owners = MAP.map((n) => s.planets[n.id]?.owner ?? 'null').join(',');
+  const sig = `${VW}x${VH}:${MOBILE ? 1 : 0}|${owners}`;
+  if (sig === provSig) {
+    return;
+  }
+  provSig = sig;
+  // every sector is a cell; empty sectors are an uncapturable neutral wash, the
+  // rest take their owner's colour (political map).
+  const seeds = MAP.map((n) => {
+    const b = projBase(n);
+    if (n.sector === 'empty') return { x: b.x, y: b.y, key: 'void', col: VOID_COLOR };
+    const o = s.planets[n.id]?.owner ?? 'null';
+    return { x: b.x, y: b.y, key: o, col: COLOR[o] };
+  });
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const sd of seeds) {
+    minX = Math.min(minX, sd.x);
+    maxX = Math.max(maxX, sd.x);
+    minY = Math.min(minY, sd.y);
+    maxY = Math.max(maxY, sd.y);
+  }
+  // A clip rectangle far larger than the seed span, so the cells tile well beyond
+  // the screen at any pan/zoom — the territory always fills the whole map.
+  const m = 4000;
+  const rect: Array<[number, number]> = [
+    [minX - m, minY - m],
+    [maxX + m, minY - m],
+    [maxX + m, maxY + m],
+    [minX - m, maxY + m],
+  ];
+  provCells = [];
+  for (let i = 0; i < seeds.length; i++) {
+    const si = seeds[i]!;
+    let poly: Array<[number, number]> = rect.map((p) => [p[0], p[1]]);
+    for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
+      if (j === i) continue;
+      const sj = seeds[j]!;
+      const a = 2 * (sj.x - si.x);
+      const b = 2 * (sj.y - si.y);
+      const c = si.x * si.x + si.y * si.y - (sj.x * sj.x + sj.y * sj.y);
+      poly = clipHalfPlane(poly, a, b, c);
+    }
+    if (poly.length >= 3) {
+      provCells.push({ owner: si.key, col: si.col, poly });
+    }
+  }
+}
+
+function drawProvinces(): void {
+  buildProvinces();
+  // Draw in base space under the live camera (translate+scale matches world()),
+  // so the vector cells pan/zoom locked to the planets — no shimmer, no stretch.
+  cx.save();
+  cx.translate(cam.x, cam.y);
+  cx.scale(cam.scale, cam.scale);
+  const trace = (poly: Array<[number, number]>): void => {
+    cx.beginPath();
+    cx.moveTo(poly[0]![0], poly[0]![1]);
+    for (let i = 1; i < poly.length; i++) cx.lineTo(poly[i]![0], poly[i]![1]);
+    cx.closePath();
+  };
+  for (const cell of provCells) {
+    trace(cell.poly);
+    cx.fillStyle = rgba(cell.col, cell.owner === 'void' ? 0.05 : 0.11);
+    cx.fill();
+  }
+  // faint province borders — vector, so ~1px on screen at any zoom
+  cx.lineWidth = 1 / cam.scale;
+  cx.strokeStyle = rgba('#7df0d0', 0.16);
+  for (const cell of provCells) {
+    trace(cell.poly);
+    cx.stroke();
+  }
+  cx.restore();
+}
+
 function render(now: number) {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   drawScope(now);
+  drawProvinces();
 
   // jump lanes — cached links with animated energy packets
   for (const [from, to] of MAP_LINKS) {
@@ -671,7 +1063,6 @@ function render(now: number) {
 
   // battles — pulsing red contact ring
   const wave = (now / 900) % 1;
-  const pulse = 0.5 + 0.5 * Math.sin(now / 180);
   for (const b of Object.values(s.battles)) {
     if (!known(b.location)) continue;
     const pp = s.planets[b.location];
@@ -692,8 +1083,109 @@ function render(now: number) {
     const kn = known(n.id);
     const showOwner = kn ? p.owner : null; // hide ownership of fogged systems
     const col = kn ? COLOR[p.owner ?? 'null'] : FOG_COL;
-    const sector = SECTOR_GLOW[n.sector] ?? SECTOR_GLOW.empty_space;
+    const sector = sectorColor(n.sector);
     const ownerPulse = 0.64 + 0.36 * Math.sin(now / 620 + n.x * 0.011 + n.y * 0.017);
+
+    // empty-space sector: just a faint survey marker at its centre (no city, no
+    // capture) — it is only a node you travel through.
+    if (n.sector === 'empty') {
+      cx.save();
+      cx.strokeStyle = rgba(VOID_COLOR, 0.5);
+      cx.lineWidth = 1;
+      cx.beginPath();
+      for (const [dx, dy] of CARDINAL) {
+        cx.moveTo(c.x + dx * 1.5, c.y + dy * 1.5);
+        cx.lineTo(c.x + dx * 3.5, c.y + dy * 3.5);
+      }
+      cx.stroke();
+      cx.fillStyle = rgba(VOID_COLOR, 0.6);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 1, 0, TAU);
+      cx.fill();
+      cx.restore();
+      continue;
+    }
+
+    // asteroid-field sector: a lane junction, not a city — scattered rocks + a
+    // fat hub where the lanes meet, no orbits. Captured by simply arriving — unless
+    // a space fortress is raised here, which fortifies it (orbit + AA, must storm).
+    if (n.sector === 'asteroid') {
+      const fort = p.buildings.find((b) => b.type === 'starfort');
+      const glow = cx.createRadialGradient(c.x, c.y, 0, c.x, c.y, 30);
+      glow.addColorStop(0, rgba(col, p.owner ? 0.14 : 0.05));
+      glow.addColorStop(1, 'rgba(2,6,12,0)');
+      cx.fillStyle = glow;
+      cx.beginPath();
+      cx.arc(c.x, c.y, 30, 0, TAU);
+      cx.fill();
+      cx.save();
+      cx.strokeStyle = 'rgba(186,170,140,0.7)';
+      cx.fillStyle = 'rgba(42,40,33,0.72)';
+      cx.lineWidth = 1;
+      for (const rk of asteroidsFor(n.id, n.x, n.y)) {
+        cx.save();
+        cx.translate(c.x + rk.dx, c.y + rk.dy);
+        cx.rotate(rk.rot + now / 9000);
+        cx.beginPath();
+        for (let k = 0; k < rk.sides; k++) {
+          const a = (k / rk.sides) * TAU;
+          const rr = rk.r * (0.72 + 0.28 * Math.sin(a * 2 + rk.rot));
+          const px = Math.cos(a) * rr;
+          const py = Math.sin(a) * rr;
+          if (k) cx.lineTo(px, py);
+          else cx.moveTo(px, py);
+        }
+        cx.closePath();
+        cx.fill();
+        cx.stroke();
+        cx.restore();
+      }
+      cx.restore();
+      // fat junction hub (the lanes converge here), owner-coloured
+      cx.save();
+      cx.shadowColor = col;
+      cx.shadowBlur = 8;
+      cx.fillStyle = rgba(col, 0.92);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 4.2, 0, TAU);
+      cx.fill();
+      cx.strokeStyle = rgba(col, 0.75);
+      cx.lineWidth = 1.3;
+      cx.beginPath();
+      cx.arc(c.x, c.y, 7.5 + 0.6 * ownerPulse, 0, TAU);
+      cx.stroke();
+      cx.restore();
+      // space fortress: a hexagonal bastion ring around the hub (with HP bar)
+      if (fort) {
+        cx.save();
+        cx.strokeStyle = col;
+        cx.lineWidth = 1.6;
+        cx.shadowColor = col;
+        cx.shadowBlur = 8;
+        poly(c.x, c.y, 12, 6, Math.PI / 6);
+        cx.stroke();
+        poly(c.x, c.y, 7, 6, Math.PI / 6);
+        cx.stroke();
+        cx.restore();
+        const frac = Math.max(0, Math.min(1, fort.hp / hpOfLevel('starfort', fort.level)));
+        cx.fillStyle = 'rgba(2,9,13,.7)';
+        cx.fillRect(c.x - 12, c.y - 22, 24, 3);
+        cx.fillStyle = rgba(frac > 0.35 ? col : '#ff5a4d', 0.9);
+        cx.fillRect(c.x - 12, c.y - 22, 24 * frac, 3);
+      }
+      if (selPlanet === n.id) targetBrackets(c.x, c.y, fort ? 18 : 15, now);
+      cx.save();
+      cx.shadowColor = 'rgba(0,0,0,0.85)';
+      cx.shadowBlur = 3;
+      cx.fillStyle = p.owner ? col : '#9fc9c4';
+      cx.font = '700 11px ui-monospace,Menlo,monospace';
+      cx.fillText(n.id, c.x + 16, c.y - 1);
+      cx.fillStyle = 'rgba(150,210,205,0.55)';
+      cx.font = '9px ui-monospace,Menlo,monospace';
+      cx.fillText(fort ? 'void fortress ✦' : 'asteroid field', c.x + 16, c.y + 11);
+      cx.restore();
+      continue;
+    }
 
     const aura = cx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R + 34);
     aura.addColorStop(0, rgba(col, showOwner ? 0.18 : 0.08));
@@ -768,12 +1260,7 @@ function render(now: number) {
     cx.strokeStyle = rgba(col, 0.7);
     cx.lineWidth = 1.2;
     cx.beginPath();
-    for (const [dx, dy] of [
-      [0, -1],
-      [0, 1],
-      [-1, 0],
-      [1, 0],
-    ] as const) {
+    for (const [dx, dy] of CARDINAL) {
       cx.moveTo(c.x + dx * (R - 3), c.y + dy * (R - 3));
       cx.lineTo(c.x + dx * (R + 5), c.y + dy * (R + 5));
     }
@@ -801,7 +1288,8 @@ function render(now: number) {
     cx.restore();
   }
 
-  // orbit rings around any planet that holds a stationed fleet (near vs far)
+  // orbit rings around any CITY that holds a stationed fleet (near vs far).
+  // Asteroid-field junctions have no orbits, so they are skipped.
   const stationed: Record<string, Fleet[]> = {};
   for (const f of Object.values(s.fleets))
     if (f.location && !f.movement) {
@@ -811,17 +1299,27 @@ function render(now: number) {
   for (const pid of Object.keys(stationed)) {
     const pl = s.planets[pid];
     if (!pl) continue;
+    // orbit only on types that have one (cities); a fortress gives a junction one too
+    const fortified =
+      pl.buildings.some((b) => b.type === 'starfort') || (pl.garrison ?? []).some((u) => u.count > 0);
+    if (!SECTOR_TYPES[SECTOR_OF[pid]]?.orbit && !fortified) continue;
     const pc = world(pl.position);
     if (!visible(pc, 80)) continue;
     for (const orb of ['far', 'near'] as const) {
+      const warm = orb === 'near'; // near = hot zone (bombard / AA reaches), far = safe
       cx.save();
-      cx.setLineDash([2, 6]);
-      cx.lineDashOffset = orb === 'near' ? now / 220 : -now / 260;
-      cx.strokeStyle = rgba('#7df0d0', orb === 'near' ? 0.24 : 0.13);
-      cx.lineWidth = 1;
+      cx.setLineDash(warm ? [2, 5] : [7, 6]);
+      cx.lineDashOffset = warm ? now / 200 : -now / 280;
+      cx.strokeStyle = rgba(ORBIT_COLOR[orb], warm ? 0.42 : 0.22);
+      cx.lineWidth = warm ? 1.3 : 1;
       cx.beginPath();
       cx.arc(pc.x, pc.y, ORBIT_R[orb], 0, TAU);
       cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle = rgba(ORBIT_COLOR[orb], 0.7);
+      cx.font = '700 7px ui-monospace,Menlo,monospace';
+      cx.textAlign = 'center';
+      cx.fillText(warm ? 'NEAR' : 'FAR', pc.x, pc.y + ORBIT_R[orb] + 8);
       cx.restore();
     }
   }
@@ -833,8 +1331,8 @@ function render(now: number) {
     const A = fleetAnchor(f);
     if (!A || !visible(A, 120)) continue;
     const col = COLOR[f.owner];
-    const ships = f.units.reduce((a, st) => a + st.count, 0);
-    const troops = (f.landing ?? []).reduce((a, st) => a + st.count, 0);
+    const ships = sumUnits(f.units);
+    const troops = sumUnits(f.landing ?? []);
     const engine = 0.55 + 0.45 * Math.sin(now / 120 + f.id.length);
 
     // bombardment beam down to the planet
@@ -872,25 +1370,42 @@ function render(now: number) {
       }
     }
 
+    // fleet model = a squadron of 1 / 2 / 3 triangles by ship count
+    const squad = Math.min(3, Math.max(1, ships));
+    const formation: ReadonlyArray<readonly [number, number]> =
+      squad === 1
+        ? [[0, 0]]
+        : squad === 2
+          ? [
+              [-4, 1],
+              [4, 1],
+            ]
+          : [
+              [0, -3.5],
+              [-5, 5],
+              [5, 5],
+            ];
     cx.save();
     cx.translate(A.x, A.y);
     cx.rotate(A.ang + Math.PI / 2);
     cx.shadowColor = col;
-    cx.shadowBlur = 9 + 8 * engine;
-    cx.fillStyle = rgba(col, 0.1 + 0.12 * engine);
+    cx.shadowBlur = 8 + 7 * engine;
+    cx.fillStyle = rgba(col, 0.14 + 0.12 * engine);
     cx.strokeStyle = col;
-    cx.lineWidth = 1.8;
+    cx.lineWidth = 1.5;
+    for (const [ox, oy] of formation) {
+      cx.beginPath();
+      cx.moveTo(ox, oy - 5);
+      cx.lineTo(ox + 3.6, oy + 4);
+      cx.lineTo(ox - 3.6, oy + 4);
+      cx.closePath();
+      cx.fill();
+      cx.stroke();
+    }
+    const lead = formation[0]!;
+    cx.fillStyle = rgba('#ffffff', 0.4 + 0.35 * engine);
     cx.beginPath();
-    cx.moveTo(0, -8);
-    cx.lineTo(6, 7);
-    cx.lineTo(0, 3.5);
-    cx.lineTo(-6, 7);
-    cx.closePath();
-    cx.fill();
-    cx.stroke();
-    cx.fillStyle = rgba('#ffffff', 0.45 + 0.35 * engine);
-    cx.beginPath();
-    cx.arc(0, 3.2, 1.2 + engine, 0, TAU);
+    cx.arc(lead[0], lead[1], 1 + 0.8 * engine, 0, TAU);
     cx.fill();
     cx.restore();
 
@@ -902,7 +1417,7 @@ function render(now: number) {
 
     // orbit tag for a stationed fleet (N = near / F = far)
     if (f.location && !f.movement) {
-      cx.fillStyle = rgba(f.orbit === 'near' ? '#ffb15f' : '#7df0d0', 0.9);
+      cx.fillStyle = rgba(ORBIT_COLOR[f.orbit ?? 'far'], 0.9);
       cx.font = '700 8px ui-monospace,Menlo,monospace';
       cx.fillText(f.orbit === 'near' ? 'N' : 'F', A.x, A.y - 12);
     }
@@ -928,24 +1443,70 @@ function render(now: number) {
 // --- side panel --------------------------------------------------------------
 
 function btn(act: string, arg: string, label: string, ok: boolean): string {
-  return `<button class="b" data-act="${act}" data-arg="${arg}" ${ok ? '' : 'disabled'}>${label}</button>`;
+  return `<button class="b" data-act="${esc(act)}" data-arg="${esc(arg)}" ${ok ? '' : 'disabled'}>${esc(label)}</button>`;
 }
 function cardHeader(color: string, title: string, sub: string): string {
   return `<div class="phead">
     <span class="pflag" style="background:${color}"></span>
-    <div class="ptitle"><b>${title}</b><span>${sub}</span></div>
+    <div class="ptitle"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
     <button class="pclose" data-act="close" data-arg="">✕</button>
   </div>`;
+}
+function tabButton(tab: PlanetTab, label: string, count: number): string {
+  const on = planetTab === tab ? ' on' : '';
+  return `<button class="ptab${on}" data-act="tab" data-arg="${tab}">${label}<b>${count}</b></button>`;
+}
+function unitRows(stacks: Array<{ unit: string; count: number }>): string {
+  if (!stacks.length) {
+    return `<div class="row dim">none</div>`;
+  }
+  return stacks
+    .map(
+      (st) =>
+        `<div class="asset-row"><span class="bicon">${unitIcon(st.unit)}</span><b>${st.count}× ${displayUnit(st.unit)}</b><span class="dim">${isGround(st.unit) ? 'ground' : 'space'}</span></div>`,
+    )
+    .join('');
+}
+function conveyorHtml(planetId: string, lane: BuildLane): string {
+  const active = activeConstruction(planetId, lane);
+  const queued = queueOf(planetId)[lane];
+  let html = `<div class="conveyor">`;
+  if (active) {
+    const pct = progressPct(active);
+    html += `<div class="current"><span>NOW</span><b>${constructionLabel(active.payload)}</b><em>${timeLeft(active.at)}</em></div>`;
+    html += `<div class="bar"><i style="width:${pct.toFixed(0)}%"></i></div>`;
+  } else {
+    html += `<div class="current idle"><span>IDLE</span><b>ready for next order</b><em>—</em></div>`;
+    html += `<div class="bar"><i style="width:0%"></i></div>`;
+  }
+  if (queued.length) {
+    html += `<div class="queue">${queued
+      .map((q, i) => `<span><em>${i + 1}</em>${queuedLabel(q)}</span>`)
+      .join('')}</div>`;
+  } else {
+    html += `<div class="queue empty">queue empty</div>`;
+  }
+  return html + `</div>`;
+}
+function buildButtons(planetId: string, ids: string[], kind: 'building' | 'unit'): string {
+  let html = `<div class="row">`;
+  for (const id of ids) {
+    const c = kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost;
+    const icon = kind === 'unit' ? unitIcon(id) : (BUILD_ICON[id] ?? '+');
+    const label =
+      kind === 'unit'
+        ? `${icon} ${displayUnit(id)} ${cost(c)}`
+        : `${icon} ${data.buildings[id]?.name ?? id} ${cost(c)}`;
+    html += btn(kind === 'unit' ? 'unit' : 'build', id, label, s.planets[planetId]?.owner === ME);
+  }
+  return html + `</div>`;
 }
 
 function panelHtml(): string {
   const group = [...selFleets].map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
   if (group.length > 1) {
-    const ships = group.reduce((a, f) => a + f.units.reduce((b, u) => b + u.count, 0), 0);
-    const troops = group.reduce(
-      (a, f) => a + (f.landing ?? []).reduce((b, u) => b + u.count, 0),
-      0,
-    );
+    const ships = group.reduce((a, f) => a + sumUnits(f.units), 0);
+    const troops = group.reduce((a, f) => a + sumUnits(f.landing ?? []), 0);
     let h = cardHeader(
       COLOR[ME],
       'TASK GROUP',
@@ -954,8 +1515,8 @@ function panelHtml(): string {
     h += `<div class="hint">Press <b>Move</b>, then tap a destination to send all selected fleets (they route and stop). Shift-drag on the map selects a fleet group.</div>`;
     for (const f of group) {
       const loc = f.location ?? (f.movement ? `${f.movement.from}→${f.movement.to}` : '—');
-      const nShips = f.units.reduce((a, u) => a + u.count, 0);
-      const nTr = (f.landing ?? []).reduce((a, u) => a + u.count, 0);
+      const nShips = sumUnits(f.units);
+      const nTr = sumUnits(f.landing ?? []);
       h += `<div class="row" style="color:${COLOR[f.owner]}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
     }
     h += btn('cancel', '', 'Deselect group', true);
@@ -964,17 +1525,17 @@ function panelHtml(): string {
   if (selFleet) {
     const f = s.fleets[selFleet];
     if (f) {
-      const ships = f.units.map((u) => `${u.count}×${u.unit}`).join(', ') || '—';
-      const tr = (f.landing ?? []).map((u) => `${u.count}×${u.unit}`).join(', ') || '—';
-      const nShips = f.units.reduce((a, u) => a + u.count, 0);
-      const nTr = (f.landing ?? []).reduce((a, u) => a + u.count, 0);
+      const shipList = f.units.map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
+      const trList = (f.landing ?? []).map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
+      const nShips = sumUnits(f.units);
+      const nTr = sumUnits(f.landing ?? []);
       const orbit = f.orbit ?? '—';
       let h = cardHeader(
         COLOR[f.owner],
         'FLEET',
         `${nShips} ships · ${nTr} troops · orbit ${orbit}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
       );
-      h += `<div class="pstats"><span>✦ ${ships}</span></div><div class="row dim">Carrying: ${tr}</div>`;
+      h += `<div class="pstats"><span>✦ ${shipList}</span></div><div class="row dim">Carrying: ${trList}</div>`;
 
       const here = planet(f.location);
       const docked = !!here && !f.movement && !f.battleId;
@@ -985,9 +1546,10 @@ function panelHtml(): string {
             : 'In transit — routing along the lanes. Collisions trigger an orbital battle.'
         }</div>`;
       } else {
-        const hostile = here!.owner !== f.owner; // enemy or neutral world
+        // enemy/neutral world you can act on — empty space is pass-through only
+        const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
         // orbit toggle
-        h += `<div class="sec">Orbit · ${here!.id}</div><div class="row">`;
+        h += `<div class="sec">Orbit · ${esc(here!.id)}</div><div class="row">`;
         h += btn('orbit', 'near', '▼ Descend (near)', orbit !== 'near');
         h += btn('orbit', 'far', '▲ Pull back (far)', orbit !== 'far');
         h += `</div>`;
@@ -1042,78 +1604,86 @@ function panelHtml(): string {
   const sec = data.sectors[p.sectorType ?? '']?.name ?? p.sectorType ?? '—';
   const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
   const ptName = pt?.name ?? p.planetType ?? '—';
-  const gcount = p.garrison.reduce((a, st) => a + st.count, 0);
+  const ground = p.garrison.filter((st) => isGround(st.unit));
+  const ships = p.garrison.filter((st) => isShip(st.unit));
+  const gcount = sumUnits(p.garrison);
+  const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(COLOR[owner], p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>▣ ${p.buildings.length} built</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('marine')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
     if (pt.productionBonus !== 0) parts.push(`prod ${pct(pt.productionBonus)}`);
     if (pt.defenseBonus !== 0) parts.push(`def ${pct(pt.defenseBonus)}`);
-    h += `<div class="row dim">${ptName} world — ${parts.join(' · ')}</div>`;
+    h += `<div class="row dim">${esc(ptName)} world — ${parts.join(' · ')}</div>`;
   }
 
-  // buildings
-  h += `<div class="sec">Buildings</div>`;
-  if (p.buildings.length === 0) h += `<div class="row dim">none</div>`;
-  for (const b of p.buildings) {
-    const def = data.buildings[b.type];
-    const max = def ? buildingMaxLevel(def) : 1;
-    h += `<div class="row"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span>${def?.name ?? b.type} <span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
-    if (mine && b.level < max) {
-      const c = def?.upgrades[b.level - 1]?.cost;
-      h += ' ' + btn('upgrade', b.type, `▲ ${cost(c)}`, afford(c));
+  h += `<div class="ptabs">${tabButton('ground', 'Ground', ground.length)}${tabButton(
+    'ships',
+    'Ships',
+    ships.length + here.length,
+  )}${tabButton('buildings', 'Buildings', p.buildings.length)}</div>`;
+
+  if (planetTab === 'ground') {
+    h += `<div class="sec">Ground units</div>`;
+    h += unitRows(ground);
+    if (mine) {
+      const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
+      h += `<div class="sec">Ground conveyor</div>`;
+      h += conveyorHtml(p.id, 'units');
+      h += buildButtons(p.id, groundBuilds, 'unit');
     }
-    h += `</div>`;
-  }
-  if (mine) {
-    const missing = BUILDABLE.filter((t) => !p.buildings.some((b) => b.type === t));
-    if (missing.length) {
-      h += `<div class="row" style="margin-top:4px">`;
-      for (const t of missing) {
-        const c = data.buildings[t]?.cost;
-        h += btn(
-          'build',
-          t,
-          `${BUILD_ICON[t] ?? '+'} ${data.buildings[t]?.name ?? t} ${cost(c)}`,
-          afford(c),
-        );
+    h += `<div class="hint">Ground units defend planets and can be loaded onto fleets from the fleet panel.</div>`;
+  } else if (planetTab === 'ships') {
+    h += `<div class="sec">Spacecraft in garrison</div>`;
+    h += unitRows(ships);
+    if (mine && ships.length) {
+      h += `<div class="row">${btn('launch', p.id, '🚀 Launch fleet from garrison', true)}</div>`;
+    }
+    if (here.length) {
+      h += `<div class="sec">Fleets in orbit</div>`;
+      for (const f of here) {
+        const fShips = sumUnits(f.units);
+        const tr = sumUnits(f.landing ?? []);
+        const sel = f.owner === ME ? btn('selfleet', f.id, 'Select →', true) : '';
+        h += `<div class="asset-row" style="color:${COLOR[f.owner]}"><span class="bicon">▲</span><b>${fShips} ships${tr ? ' +' + tr + ' troops' : ''}</b><span class="dim">orbit ${f.orbit ?? 'far'}</span>${sel}</div>`;
+      }
+    }
+    if (mine) {
+      const shipBuilds = BUILD_UNITS.filter((u) => isShip(u));
+      h += `<div class="sec">Shipyard conveyor</div>`;
+      h += conveyorHtml(p.id, 'units');
+      h += buildButtons(p.id, shipBuilds, 'unit');
+    }
+    h += `<div class="hint">Built spacecraft join the garrison first; launch creates a mobile fleet.</div>`;
+  } else {
+    h += `<div class="sec">Building conveyor</div>`;
+    if (mine) {
+      h += conveyorHtml(p.id, 'buildings');
+    } else {
+      h += `<div class="row dim">enemy construction telemetry unavailable</div>`;
+    }
+    h += `<div class="sec">Buildings</div>`;
+    if (p.buildings.length === 0) h += `<div class="row dim">none</div>`;
+    for (const b of p.buildings) {
+      const def = data.buildings[b.type];
+      const max = def ? buildingMaxLevel(def) : 1;
+      h += `<div class="asset-row"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${def?.name ?? b.type}</b><span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
+      if (mine && b.level < max) {
+        const c = def?.upgrades[b.level - 1]?.cost;
+        h += btn('upgrade', b.type, `▲ Upgrade ${cost(c)}`, afford(c));
       }
       h += `</div>`;
     }
-  }
-
-  // garrison
-  h += `<div class="sec">Garrison</div>`;
-  h +=
-    p.garrison.length === 0
-      ? `<div class="row dim">undefended</div>`
-      : `<div class="row">${p.garrison.map((u) => `${u.count}×${u.unit}`).join(', ')}</div>`;
-  if (mine && p.garrison.some((st) => isShip(st.unit))) {
-    h += `<div class="row">${btn('launch', p.id, '🚀 Launch fleet from garrison', true)}</div>`;
-  }
-
-  // fleets here
-  const here = Object.values(s.fleets).filter((f) => f.location === p.id);
-  if (here.length) {
-    h += `<div class="sec">Fleets in orbit</div>`;
-    for (const f of here) {
-      const ships = f.units.reduce((a, st) => a + st.count, 0);
-      const tr = (f.landing ?? []).reduce((a, st) => a + st.count, 0);
-      const sel = f.owner === ME ? btn('selfleet', f.id, 'Select →', true) : '';
-      h += `<div class="row" style="color:${COLOR[f.owner]}">▲ ${ships} ships${tr ? ' +' + tr + ' troops' : ''} ${sel}</div>`;
+    if (mine) {
+      // an asteroid junction can only raise a space fortress; a city builds the rest
+      const buildable = SECTOR_OF[p.id] === 'asteroid' ? ['starfort'] : BUILDABLE;
+      const missing = buildable.filter((t) => !p.buildings.some((b) => b.type === t));
+      if (missing.length) {
+        h += buildButtons(p.id, missing, 'building');
+      }
     }
-  }
-
-  // unit production
-  if (mine) {
-    h += `<div class="sec">Build units → garrison</div><div class="row">`;
-    for (const u of BUILD_UNITS) {
-      const c = data.units[u]?.cost;
-      h += btn('unit', u, `${u} ${cost(c)}`, afford(c));
-    }
-    h += `</div><div class="hint">Built units join the garrison; “Launch fleet” turns ships + troops into a mobile fleet.</div>`;
   }
   return h;
 }
@@ -1153,7 +1723,11 @@ function renderCmdBar() {
   const anyDocked = docked.length > 0;
   const anyFar = docked.some((f) => (f.orbit ?? 'far') === 'far');
   const canAssault = docked.some(
-    (f) => f.orbit === 'near' && f.location && s.planets[f.location]?.owner !== f.owner,
+    (f) =>
+      f.orbit === 'near' &&
+      f.location &&
+      s.planets[f.location]?.owner !== f.owner &&
+      SECTOR_TYPES[SECTOR_OF[f.location]]?.capturable, // empty space can't be taken
   );
   const descend = anyFar; // at least one far → primary orbit action is descend to near
   const html =
@@ -1181,12 +1755,16 @@ side.addEventListener('click', (ev) => {
     selFleets = new Set();
   } else if (act === 'selfleet') {
     setFleetSelection([arg]);
+  } else if (act === 'tab') {
+    if (arg === 'ground' || arg === 'ships' || arg === 'buildings') {
+      planetTab = arg;
+    }
   } else if (act === 'build') {
-    playerOrder(buildBuilding(ME, selPlanet!, arg));
+    enqueueBuild(selPlanet!, { kind: 'building', id: arg, count: 1 });
   } else if (act === 'upgrade') {
-    playerOrder(upgradeBuilding(ME, selPlanet!, arg));
+    enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
-    playerOrder(buildUnit(ME, selPlanet!, arg, 1));
+    enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
   } else if (act === 'launch') {
     playerOrder(launchFleet(ME, arg));
   } else if (act === 'orbit') {
@@ -1397,6 +1975,11 @@ if (fogBtn) {
   });
 }
 
+// Mobile: hamburger toggles the slide-in drawer (rail + log + comms); the scrim
+// behind it closes on tap. No-op on desktop, where the drawer is always shown.
+burger.addEventListener('click', () => document.body.classList.toggle('drawer-open'));
+scrim.addEventListener('click', () => document.body.classList.remove('drawer-open'));
+
 // --- loop --------------------------------------------------------------------
 
 let lastReal = performance.now();
@@ -1408,6 +1991,7 @@ function frame(nowReal: number) {
     apply(advance(s, target));
     autoEngage();
     runAI();
+    pumpBuildQueues();
     checkEnd();
   }
   fogVisible = fogOn ? computeFog() : null; // dev fog projection for this frame
@@ -1420,6 +2004,7 @@ function frame(nowReal: number) {
   const clockText = `Day ${d} · ${String(h).padStart(2, '0')}:00`;
   if (clockText !== lastClockText) {
     clock.textContent = clockText;
+    topClock.textContent = clockText;
     lastClockText = clockText;
   }
   const dayTimerText = `Day ${d} — next cycle in ${24 - h}h`;
@@ -1454,7 +2039,7 @@ function frame(nowReal: number) {
     alertBadge.textContent = alertText;
     lastAlertText = alertText;
   }
-  const logHtml = logLines.map((l) => `<div>${l}</div>`).join('');
+  const logHtml = logLines.map((l) => `<div>${esc(l)}</div>`).join('');
   if (logHtml !== lastLogHtml) {
     logEl.innerHTML = logHtml;
     lastLogHtml = logHtml;

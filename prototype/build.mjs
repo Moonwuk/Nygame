@@ -111,8 +111,27 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
   background:transparent;border:1px solid #7a221c;color:var(--red);}
 .pstats{display:flex;gap:7px;flex-wrap:wrap;margin:2px 0 4px;}
 .pstats span{background:rgba(53,214,230,.06);border:1px solid var(--line);padding:4px 9px;font-size:11px;color:var(--ink);}
+.ptabs{display:flex;gap:6px;margin:10px 0 4px;flex-wrap:wrap;}
+.ptab{cursor:pointer;background:rgba(53,214,230,.04);border:1px solid var(--line);color:var(--cyan-dim);
+  padding:6px 10px;font:700 10px ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;border-radius:2px;}
+.ptab b{margin-left:7px;color:var(--ink);}
+.ptab.on{color:var(--cyan);border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 12px rgba(53,214,230,.2);}
+.asset-row{display:flex;align-items:center;gap:8px;margin:5px 0;min-height:24px;}
+.asset-row b{min-width:120px;font-size:12px;}
 .bicon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:7px;
   border:1px solid var(--line-hi);background:rgba(53,214,230,.07);color:var(--cyan);font-size:12px;}
+.asset-row .bicon{margin-right:0;flex:0 0 auto;}
+.conveyor{margin:6px 0 8px;padding:8px;border:1px solid var(--line);background:rgba(53,214,230,.04);}
+.conveyor .current{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-size:11px;}
+.conveyor .current span{color:var(--grn);letter-spacing:1.5px;font-size:9px;}
+.conveyor .current.idle span{color:var(--dim);}
+.conveyor .current em{color:var(--cyan-dim);font-style:normal;}
+.conveyor .bar{height:4px;margin:7px 0;background:rgba(53,214,230,.08);overflow:hidden;}
+.conveyor .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--grn),var(--cyan));box-shadow:0 0 10px rgba(125,240,208,.6);}
+.conveyor .queue{display:flex;gap:6px;flex-wrap:wrap;}
+.conveyor .queue span{border:1px solid var(--line);background:rgba(2,9,13,.55);padding:3px 6px;font-size:10px;color:var(--ink);}
+.conveyor .queue em{font-style:normal;color:var(--grn-dim);margin-right:5px;}
+.conveyor .queue.empty{color:var(--dim);font-size:10px;}
 button.b{background:transparent;color:var(--cyan);border:1px solid var(--cyan-dim);border-radius:2px;
   padding:5px 10px;margin:3px 4px 2px 0;cursor:pointer;font:700 11px ui-monospace,monospace;letter-spacing:.4px;}
 button.b:hover:not(:disabled){background:rgba(53,214,230,.14);box-shadow:0 0 10px rgba(53,214,230,.35);}
@@ -135,30 +154,61 @@ body.sheet-open #log{display:none;}
   box-shadow:0 0 40px rgba(53,214,230,.25),inset 0 0 30px rgba(53,214,230,.06);
   clip-path:polygon(0 12px,12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);}
 
+/* mobile chrome: hamburger + slide-in drawer. On desktop the drawer is a layout
+   no-op (display:contents) so the rail / log / comms keep their fixed spots. */
+#burger{display:none;flex:0 0 auto;width:42px;height:100%;border:0;border-right:1px solid var(--line);
+  background:transparent;color:var(--cyan);font-size:18px;cursor:pointer;align-items:center;justify-content:center;}
+#burger:active{background:rgba(53,214,230,.14);}
+#topclock{display:none;flex:0 0 auto;padding:0 10px;color:var(--grn);font-size:11px;letter-spacing:.5px;
+  white-space:nowrap;font-variant-numeric:tabular-nums;}
+#scrim{display:none;position:fixed;inset:44px 0 0 0;z-index:34;background:rgba(1,5,9,.58);}
+#drawer{display:contents;}
+.rlabel{display:none;}
+
 @media (max-width:720px){
   #top{height:44px;}
   .who{display:none;}
   .crest{padding:0 10px;}
+  /* hamburger drops out of the top bar to a thumb-reachable button, lower-left */
+  #burger{display:flex;position:fixed;left:8px;bottom:14px;top:auto;width:46px;height:46px;
+    border:1px solid var(--line-hi);border-radius:4px;background:var(--glass);z-index:36;
+    box-shadow:0 0 16px rgba(0,0,0,.5);}
+  body.sheet-open #burger{display:none;}
+  #topclock{display:block;}
   .res{padding:0 9px;gap:5px;}
   #devline{display:none;}
-  #rail{top:44px;width:40px;}
-  #rail button{height:38px;font-size:15px;}
+
+  /* left rail + event log + comms collapse into a slide-in drawer */
+  #drawer{display:flex;flex-direction:column;position:fixed;left:0;top:44px;bottom:0;width:80vw;max-width:300px;
+    z-index:35;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;
+    background:var(--glass);border-right:1px solid var(--cyan);box-shadow:0 0 40px rgba(0,0,0,.7);}
+  body.drawer-open #drawer{transform:none;}
+  body.drawer-open #scrim{display:block;}
+  #drawer #rail{position:static;width:auto;flex-direction:column;align-items:stretch;gap:0;padding:6px 0;
+    background:transparent;border:0;border-bottom:1px solid var(--line);}
+  #drawer #rail button{width:100%;height:46px;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:17px;}
+  #drawer #rail button:active{background:rgba(53,214,230,.1);}
+  #drawer #rail .rlabel{display:inline;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;}
+  #drawer #rail .badge{left:auto;right:14px;top:50%;transform:translateY(-50%);}
+  #drawer #log{position:static;left:auto;right:auto;bottom:auto;width:auto;height:150px;margin:0;border:0;
+    border-bottom:1px solid var(--line);}
+  #drawer #botleft{position:static;left:auto;bottom:auto;padding:12px 16px;}
+
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:56vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
-  #log{left:48px;right:8px;width:auto;bottom:54px;height:66px;}
-  #botleft{left:46px;bottom:6px;}
-  .chat{width:38px;height:38px;}
-  #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
-  body.sheet-open #log,body.sheet-open #botleft{display:none;}
-  button.b{padding:7px 12px;font-size:12px;}
-  #speedbar{bottom:auto;top:48px;right:6px;padding:3px 5px;}
+
+  /* speed control sits at the bottom-right; it hides under the sheet, and a
+     selection opens the sheet, so it never collides with the command bar */
+  #speedbar{right:10px;bottom:12px;top:auto;padding:4px 6px;}
   body.sheet-open #speedbar{display:none;}
+
+  #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
+  button.b{padding:7px 12px;font-size:12px;}
   #cmdbar{bottom:10px;}
   body.sheet-open #cmdbar{bottom:calc(56vh + 8px);}
 }
 @media (max-width:430px){
   .res .rv em{display:none;}
-  #log{display:none;}
 }
 `;
 
@@ -169,26 +219,31 @@ const html = `<!doctype html>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
+  <button id="burger" title="Menu" aria-label="Menu">☰</button>
   <div class="crest"><span class="dia"></span>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
+  <span id="topclock">Day 1</span>
   <div id="purse"></div>
 </header>
 <div id="devline">VOID CORE v0.1 · SESSION skirmish-1 · GRID sector-7 · <span id="clock">Day 1</span></div>
-<nav id="rail">
-  <button title="Dispatches">≡</button>
-  <button title="Diplomacy (soon)">⬡</button>
-  <button title="Economy">¤</button>
-  <button title="Military">△</button>
-  <button title="Army">▤</button>
-  <button title="Espionage (soon)">◎</button>
-  <button title="Markers">⚑</button>
-  <button title="Research (soon)">✛</button>
-  <button title="Alerts">⚠<span class="badge" id="alertbadge" style="display:none">0</span></button>
-</nav>
+<div id="scrim"></div>
+<div id="drawer">
+  <nav id="rail">
+    <button title="Dispatches">≡<span class="rlabel">Dispatches</span></button>
+    <button title="Diplomacy (soon)">⬡<span class="rlabel">Diplomacy</span></button>
+    <button title="Economy">¤<span class="rlabel">Economy</span></button>
+    <button title="Military">△<span class="rlabel">Military</span></button>
+    <button title="Army">▤<span class="rlabel">Army</span></button>
+    <button title="Espionage (soon)">◎<span class="rlabel">Espionage</span></button>
+    <button title="Markers">⚑<span class="rlabel">Markers</span></button>
+    <button title="Research (soon)">✛<span class="rlabel">Research</span></button>
+    <button title="Alerts">⚠<span class="rlabel">Alerts</span><span class="badge" id="alertbadge" style="display:none">0</span></button>
+  </nav>
+  <div id="log"></div>
+  <footer id="botleft"><button class="chat" title="Comms">◈</button><span id="daytimer">Day 1</span></footer>
+</div>
 <aside id="side"></aside>
-<footer id="botleft"><button class="chat" title="Comms">◈</button><span id="daytimer">Day 1</span></footer>
-<div id="log"></div>
 <div id="speedbar" class="spd">
   <button data-speed="0">‖</button><button data-speed="2" class="on">▶</button><button data-speed="6">▶▶</button>
   <span class="sep"></span><button data-fog title="Fog of war — dev preview (variant A)">FOG</button>

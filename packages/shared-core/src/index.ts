@@ -106,6 +106,9 @@ export {
 
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';
+export { MS_PER_HOUR, MS_PER_DAY } from './util/time';
+export { findHealthyStack, addUnits, sumUnitStat } from './util/stacks';
+export { requireOwnedIdleFleet, type IdleFleet } from './util/fleet';
 
 // Base modules (plugins) — opt-in via the manifest passed to createKernel.
 export { economyModule } from './modules/economy';

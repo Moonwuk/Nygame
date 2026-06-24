@@ -4,9 +4,7 @@ import type { GameData, ResourceBag } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
 import { bombardedPlanets } from '../state/orbit';
 import { timeScaleOf } from '../action/types';
-
-const MS_PER_HOUR = 3_600_000;
-const MS_PER_DAY = 86_400_000;
+import { MS_PER_HOUR, MS_PER_DAY } from '../util/time';
 
 /** Base hourly production of a planet = the sum of its buildings' `produces`,
  *  each at its current level. */

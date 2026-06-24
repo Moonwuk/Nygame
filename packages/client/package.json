@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "React Native mobile client (Stage 4 — see docs/roadmap.md). Placeholder.",
+  "description": "React Native/mobile client package (Stage 4) with a minimal multiplayer transport adapter.",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@void/shared-core": "workspace:*"
+  }
 }

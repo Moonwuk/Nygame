@@ -428,6 +428,29 @@ describe('combat — two-phase planet capture (GDD §7.4)', () => {
   });
 });
 
+describe('combat — shipless fleet capture (bug fix)', () => {
+  it('a fleet with no ships but surviving landing troops still captures the planet', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    // Fleet A has zero ships but carries marines; planet has a weak garrison.
+    const shipless = fleet('A', 'p1', 'P', [], [['marine', 2]]);
+    shipless.orbit = 'near';
+    const st = baseState([shipless], [planet('P', 'p2', 0, 0, [['militia', 1]])]);
+    const started = okApply(kernel.applyAction(st, assault('A'), ctx(0)));
+    expect(Object.keys(started.state.battles)).toHaveLength(1);
+
+    const r = okAdvance(kernel.advanceTo(started.state, ctx(2 * HOUR)));
+    // The landing force should have captured the planet even though the fleet
+    // had no ships (previously releaseOrDestroyFleet deleted the fleet first).
+    expect(r.state.planets.P?.owner).toBe('p1');
+    expect(types(r.events)).toContain('planet.captured');
+    // Marines deposited as garrison.
+    const marines = (r.state.planets.P?.garrison ?? []).find((s) => s.unit === 'marine');
+    expect(marines?.count).toBe(2);
+    // Fleet itself is destroyed (no ships left).
+    expect(r.state.fleets.A).toBeUndefined();
+  });
+});
+
 describe('combat — attack vs defense stats (return-fire mechanic)', () => {
   it('the aggressor uses attack; the standing defender answers with defense only', () => {
     const kernel = createKernel([combatModule, arrivalModule]);

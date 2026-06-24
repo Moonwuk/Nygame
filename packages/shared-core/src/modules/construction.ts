@@ -1,12 +1,14 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { BuildingInstance, Planet, Player, UnitStack } from '../state/gameState';
+import type { BuildingInstance, Planet, Player } from '../state/gameState';
 import type { GameData, ResourceBag } from '../data/schemas';
 import { buildingLevel, buildingMaxLevel } from '../data/schemas';
 import { isBombarded } from '../state/orbit';
 import type { Action } from '../action/types';
 import { timeScaleOf } from '../action/types';
+import { canAfford, payCost } from '../util/treasury';
+import { MS_PER_HOUR } from '../util/time';
+import { addUnits } from '../util/stacks';
 
-const MS_PER_HOUR = 3_600_000;
 /** Share of the ground assault's round damage that also wears down the planet's
  *  structures (the rest is spent on the defending garrison). Tunable. */
 const STRUCTURE_DAMAGE_SHARE = 0.5;
@@ -36,28 +38,6 @@ interface ConstructionRequirement {
   code?: string;
 }
 
-// --- treasury helpers --------------------------------------------------------
-
-/** True if the treasury can cover every line of `cost`. */
-function canAfford(treasury: ResourceBag, cost: ResourceBag): boolean {
-  for (const res of Object.keys(cost)) {
-    if ((treasury[res] ?? 0) < (cost[res] ?? 0)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/** Deducts `cost` from the treasury in place (caller has checked affordability). */
-function payCost(treasury: ResourceBag, cost: ResourceBag): void {
-  for (const res of Object.keys(cost)) {
-    const amount = cost[res] ?? 0;
-    if (amount !== 0) {
-      treasury[res] = (treasury[res] ?? 0) - amount;
-    }
-  }
-}
-
 /** `cost × count`, for multi-unit orders. */
 function scaleCost(cost: ResourceBag, count: number): ResourceBag {
   const out: Record<string, number> = {};
@@ -65,17 +45,6 @@ function scaleCost(cost: ResourceBag, count: number): ResourceBag {
     out[res] = (cost[res] ?? 0) * count;
   }
   return out;
-}
-
-/** Adds units to a garrison, merging into a healthy (non-combat) stack of the
- *  same unit when one exists, else appending a fresh stack. */
-function reinforce(garrison: UnitStack[], unit: string, count: number): void {
-  const stack = garrison.find((s) => s.unit === unit && s.hp === undefined);
-  if (stack) {
-    stack.count += count;
-  } else {
-    garrison.push({ unit, count });
-  }
 }
 
 /** Schedules a build to finish after `hours`, scaled by the match timeScale
@@ -206,6 +175,17 @@ export const constructionModule: GameModule = {
       if (planet.buildings.some((b) => b.type === payload.building)) {
         return h.reject('E_ALREADY_BUILT'); // one of each type; grow it with building.upgrade
       }
+      if (
+        h.state.scheduled.some(
+          (e) =>
+            e.type === 'construction.complete' &&
+            (e.payload as CompletePayload).kind === 'building' &&
+            (e.payload as CompletePayload).planetId === planet.id &&
+            (e.payload as CompletePayload).building === payload.building,
+        )
+      ) {
+        return h.reject('E_ALREADY_QUEUED');
+      }
       const level1 = buildingLevel(def, 1);
       if (!canAfford(player.resources, level1.cost)) {
         return h.reject('E_INSUFFICIENT');
@@ -245,6 +225,17 @@ export const constructionModule: GameModule = {
       const nextLevel = instance.level + 1;
       if (nextLevel > buildingMaxLevel(def)) {
         return h.reject('E_MAX_LEVEL');
+      }
+      if (
+        h.state.scheduled.some(
+          (e) =>
+            e.type === 'construction.complete' &&
+            (e.payload as CompletePayload).kind === 'upgrade' &&
+            (e.payload as CompletePayload).planetId === planet.id &&
+            (e.payload as CompletePayload).building === instance.type,
+        )
+      ) {
+        return h.reject('E_ALREADY_QUEUED');
       }
       const next = buildingLevel(def, nextLevel);
       if (!canAfford(player.resources, next.cost)) {
@@ -351,7 +342,7 @@ export const constructionModule: GameModule = {
           owner: p.playerId,
         });
       } else if (p.kind === 'unit' && typeof p.unit === 'string' && typeof p.count === 'number') {
-        reinforce(planet.garrison, p.unit, p.count);
+        addUnits(planet.garrison, p.unit, p.count);
         h.emit('unit.built', {
           planetId: planet.id,
           unit: p.unit,

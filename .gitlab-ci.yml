@@ -75,7 +75,7 @@ sast-semgrep:
 
 # ===========================================================================
 # 2) SCA / Dependency Scanning — Software Composition Analysis.
-#    Зачем: 80%+ уязвимостей приходят из ЗАВИСИМОСТЕЙ (supply chain). Сверяем
+#    Зачем: 80%+ уязвимостей приходят из ЗАВИСИМОСТЕЙ (supply chain). Сверяе
 #    pnpm-lock с базами CVE. OWASP A06 (Vulnerable & Outdated Components).
 #    Два инструмента — перекрёстная проверка и обучение разнице источников:
 #      - pnpm audit  → npm advisory DB (быстро, нативно)

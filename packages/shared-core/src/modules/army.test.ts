@@ -36,6 +36,12 @@ const data: GameData = parseGameData({
       domain: 'ground',
       stats: { attack: 20, defense: 16, speed: 0, hp: 50, cargoSize: 3 },
     },
+    orbital_aa: {
+      faction: 'x',
+      domain: 'ground',
+      traits: ['immobile'],
+      stats: { attack: 4, defense: 14, speed: 0, hp: 30, aaDamage: 12, cargoSize: 2 },
+    },
   },
   factions: {},
   buildings: {},
@@ -161,6 +167,17 @@ describe('army module — loading ground army onto fleets', () => {
   it('rejects loading more army than the garrison holds', () => {
     const kernel = createKernel([armyModule]);
     expect(errCode(kernel.applyAction(base(), load('F', 'militia', 9), ctx))).toBe('E_NO_ARMY');
+  });
+
+  it('rejects loading a fixed emplacement (immobile orbital AA)', () => {
+    const kernel = createKernel([armyModule]);
+    const st = stateWith({
+      players: [player('p1')],
+      planets: [planet('A', 'p1', [['orbital_aa', 2]])],
+      fleets: [fleet('F', 'p1', 'A', [['dropship', 1]])], // ample capacity
+    });
+    expect(errCode(kernel.applyAction(st, load('F', 'orbital_aa', 1), ctx))).toBe('E_IMMOBILE');
+    expect(st.planets.A?.garrison).toEqual([{ unit: 'orbital_aa', count: 2 }]); // nothing moved
   });
 });
 

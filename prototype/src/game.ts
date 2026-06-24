@@ -74,7 +74,7 @@ export const data: GameData = parseGameData({
       faction: 'blue',
       stats: { attack: 4, defense: 14, speed: 0, hp: 30, aaDamage: 12 },
       domain: 'ground',
-      traits: ['ground'],
+      traits: ['ground', 'immobile'], // a fixed emplacement — can't be lifted onto a fleet
       line: 'rear',
       cost: { metal: 110, credits: 30 },
       buildTimeHours: 4,
@@ -98,6 +98,15 @@ export const data: GameData = parseGameData({
       hp: 20,
     },
     barracks: { name: 'Barracks', cost: { metal: 70 }, buildTimeHours: 3, hp: 25 },
+    // space fortress — only built in an asteroid field; turns the junction into a
+    // defended, assaultable strongpoint (it garrisons a fixed orbital-AA by default)
+    starfort: {
+      name: 'Void Fortress',
+      cost: { metal: 180, credits: 60 },
+      buildTimeHours: 6,
+      hp: 70,
+      defenseBonus: 0.4,
+    },
     fort: {
       name: 'Fort',
       cost: { metal: 100 },
@@ -125,8 +134,37 @@ export const data: GameData = parseGameData({
   },
 });
 
+// --- sectors -----------------------------------------------------------------
+
+/**
+ * Sector-type registry — the whole map is a graph of sectors, each of exactly one
+ * type. Types are pure data: add/remove them freely; every type carries its own
+ * properties, and rendering + behaviour read from here (no hard-coded sector logic).
+ *   core       — terrain key in `data.sectors` (speed/HP bonuses) this type maps to
+ *   capturable — can be owned/taken (empty space can't — only traversed)
+ *   buildable  — structures can be raised here
+ *   orbit      — has the near/far orbital layer (cities, fortresses)
+ *   color      — map accent for the type
+ */
+export interface SectorType {
+  name: string;
+  core: string;
+  capturable: boolean;
+  buildable: boolean;
+  orbit: boolean;
+  color: string;
+}
+export const SECTOR_TYPES: Record<string, SectorType> = {
+  planet: { name: 'Planet', core: 'empty_space', capturable: true, buildable: true, orbit: true, color: '#5fd0ff' },
+  nebula: { name: 'Nebula', core: 'nebula', capturable: true, buildable: true, orbit: true, color: '#8f6dff' },
+  asteroid: { name: 'Asteroid Field', core: 'asteroid_field', capturable: true, buildable: true, orbit: false, color: '#d6a645' },
+  empty: { name: 'Empty Space', core: 'empty_space', capturable: false, buildable: false, orbit: false, color: '#46606e' },
+};
+
 // --- the map -----------------------------------------------------------------
 
+/** One sector node. `sector` is its type key (see SECTOR_TYPES); `links` are the
+ *  paths to neighbouring sectors; `type` is the planet-type (bonuses) for worlds. */
 export interface MapNode {
   id: string;
   owner: string | null;
@@ -139,128 +177,75 @@ export interface MapNode {
   garrison?: Array<[string, number]>;
 }
 
-export const MAP: MapNode[] = [
-  {
-    id: 'HOME',
-    owner: 'p1',
-    x: 130,
-    y: 330,
-    sector: 'empty_space',
-    type: 'terran',
-    links: ['FORGE', 'RELAY', 'ANCHOR'],
-    buildings: [{ type: 'mine' }],
-    garrison: [['marine', 3]],
-  },
-  {
-    id: 'FORGE',
-    owner: null,
-    x: 320,
-    y: 165,
-    sector: 'asteroid_field',
-    type: 'volcanic',
-    links: ['HOME', 'NEXUS', 'VEIL'],
-    garrison: [['marine', 2]],
-  },
-  {
-    id: 'RELAY',
-    owner: null,
-    x: 320,
-    y: 480,
-    sector: 'empty_space',
-    type: 'barren',
-    links: ['HOME', 'NEXUS', 'ANCHOR', 'HARBOR'],
-    garrison: [['marine', 1]],
-  },
-  {
-    id: 'ANCHOR',
-    owner: 'p1',
-    x: 190,
-    y: 560,
-    sector: 'empty_space',
-    type: 'oceanic',
-    links: ['HOME', 'RELAY'],
-    buildings: [{ type: 'refinery' }],
-    garrison: [
-      ['marine', 2],
-      ['orbital_aa', 1],
-    ],
-  },
-  {
-    id: 'VEIL',
-    owner: null,
-    x: 560,
-    y: 125,
-    sector: 'nebula',
-    type: 'gas_giant',
-    links: ['FORGE', 'NEXUS', 'OUTPOST'],
-    buildings: [{ type: 'refinery' }],
-    garrison: [['marine', 2]],
-  },
-  {
-    id: 'NEXUS',
-    owner: null,
-    x: 520,
-    y: 320,
-    sector: 'nebula',
-    type: 'oceanic',
-    links: ['FORGE', 'RELAY', 'VEIL', 'HARBOR', 'OUTPOST', 'CRIMSON'],
-    buildings: [{ type: 'fort' }],
-    garrison: [
-      ['marine', 3],
-      ['cruiser', 1],
-    ],
-  },
-  {
-    id: 'HARBOR',
-    owner: null,
-    x: 610,
-    y: 545,
-    sector: 'empty_space',
-    type: 'oceanic',
-    links: ['RELAY', 'NEXUS', 'CRIMSON'],
-    buildings: [{ type: 'barracks' }],
-    garrison: [['marine', 2]],
-  },
-  {
-    id: 'OUTPOST',
-    owner: 'p2',
-    x: 740,
-    y: 175,
-    sector: 'asteroid_field',
-    type: 'volcanic',
-    links: ['VEIL', 'NEXUS', 'CRIMSON', 'BASTION'],
-    buildings: [{ type: 'mine' }],
-    garrison: [['marine', 3]],
-  },
-  {
-    id: 'BASTION',
-    owner: 'p2',
-    x: 930,
-    y: 255,
-    sector: 'asteroid_field',
-    type: 'barren',
-    links: ['OUTPOST', 'CRIMSON'],
-    buildings: [{ type: 'fort' }],
-    garrison: [
-      ['marine', 3],
-      ['scout', 1],
-    ],
-  },
-  {
-    id: 'CRIMSON',
-    owner: 'p2',
-    x: 830,
-    y: 380,
-    sector: 'empty_space',
-    type: 'terran',
-    links: ['NEXUS', 'HARBOR', 'OUTPOST', 'BASTION'],
-    buildings: [{ type: 'fort' }, { type: 'mine' }],
-    garrison: [
-      ['marine', 4],
-      ['orbital_aa', 1],
-    ],
-  },
+type KeyNode = Omit<MapNode, 'links'>;
+
+// Curated sectors — fixed positions / types / owners / garrisons. The rest of the
+// map is filled in around them and everything is wired up by proximity below.
+const KEY: KeyNode[] = [
+  // home region (west)
+  { id: 'HOME', owner: 'p1', x: 150, y: 250, sector: 'planet', type: 'terran', buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
+  { id: 'ANCHOR', owner: 'p1', x: 130, y: 440, sector: 'planet', type: 'oceanic', buildings: [{ type: 'refinery' }], garrison: [['marine', 2], ['orbital_aa', 1]] },
+  { id: 'RELAY', owner: null, x: 320, y: 360, sector: 'planet', type: 'barren', garrison: [['marine', 1]] },
+  { id: 'FORGE', owner: null, x: 250, y: 175, sector: 'asteroid' },
+  // contested region (centre)
+  { id: 'NEXUS', owner: null, x: 560, y: 250, sector: 'nebula', type: 'oceanic', buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['cruiser', 1]] },
+  { id: 'VEIL', owner: null, x: 470, y: 430, sector: 'nebula', type: 'gas_giant', buildings: [{ type: 'refinery' }], garrison: [['marine', 2]] },
+  { id: 'HARBOR', owner: null, x: 660, y: 430, sector: 'planet', type: 'oceanic', buildings: [{ type: 'barracks' }], garrison: [['marine', 2]] },
+  { id: 'DRIFT', owner: null, x: 560, y: 150, sector: 'asteroid' },
+  // enemy region (east)
+  { id: 'OUTPOST', owner: 'p2', x: 850, y: 250, sector: 'planet', type: 'volcanic', buildings: [{ type: 'mine' }], garrison: [['marine', 3]] },
+  { id: 'BASTION', owner: 'p2', x: 930, y: 440, sector: 'nebula', type: 'barren', buildings: [{ type: 'fort' }], garrison: [['marine', 3], ['scout', 1]] },
+  { id: 'CRIMSON', owner: 'p2', x: 970, y: 260, sector: 'planet', type: 'terran', buildings: [{ type: 'fort' }, { type: 'mine' }], garrison: [['marine', 4], ['orbital_aa', 1]] },
+  { id: 'SLAG', owner: null, x: 1020, y: 390, sector: 'asteroid' },
 ];
+
+// Fill the rest of the map with sectors on a jittered lattice: mostly empty space,
+// with the occasional neutral field/world to seize. Deterministic; bump the grid
+// density to get more sectors.
+function fillSectors(): KeyNode[] {
+  const hash = (a: number, b: number): number => {
+    const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const out: KeyNode[] = [];
+  let i = 0;
+  for (let gx = 60; gx <= 1130; gx += 120) {
+    for (let gy = 50; gy <= 520; gy += 120) {
+      const x = gx + (hash(gx, gy) - 0.5) * 70;
+      const y = gy + (hash(gy, gx) - 0.5) * 70;
+      if (KEY.some((k) => Math.hypot(k.x - x, k.y - y) < 90)) continue;
+      const r = hash(x * 0.37, y * 0.71);
+      const sector = r < 0.1 ? 'asteroid' : r < 0.18 ? 'nebula' : 'empty';
+      const node: KeyNode = { id: `S${i++}`, owner: null, x, y, sector };
+      if (sector === 'nebula') node.type = 'barren';
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+// Wire sectors up by proximity: each links to its nearest neighbours within range
+// (symmetric, degree-capped) — "every sector has N paths, joined or not to its
+// neighbours". This is what makes the whole map one traversable graph.
+function withProximityLinks(nodes: KeyNode[]): MapNode[] {
+  const range = 215;
+  const cap = 6;
+  const adj = new Map<string, Set<string>>(nodes.map((n) => [n.id, new Set<string>()]));
+  const dist = (a: KeyNode, b: KeyNode): number => Math.hypot(a.x - b.x, a.y - b.y);
+  for (const n of nodes) {
+    const near = nodes
+      .filter((m) => m.id !== n.id && dist(m, n) <= range)
+      .sort((a, b) => dist(a, n) - dist(b, n))
+      .slice(0, cap);
+    for (const m of near) {
+      adj.get(n.id)!.add(m.id);
+      adj.get(m.id)!.add(n.id);
+    }
+  }
+  return nodes.map((n) => ({ ...n, links: [...adj.get(n.id)!] }));
+}
+
+export const MAP: MapNode[] = withProximityLinks([...KEY, ...fillSectors()]);
 
 function player(
   id: string,
@@ -354,7 +339,7 @@ export function newGame(): GameState {
       owner: n.owner,
       position: { x: n.x, y: n.y },
       links: n.links,
-      sectorType: n.sector,
+      sectorType: SECTOR_TYPES[n.sector]?.core ?? 'empty_space',
       planetType: n.type,
       resources: {},
       buildings: (n.buildings ?? []).map((b) => {
