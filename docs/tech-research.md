@@ -122,6 +122,21 @@ Severity: 🔴 High (блокер играбельной/публичной ве
 | **CDN для ассетов** | 🟡 | Карта/спрайты/звук — раздавать с края. |
 | **Тулинг баланса экономики** | 🟡 | Симуляции/дашборды для настройки констант без кода. |
 
+## Роадмапы по блокам (этот документ → 7 роадмапов)
+
+Каждый слой/пробел развёрнут в отдельный роадмап с задачами/подзадачами (формат кирпичиков):
+
+1. `core-roadmap.md` — ядро/контент: фракции, дипломатия, трейты, версияирование сейвов, реплей.
+2. `server-roadmap.md` — авторитет и транспорт: Fastify, match-actor, WS, sync/дельты, AOI, action-layer.
+3. `persistence-roadmap.md` — персистентность и планировщик: Postgres+JSONB, snapshot/event-log, миграции, BullMQ, бэкапы.
+4. `accounts-roadmap.md` — аккаунты и идентичность: OAuth/OIDC, сессии, JWT-handshake.
+5. `matchmaking-roadmap.md` — матчмейкинг и жизненный цикл матча: лобби, предматч, победа (Этап 5).
+6. `game-integrity-roadmap.md` — целостность игры: rate-limit, аномалии, мультиаккаунт/сговор, аудит-реплей.
+7. `operations-roadmap.md` — эксплуатация: масштаб/мульти-регион, наблюдаемость/телеметрия, live-ops, модерация.
+
+Уже покрыто отдельно: клиент → `cross-platform-roadmap.md`; безопасность → `secure-sdlc-roadmap.md`
++ `secure-environment-roadmap.md`.
+
 ## Рекомендации (сводно)
 
 - **Подтвердить выбор:** ядро ✅, Postgres+JSONB ✅ (+ snapshot/event-log), BullMQ ✅ (или
@@ -139,7 +154,14 @@ Severity: 🔴 High (блокер играбельной/публичной ве
 Выделенный research-проход прерван лимитом — досверить цитатами: build-vs-adopt realtime
 (Colyseus/Nakama/SpacetimeDB актуальное состояние), pg-boss vs BullMQ vs Temporal на масштабе,
 WebTransport-поддержка в браузерах, паттерны graceful-deploy для долгих WS, стоимостные модели
-Fly.io/Railway для always-on. Этот документ — инженерный анализ; цитаты добавить отдельным PR.
+Fly.io/Railway для always-on.
+
+**Конкретно (из инженерного ревью, см. `sprint-1.md`):**
+- **pg-boss vs BullMQ на НАШЕМ паттерне** (долгие таймеры «прибудет через N ч»), а не синтетика.
+- **JSONB versioning/индексы** в Postgres: `jsonb_path_ops`, GIN vs GiST под наш access pattern.
+- **Десинк-детекция** в других async-strategy на TS: как решали сверку состояния.
+
+Этот документ — инженерный анализ; цитаты добавить отдельным PR.
 
 ## Ссылки на внутренние доки
 

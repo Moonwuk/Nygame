@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData, safeParseGameData, buildingLevel } from './schemas';
+import { parseGameData, safeParseGameData, buildingLevel, buildingMaxLevel } from './schemas';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const dataDir = path.join(repoRoot, 'data');
@@ -66,6 +66,17 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(buildingLevel(fort!, 3).defenseBonus).toBeCloseTo(0.65);
     // Every ordinary building still grants the baseline +1%.
     expect(buildingLevel(data.buildings.barracks!, 1).defenseBonus).toBeCloseTo(0.01);
+  });
+
+  it('the radar array widens its detection radius (distance) across its 3 levels', () => {
+    const data = parseGameData(loadShippedBundle());
+    const radar = data.buildings.radar;
+    expect(radar).toBeDefined();
+    expect(buildingMaxLevel(radar!)).toBe(3);
+    // radarRange is a Euclidean distance (map units), not jumps.
+    expect(buildingLevel(radar!, 1).radarRange).toBe(300);
+    expect(buildingLevel(radar!, 2).radarRange).toBe(500);
+    expect(buildingLevel(radar!, 3).radarRange).toBe(700);
   });
 
   it('applies defaults for omitted optional fields', () => {

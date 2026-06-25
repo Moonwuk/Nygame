@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 232 зелёных**.
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 255 зелёных**.
 
 ---
 
@@ -72,7 +72,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory  (+ *.test.ts)
+  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory, visibility  (+ *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -238,14 +238,28 @@ elimination считается по ним (планеты+флоты+юниты
 `visibleState(state, viewerId, data)` — **чистая проекция** (не модуль, не редьюсер):
 сервер прогоняет её перед отправкой клиенту, **физически** убирая невидимое (а не
 «шлём всё, прячем на клиенте»). Не влияет на симуляцию — read-only вид, детерминизм
-не трогает. Текущая видимость: **identify** (полное опознание, дальность 1 прыжок от
-своих миров/флотов) + **radar** (шире, от `BuildingDef.radarRange` и `UnitDef.radarRange`
-кораблей-радаров). Враг в радаре, но не опознан → **сигнатура** `{location, size:S/M/L}`
+не трогает. Текущая видимость: **identify** (полное опознание, дальность 1 прыжок по
+графу от своих миров/флотов) + **radar** — по **физическому расстоянию** (евклидово, от
+`BuildingDef.radarRange`/`UnitDef.radarRange` в координатных единицах), **не по прыжкам**:
+узел близкий в космосе, но далёкий/недостижимый по лейнам, всё равно ловится радаром.
+Враг в радаре, но не опознан → **сигнатура** `{location, size:S/M/L}`
 (грубое «что-то есть», ведро по `Σ count × UnitDef.signature`), а не сам флот. Прячет:
 чужую казну/технологии, контент невидимых миров (топология остаётся), невидимые
 флоты/бои и **всё расписание** (утечка планов). Покрыто тестами, включая anti-leak
-по JSON. **Дальше:** память последнего увиденного (вариант B), хук `vision.source`,
-радарные постройки/корабли в данных, сборка в `visibilityModule`.
+по JSON.
+
+**Память (вариант B, `visibilityModule` + `modules/visibility.ts`).** Модуль на
+`time.advanced`/`planet.captured`/`fleet.arrived` пишет per-player снимки опознанных
+миров в **`GameState.fog`** (JSON, детерминировано). `visibleState` для мира вне обзора,
+но виденного ранее, отдаёт **серое «last known»** из снимка и кладёт id в `remembered[]`
+(а `fog` из проекции вырезается — внутреннее). Без модуля — память пустая, мир читается
+как unknown (мягкая деградация).
+
+**Туман на рассылке (F6, `packages/server/MatchRoom`).** Сервер шлёт **per-player
+дельты** от `visibleState` (своя базовая линия на игрока) + сигнатуры/`remembered`
+отдельными полями; **события тоже фильтруются** по видимости (`eventVisibleTo`). e2e:
+на dev-карте green не видит флот red и `red_1` **не появляется по проводу** ни в стейте,
+ни в событиях. **Дальше:** AOI-оптимизация, JWT в рукопожатии (F7).
 
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
@@ -258,10 +272,12 @@ cruiser, siege_lance(artillery,range), dropship(cargoCapacity 12), militia,
 drop_infantry, tank(cargoSize 3), orbital_aa(aaDamage), infected_cruiser,
 reanimated_drone` (супер-юнитов пока нет — добавятся позже).
 - **buildings** (`BuildingDef`): `cost, buildTimeHours, produces, hp,
-defenseBonus, upgrades[{…}], traits, scoreValue`. Есть: `mine_t1, mine_t2, shipyard,
-biomass_pit, barracks, spaceport, fort` (форт — 3 уровня: HP 35→50→65,
-  defenseBonus 0.35→0.50→0.65). `scoreValue`: fort 20·уровень, shipyard 12,
-  mine/biomass 8, barracks/spaceport 6.
+defenseBonus, upgrades[{…}], traits, scoreValue, radarRange`. Есть: `mine_t1, mine_t2,
+shipyard, biomass_pit, barracks, spaceport, radar, fort` (форт — 3 уровня: HP 35→50→65,
+  defenseBonus 0.35→0.50→0.65; **радар — 3 уровня**: `radarRange` 300→500→700 (расстояние),
+  HP 18→26→34). `radarRange` теперь **уровневый** (`BuildingLevelSchema`), `visibleState`
+  читает его через `buildingLevel(def, level)`. `scoreValue`: fort 20·уровень, shipyard 12,
+  mine/biomass 8, barracks/spaceport/radar 6.
 - **sectors:** `empty_space(+скорость), asteroid_field(−скорость/+живучесть/score 5),
 nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
 volcanic 20, gas_giant 10, barren 5).
@@ -367,7 +383,7 @@ golden; модель времени `advanceTo`; экономика (казна 
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 232 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 255 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```

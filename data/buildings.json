@@ -51,6 +51,30 @@
     "scoreValue": 6,
     "traits": []
   },
+  "radar": {
+    "name": "Sensor Array I",
+    "cost": { "metal": 120, "credits": 40 },
+    "buildTimeHours": 6,
+    "produces": {},
+    "hp": 18,
+    "radarRange": 300,
+    "scoreValue": 6,
+    "upgrades": [
+      {
+        "cost": { "metal": 220, "credits": 90 },
+        "buildTimeHours": 10,
+        "hp": 26,
+        "radarRange": 500
+      },
+      {
+        "cost": { "metal": 360, "credits": 160 },
+        "buildTimeHours": 14,
+        "hp": 34,
+        "radarRange": 700
+      }
+    ],
+    "traits": []
+  },
   "fort": {
     "name": "Fortress",
     "cost": { "metal": 150 },

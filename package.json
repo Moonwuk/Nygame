@@ -17,6 +17,8 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "prototype": "node prototype/build.mjs",
     "dev:server": "node packages/server/dev.mjs",
+    "dev:proto-server": "node prototype/netserver.mjs",
+    "dev:client": "node testclient/build.mjs",
     "audit": "pnpm audit --audit-level=high",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
   },

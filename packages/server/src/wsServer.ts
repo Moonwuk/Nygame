@@ -60,13 +60,21 @@ export function createMultiplayerServer(
     });
   });
 
+  // Track live sockets so close() can actively drain them: `httpServer.close()`
+  // alone waits for in-flight WebSocket connections forever (they never end on
+  // their own), so a graceful restart has to close them itself.
+  const sockets = new Set<WebSocket>();
   wss.on('connection', (ws: WebSocket, _request: IncomingMessage, playerId: string) => {
+    sockets.add(ws);
     room.addPeer(playerId, ws);
     ws.on('message', (data) => {
       const raw = typeof data === 'string' ? data : data.toString('utf8');
       room.receive(playerId, ws, raw);
     });
-    ws.on('close', () => room.removePeer(playerId, ws));
+    ws.on('close', () => {
+      sockets.delete(ws);
+      room.removePeer(playerId, ws);
+    });
   });
 
   return {
@@ -86,8 +94,16 @@ export function createMultiplayerServer(
       }),
     close: () =>
       new Promise((resolve, reject) => {
+        // Graceful drain: ask every client to close (1001 "going away"), then
+        // terminate any straggler after a short grace so close() always resolves.
+        for (const ws of sockets) ws.close(1001, 'server shutting down');
+        const grace = setTimeout(() => {
+          for (const ws of sockets) ws.terminate();
+        }, 1000);
+        grace.unref();
         wss.close(() => {
           httpServer.close((error) => {
+            clearTimeout(grace);
             if (error) reject(error);
             else resolve();
           });

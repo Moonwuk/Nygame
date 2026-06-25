@@ -1,0 +1,267 @@
+name: SSDLC Security Pipeline
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+    branches: [main]
+
+# ✅ ИСПРАВЛЕНИЕ 1: Добавляем необходимые permissions
+permissions:
+  contents: read
+  security-events: write  # Для загрузки SARIF в CodeQL
+  actions: read
+  pull-requests: write    # Для создания комментариев в PR
+
+env:
+  PNPM_VERSION: '10'
+  NODE_VERSION: '22'
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true  # Временно для Node 20
+
+jobs:
+  # ===========================================================================
+  # ФУНКЦИОНАЛЬНЫЙ ГЕЙТ
+  # ===========================================================================
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - run: pnpm run test --coverage
+
+  # ===========================================================================
+  # SAST — Static Analysis
+  # ===========================================================================
+  sast-semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/typescript
+            p/javascript
+            p/security-audit
+          generateSarif: "1"
+      
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4  # ✅ ИСПРАВЛЕНИЕ 2: v3 → v4
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  sast-bearer:
+    name: Taint Analysis (Bearer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Bearer
+        uses: bearer/bearer-action@v2
+        with:
+          path: .
+          format: sarif
+          output: bearer.sarif
+          severity: high,critical
+      
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4  # ✅ ИСПРАВЛЕНИЕ 2: v3 → v4
+        if: always()
+        with:
+          sarif_file: bearer.sarif
+
+  # ===========================================================================
+  # SCA — Dependency Scanning
+  # ===========================================================================
+  sca-pnpm-audit:
+    name: SCA (pnpm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+
+  sca-osv-scanner:
+    name: SCA (OSV-Scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # ✅ ИСПРАВЛЕНИЕ 3: Правильный путь к action
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
+            --format=sarif
+            --output=osv.sarif
+      
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4  # ✅ ИСПРАВЛЕНИЕ 2: v3 → v4
+        if: always()
+        with:
+          sarif_file: osv.sarif
+
+  # ===========================================================================
+  # SECRET DETECTION
+  # ===========================================================================
+  secrets-gitleaks:
+    name: Secret Detection (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # IaC & MISCONFIGURATION
+  # ===========================================================================
+  trivy-fs:
+    name: IaC Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scanners: 'vuln,secret,misconfig'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'trivy.sarif'
+          exit-code: '0'
+      
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4  # ✅ ИСПРАВЛЕНИЕ 2: v3 → v4
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+
+  # ===========================================================================
+  # SBOM
+  # ===========================================================================
+  sbom-syft:
+    name: SBOM (Syft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  # ===========================================================================
+  # QUALITY GATE & FEEDBACK
+  # ===========================================================================
+  security-gate:
+    name: Security Quality Gate
+    runs-on: ubuntu-latest
+    needs:
+      - sast-semgrep
+      - sast-bearer
+      - sca-osv-scanner
+      - secrets-gitleaks
+      - trivy-fs
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+        continue-on-error: true
+      
+      - name: Analyze findings
+        id: analyze
+        run: |
+          CRITICAL=0
+          HIGH=0
+          
+          for sarif in $(find . -name "*.sarif"); do
+            CRITICAL=$((CRITICAL + $(jq '[.runs[].results[] | select(.level=="error")] | length' "$sarif" 2>/dev/null || echo 0)))
+            HIGH=$((HIGH + $(jq '[.runs[].results[] | select(.level=="warning")] | length' "$sarif" 2>/dev/null || echo 0)))
+          done
+          
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          
+          echo "🔴 Critical: $CRITICAL"
+          echo "🟠 High: $HIGH"
+          
+          if [ $CRITICAL -gt 0 ] || [ $HIGH -gt 0 ]; then
+            echo "❌ Quality Gate FAILED"
+            exit 1
+          else
+            echo "✅ Quality Gate PASSED"
+          fi
+      
+      - name: Post comment to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const critical = ${{ steps.analyze.outputs.critical }};
+            const high = ${{ steps.analyze.outputs.high }};
+            const passed = critical === 0 && high === 0;
+            
+            const body = `## ${passed ? '✅' : '🚨'} Security Quality Gate: **${passed ? 'PASSED' : 'FAILED'}**
+            
+            | Severity | Count |
+            |----------|-------|
+            | 🔴 Critical | ${critical} |
+            | 🟠 High | ${high} |
+            
+            ${passed ? '✅ Code is safe to merge.' : '❌ Please fix security issues before merging.'}
+            
+            ---
+            *Scanners: Semgrep, Bearer, OSV-Scanner, Gitleaks, Trivy*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

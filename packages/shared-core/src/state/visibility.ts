@@ -1,4 +1,4 @@
-import type { GameData } from '../data/schemas';
+import { buildingLevel, type GameData } from '../data/schemas';
 import { deepClone } from '../util/clone';
 import type { Fleet, GameState, PlanetId, PlayerId } from './gameState';
 
@@ -30,9 +30,13 @@ export interface SignatureContact {
   size: SignatureSize;
 }
 
-/** The state as one player may see it: a filtered `GameState` plus the radar
- *  contacts that stand in for fleets detected but not identified. */
-export type VisibleState = GameState & { signatures: SignatureContact[] };
+/** The state as one player may see it: a filtered `GameState`, the radar
+ *  contacts that stand in for fleets detected but not identified, and the ids of
+ *  worlds shown from memory (greyed "last known", variant B). */
+export type VisibleState = GameState & {
+  signatures: SignatureContact[];
+  remembered: PlanetId[];
+};
 
 /** Total radar signature of a fleet = Σ count × per-unit signature. */
 function fleetSignature(fleet: Fleet, data: GameData): number {
@@ -43,7 +47,7 @@ function fleetSignature(fleet: Fleet, data: GameData): number {
   return total;
 }
 
-/** Radar reach (jumps) a fleet projects, from its loudest radar-ship. */
+/** Radar reach (distance, in map units) a fleet projects, from its loudest radar-ship. */
 function fleetRadar(fleet: Fleet, data: GameData): number {
   let reach = 0;
   for (const stack of fleet.units) {
@@ -72,6 +76,21 @@ function flood(state: GameState, start: PlanetId, hops: number, out: Set<PlanetI
   }
 }
 
+/** Add every node within Euclidean `radius` of `originId`'s position. Radar is a
+ *  physical signal, not graph hops: a node that is close in space still shows up
+ *  even if it is many jumps away (or unreachable) by the lane graph. Uses squared
+ *  distance — exact and deterministic, no sqrt. */
+function withinRadius(state: GameState, originId: PlanetId, radius: number, out: Set<PlanetId>): void {
+  const origin = state.planets[originId]?.position;
+  if (!origin) return;
+  const r2 = radius * radius;
+  for (const planet of Object.values(state.planets)) {
+    const dx = planet.position.x - origin.x;
+    const dy = planet.position.y - origin.y;
+    if (dx * dx + dy * dy <= r2) out.add(planet.id);
+  }
+}
+
 /** The node a fleet occupies or is travelling over. */
 function fleetNode(fleet: Fleet): PlanetId | null {
   return fleet.location ?? fleet.movement?.to ?? fleet.movement?.from ?? null;
@@ -90,8 +109,11 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
     if (planet.owner !== viewerId) continue;
     flood(state, planet.id, IDENTIFY_HOPS, identify);
     let reach = 0;
-    for (const b of planet.buildings) reach = Math.max(reach, data.buildings[b.type]?.radarRange ?? 0);
-    if (reach > 0) flood(state, planet.id, reach, radar);
+    for (const b of planet.buildings) {
+      const def = data.buildings[b.type];
+      if (def) reach = Math.max(reach, buildingLevel(def, b.level).radarRange);
+    }
+    if (reach > 0) withinRadius(state, planet.id, reach, radar);
   }
   for (const fleet of Object.values(state.fleets)) {
     if (fleet.owner !== viewerId) continue;
@@ -99,10 +121,16 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
     if (node === null) continue;
     flood(state, node, IDENTIFY_HOPS, identify);
     const reach = fleetRadar(fleet, data);
-    if (reach > 0) flood(state, node, reach, radar);
+    if (reach > 0) withinRadius(state, node, reach, radar);
   }
   for (const id of identify) radar.add(id); // identify implies radar
   return { identify, radar };
+}
+
+/** The set of nodes `viewerId` currently identifies (full detail). Exported so
+ *  `visibilityModule` snapshots exactly what the projection treats as live. */
+export function identifiedNodes(state: GameState, viewerId: PlayerId, data: GameData): Set<PlanetId> {
+  return coverageFor(state, viewerId, data).identify;
 }
 
 /**
@@ -123,15 +151,35 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   }
 
   // Planets: keep topology (id/position/links) but strip contents you can't see.
+  // A world you have seen before shows its remembered snapshot (variant B);
+  // one never identified shows nothing.
+  const remembered: PlanetId[] = [];
+  const memory = state.fog?.[viewerId];
   for (const planet of Object.values(view.planets)) {
     if (planet.owner === viewerId || identify.has(planet.id)) continue;
-    planet.owner = null;
-    planet.garrison = [];
-    planet.buildings = [];
-    planet.resources = {};
-    delete planet.sectorType;
-    delete planet.planetType;
+    const snap = memory?.[planet.id];
+    if (snap) {
+      planet.owner = snap.owner;
+      planet.garrison = snap.garrison.map((s) => ({ ...s }));
+      planet.buildings = snap.buildings.map((b) => ({ ...b }));
+      planet.resources = {};
+      if (snap.sectorType === undefined) delete planet.sectorType;
+      else planet.sectorType = snap.sectorType;
+      if (snap.planetType === undefined) delete planet.planetType;
+      else planet.planetType = snap.planetType;
+      remembered.push(planet.id);
+    } else {
+      planet.owner = null;
+      planet.garrison = [];
+      planet.buildings = [];
+      planet.resources = {};
+      delete planet.sectorType;
+      delete planet.planetType;
+    }
   }
+  remembered.sort();
+  view.remembered = remembered;
+  delete view.fog; // memory is authoritative-internal — never shipped raw
 
   // Fleets: own + identified enemy stay; radar-only enemy → a coarse signature;
   // everything else is removed entirely.

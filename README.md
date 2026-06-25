@@ -1,6 +1,6 @@
 # Void Dominion
 
-Мобильная **real-time** космическая grand strategy с массовым мультиплеером —
+Мобильная/браузерная **real-time** космическая grand strategy с массовым мультиплеером —
 в духе игр Bytro Labs (Iron Order, Call of War, Supremacy 1914), но в сеттинге тёмного
 космоса. Мир идёт в непрерывном реальном времени и круглосуточно; игрок действует
 асинхронно (зашёл, отдал приказы на часы вперёд, вышел). Не пошаговая. Жанр и темп —
@@ -17,41 +17,69 @@
 - **Детерминизм** — ядро это чистая функция: одинаковый вход → одинаковый выход
   (replay боёв, предпросмотр на клиенте, античит). Seeded RNG, время — параметр.
 - **Server-authority** — клиент шлёт намерение, сервер решает (основа античита).
+- **Туман войны как граница безопасности** — сервер физически не отправляет невидимое
+  (`visibleState`), а не «шлёт всё и прячет на клиенте».
 - **Fail-secure** — любая ошибка ведёт к безопасному отказу, не к пропуску.
 - **TypeScript везде** — `shared-core` пишется один раз и работает и на сервере, и на клиенте.
 
 Подробности — в [`docs/`](./docs): [`gdd.md`](./docs/gdd.md) (игровой дизайн),
 [`architecture.md`](./docs/architecture.md), [`modulesystem.md`](./docs/modulesystem.md),
-[`roadmap.md`](./docs/roadmap.md), [`deep-technical-roadmap.md`](./docs/deep-technical-roadmap.md), [`multiplayer.md`](./docs/multiplayer.md), [`engineering-risks.md`](./docs/engineering-risks.md).
+[`roadmap.md`](./docs/roadmap.md), [`state.md`](./docs/state.md) (снимок текущего состояния),
+[`backlog.md`](./docs/backlog.md) (кирпичики задач). Техническое исследование стека и
+по-блочные роадмапы: [`tech-research.md`](./docs/tech-research.md),
+[`core-roadmap.md`](./docs/core-roadmap.md), [`server-roadmap.md`](./docs/server-roadmap.md),
+[`persistence-roadmap.md`](./docs/persistence-roadmap.md), [`accounts-roadmap.md`](./docs/accounts-roadmap.md),
+[`matchmaking-roadmap.md`](./docs/matchmaking-roadmap.md), [`game-integrity-roadmap.md`](./docs/game-integrity-roadmap.md),
+[`operations-roadmap.md`](./docs/operations-roadmap.md), [`cross-platform-roadmap.md`](./docs/cross-platform-roadmap.md);
+безопасность — [`secure-sdlc-roadmap.md`](./docs/secure-sdlc-roadmap.md) и
+[`secure-environment-roadmap.md`](./docs/secure-environment-roadmap.md).
 
 ## Структура монорепы
 
 ```
 .
 ├── packages/
-│   ├── shared-core/   # детерминированное ядро-симуляция (готовится первым)
+│   ├── shared-core/   # детерминированное ядро-симуляция (готово в основном)
 │   ├── action-layer/  # Stage 2: envelope validation, auth, idempotency, sequence
-│   ├── server/        # авторитетный сервер — Stage 3 (in-memory multiplayer slice)
-│   └── client/        # React Native клиент — Stage 4 (transport adapter slice)
-├── data/              # игровой контент (data-driven): units, factions, buildings, events, resources
-└── docs/              # проектные документы
+│   ├── server/        # авторитетный сервер — Stage 3 (in-memory multiplayer slice + туман на рассылке)
+│   └── client/        # клиент — Stage 4 (PWA-first; пока transport adapter slice)
+├── data/              # игровой контент (data-driven): units, factions, buildings, technologies, sectors, …
+├── prototype/         # играбельный single-file HTML на реальном ядре (throwaway-демо «пощупать»)
+└── docs/              # проектные документы и роадмапы
 ```
 
 ### `@void/shared-core`
 
-| Модуль     | Назначение                                                                                   |
-| ---------- | -------------------------------------------------------------------------------------------- |
-| `rng/`     | Seeded PRNG (sfc32) — детерминизм, состояние сериализуется в `GameState`                     |
-| `state/`   | `GameState` и фабрика начального состояния (JSON-сериализуемо, хранится как JSONB)           |
-| `action/`  | Контракт действия (`Action`/`Context`/`ApplyResult`), `Rejection`, парсер id                 |
-| `kernel/`  | Микроядро: `createKernel`, `applyAction`, `advanceTo` (модель времени), шина, хуки, манифест |
-| `data/`    | zod-схемы игровых данных + `parseGameData` (валидация всего входа)                           |
-| `modules/` | Базовые модули-плагины: `economyModule`, `movementModule`, `combatModule`                    |
-| `util/`    | `deepClone`/`deepFreeze` для immutable-контракта редьюсера                                   |
+| Зона       | Что внутри                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------- |
+| `kernel/`  | Микроядро: `createKernel`, `applyAction`, `advanceTo` (real-time), шина, хуки, реестр, манифест    |
+| `state/`   | `GameState`; `visibleState` (туман войны — проекция-граница безопасности); `diffState`/`applyDelta` (дельта-sync); `hashState` (детект десинка) |
+| `action/`  | Контракт действия (`Action`/`Context`/`ApplyResult`), `Rejection`, `timeScale`                      |
+| `data/`    | zod-схемы игровых данных + `parseGameData` (валидация всего входа, A05/A08)                          |
+| `modules/` | Базовые модули-плагины (см. ниже) — каждая механика подключается через шину                          |
+| `rng/`     | Seeded PRNG (sfc32) — детерминизм; состояние сериализуется в `GameState` (golden-тест)               |
+| `util/`    | `deepClone`/`deepFreeze` (immutable-контракт), общие хелперы казны/стеков/времени                    |
+
+**Модули ядра:** `sector`, `planetType`, `technology`, `economy`, `movement`, `combat`
+(орбитальный/наземный бой, двухфазный захват, ПВО, бомбардировка), `construction`,
+`army` (флот ⊕ наземная армия + транспорт), `victory` (data-driven очки/счёт),
+`visibility` (память тумана войны, вариант B). Новая механика = новый модуль (+ данные),
+ядро не трогается.
 
 ### `@void/action-layer`
 
-Stage 2 security gate before server authority applies actions: `ActionEnvelope` validation, player/session authorization, idempotency receipts and per-session `clientSeq` ordering. This layer is intentionally outside `shared-core`: the core stays deterministic and assumes actions already passed validation/authorization.
+Stage-2 security gate перед тем, как авторитет сервера применяет действия:
+валидация `ActionEnvelope`, авторизация по игроку/сессии, идемпотентность (receipts) и
+строгий порядок `clientSeq` per-session. Слой намеренно вне `shared-core`: ядро остаётся
+детерминированным и считает, что действие уже прошло валидацию/авторизацию.
+
+### `@void/server`
+
+In-memory срез мультиплеера на **реальном** ядре: `MatchRoom` (advance → authorize →
+`applyAction` → broadcast), WebSocket-слой (`createMultiplayerServer`), **дельта-рассылка
+с туманом войны (F6)** — каждый игрок получает только свою `visibleState` (скрытое физически
+не уходит, события тоже фильтруются), graceful drain + reconnect-resync. Персистентность,
+планировщик и аккаунты — впереди (см. роадмапы `persistence`/`accounts`).
 
 ## Разработка
 
@@ -65,20 +93,27 @@ pnpm run lint           # ESLint (включая правила детермин
 pnpm run typecheck      # tsc --noEmit по всем пакетам
 pnpm run format         # Prettier --write
 pnpm run audit          # pnpm audit (OWASP A03)
+pnpm run prototype      # собрать играбельный prototype/dist/void-dominion.html
 
 pnpm run check          # lint + typecheck + test (как в CI)
 ```
 
-CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) гоняет lint, typecheck,
-тесты и `pnpm audit` на каждый push/PR.
+CI: [`ci.yml`](./.github/workflows/ci.yml) гоняет lint, typecheck, тесты и `pnpm audit`
+на каждый push/PR; [`ssdlc.yml`](./.github/workflows/ssdlc.yml) — security-пайплайн
+(Semgrep, Bearer, Trivy, Gitleaks, SCA, SBOM). На сейчас **255 тестов** зелёные.
 
 ## Статус
 
 - **Этап 0 (Каркас)** — ✅ готово.
-- **Этап 1 (Ядро)** — 🚧 заложен фундамент (kernel + шина + реестр модулей + `GameState` +
-  seeded RNG + `applyAction`), **модель времени `advanceTo`** (real-time: запланированные
-  события + континуальное накопление) и **базовые модули-плагины** (движение, экономика,
-  **бой с захватом** §7: линии, почасовые раунды, двухфазный захват орбита→десант) плюс
-  `timeScale`. Дальше — очки/победа, герои, тактики.
+- **Этап 1 (Ядро)** — 🚧 фундамент готов и покрыт тестами: микроядро + шина + хуки +
+  манифест, seeded RNG (golden), модель времени `advanceTo`, экономика, карта + движение,
+  секторы и типы планет, **бой с двухфазным захватом** (орбита→десант, ПВО, бомбардировка),
+  здания, флот ⊕ армия + транспорт, **дерево технологий**, **победа и data-driven очки**,
+  **туман войны** (`visibleState` + память варианта B + radar-сигнатуры). Дальше по плану
+  эволюции ядра — фракции, дипломатия.
+- **Этап 2 (Слой действий)** — 🧪 каркас `@void/action-layer` есть.
+- **Этап 3 (Сервер)** — 🧪 in-memory multiplayer slice + WebSocket + дельта-sync + **туман
+  на рассылке (F6)**; впереди персистентность/планировщик/аккаунты.
 
-См. [`docs/roadmap.md`](./docs/roadmap.md) — раздел «Статус реализации».
+См. [`docs/roadmap.md`](./docs/roadmap.md) (раздел «Статус реализации») и
+[`docs/state.md`](./docs/state.md) — живой снимок того, что готово и как работает.

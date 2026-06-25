@@ -226,7 +226,24 @@ export interface GameState {
   scheduled: ScheduledEvent[];
   /** Monotonic counter handing each scheduled event its deterministic `seq`. */
   scheduleSeq: number;
+  /** Per-player fog-of-war memory (variant B): the last identified snapshot of
+   *  each seen world. Maintained by `visibilityModule`; read by `visibleState`
+   *  to show greyed "last known" worlds. Internal — stripped from projections. */
+  fog?: Record<PlayerId, FogMemory>;
 }
+
+/** A player's remembered last-known state of one world (fog-of-war memory). */
+export interface PlanetSnapshot {
+  owner: PlayerId | null;
+  garrison: UnitStack[];
+  buildings: BuildingInstance[];
+  sectorType?: string;
+  planetType?: string;
+  /** Simulation time (ms) this snapshot was taken. */
+  at: number;
+}
+/** One player's memory: last-known snapshot per world they have ever identified. */
+export type FogMemory = Record<PlanetId, PlanetSnapshot>;
 
 /** Creates an empty, deterministically-seeded initial state. */
 export function createInitialState(params: {

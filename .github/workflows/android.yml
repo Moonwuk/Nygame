@@ -1,0 +1,67 @@
+name: Android APK (prototype)
+
+# Builds an installable debug APK of the prototype by wrapping the self-contained
+# prototype HTML in a Capacitor WebView. Runs on GitHub's ubuntu runner, which has
+# the Android SDK preinstalled. Download the APK from the run's artifacts.
+# NOTE: action versions are tag-pinned for now — SHA-pin with SD-6.1 (see
+# secure-sdlc-roadmap.md) alongside the other workflows.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/awesome-bohr-ygnunp]
+    paths:
+      - 'prototype/**'
+      - 'mobile/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Assemble debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build the prototype (self-contained HTML)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run prototype
+
+      - name: Stage web assets + install Capacitor
+        working-directory: mobile
+        run: |
+          mkdir -p www
+          cp ../prototype/dist/void-dominion.html www/index.html
+          npm install
+
+      - name: Generate the Android project
+        working-directory: mobile
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Assemble debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-dominion-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

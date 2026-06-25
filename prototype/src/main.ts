@@ -30,6 +30,7 @@ import {
   type StepOut,
 } from './game';
 import { buildingMaxLevel } from '../../packages/shared-core/src/index';
+import { MultiplayerClient } from '../../packages/client/src/index';
 import type {
   GameState,
   Fleet,
@@ -50,6 +51,14 @@ const COLOR: Record<string, string> = {
   null: '#6f8a93', // neutral — gray
 };
 const VOID_COLOR = '#46606e'; // empty-space provinces — uncapturable void
+// Political colour is relative to the local commander: YOU are always green,
+// neutral gray, everyone else (the enemy) red. In single-player you are p1; in
+// net mode you may be p1 or p2 — this keeps "your" colour green either way.
+function ownerColor(owner: string | null | undefined): string {
+  if (!owner) return COLOR.null;
+  if (owner === ME) return COLOR.p1;
+  return COLOR.p2;
+}
 const LANE = 'rgba(73,196,206,0.20)';
 const GRID = 'rgba(46,150,160,0.07)';
 const LOCK = '#7df0d0'; // selection / targeting reticle accent
@@ -75,7 +84,7 @@ const UNIT_ICON: Record<string, string> = {
 };
 /** Accent colour for a sector type (from the data-driven registry). */
 const sectorColor = (type: string): string => SECTOR_TYPES[type]?.color ?? '#35d6e6';
-const ME = 'p1';
+let ME = 'p1';
 type PlanetTab = 'ground' | 'ships' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
@@ -142,6 +151,13 @@ let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
+
+// --- multiplayer (net mode) --------------------------------------------------
+// When connected, the server is authoritative: snapshots replace `s`, orders are
+// sent (not applied locally), and the local sim/AI is suspended (see frame()).
+let NET = false;
+let netClient: MultiplayerClient | null = null;
+let netSock: WebSocket | null = null;
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
 let planetTab: PlanetTab = 'buildings';
 const buildQueues: Record<string, PlanetBuildQueue> = {};
@@ -442,6 +458,18 @@ function queuedLabel(q: QueuedBuild): string {
   return `${BUILD_ICON[q.id] ?? '▣'} ${data.buildings[q.id]?.name ?? q.id}`;
 }
 function enqueueBuild(planetId: string, order: QueuedBuild): void {
+  if (NET) {
+    // No local build queue in net mode — the server times construction. Send the
+    // order straight away (one tap = one build queued server-side).
+    const action =
+      order.kind === 'unit'
+        ? buildUnit(ME, planetId, order.id, order.count)
+        : order.kind === 'upgrade'
+          ? upgradeBuilding(ME, planetId, order.id)
+          : buildBuilding(ME, planetId, order.id);
+    playerOrder(action);
+    return;
+  }
   queueOf(planetId)[laneOf(order.kind)].push(order);
   note(`queued ${queuedLabel(order)} at ${planetId}`);
   pumpBuildQueues();
@@ -546,9 +574,11 @@ function fleetNode(f: Fleet): string | null {
 //     `radar.source` hook will move these into data) -------------------------
 // How "loud" each unit is to enemy radar — big hulls broadcast, recon is quiet.
 const SIGNATURE: Record<string, number> = { scout: 1, marine: 1, orbital_aa: 2, cruiser: 4, siege: 5 };
-// Radar-ship classes: a fleet carrying one projects radar this many jumps.
-const RADAR_SHIP: Record<string, number> = { scout: 2 };
-const SENSOR_HOPS = 1; // identify (full-detail) range from any owned node / fleet
+// Radar-ship classes: a fleet carrying one projects radar this far (DISTANCE, map units).
+const RADAR_SHIP: Record<string, number> = { scout: 350 };
+// Radar-array detection radius (DISTANCE, map units) by building level.
+const RADAR_LEVEL_DIST = [0, 300, 500, 700];
+const SENSOR_HOPS = 1; // identify (full-detail) range from any owned node / fleet (jumps)
 
 /** Total radar signature of a fleet = Σ count × per-unit signature. */
 function fleetSignature(f: Fleet): number {
@@ -560,17 +590,30 @@ function fleetSignature(f: Fleet): number {
 function sigClass(sig: number): 'S' | 'M' | 'L' {
   return sig >= 13 ? 'L' : sig >= 5 ? 'M' : 'S';
 }
-/** Radar reach (jumps) a fleet projects, from its loudest radar-ship (0 = none). */
+/** Radar reach (distance) a fleet projects, from its loudest radar-ship (0 = none). */
 function fleetRadar(f: Fleet): number {
   let r = 0;
   for (const st of f.units) if (st.count > 0) r = Math.max(r, RADAR_SHIP[st.unit] ?? 0);
   return r;
 }
-/** Radar reach (jumps) a world projects, from its best radar array (level + 1). */
+/** Radar reach (distance) a world projects, from its best radar array (grows with level). */
 function planetRadar(p: Planet): number {
   let r = 0;
-  for (const b of p.buildings) if (b.type === 'radar') r = Math.max(r, b.level + 1);
+  for (const b of p.buildings) if (b.type === 'radar') r = Math.max(r, RADAR_LEVEL_DIST[b.level] ?? 0);
   return r;
+}
+/** Add every node within Euclidean `radius` of `start`'s position — radar is a
+ *  physical signal, not jumps: a node close in space shows up even if many jumps
+ *  away (or unreachable) by the lane graph. */
+function withinRadius(start: string, radius: number, out: Set<string>): void {
+  const origin = s.planets[start]?.position;
+  if (!origin) return;
+  const r2 = radius * radius;
+  for (const pl of Object.values(s.planets)) {
+    const dx = pl.position.x - origin.x;
+    const dy = pl.position.y - origin.y;
+    if (dx * dx + dy * dy <= r2) out.add(pl.id);
+  }
 }
 
 /** Flood `hops` jumps out from `start` over the lane graph into `out`. */
@@ -606,7 +649,7 @@ function computeVision(): Vision {
     if (p.owner === ME) {
       floodHops(p.id, SENSOR_HOPS, identify);
       const rr = planetRadar(p);
-      if (rr > 0) floodHops(p.id, rr, radar);
+      if (rr > 0) withinRadius(p.id, rr, radar);
     }
   for (const f of Object.values(s.fleets))
     if (f.owner === ME) {
@@ -614,7 +657,7 @@ function computeVision(): Vision {
       if (!node) continue;
       floodHops(node, SENSOR_HOPS, identify);
       const rr = fleetRadar(f);
-      if (rr > 0) floodHops(node, rr, radar);
+      if (rr > 0) withinRadius(node, rr, radar);
     }
   for (const id of identify) radar.add(id); // identify implies radar
   return { identify, radar };
@@ -654,7 +697,7 @@ function radarHas(id: string | null | undefined): boolean {
 function drawFogMarker(c: { x: number; y: number }, id: string, mem: Snapshot | undefined): void {
   cx.save();
   if (mem) {
-    const col = COLOR[mem.owner ?? 'null'];
+    const col = ownerColor(mem.owner);
     cx.setLineDash([2, 4]);
     cx.strokeStyle = rgba(col, 0.34);
     cx.lineWidth = 1;
@@ -736,6 +779,10 @@ function installFortressAA(planetId: string) {
 /** Apply a player-issued order and surface a rejection in the log (so a denied
  *  click — wrong orbit, no capacity, can't afford — isn't silently swallowed). */
 function playerOrder(action: Action) {
+  if (NET && netClient) {
+    netClient.sendAction(action); // server is authoritative — await its broadcast
+    return;
+  }
   const out = order(s, action, s.time);
   apply(out);
   if (out.error) note('✖ ' + out.error.replace(/^E_/, '').toLowerCase().replace(/_/g, ' '));
@@ -1123,7 +1170,7 @@ function buildProvinces(): void {
     const b = projBase(n);
     if (n.sector === 'empty') return { x: b.x, y: b.y, key: 'void', col: VOID_COLOR };
     const o = s.planets[n.id]?.owner ?? 'null';
-    return { x: b.x, y: b.y, key: o, col: COLOR[o] };
+    return { x: b.x, y: b.y, key: o, col: ownerColor(s.planets[n.id]?.owner) };
   });
   let minX = Infinity;
   let minY = Infinity;
@@ -1235,7 +1282,7 @@ function render(now: number) {
       continue;
     }
     const showOwner = p.owner;
-    const col = COLOR[p.owner ?? 'null'];
+    const col = ownerColor(p.owner);
     const sector = sectorColor(n.sector);
     const ownerPulse = 0.64 + 0.36 * Math.sin(now / 620 + n.x * 0.011 + n.y * 0.017);
 
@@ -1490,7 +1537,7 @@ function render(now: number) {
     }
     const A = fleetAnchor(f);
     if (!A || !visible(A, 120)) continue;
-    const col = COLOR[f.owner];
+    const col = ownerColor(f.owner);
     const ships = sumUnits(f.units);
     const troops = sumUnits(f.landing ?? []);
     const engine = 0.55 + 0.45 * Math.sin(now / 120 + f.id.length);
@@ -1668,7 +1715,7 @@ function panelHtml(): string {
     const ships = group.reduce((a, f) => a + sumUnits(f.units), 0);
     const troops = group.reduce((a, f) => a + sumUnits(f.landing ?? []), 0);
     let h = cardHeader(
-      COLOR[ME],
+      ownerColor(ME),
       'TASK GROUP',
       `${group.length} fleets · ${ships} ships · ${troops} troops`,
     );
@@ -1677,7 +1724,7 @@ function panelHtml(): string {
       const loc = f.location ?? (f.movement ? `${f.movement.from}→${f.movement.to}` : '—');
       const nShips = sumUnits(f.units);
       const nTr = sumUnits(f.landing ?? []);
-      h += `<div class="row" style="color:${COLOR[f.owner]}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
+      h += `<div class="row" style="color:${ownerColor(f.owner)}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
     }
     h += btn('cancel', '', 'Deselect group', true);
     return h;
@@ -1691,7 +1738,7 @@ function panelHtml(): string {
       const nTr = sumUnits(f.landing ?? []);
       const orbit = f.orbit ?? '—';
       let h = cardHeader(
-        COLOR[f.owner],
+        ownerColor(f.owner),
         'FLEET',
         `${nShips} ships · ${nTr} troops · orbit ${orbit}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
       );
@@ -1759,7 +1806,7 @@ function panelHtml(): string {
           .map((b) => `${BUILD_ICON[b.type] ?? '▪'} ${data.buildings[b.type]?.name ?? b.type} L${b.level}`)
           .join(', ') || 'none seen';
       return (
-        cardHeader(COLOR[mem.owner ?? 'null'], p.id, 'LAST KNOWN ✦') +
+        cardHeader(ownerColor(mem.owner), p.id, 'LAST KNOWN ✦') +
         `<div class="row dim">Out of sensor range — last scan (may be stale).</div>` +
         `<div class="row">Owner: <b>${mem.owner ? NAME[mem.owner] : 'Neutral'}</b></div>` +
         `<div class="row">Garrison when seen: <b>${mem.garrison}</b></div>` +
@@ -1775,7 +1822,6 @@ function panelHtml(): string {
       btn('cancel', '', 'Deselect', true)
     );
   }
-  const owner = p.owner ?? 'null';
   const mine = p.owner === ME;
   const sec = data.sectors[p.sectorType ?? '']?.name ?? p.sectorType ?? '—';
   const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
@@ -1785,7 +1831,7 @@ function panelHtml(): string {
   const gcount = sumUnits(p.garrison);
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
-    cardHeader(COLOR[owner], p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${ptName} · ${sec}`) +
+    cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${ptName} · ${sec}`) +
     `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('marine')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
@@ -1823,7 +1869,7 @@ function panelHtml(): string {
         const fShips = sumUnits(f.units);
         const tr = sumUnits(f.landing ?? []);
         const sel = f.owner === ME ? btn('selfleet', f.id, 'Select →', true) : '';
-        h += `<div class="asset-row" style="color:${COLOR[f.owner]}"><span class="bicon">▲</span><b>${fShips} ships${tr ? ' +' + tr + ' troops' : ''}</b><span class="dim">orbit ${f.orbit ?? 'far'}</span>${sel}</div>`;
+        h += `<div class="asset-row" style="color:${ownerColor(f.owner)}"><span class="bicon">▲</span><b>${fShips} ships${tr ? ' +' + tr + ' troops' : ''}</b><span class="dim">orbit ${f.orbit ?? 'far'}</span>${sel}</div>`;
       }
     }
     if (mine) {
@@ -1879,8 +1925,8 @@ function renderPanel() {
   }
 }
 
-function cmdBtn(cmd: string, label: string, cls: string, disabled: boolean): string {
-  return `<button data-cmd="${cmd}" class="${cls}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+function cmdBtn(cmd: string, icon: string, label: string, cls: string, disabled: boolean): string {
+  return `<button data-cmd="${cmd}" class="${cls}" title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}><span class="ci">${icon}</span><span class="cl">${esc(label)}</span></button>`;
 }
 
 /** Horizontal fleet command bar — Move (arm) / Stop / Attack / orbit change —
@@ -1908,10 +1954,10 @@ function renderCmdBar() {
   const descend = anyFar; // at least one far → primary orbit action is descend to near
   const html =
     `<span class="cmdlabel">${ids.length > 1 ? ids.length + ' FLEETS' : 'FLEET'}</span>` +
-    cmdBtn('move', '⤳ Move', aiming ? 'on' : '', false) +
-    cmdBtn('stop', '■ Stop', 'danger', !anyMoving) +
-    cmdBtn('attack', '⚔ Attack', '', !canAssault) +
-    cmdBtn(descend ? 'near' : 'far', descend ? '▼ Near' : '▲ Far', '', !anyDocked);
+    cmdBtn('move', '⤳', 'Move', aiming ? 'on' : '', false) +
+    cmdBtn('stop', '■', 'Stop', 'danger', !anyMoving) +
+    cmdBtn('attack', '⚔', 'Attack', '', !canAssault) +
+    cmdBtn(descend ? 'near' : 'far', descend ? '▼' : '▲', descend ? 'Near' : 'Far', '', !anyDocked);
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
     lastCmdHtml = html;
@@ -2156,6 +2202,81 @@ if (fogBtn) {
 burger.addEventListener('click', () => document.body.classList.toggle('drawer-open'));
 scrim.addEventListener('click', () => document.body.classList.remove('drawer-open'));
 
+// --- connect overlay (single-player vs join a live session) ------------------
+// Entry screen: pick a faction, then run a local skirmish or connect to a server
+// (`pnpm dev:proto-server`, or a tunnel URL a friend shared). The last-used URL
+// is remembered so the APK reconnects with one tap.
+const connectEl = $('connect');
+const srvInput = $('csrv') as HTMLInputElement;
+const whoInput = $('cwho') as HTMLSelectElement;
+const statusEl = $('cstatus');
+const showConnect = (show: boolean): void => {
+  connectEl.style.display = show ? 'flex' : 'none';
+};
+srvInput.value =
+  localStorage.getItem('void.server') ??
+  (location.protocol === 'https:' ? '' : `ws://${location.hostname || '127.0.0.1'}:8788`);
+
+$('csolo').addEventListener('click', () => {
+  NET = false;
+  showConnect(false);
+});
+
+$('cgo').addEventListener('click', () => {
+  const base = srvInput.value.trim().replace(/\/+$/, '');
+  if (!base) {
+    statusEl.textContent = 'enter a server URL';
+    return;
+  }
+  const who = whoInput.value === 'p2' ? 'p2' : 'p1';
+  const url = `${base}/matches/proto?player=${encodeURIComponent(who)}`;
+  statusEl.textContent = 'connecting…';
+  localStorage.setItem('void.server', base);
+
+  if (netSock) netSock.close();
+  const sock = (netSock = new WebSocket(url));
+  const client = (netClient = new MultiplayerClient(
+    { send: (d: string) => sock.send(d), close: () => sock.close() },
+    {
+      onStatus: (st) => {
+        if (st === 'open') {
+          NET = true;
+          ME = who;
+          clearSelection();
+          showConnect(false);
+          note(`● connected as ${NAME[who] ?? who}`);
+        }
+      },
+      onSnapshot: (snap) => {
+        s = snap.state;
+        if (snap.playerId) ME = snap.playerId;
+        // mirror apply()'s selection cleanup (we replace `s` directly here)
+        if (selFleet && !s.fleets[selFleet]) selFleet = null;
+        selFleets = new Set([...selFleets].filter((id) => s.fleets[id]?.owner === ME));
+        lastPanelHtml = '';
+      },
+      onRejection: (_id, code) =>
+        note('✖ ' + code.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')),
+      onError: (code) => {
+        statusEl.textContent = 'error: ' + code;
+      },
+    },
+  ));
+  sock.onopen = () => client.open();
+  sock.onmessage = (ev) => client.receive(String(ev.data));
+  sock.onclose = () => {
+    statusEl.textContent = 'disconnected';
+    if (NET) {
+      NET = false;
+      note('● disconnected from server');
+      showConnect(true);
+    }
+  };
+  sock.onerror = () => {
+    statusEl.textContent = 'connection failed — is the server running / URL right?';
+  };
+});
+
 // --- loop --------------------------------------------------------------------
 
 const fpsEl = $('fps');
@@ -2167,7 +2288,9 @@ function frame(nowReal: number) {
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane
   if (dt > 0 && dt < 1000) fpsEma = fpsEma * 0.9 + (1000 / dt) * 0.1;
-  if (speed > 0 && !banner) {
+  if (!NET && speed > 0 && !banner) {
+    // Local single-player sim. In net mode the server owns the clock, combat, the
+    // enemy (a human, not the AI) and construction — we only render its snapshots.
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
     autoEngage();

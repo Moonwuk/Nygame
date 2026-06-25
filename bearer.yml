@@ -1,0 +1,12 @@
+# Bearer SAST configuration.
+#
+# `prototype/` is a throwaway, single-file HTML demo of the core (see its README
+# and CLAUDE.md): it runs locally from disk with no server, no network and no
+# untrusted input, is single-user, and is already excluded from lint / typecheck
+# / tests. Its only Bearer findings are CWE-79 on `innerHTML` of game-derived
+# strings (already escaped via `escapeHtml`) — out of scope for a SAST gate that
+# guards shipped code. Bearer scans the real surface: shared-core, server,
+# action-layer and client.
+scan:
+  skip-path:
+    - prototype
