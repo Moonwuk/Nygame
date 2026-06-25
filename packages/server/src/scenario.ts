@@ -67,6 +67,10 @@ export interface DevMatchOptions {
   /** World time the scenario starts at. Match it to the first `now` so the
    *  opening `advanceTo` is a no-op rather than a jump across epoch zero. */
   time?: number;
+  /** Player ids to seat (default `['green', 'red']`). Each gets a homeworld and
+   *  one idle fleet, all joined through a neutral `nexus` — lets soak/load tests
+   *  seat N players against one room. */
+  players?: string[];
 }
 
 function player(id: string, name: string, faction: string): Player {
@@ -107,32 +111,48 @@ function fleet(id: string, owner: string, location: string, units: Array<[string
   };
 }
 
-/** Two homeworlds joined through a neutral junction, one idle fleet each. */
+const DEV_FACTIONS = ['vanguard', 'swarm', 'necromancer'];
+
+/** N homeworlds joined through a neutral junction, one idle fleet each (default
+ *  two players: green/red). Homeworlds are spread evenly around the nexus. */
 export function createDevMatch(data: GameData, options: DevMatchOptions = {}): MatchRoom {
+  const ids = options.players ?? ['green', 'red'];
   const base = createInitialState({
     seed: 'dev-match',
     version: { data: data.version, manifest: '1' },
     time: options.time ?? 0,
   });
-  const state: GameState = {
-    ...base,
-    players: {
-      green: player('green', 'Verdant Pact', 'vanguard'),
-      red: player('red', 'Crimson Swarm', 'swarm'),
-    },
-    planets: {
-      home_green: planet('home_green', 'green', -200, 0, ['nexus'], 'terran'),
-      nexus: planet('nexus', null, 0, 0, ['home_green', 'home_red'], 'barren'),
-      home_red: planet('home_red', 'red', 200, 0, ['nexus'], 'terran'),
-    },
-    fleets: {
-      green_1: fleet('green_1', 'green', 'home_green', [
-        ['cruiser', 2],
-        ['scout_drone', 1],
-      ]),
-      red_1: fleet('red_1', 'red', 'home_red', [['cruiser', 2]]),
-    },
+  const players: Record<string, Player> = {};
+  const planets: Record<string, Planet> = {
+    nexus: planet(
+      'nexus',
+      null,
+      0,
+      0,
+      ids.map((id) => `home_${id}`),
+      'barren',
+    ),
   };
+  const fleets: Record<string, Fleet> = {};
+  ids.forEach((id, i) => {
+    // `|| 0` normalizes -0 (Math.round of a tiny negative, e.g. cos(3π/2)) → +0:
+    // GameState must be JSON-stable, and JSON has no -0, so a -0 here desyncs a
+    // client's reconstruction (server in-memory -0 vs the client's JSON-parsed +0).
+    const angle = (2 * Math.PI * i) / ids.length;
+    const x = Math.round(Math.cos(angle) * 240) || 0;
+    const y = Math.round(Math.sin(angle) * 240) || 0;
+    players[id] = player(
+      id,
+      id.charAt(0).toUpperCase() + id.slice(1),
+      DEV_FACTIONS[i % DEV_FACTIONS.length] ?? 'vanguard',
+    );
+    planets[`home_${id}`] = planet(`home_${id}`, id, x, y, ['nexus'], 'terran');
+    fleets[`${id}_1`] = fleet(`${id}_1`, id, `home_${id}`, [
+      ['cruiser', 2],
+      ['scout_drone', 1],
+    ]);
+  });
+  const state: GameState = { ...base, players, planets, fleets };
   return new MatchRoom({
     id: 'dev',
     initialState: state,

@@ -49,6 +49,41 @@ peers and that a peer reconstructs the exact authoritative state from `welcome` 
 deltas. The construction (data loader + `createDevMatch`) lives in
 `packages/server/src/scenario.ts`, reused by both the runner and the test.
 
+## Preparing for a live multiplayer test
+
+**Seat more than two players.** `createDevMatch(data, { players: ['green', 'red', 'blue', 'gold'] })`
+seats N players — each gets a homeworld (spread around the neutral `nexus`) and an idle fleet
+`<id>_1`. The default is `['green', 'red']`.
+
+**Expose the server.**
+- *Same machine:* open two browser contexts (two tabs / a private window) as `green` and `red`.
+- *LAN (two devices):* `HOST=0.0.0.0 PORT=9000 pnpm dev:server`, then dial
+  `ws://<this-machine-LAN-IP>:9000/matches/dev?player=green`.
+- *Internet (throwaway):* tunnel the port — `cloudflared tunnel --url http://localhost:8787`
+  (or `ngrok http 8787`) — and use the printed `wss://…` URL; or host it (Fly.io/Railway). Do
+  **not** expose an unauthenticated dev server long-term — JWT is brick F7 / SE-0.1.
+
+**Headless coverage (runs in `pnpm test`):**
+- `scenario.test.ts` — the two-player wire (action → broadcast to both → exact reconstruction).
+- `restart.test.ts` — graceful restart: `close()` drains active clients (clean 1001) and a fresh
+  server resumes a client from preserved state (the only missing piece for crash-safe restart is
+  durable state, F2).
+- `soak.test.ts` — N clients fire K actions concurrently; the room serializes all N×K and every
+  client converges on the same authoritative state. (This caught a real JSON-stability bug: a `-0`
+  coordinate desynced reconstruction, since JSON has no `-0`.)
+
+**Manual checklist for a human two-player test:**
+1. Both clients connect and receive a `welcome` snapshot.
+2. An action from one player is reflected on the **other** within the broadcast.
+3. An unknown `?player=` is refused (HTTP 403).
+4. Kill the server mid-session → clients disconnect cleanly; restart → they reconnect and resync
+   from `welcome` (state is lost until persistence/F2 — expected for now).
+5. Bad / oversized messages are rejected (`E_BAD_MESSAGE` / `E_PAYLOAD_TOO_LARGE`), not crashing.
+
+**Known constraints before this is "real" multiplayer** (see limitations below): in-memory
+(restart loses the match), no auth, lazy world clock (advances on action, no scheduler), and deltas
+are not yet visibility-filtered per player (F6).
+
 ## Protocol
 
 Client → server:
