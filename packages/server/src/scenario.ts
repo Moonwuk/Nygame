@@ -12,6 +12,7 @@ import {
   sectorModule,
   technologyModule,
   victoryModule,
+  visibilityModule,
   type Fleet,
   type GameData,
   type GameModule,
@@ -59,6 +60,7 @@ export const DEV_MODULES: GameModule[] = [
   technologyModule,
   armyModule,
   victoryModule,
+  visibilityModule, // fog-of-war memory (variant B): records last-seen worlds
 ];
 
 export interface DevMatchOptions {

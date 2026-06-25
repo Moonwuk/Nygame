@@ -6,8 +6,9 @@ import type {
   GameState,
   Kernel,
   PlayerId,
+  SignatureContact,
 } from '@void/shared-core';
-import { diffState } from '@void/shared-core';
+import { diffState, identifiedNodes, visibleState } from '@void/shared-core';
 import {
   parseClientMessage,
   serializeServerMessage,
@@ -64,15 +65,14 @@ export class MatchRoom {
   private readonly receipts = new Map<string, ActionReceipt>();
   private seq = 0;
   private stateValue: GameState;
-  /** The state every connected peer is known to hold — the baseline deltas diff
-   *  against. A new peer's `welcome` resets it to the current state (between
-   *  actions the room state never changes, so one room-wide baseline is sound). */
-  private lastBroadcast: GameState;
+  /** Per-player baseline the deltas diff against — each player's last broadcast
+   *  *visible* view (fog of war is server-authoritative, so every player holds a
+   *  different state). A peer's `welcome` (re)sets its player's baseline. */
+  private readonly lastVisible = new Map<PlayerId, GameState>();
 
   constructor(options: MatchRoomOptions) {
     this.id = options.id;
     this.stateValue = options.initialState;
-    this.lastBroadcast = options.initialState;
     this.kernel = options.kernel;
     this.data = options.data;
     this.config = options.config ?? { timeScale: 1 };
@@ -101,15 +101,30 @@ export class MatchRoom {
     const playerPeers = this.peers.get(playerId) ?? new Set<RoomPeer>();
     playerPeers.add(peer);
     this.peers.set(playerId, playerPeers);
+    const view = this.viewFor(playerId);
+    this.lastVisible.set(playerId, view.base);
     this.send(peer, {
       type: 'welcome',
       matchId: this.id,
       playerId,
       seq: this.seq,
       serverTime: this.now(),
-      state: this.stateValue,
+      state: view.base,
+      signatures: view.signatures,
+      remembered: view.remembered,
     });
     return true;
+  }
+
+  /** What `playerId` may see right now: a clean visible `GameState` baseline
+   *  (fog applied, internal memory stripped) plus the fog extras for the wire. */
+  private viewFor(playerId: PlayerId): {
+    base: GameState;
+    signatures: SignatureContact[];
+    remembered: string[];
+  } {
+    const { signatures, remembered, ...base } = visibleState(this.stateValue, playerId, this.data);
+    return { base: base as GameState, signatures, remembered };
   }
 
   removePeer(playerId: PlayerId, peer: RoomPeer): void {
@@ -149,7 +164,7 @@ export class MatchRoom {
     const cached = this.receipts.get(action.id);
     if (cached) {
       if (peer) {
-        if (cached.ok) this.send(peer, this.snapshot());
+        if (cached.ok) this.send(peer, this.stateMessageFor(playerId));
         else this.sendRejection(peer, cached);
       }
       return { ok: cached.ok, seq: cached.seq, events: [], code: cached.code };
@@ -184,14 +199,20 @@ export class MatchRoom {
     return { ok: true, seq: receipt.seq, events };
   }
 
-  snapshot(): ServerMessage {
+  /** A full per-player resync snapshot (fog applied), e.g. for a deduped retry.
+   *  Resets that player's delta baseline. */
+  private stateMessageFor(playerId: PlayerId): ServerMessage {
+    const view = this.viewFor(playerId);
+    this.lastVisible.set(playerId, view.base);
     return {
       type: 'state',
       matchId: this.id,
       seq: this.seq,
       serverTime: this.now(),
-      state: this.stateValue,
+      state: view.base,
       events: [],
+      signatures: view.signatures,
+      remembered: view.remembered,
     };
   }
 
@@ -223,20 +244,45 @@ export class MatchRoom {
   }
 
   private broadcastState(events: DomainEvent[]): void {
-    // Send only what changed since the last broadcast (an idle world ⇒ tiny
-    // payload). Full snapshots go out on join (`welcome`) and idempotent resync.
-    const message: ServerMessage = {
-      type: 'delta',
-      matchId: this.id,
-      seq: this.seq,
-      serverTime: this.now(),
-      delta: diffState(this.lastBroadcast, this.stateValue),
-      events,
-    };
-    this.lastBroadcast = this.stateValue;
-    for (const playerPeers of this.peers.values()) {
+    // Fog of war is a server boundary: each player gets a delta against THEIR own
+    // last visible view, so hidden worlds/fleets are physically never sent. Only
+    // what changed in that player's view goes out (an idle world ⇒ tiny payload).
+    const now = this.now();
+    for (const [playerId, playerPeers] of this.peers) {
+      const view = this.viewFor(playerId);
+      const baseline = this.lastVisible.get(playerId) ?? view.base;
+      const identify = identifiedNodes(this.stateValue, playerId, this.data);
+      const message: ServerMessage = {
+        type: 'delta',
+        matchId: this.id,
+        seq: this.seq,
+        serverTime: now,
+        delta: diffState(baseline, view.base),
+        events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
+        signatures: view.signatures,
+        remembered: view.remembered,
+      };
+      this.lastVisible.set(playerId, view.base);
       for (const peer of playerPeers) this.send(peer, message);
     }
+  }
+
+  /** Whether a domain event may be revealed to `playerId` — events leak intent
+   *  too, so they pass the same fog as state: your own actions, anything at a
+   *  world you identify, and global clock/match events; everything else is cut. */
+  private eventVisibleTo(event: DomainEvent, playerId: PlayerId, identify: Set<string>): boolean {
+    if (event.type === 'time.advanced' || event.type.startsWith('match.')) return true;
+    const p = (event.payload ?? {}) as Record<string, unknown>;
+    if (p.owner === playerId) return true;
+    for (const key of ['location', 'planetId', 'at'] as const) {
+      const node = p[key];
+      if (typeof node === 'string' && identify.has(node)) return true;
+    }
+    const fleetId = p.fleetId;
+    if (typeof fleetId === 'string' && this.stateValue.fleets[fleetId]?.owner === playerId) {
+      return true;
+    }
+    return false;
   }
 
   private sendRejection(peer: RoomPeer, receipt: ActionReceipt): void {

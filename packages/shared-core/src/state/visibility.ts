@@ -30,9 +30,13 @@ export interface SignatureContact {
   size: SignatureSize;
 }
 
-/** The state as one player may see it: a filtered `GameState` plus the radar
- *  contacts that stand in for fleets detected but not identified. */
-export type VisibleState = GameState & { signatures: SignatureContact[] };
+/** The state as one player may see it: a filtered `GameState`, the radar
+ *  contacts that stand in for fleets detected but not identified, and the ids of
+ *  worlds shown from memory (greyed "last known", variant B). */
+export type VisibleState = GameState & {
+  signatures: SignatureContact[];
+  remembered: PlanetId[];
+};
 
 /** Total radar signature of a fleet = Σ count × per-unit signature. */
 function fleetSignature(fleet: Fleet, data: GameData): number {
@@ -105,6 +109,12 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
   return { identify, radar };
 }
 
+/** The set of nodes `viewerId` currently identifies (full detail). Exported so
+ *  `visibilityModule` snapshots exactly what the projection treats as live. */
+export function identifiedNodes(state: GameState, viewerId: PlayerId, data: GameData): Set<PlanetId> {
+  return coverageFor(state, viewerId, data).identify;
+}
+
 /**
  * Project `state` to what `viewerId` may see. Pure: the input is never mutated
  * (works on a `deepClone`). Hides every other player's private data, the
@@ -123,15 +133,35 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   }
 
   // Planets: keep topology (id/position/links) but strip contents you can't see.
+  // A world you have seen before shows its remembered snapshot (variant B);
+  // one never identified shows nothing.
+  const remembered: PlanetId[] = [];
+  const memory = state.fog?.[viewerId];
   for (const planet of Object.values(view.planets)) {
     if (planet.owner === viewerId || identify.has(planet.id)) continue;
-    planet.owner = null;
-    planet.garrison = [];
-    planet.buildings = [];
-    planet.resources = {};
-    delete planet.sectorType;
-    delete planet.planetType;
+    const snap = memory?.[planet.id];
+    if (snap) {
+      planet.owner = snap.owner;
+      planet.garrison = snap.garrison.map((s) => ({ ...s }));
+      planet.buildings = snap.buildings.map((b) => ({ ...b }));
+      planet.resources = {};
+      if (snap.sectorType === undefined) delete planet.sectorType;
+      else planet.sectorType = snap.sectorType;
+      if (snap.planetType === undefined) delete planet.planetType;
+      else planet.planetType = snap.planetType;
+      remembered.push(planet.id);
+    } else {
+      planet.owner = null;
+      planet.garrison = [];
+      planet.buildings = [];
+      planet.resources = {};
+      delete planet.sectorType;
+      delete planet.planetType;
+    }
   }
+  remembered.sort();
+  view.remembered = remembered;
+  delete view.fog; // memory is authoritative-internal — never shipped raw
 
   // Fleets: own + identified enemy stay; radar-only enemy → a coarse signature;
   // everything else is removed entirely.

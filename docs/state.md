@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 232 зелёных**.
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 247 зелёных**.
 
 ---
 
@@ -72,7 +72,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory  (+ *.test.ts)
+  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory, visibility  (+ *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -244,8 +244,20 @@ elimination считается по ним (планеты+флоты+юниты
 (грубое «что-то есть», ведро по `Σ count × UnitDef.signature`), а не сам флот. Прячет:
 чужую казну/технологии, контент невидимых миров (топология остаётся), невидимые
 флоты/бои и **всё расписание** (утечка планов). Покрыто тестами, включая anti-leak
-по JSON. **Дальше:** память последнего увиденного (вариант B), хук `vision.source`,
-радарные постройки/корабли в данных, сборка в `visibilityModule`.
+по JSON.
+
+**Память (вариант B, `visibilityModule` + `modules/visibility.ts`).** Модуль на
+`time.advanced`/`planet.captured`/`fleet.arrived` пишет per-player снимки опознанных
+миров в **`GameState.fog`** (JSON, детерминировано). `visibleState` для мира вне обзора,
+но виденного ранее, отдаёт **серое «last known»** из снимка и кладёт id в `remembered[]`
+(а `fog` из проекции вырезается — внутреннее). Без модуля — память пустая, мир читается
+как unknown (мягкая деградация).
+
+**Туман на рассылке (F6, `packages/server/MatchRoom`).** Сервер шлёт **per-player
+дельты** от `visibleState` (своя базовая линия на игрока) + сигнатуры/`remembered`
+отдельными полями; **события тоже фильтруются** по видимости (`eventVisibleTo`). e2e:
+на dev-карте green не видит флот red и `red_1` **не появляется по проводу** ни в стейте,
+ни в событиях. **Дальше:** AOI-оптимизация, JWT в рукопожатии (F7).
 
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
@@ -367,7 +379,7 @@ golden; модель времени `advanceTo`; экономика (казна 
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 232 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 247 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```

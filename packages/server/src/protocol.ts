@@ -1,4 +1,18 @@
-import type { Action, DomainEvent, GameState, PlayerId, StateDelta } from '@void/shared-core';
+import type {
+  Action,
+  DomainEvent,
+  GameState,
+  PlayerId,
+  SignatureContact,
+  StateDelta,
+} from '@void/shared-core';
+
+/** Fog-of-war extras carried alongside a per-player view (radar contacts and the
+ *  ids of worlds shown from memory). Diffed state covers the rest. */
+export interface VisibilityFields {
+  signatures?: SignatureContact[];
+  remembered?: string[];
+}
 
 export type ServerErrorCode =
   | 'E_BAD_MESSAGE'
@@ -18,7 +32,7 @@ export interface ClientPingMessage {
 
 export type ClientMessage = ClientActionMessage | ClientPingMessage;
 
-export interface ServerWelcomeMessage {
+export interface ServerWelcomeMessage extends VisibilityFields {
   type: 'welcome';
   matchId: string;
   playerId: PlayerId;
@@ -27,7 +41,7 @@ export interface ServerWelcomeMessage {
   state: GameState;
 }
 
-export interface ServerStateMessage {
+export interface ServerStateMessage extends VisibilityFields {
   type: 'state';
   matchId: string;
   seq: number;
@@ -38,7 +52,7 @@ export interface ServerStateMessage {
 
 /** Incremental update — only the entities/fields that changed since the peer's
  *  last `welcome`/`state` snapshot. A full `state` is sent on join and on resync. */
-export interface ServerDeltaMessage {
+export interface ServerDeltaMessage extends VisibilityFields {
   type: 'delta';
   matchId: string;
   seq: number;

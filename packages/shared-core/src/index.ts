@@ -15,6 +15,8 @@ export {
   type GameVersion,
   type Player,
   type Planet,
+  type PlanetSnapshot,
+  type FogMemory,
   type Fleet,
   type FleetMovement,
   type Battle,
@@ -42,7 +44,7 @@ export {
 } from './state/gameState';
 export { isBombarded, bombardedPlanets } from './state/orbit';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
-export { visibleState } from './state/visibility';
+export { visibleState, identifiedNodes } from './state/visibility';
 export type { VisibleState, SignatureContact, SignatureSize } from './state/visibility';
 export { hashState } from './state/hash';
 
@@ -124,3 +126,4 @@ export { constructionModule } from './modules/construction';
 export { technologyModule } from './modules/technology';
 export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
+export { visibilityModule } from './modules/visibility';
