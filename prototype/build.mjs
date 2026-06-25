@@ -220,6 +220,26 @@ body.sheet-open #log{display:none;}
 @media (max-width:430px){
   .res .rv em{display:none;}
 }
+/* connect overlay — entry screen (single-player vs join a live session) */
+#connect{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  padding:20px;background:radial-gradient(120% 100% at 50% 30%,rgba(4,20,28,.92),rgba(1,4,10,.97));
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#connect .cbox{width:min(420px,94vw);background:var(--glass);border:1px solid var(--line-hi);
+  border-radius:12px;padding:22px 20px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#connect .ctitle{display:flex;align-items:center;gap:10px;font-size:18px;letter-spacing:3px;color:var(--cyan);}
+#connect .ctitle .dia{width:12px;height:12px;transform:rotate(45deg);background:var(--cyan);box-shadow:0 0 10px var(--cyan);}
+#connect .csub{margin:8px 0 18px;color:var(--dim);font-size:12px;line-height:1.5;}
+#connect .cfield{display:block;margin:0 0 12px;color:var(--dim);font-size:11px;letter-spacing:1px;text-transform:uppercase;}
+#connect .cfield input,#connect .cfield select{display:block;width:100%;margin-top:5px;padding:11px 12px;
+  background:rgba(2,10,14,.9);border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);
+  font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.3px;}
+#connect .cfield input:focus,#connect .cfield select:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(53,214,230,.2);}
+#connect .crow{display:flex;gap:10px;margin-top:18px;}
+#connect .cbtn{flex:1;padding:13px 10px;border-radius:8px;border:1px solid var(--cyan);background:rgba(53,214,230,.12);
+  color:var(--cyan);font:600 13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;min-height:46px;}
+#connect .cbtn:active{background:rgba(53,214,230,.24);}
+#connect .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
+#connect .cstat{margin-top:14px;min-height:16px;font-size:12px;color:var(--amber);text-align:center;}
 `;
 
 const html = `<!doctype html>
@@ -261,6 +281,23 @@ const html = `<!doctype html>
 <div id="cmdbar"></div>
 <div id="fps"></div>
 <div id="banner"></div>
+<div id="connect">
+  <div class="cbox">
+    <div class="ctitle"><span class="dia"></span><b>VOID DOMINION</b></div>
+    <p class="csub">Join a live sector with a friend, or run a local skirmish against the AI.</p>
+    <label class="cfield">Server
+      <input id="csrv" type="text" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="wss://… or ws://host:8788">
+    </label>
+    <label class="cfield">Command
+      <select id="cwho"><option value="p1">Azure Compact (you · green)</option><option value="p2">Crimson Hegemony (you · green)</option></select>
+    </label>
+    <div class="crow">
+      <button id="cgo" class="cbtn">Connect</button>
+      <button id="csolo" class="cbtn ghost">Single player</button>
+    </div>
+    <div id="cstatus" class="cstat"></div>
+  </div>
+</div>
 <script>${js}</script>
 </body></html>`;
 
