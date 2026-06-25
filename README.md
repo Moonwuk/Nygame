@@ -100,7 +100,7 @@ pnpm run check          # lint + typecheck + test (как в CI)
 
 CI: [`ci.yml`](./.github/workflows/ci.yml) гоняет lint, typecheck, тесты и `pnpm audit`
 на каждый push/PR; [`ssdlc.yml`](./.github/workflows/ssdlc.yml) — security-пайплайн
-(Semgrep, Bearer, Trivy, Gitleaks, SCA, SBOM). На сейчас **249 тестов** зелёные.
+(Semgrep, Bearer, Trivy, Gitleaks, SCA, SBOM). На сейчас **252 теста** зелёные.
 
 ## Статус
 
