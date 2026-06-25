@@ -44,6 +44,7 @@ export { isBombarded, bombardedPlanets } from './state/orbit';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
 export { visibleState } from './state/visibility';
 export type { VisibleState, SignatureContact, SignatureSize } from './state/visibility';
+export { hashState } from './state/hash';
 
 // Action contract
 export {
