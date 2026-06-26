@@ -42,6 +42,11 @@ export {
   type MatchScore,
   type MatchState,
 } from './state/gameState';
+export {
+  buildStateFromMap,
+  validateMatchMap,
+  type BuildFromMapOptions,
+} from './state/buildFromMap';
 export { isBombarded, bombardedPlanets } from './state/orbit';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
 export { visibleState, identifiedNodes } from './state/visibility';
@@ -76,6 +81,16 @@ export type {
   ModuleManifest,
   ModuleManifestEntry,
 } from './kernel/module';
+
+// Map-as-content (data-driven match setup)
+export {
+  MatchMapSchema,
+  MapSectorSchema,
+  parseMatchMap,
+  safeParseMatchMap,
+  type MatchMap,
+  type MapSector,
+} from './data/mapSchema';
 
 // Data-driven content
 export {
