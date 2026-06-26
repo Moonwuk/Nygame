@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "description": "Capacitor Android wrapper that packages the Void Dominion prototype (a self-contained HTML game) into an installable APK. Standalone — not part of the pnpm workspace.",
   "scripts": {
+    "postinstall": "node patch-capacitor-tar.mjs",
     "www": "node sync-www.mjs",
     "android:add": "cap add android",
     "sync": "cap sync android",
@@ -17,7 +18,8 @@
     "@capacitor/cli": "^6.0.0"
   },
   "comments": {
-    "overrides": "Pin the transitive node-tar to a patched line (>=7.5.16) to clear the GHSA path-traversal / symlink / file-smuggling advisories that affect tar <=7.5.15. @capacitor/cli@6 declares tar ^6.1.11 but its only use is tar.extract({file,cwd}) (build-time template extraction), which is API-compatible with tar 7 — so we keep Capacitor 6 (the v6/JDK17 APK pipeline) instead of the breaking @capacitor/cli@8 bump."
+    "overrides": "Pin the transitive node-tar to a patched line (>=7.5.16) to clear the GHSA path-traversal / symlink / file-smuggling advisories (tar <=7.5.15). We keep Capacitor 6 (the v6/JDK17 APK pipeline) instead of the breaking @capacitor/cli@8 bump.",
+    "postinstall": "tar 7's CJS interop leaves `tar_1.default` undefined, so @capacitor/cli@6's `tar_1.default.extract` crashes `cap add/sync`. patch-capacitor-tar.mjs rewrites it to `(tar_1.default||tar_1).extract` (works under tar 6 and 7) after install, so the override doesn't break the build."
   },
   "overrides": {
     "tar": "^7.5.17"
