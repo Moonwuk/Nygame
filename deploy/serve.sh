@@ -37,6 +37,13 @@ if [ -n "$GIT_TOKEN" ]; then
     git pull "https://x-access-token@github.com/Moonwuk/Nygame.git" "$branch" \
     || echo "  (pull failed — using the local checkout)"
   rm -f "$askpass"
+else
+  # No token set — pull via the existing origin. This is the RECOMMENDED setup:
+  # point origin at a read-only SSH deploy key (git remote set-url origin
+  # git@github.com:Moonwuk/Nygame.git) so the box holds no reusable secret at all.
+  # Non-fatal: if there's no credential/remote, just serve the local checkout.
+  echo "→ pulling latest…"
+  git pull --ff-only 2>/dev/null || echo "  (pull skipped — serving the local checkout)"
 fi
 
 echo "→ installing dependencies…"
