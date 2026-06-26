@@ -341,3 +341,42 @@ describe('MatchRoom — lobby gate (waitForPlayers)', () => {
     expect(p1.messages.at(-1)).toMatchObject({ serverTime: 3000, waiting: true });
   });
 });
+
+describe('MatchRoom — singlePeerPerPlayer (1v1 slot guard)', () => {
+  function guarded(): MatchRoom {
+    return new MatchRoom({
+      id: 'guard',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => 10,
+      singlePeerPerPlayer: true,
+    });
+  }
+
+  it('refuses a second live connection to an occupied side, frees it on disconnect', () => {
+    const r = guarded();
+    const a = new MemoryPeer();
+    const b = new MemoryPeer();
+
+    expect(r.addPeer('p1', a)).toBe(true);
+    expect(a.messages[0]).toMatchObject({ type: 'welcome', playerId: 'p1' });
+
+    // a second person taking the SAME side is refused (this is what stranded the lobby)
+    expect(r.addPeer('p1', b)).toBe(false);
+    expect(b.messages).toEqual([{ type: 'error', matchId: 'guard', code: 'E_SLOT_TAKEN' }]);
+
+    // the OTHER side is still free — the way a real 1v1 must go
+    expect(r.addPeer('p2', new MemoryPeer())).toBe(true);
+
+    // a slot frees the moment its peer drops, so reconnect-after-drop still works
+    r.removePeer('p1', a);
+    expect(r.addPeer('p1', new MemoryPeer())).toBe(true);
+  });
+
+  it('still allows multiple peers per side when the guard is off (default)', () => {
+    const r = room(); // singlePeerPerPlayer unset
+    expect(r.addPeer('p1', new MemoryPeer())).toBe(true);
+    expect(r.addPeer('p1', new MemoryPeer())).toBe(true); // same side, e.g. a 2nd device
+  });
+});

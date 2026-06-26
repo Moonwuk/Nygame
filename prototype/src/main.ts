@@ -2936,23 +2936,18 @@ $('cgo').addEventListener('click', () => {
   statusEl.textContent = `connecting → ${url}`; // show the resolved target so a bad URL is visible
   localStorage.setItem('void.server', base);
 
+  // WS "open" only means the socket connected, not that the server admitted us — it
+  // may still reject (slot taken / unknown player). Flip to "in the match" only on
+  // the first welcome snapshot, so a rejected join never flashes the map.
+  let admitted = false;
   if (netSock) netSock.close();
   const sock = (netSock = new WebSocket(url));
   const client = (netClient = new MultiplayerClient(
     { send: (d: string) => sock.send(d), close: () => sock.close() },
     {
-      onStatus: (st) => {
-        if (st === 'open') {
-          NET = true;
-          ME = who;
-          clearSelection();
-          showConnect(false);
-          note(`● connected as ${NAME[who] ?? who}`);
-          // Latency probe: ping every 2s with a client timestamp the pong echoes.
-          if (pingTimer) clearInterval(pingTimer);
-          pingTimer = setInterval(() => client.ping(performance.now()), 2000);
-          client.ping(performance.now()); // seed an RTT reading immediately
-        }
+      onStatus: () => {
+        // Intentionally no-op on "open": admission is confirmed by the first
+        // welcome snapshot (see onSnapshot), not by the socket opening.
       },
       onPong: (_serverTime, clientTime) => {
         if (clientTime === undefined) return;
@@ -2960,6 +2955,19 @@ $('cgo').addEventListener('click', () => {
         rttEma = rttEma === null ? rtt : rttEma * 0.7 + rtt * 0.3;
       },
       onSnapshot: (snap) => {
+        if (!admitted) {
+          // Server accepted us — NOW we're really in the match.
+          admitted = true;
+          NET = true;
+          ME = snap.playerId ?? who;
+          clearSelection();
+          showConnect(false);
+          note(`● connected as ${NAME[ME] ?? ME}`);
+          // Latency probe: ping every 2s with a client timestamp the pong echoes.
+          if (pingTimer) clearInterval(pingTimer);
+          pingTimer = setInterval(() => client.ping(performance.now()), 2000);
+          client.ping(performance.now()); // seed an RTT reading immediately
+        }
         s = snap.state;
         if (snap.playerId) ME = snap.playerId;
         // Desync check (M0): the server tags each snapshot with hashState(view); we
@@ -2984,24 +2992,32 @@ $('cgo').addEventListener('click', () => {
       onRejection: (_id, code) =>
         note('✖ ' + code.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')),
       onError: (code) => {
-        statusEl.textContent = 'error: ' + code;
+        if (!admitted && code === 'E_SLOT_TAKEN') {
+          statusEl.textContent = `${NAME[who] ?? who} is already taken — pick the other side`;
+        } else if (!admitted && code === 'E_UNKNOWN_PLAYER') {
+          statusEl.textContent = 'unknown player slot';
+        } else {
+          statusEl.textContent = 'error: ' + code;
+        }
       },
     },
   ));
   sock.onopen = () => client.open();
   sock.onmessage = (ev) => client.receive(String(ev.data));
   sock.onclose = () => {
-    statusEl.textContent = 'disconnected';
     if (pingTimer) {
       clearInterval(pingTimer);
       pingTimer = null;
     }
     rttEma = null;
     if (NET) {
+      statusEl.textContent = 'disconnected';
       NET = false;
       note('● disconnected from server');
       showConnect(true);
     }
+    // If we were never admitted, leave the rejection message (e.g. "… already
+    // taken") in the status line instead of overwriting it with "disconnected".
   };
   sock.onerror = () => {
     statusEl.textContent = 'connection failed — is the server running / URL right?';

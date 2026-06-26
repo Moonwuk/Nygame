@@ -37,6 +37,11 @@ export interface MatchRoomOptions {
   /** Attach `hashState(view)` to each snapshot so the client can detect desync.
    *  Opt-in (it hashes the per-player view on every broadcast). */
   emitStateHash?: boolean;
+  /** 1v1 lobby guard: reject a second LIVE connection to an already-occupied
+   *  player slot, so two people can't both take the same side (which would leave
+   *  the lobby waiting forever for the empty side). A slot frees the moment its
+   *  peer disconnects, so reconnect-after-drop still works. Default false. */
+  singlePeerPerPlayer?: boolean;
   /** Observation-only room-event stream for metrics/playtest logging (M0). */
   observe?: (event: RoomObservation) => void;
 }
@@ -85,6 +90,7 @@ export class MatchRoom {
   private lobbyAccrued = 0; // game-ms accrued while running
   private lobbyRunningSince: number | null = null; // raw ms when running began, else null
   private readonly emitStateHash: boolean;
+  private readonly singlePeerPerPlayer: boolean;
   private readonly observe?: (event: RoomObservation) => void;
   private endObserved = false; // 'end' is reported once
   private readonly peers = new Map<PlayerId, Set<RoomPeer>>();
@@ -109,6 +115,7 @@ export class MatchRoom {
         ? new Set(options.waitForPlayers)
         : null;
     this.emitStateHash = options.emitStateHash ?? false;
+    this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
     this.observe = options.observe;
   }
 
@@ -185,6 +192,13 @@ export class MatchRoom {
     if (!this.hasPlayer(playerId)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_UNKNOWN_PLAYER' });
       peer.close?.(1008, 'unknown player');
+      return false;
+    }
+    if (this.singlePeerPerPlayer && (this.peers.get(playerId)?.size ?? 0) > 0) {
+      // That side is already controlled by a live connection — refuse so the two
+      // players can't both take the same slot (which strands the lobby).
+      this.send(peer, { type: 'error', matchId: this.id, code: 'E_SLOT_TAKEN' });
+      peer.close?.(1008, 'slot taken');
       return false;
     }
     const playerPeers = this.peers.get(playerId) ?? new Set<RoomPeer>();

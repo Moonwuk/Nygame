@@ -15,6 +15,9 @@ npm-debug.log*
 # Playtest capture (per-run JSONL from the prototype dev server — M0)
 playtest-logs/
 
+# VPS server config — holds a token; never commit (see deploy/server.env.example)
+deploy/server.env
+
 # Env / secrets (never commit — see docs/architecture.md A04)
 .env
 .env.*

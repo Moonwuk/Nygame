@@ -19,6 +19,7 @@
     "dev:server": "node packages/server/dev.mjs",
     "dev:proto-server": "node prototype/netserver.mjs",
     "host": "node prototype/host.mjs",
+    "serve": "bash deploy/serve.sh",
     "doctor": "node prototype/doctor.mjs",
     "dev:client": "node testclient/build.mjs",
     "audit": "pnpm audit --audit-level=high",

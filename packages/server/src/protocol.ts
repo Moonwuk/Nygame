@@ -18,6 +18,7 @@ export type ServerErrorCode =
   | 'E_BAD_MESSAGE'
   | 'E_FORBIDDEN'
   | 'E_PAYLOAD_TOO_LARGE'
+  | 'E_SLOT_TAKEN'
   | 'E_UNKNOWN_PLAYER';
 
 export interface ClientActionMessage {
