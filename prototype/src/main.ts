@@ -2061,7 +2061,9 @@ function panelHtml(): string {
 }
 
 function renderPanel() {
-  const open = selFleet !== null || selPlanet !== null || selFleets.size > 0;
+  // While arming a merge target, collapse the panel so the map (and the fleet to
+  // merge with) is fully tappable — important on phones where the sheet covers it.
+  const open = !merging && (selFleet !== null || selPlanet !== null || selFleets.size > 0);
   side.style.display = open ? 'block' : 'none';
   document.body.classList.toggle('sheet-open', open); // mobile: hide log/comms under the sheet
   if (!open) {

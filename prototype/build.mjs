@@ -123,8 +123,11 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
   padding:6px 10px;font:700 10px ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;border-radius:2px;}
 .ptab b{margin-left:7px;color:var(--ink);}
 .ptab.on{color:var(--cyan);border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 12px rgba(53,214,230,.2);}
-.asset-row{display:flex;align-items:center;gap:8px;margin:5px 0;min-height:24px;}
-.asset-row b{min-width:120px;font-size:12px;}
+/* wrap (don't overflow) so a trailing Select/Upgrade button never laps onto the
+   neighbouring column when the panel is laid out in narrow multi-column blocks */
+.asset-row{display:flex;align-items:center;gap:8px;margin:5px 0;min-height:24px;flex-wrap:wrap;}
+.asset-row b{flex:1 1 auto;min-width:96px;font-size:12px;}
+.asset-row .b{margin-left:auto;}
 .bicon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:7px;
   border:1px solid var(--line-hi);background:rgba(53,214,230,.07);color:var(--cyan);font-size:12px;}
 .asset-row .bicon{margin-right:0;flex:0 0 auto;}
@@ -240,6 +243,10 @@ body.sheet-open #log{display:none;}
   /* phones: no horizontal columns — a single readable top-to-bottom stack */
   .pcols{column-width:auto;column-count:1;column-rule:none;}
   .pcols .block{margin-bottom:0;}
+  /* phones are wide enough for one line — keep asset rows un-wrapped as before */
+  .asset-row{flex-wrap:nowrap;}
+  .asset-row b{flex:0 1 auto;min-width:120px;}
+  .asset-row .b{margin-left:0;}
 
   /* speed control sits at the bottom-right; it hides under the sheet, and a
      selection opens the sheet, so it never collides with the command bar */
