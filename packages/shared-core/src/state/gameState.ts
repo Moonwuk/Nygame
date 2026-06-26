@@ -125,14 +125,38 @@ export interface FleetMovement {
   path?: PlanetId[];
   /** Final destination of the whole journey. */
   destination?: PlanetId;
+  /** Fraction along (`from`,`to`) this leg STARTS at, in [0,1) (default 0). >0
+   *  only on the first leg out of a mid-lane parked position — the fleet resumes
+   *  partway down the road instead of from a node. */
+  startT?: number;
+  /** Fraction along (`from`,`to`) this (final) leg ENDS at, in (0,1] (default 1).
+   *  <1 means the journey stops at a point ON the lane: on arrival the fleet
+   *  parks (`edge`) at this fraction instead of reaching node `to`. */
+  endT?: number;
+  /** Journey-wide park fraction carried across hops: when the LAST leg fires it
+   *  parks at `parkT` (becomes that leg's `endT`). Absent = arrive at a node. */
+  parkT?: number;
+}
+
+/** A fleet parked at a continuous point ALONG a lane (it stopped mid-march, or
+ *  marched to a point on the path — not a node). `t` ∈ (0,1) is the fraction
+ *  from `from` to `to`. Mutually exclusive with `location`/`movement`: a fleet is
+ *  either at a node, in transit, or parked on a lane. */
+export interface FleetEdge {
+  from: PlanetId;
+  to: PlanetId;
+  t: number;
 }
 
 export interface Fleet {
   id: FleetId;
   owner: PlayerId;
-  /** Current location, or null while in transit. */
+  /** Current location, or null while in transit / parked on a lane. */
   location: PlanetId | null;
   movement: FleetMovement | null;
+  /** Parked at a continuous point on a lane (stopped mid-march or marched to a
+   *  point on the path). Set only while `location` and `movement` are both null. */
+  edge?: FleetEdge | null;
   units: UnitStack[];
   /** Ground army carried as cargo (the landing force of a ground assault),
    *  bounded by the ships' transport capacity — see the `army` module. */

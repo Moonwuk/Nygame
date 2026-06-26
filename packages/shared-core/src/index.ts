@@ -19,6 +19,7 @@ export {
   type FogMemory,
   type Fleet,
   type FleetMovement,
+  type FleetEdge,
   type Battle,
   type BattleSide,
   type CombatantRef,

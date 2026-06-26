@@ -270,34 +270,54 @@ describe('movement + combat — collision on a lane triggers battle', () => {
   });
 });
 
-describe('movement — fleet.stop halts at the next node', () => {
-  const stop = (fleetId: string, playerId = 'p1'): Action => ({
-    id: `s:${playerId}:2`,
-    type: 'fleet.stop',
+const stop = (fleetId: string, playerId = 'p1'): Action => ({
+  id: `s:${playerId}:2`,
+  type: 'fleet.stop',
+  playerId,
+  payload: { fleetId },
+  issuedAt: 0,
+});
+function moveEdge(
+  fleetId: string,
+  edge: { from: string; to: string; t: number },
+  playerId = 'p1',
+): Action {
+  return {
+    id: `s:${playerId}:3`,
+    type: 'fleet.move',
     playerId,
-    payload: { fleetId },
+    payload: { fleetId, toEdge: edge },
     issuedAt: 0,
-  });
-  // A(0,0) — B(30,0) — C(60,0); scout speed 10 → 3h per leg.
-  const lineABC = (): Planet[] => [
-    { ...planet('A', 'p1', 0, 0), links: ['B'] },
-    { ...planet('B', null, 30, 0), links: ['A', 'C'] },
-    { ...planet('C', null, 60, 0), links: ['B'] },
-  ];
+  };
+}
+// A(0,0) — B(30,0) — C(60,0); scout speed 10 → 3h per leg.
+const lineABC = (): Planet[] => [
+  { ...planet('A', 'p1', 0, 0), links: ['B'] },
+  { ...planet('B', null, 30, 0), links: ['A', 'C'] },
+  { ...planet('C', null, 60, 0), links: ['B'] },
+];
 
-  it('truncates the route so the fleet stops at the next hop', () => {
+describe('movement — fleet.stop parks the fleet ON the lane (Bytro continuous position)', () => {
+  it('parks at the current continuous fraction, not the next node', () => {
     const kernel = createKernel([movementModule]);
     const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
     const ordered = okApply(kernel.applyAction(st, move('F', 'C'), ctx(0)));
     expect(ordered.state.fleets.F?.movement?.destination).toBe('C'); // headed all the way
 
+    // 1h into the 3h A→B leg → one third of the way down the lane.
     const stopped = okApply(kernel.applyAction(ordered.state, stop('F'), ctx(HOUR)));
-    expect(stopped.state.fleets.F?.movement?.path).toEqual([]);
-    expect(stopped.state.fleets.F?.movement?.destination).toBe('B'); // now ends at the next node
+    const f = stopped.state.fleets.F;
+    expect(f?.location).toBe(null);
+    expect(f?.movement).toBe(null);
+    expect(f?.edge?.from).toBe('A');
+    expect(f?.edge?.to).toBe('B');
+    expect(f?.edge?.t).toBeCloseTo(1 / 3, 5);
+    expect(stopped.events.map((e) => e.type)).toContain('fleet.parked');
 
-    const done = okAdvance(kernel.advanceTo(stopped.state, ctx(4 * HOUR)));
-    expect(done.state.fleets.F?.location).toBe('B'); // halted at B, never continued to C
-    expect(done.events.map((e) => e.type)).toContain('fleet.arrived');
+    // It stays put — a parked fleet does not drift to a node on its own.
+    const later = okAdvance(kernel.advanceTo(stopped.state, ctx(10 * HOUR)));
+    expect(later.state.fleets.F?.edge?.t).toBeCloseTo(1 / 3, 5);
+    expect(later.state.fleets.F?.location).toBe(null);
   });
 
   it('rejects stopping a fleet that is not under way', () => {
@@ -306,5 +326,80 @@ describe('movement — fleet.stop halts at the next node', () => {
     const r = kernel.applyAction(st, stop('F'), ctx(0));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe('E_FLEET_BUSY');
+  });
+});
+
+describe('movement — march to a point ON a lane (toEdge), and re-route from a parked fleet', () => {
+  it('marches to a continuous point on a distant lane and parks there', () => {
+    const kernel = createKernel([movementModule]);
+    const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
+    // Aim at the midpoint of the B—C lane: route A→B (3h), then half of B→C (1.5h).
+    const ordered = okApply(kernel.applyAction(st, moveEdge('F', { from: 'B', to: 'C', t: 0.5 }), ctx(0)));
+    expect(ordered.state.fleets.F?.movement?.to).toBe('B'); // first hop is the node B
+
+    const done = okAdvance(kernel.advanceTo(ordered.state, ctx(5 * HOUR)));
+    const f = done.state.fleets.F;
+    expect(f?.location).toBe(null);
+    expect(f?.movement).toBe(null);
+    expect(f?.edge).toEqual({ from: 'B', to: 'C', t: 0.5 });
+    expect(done.events.map((e) => e.type)).toEqual(
+      expect.arrayContaining(['fleet.transit', 'fleet.parked']),
+    );
+  });
+
+  it('lets a parked fleet resume to a node, choosing the cheaper lane end', () => {
+    const kernel = createKernel([movementModule]);
+    // Park F one third down A→B, then order it onward to C.
+    const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
+    const moving = okApply(kernel.applyAction(st, move('F', 'C'), ctx(0)));
+    const parked = okApply(kernel.applyAction(moving.state, stop('F'), ctx(HOUR)));
+    expect(parked.state.fleets.F?.edge?.t).toBeCloseTo(1 / 3, 5);
+
+    // Forward to B (20 units) then B→C (30) beats reversing to A. Resumes forward.
+    const resumed = okApply(kernel.applyAction(parked.state, move('F', 'C'), ctx(HOUR)));
+    expect(resumed.state.fleets.F?.movement?.from).toBe('A');
+    expect(resumed.state.fleets.F?.movement?.to).toBe('B');
+    expect(resumed.state.fleets.F?.movement?.startT).toBeCloseTo(1 / 3, 5);
+
+    const done = okAdvance(kernel.advanceTo(resumed.state, ctx(10 * HOUR)));
+    expect(done.state.fleets.F?.location).toBe('C');
+  });
+
+  it('repositions directly along the lane it is already parked on (no detour)', () => {
+    const kernel = createKernel([movementModule]);
+    const parkedFleet: Fleet = { ...fleet('F', 'p1', null, ['scout']), edge: { from: 'A', to: 'B', t: 0.3 } };
+    const st = baseState(lineABC(), [parkedFleet]);
+    // Slide forward to 0.7 along the SAME A—B lane: one short leg, 0.4 × 30 / 10 = 1.2h.
+    const ordered = okApply(kernel.applyAction(st, moveEdge('F', { from: 'A', to: 'B', t: 0.7 }), ctx(0)));
+    expect(ordered.state.fleets.F?.movement?.from).toBe('A');
+    expect(ordered.state.fleets.F?.movement?.to).toBe('B');
+    expect(ordered.state.fleets.F?.movement?.arrivesAt).toBeCloseTo(1.2 * HOUR, 0);
+
+    const done = okAdvance(kernel.advanceTo(ordered.state, ctx(2 * HOUR)));
+    expect(done.state.fleets.F?.edge).toEqual({ from: 'A', to: 'B', t: 0.7 });
+  });
+
+  it('ignores a stale arrival after stop + re-route (no premature teleport)', () => {
+    const kernel = createKernel([movementModule]);
+    const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
+    const moving = okApply(kernel.applyAction(st, move('F', 'C'), ctx(0))); // arrival scheduled at 3h
+    const parked = okApply(kernel.applyAction(moving.state, stop('F'), ctx(HOUR)));
+    // Re-route back toward A at 1h; its new arrival is later. The OLD 3h arrival
+    // is now stale and must NOT fire the new leg.
+    const resumed = okApply(kernel.applyAction(parked.state, move('F', 'A'), ctx(HOUR)));
+    const atStale = okAdvance(kernel.advanceTo(resumed.state, ctx(3 * HOUR)));
+    // The genuine A-arrival is at 1h + (10 units / 10) = 2h, so by 3h it is at A —
+    // reached by its OWN leg, not the stale C-bound one.
+    expect(atStale.state.fleets.F?.location).toBe('A');
+    expect(atStale.state.fleets.F?.movement).toBe(null);
+  });
+
+  it('rejects a point that is not on a real lane', () => {
+    const kernel = createKernel([movementModule]);
+    const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
+    // A and C are not directly lane-connected → not a valid lane point.
+    expect(errCode(kernel.applyAction(st, moveEdge('F', { from: 'A', to: 'C', t: 0.5 }), ctx(0)))).toBe(
+      'E_NOT_A_LANE',
+    );
   });
 });

@@ -91,9 +91,12 @@ function withinRadius(state: GameState, originId: PlanetId, radius: number, out:
   }
 }
 
-/** The node a fleet occupies or is travelling over. */
+/** The node a fleet occupies, is travelling over, or is parked nearest to. */
 function fleetNode(fleet: Fleet): PlanetId | null {
-  return fleet.location ?? fleet.movement?.to ?? fleet.movement?.from ?? null;
+  if (fleet.location) return fleet.location;
+  if (fleet.movement) return fleet.movement.to ?? fleet.movement.from;
+  if (fleet.edge) return fleet.edge.t <= 0.5 ? fleet.edge.from : fleet.edge.to;
+  return null;
 }
 
 interface Coverage {
