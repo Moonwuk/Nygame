@@ -302,9 +302,16 @@ function projBase(p: { x: number; y: number }): { x: number; y: number } {
   const bottom = VH - (MOBILE ? 96 : 150);
   const aw = Math.max(60, right - left);
   const ah = Math.max(60, bottom - top);
-  const sx = (p.x - MINX) / (MAXX - MINX || 1);
-  const sy = (p.y - MINY) / (MAXY - MINY || 1);
-  return { x: left + sx * aw, y: top + sy * ah };
+  const mapW = MAXX - MINX || 1;
+  const mapH = MAXY - MINY || 1;
+  // UNIFORM scale (preserve aspect): one factor for both axes, so a circle in map
+  // space stays a circle on screen — distances aren't stretched, and the radar
+  // ring reads as a true circle. Fit the whole map inside the play area and centre
+  // it (the spare axis gets symmetric margins / letterbox).
+  const scale = Math.min(aw / mapW, ah / mapH);
+  const offX = left + (aw - mapW * scale) / 2;
+  const offY = top + (ah - mapH * scale) / 2;
+  return { x: offX + (p.x - MINX) * scale, y: offY + (p.y - MINY) * scale };
 }
 
 // Camera: pan offset + zoom over the base fit. Node/label sizes stay constant
