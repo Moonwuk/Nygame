@@ -1174,13 +1174,13 @@ function buildStaticLayer(): void {
   // one shifts the shared borders with its neighbours evenly. Adjacency IS the
   // shared border — no lanes. (Empty void waypoints aren't real provinces → skipped.)
   const W = 9000 * cam.scale * cam.scale; // size → weight (screen px²), zoom-consistent
-  const seeds: Array<{ x: number; y: number; w: number; owner: string | null }> = [];
+  const seeds: Array<{ x: number; y: number; w: number; owner: string | null; kind: string }> = [];
   for (const n of MAP) {
     if (n.sector === 'empty') continue;
     const p = s.planets[n.id];
     if (!p) continue;
     const c = world(n);
-    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: p.owner ?? null });
+    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: p.owner ?? null, kind: n.sector });
   }
   const MARGIN = 2500;
   const clip: Array<[number, number]> = [
@@ -1208,13 +1208,21 @@ function buildStaticLayer(): void {
       poly = clipHalfPlane(poly, a, b, cc);
     }
     if (poly.length < 3) continue;
-    const col = si.owner ? ownerColor(si.owner) : COLOR.null;
     trace(poly);
-    g.fillStyle = rgba(col, si.owner ? 0.34 : 0.12);
+    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.36 : 0.12);
     g.fill();
+    // faint terrain/kind accent — each province also reads as its own kind of place
+    // (its property: nebula slows fleets, gas-giant boosts output, …)
+    const accent = SECTOR_TYPES[si.kind]?.color;
+    if (accent) {
+      trace(poly);
+      g.fillStyle = rgba(accent, 0.06);
+      g.fill();
+    }
+    // border — owned boundaries (front lines) brighter/thicker, neutral fainter
     trace(poly);
-    g.strokeStyle = rgba(si.owner ? ownerColor(si.owner) : '#4a6b78', si.owner ? 0.65 : 0.32);
-    g.lineWidth = 1.2;
+    g.strokeStyle = rgba(si.owner ? ownerColor(si.owner) : '#43626e', si.owner ? 0.85 : 0.3);
+    g.lineWidth = si.owner ? 1.6 : 1;
     g.stroke();
   }
 }
