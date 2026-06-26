@@ -31,12 +31,30 @@ export interface ClientPingMessage {
   clientTime?: number;
 }
 
-export type ClientMessage = ClientActionMessage | ClientPingMessage;
+/** Host-only lobby control: begin the match now (release the frozen world clock).
+ *  Ignored from a non-host or once already started. */
+export interface ClientStartMessage {
+  type: 'start';
+}
 
-/** Lobby flag carried on snapshots: true while the match is paused waiting for the
- *  required players to connect (the world clock is frozen). Absent ⇒ running. */
+export type ClientMessage = ClientActionMessage | ClientPingMessage | ClientStartMessage;
+
+/** Roster shown on the pre-match lobby screen (manual-start mode). */
+export interface LobbyInfo {
+  /** Player who owns the Start button (the first to connect), or null if none. */
+  host: PlayerId | null;
+  /** Players with a live connection right now (the ones to show as "in"). */
+  connected: PlayerId[];
+  /** True once the host has started the match (the world clock is running). */
+  started: boolean;
+}
+
+/** Lobby data on snapshots: `waiting` is true while the world clock is frozen
+ *  (waiting for players, or for the host to press Start); `lobby` carries the
+ *  roster + host + started flag for the manual-start lobby screen. Absent ⇒ running. */
 export interface LobbyField {
   waiting?: boolean;
+  lobby?: LobbyInfo;
 }
 
 /** Optional `hashState` of the player's authoritative view, attached to snapshots
@@ -134,6 +152,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     return typeof decoded.clientTime === 'number'
       ? { type: 'ping', clientTime: decoded.clientTime }
       : { type: 'ping' };
+  }
+  if (decoded.type === 'start') {
+    return { type: 'start' };
   }
   return null;
 }

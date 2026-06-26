@@ -12,6 +12,7 @@ import { diffState, hashState, identifiedNodes, visibleState } from '@void/share
 import {
   parseClientMessage,
   serializeServerMessage,
+  type LobbyInfo,
   type ServerMessage,
   type ServerRejectionMessage,
 } from './protocol';
@@ -34,6 +35,11 @@ export interface MatchRoomOptions {
    *  connected, and re-freezes if one drops (`now` is then read as raw wall-clock
    *  and only accrues while all are present). Omit ⇒ the clock runs freely. */
   waitForPlayers?: PlayerId[];
+  /** Manual-start lobby: the world clock stays FROZEN until the host (the first
+   *  player to connect) sends a `start` message — then it runs and never re-freezes.
+   *  Snapshots carry a `lobby` roster so the client can show who's in + a Start
+   *  button. Mutually exclusive with `waitForPlayers` (this takes precedence). */
+  manualStart?: boolean;
   /** Attach `hashState(view)` to each snapshot so the client can detect desync.
    *  Opt-in (it hashes the per-player view on every broadcast). */
   emitStateHash?: boolean;
@@ -89,6 +95,10 @@ export class MatchRoom {
   private readonly waitFor: ReadonlySet<PlayerId> | null;
   private lobbyAccrued = 0; // game-ms accrued while running
   private lobbyRunningSince: number | null = null; // raw ms when running began, else null
+  /** Manual-start lobby (host presses Start). `host` = first player to connect. */
+  private readonly manualStart: boolean;
+  private host: PlayerId | null = null;
+  private started = false;
   private readonly emitStateHash: boolean;
   private readonly singlePeerPerPlayer: boolean;
   private readonly observe?: (event: RoomObservation) => void;
@@ -114,6 +124,7 @@ export class MatchRoom {
       options.waitForPlayers && options.waitForPlayers.length > 0
         ? new Set(options.waitForPlayers)
         : null;
+    this.manualStart = options.manualStart ?? false;
     this.emitStateHash = options.emitStateHash ?? false;
     this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
     this.observe = options.observe;
@@ -143,15 +154,37 @@ export class MatchRoom {
     return true;
   }
 
-  /** True while the match is paused waiting for the required players (frozen clock). */
+  /** True while the world clock is frozen: in manual-start mode until the host
+   *  presses Start; in waitForPlayers mode while a required player is missing. */
   private get waiting(): boolean {
+    if (this.manualStart) return !this.started;
     return this.waitFor !== null && !this.lobbyRunning;
   }
 
-  /** The world clock: free-running unless a lobby gate is configured, in which case
-   *  it only accrues real time while all required players are connected. */
+  /** Lobby roster + flags for the manual-start screen (only in that mode). */
+  private lobbyField(): { waiting?: boolean; lobby?: LobbyInfo } {
+    const out: { waiting?: boolean; lobby?: LobbyInfo } = {};
+    if (this.waiting) out.waiting = true;
+    if (this.manualStart) {
+      out.lobby = { host: this.host, connected: [...this.peers.keys()], started: this.started };
+    }
+    return out;
+  }
+
+  /** Host-only: begin the match now (manual-start lobby). Releases the frozen
+   *  clock — Day 1 starts at the press — and never re-freezes after. */
+  start(playerId: PlayerId): void {
+    if (!this.manualStart || this.started || playerId !== this.host) return;
+    this.started = true;
+    this.lobbyRunningSince = this.now();
+    this.observe?.({ kind: 'lobby', waiting: false });
+    this.broadcastState([]);
+  }
+
+  /** The world clock: free-running unless a lobby gate (waitForPlayers OR
+   *  manualStart) is configured, in which case it only accrues once running. */
   private clock(): number {
-    if (!this.waitFor) return this.now();
+    if (!this.waitFor && !this.manualStart) return this.now();
     return (
       this.lobbyAccrued + (this.lobbyRunningSince === null ? 0 : this.now() - this.lobbyRunningSince)
     );
@@ -205,6 +238,7 @@ export class MatchRoom {
     playerPeers.add(peer);
     this.peers.set(playerId, playerPeers);
     this.observe?.({ kind: 'join', playerId });
+    if (this.manualStart && this.host === null) this.host = playerId; // first in hosts
     const flipped = this.syncLobbyClock(); // last player in? the match resumes
     const view = this.viewFor(playerId);
     this.lastVisible.set(playerId, view.base);
@@ -218,9 +252,11 @@ export class MatchRoom {
       signatures: view.signatures,
       remembered: view.remembered,
       ...this.hashField(view.base),
-      ...(this.waiting ? { waiting: true } : {}),
+      ...this.lobbyField(),
     });
-    if (flipped) this.broadcastState([]); // tell the already-present peer the wait ended
+    // Tell already-present peers the wait ended (waitForPlayers) or the lobby
+    // roster changed (manualStart, pre-start), so their lobby screen updates.
+    if (flipped || (this.manualStart && !this.started)) this.broadcastState([]);
     return true;
   }
 
@@ -242,8 +278,15 @@ export class MatchRoom {
     if (playerPeers.size === 0) {
       this.peers.delete(playerId);
       this.observe?.({ kind: 'leave', playerId });
+      // Manual-start lobby: if the host leaves before starting, hand the Start
+      // button to whoever's still here (insertion order) so the lobby isn't stuck.
+      if (this.manualStart && !this.started && this.host === playerId) {
+        this.host = this.peers.keys().next().value ?? null;
+      }
     }
-    if (this.syncLobbyClock()) this.broadcastState([]); // a required player dropped → freeze + notify
+    // Broadcast on a waitForPlayers freeze, or on any pre-start manual-start roster
+    // change, so the remaining lobby screens update.
+    if (this.syncLobbyClock() || (this.manualStart && !this.started)) this.broadcastState([]);
   }
 
   receive(playerId: PlayerId, peer: RoomPeer, raw: string): void {
@@ -267,6 +310,10 @@ export class MatchRoom {
               clientTime: message.clientTime,
             };
       this.send(peer, pong);
+      return;
+    }
+    if (message.type === 'start') {
+      this.start(playerId); // host-only; ignored otherwise
       return;
     }
     this.submitAction(playerId, message.action, peer);
@@ -327,7 +374,7 @@ export class MatchRoom {
       signatures: view.signatures,
       remembered: view.remembered,
       ...this.hashField(view.base),
-      ...(this.waiting ? { waiting: true } : {}),
+      ...this.lobbyField(),
     };
   }
 
@@ -371,7 +418,7 @@ export class MatchRoom {
     // last visible view, so hidden worlds/fleets are physically never sent. Only
     // what changed in that player's view goes out (an idle world ⇒ tiny payload).
     const now = this.clock();
-    const waiting = this.waiting;
+    const lobby = this.lobbyField();
     for (const [playerId, playerPeers] of this.peers) {
       const view = this.viewFor(playerId);
       const baseline = this.lastVisible.get(playerId) ?? view.base;
@@ -386,7 +433,7 @@ export class MatchRoom {
         signatures: view.signatures,
         remembered: view.remembered,
         ...this.hashField(view.base),
-        ...(waiting ? { waiting: true } : {}),
+        ...lobby,
       };
       this.lastVisible.set(playerId, view.base);
       for (const peer of playerPeers) this.send(peer, message);

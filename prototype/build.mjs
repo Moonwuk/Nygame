@@ -284,6 +284,26 @@ body.sheet-open #log{display:none;}
 #connect .cbtn:active{background:rgba(53,214,230,.24);}
 #connect .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
 #connect .cstat{margin-top:14px;min-height:16px;font-size:12px;color:var(--amber);text-align:center;}
+#lobby{position:fixed;inset:0;z-index:55;display:none;align-items:center;justify-content:center;
+  background:rgba(2,8,11,.66);}
+#lobby .lbox{width:min(420px,94vw);background:var(--glass);border:1px solid var(--line-hi);
+  border-radius:14px;padding:22px;box-shadow:0 0 40px rgba(0,0,0,.6);}
+#lobby .ltitle{display:flex;align-items:center;gap:10px;font-size:18px;letter-spacing:3px;color:var(--cyan);}
+#lobby .ltitle .dia{width:12px;height:12px;transform:rotate(45deg);background:var(--cyan);box-shadow:0 0 10px var(--cyan);border:none;}
+#lobby .lsub{margin:8px 0 16px;color:var(--dim);font-size:12px;line-height:1.5;}
+#lobby .lroster{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+#lobby .lrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-hi);
+  border-radius:8px;font:13px ui-monospace,monospace;color:var(--ink);}
+#lobby .lrow .dot{width:10px;height:10px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor;}
+#lobby .lrow .nm{flex:1;}
+#lobby .lrow .me{font-size:10px;color:var(--cyan);letter-spacing:1px;}
+#lobby .lrow .host{font-size:9px;letter-spacing:.5px;border:1px solid var(--line-hi);border-radius:3px;
+  padding:2px 5px;color:var(--amber);}
+#lobby .lrow.off{opacity:.5;}
+#lobby .lbtn{width:100%;padding:13px 10px;border-radius:8px;border:1px solid var(--cyan);
+  background:rgba(53,214,230,.14);color:var(--cyan);font:13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
+#lobby .lbtn:disabled{opacity:.4;cursor:not-allowed;}
+#lobby .lwait{text-align:center;color:var(--dim);font-size:12px;}
 `;
 
 const html = `<!doctype html>
@@ -341,6 +361,14 @@ const html = `<!doctype html>
       <button id="csolo" class="cbtn ghost">Single player</button>
     </div>
     <div id="cstatus" class="cstat"></div>
+  </div>
+</div>
+<div id="lobby">
+  <div class="lbox">
+    <div class="ltitle"><span class="dia"></span><b>LOBBY</b></div>
+    <p class="lsub">Waiting in the staging sector. The host starts the match when ready.</p>
+    <div id="lroster" class="lroster"></div>
+    <div id="lactions"></div>
   </div>
 </div>
 <script>${js}</script>

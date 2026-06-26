@@ -16,6 +16,14 @@ export interface MultiplayerSnapshot {
   waiting?: boolean;
   /** Server's `hashState` of this view, if sent — compare to detect desync. */
   hash?: string;
+  /** Manual-start lobby roster (who's host, who's connected, has it started). */
+  lobby?: LobbyRoster;
+}
+
+export interface LobbyRoster {
+  host: PlayerId | null;
+  connected: PlayerId[];
+  started: boolean;
 }
 
 export interface MultiplayerClientHandlers {
@@ -40,6 +48,7 @@ interface InboundBase {
   code?: string;
   waiting?: boolean;
   hash?: string;
+  lobby?: LobbyRoster;
   serverTime?: number;
   clientTime?: number;
 }
@@ -87,6 +96,11 @@ export class MultiplayerClient {
     this.socket.send(JSON.stringify({ type: 'ping', clientTime }));
   }
 
+  /** Host-only: ask the server to begin the match (manual-start lobby). */
+  start(): void {
+    this.socket.send(JSON.stringify({ type: 'start' }));
+  }
+
   receive(raw: string): void {
     const message = decode(raw);
     if (!message) {
@@ -110,6 +124,7 @@ export class MultiplayerClient {
         state: message.state,
         waiting: message.waiting,
         hash: message.hash,
+        lobby: message.lobby,
       });
       return;
     }
@@ -129,6 +144,7 @@ export class MultiplayerClient {
         state: this.lastState,
         waiting: message.waiting,
         hash: message.hash,
+        lobby: message.lobby,
       });
       return;
     }

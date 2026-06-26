@@ -90,7 +90,7 @@ const room = new MatchRoom({
   kernel,
   data,
   now: () => Date.now(),
-  waitForPlayers: ['p1', 'p2'],
+  manualStart: true, // lobby: clock frozen until the host (first in) presses Start
   singlePeerPerPlayer: true, // 1v1: each side is one connection — no two-people-as-Azure
   emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
   observe, // M0: log every room event to JSONL + count for the on-exit summary

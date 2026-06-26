@@ -380,3 +380,75 @@ describe('MatchRoom — singlePeerPerPlayer (1v1 slot guard)', () => {
     expect(r.addPeer('p1', new MemoryPeer())).toBe(true); // same side, e.g. a 2nd device
   });
 });
+
+describe('MatchRoom — manualStart lobby', () => {
+  type Lobby = { host: string | null; connected: string[]; started: boolean };
+  const lobbyOf = (m: ServerMessage | undefined): Lobby | undefined =>
+    (m as { lobby?: Lobby } | undefined)?.lobby;
+
+  function manual(): { r: MatchRoom; tick: (ms: number) => void } {
+    let real = 1000;
+    const r = new MatchRoom({
+      id: 'ms',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => real,
+      manualStart: true,
+    });
+    return { r, tick: (ms) => (real += ms) };
+  }
+
+  it('freezes the clock and shows a lobby until the host presses Start', () => {
+    const { r, tick } = manual();
+    const p1 = new MemoryPeer();
+    const p2 = new MemoryPeer();
+
+    // first to join hosts; clock frozen at 0; lobby roster present
+    r.addPeer('p1', p1);
+    expect(p1.messages[0]).toMatchObject({ type: 'welcome', waiting: true, serverTime: 0 });
+    expect(lobbyOf(p1.messages[0])).toEqual({ host: 'p1', connected: ['p1'], started: false });
+
+    // p2 joins → p1's lobby roster updates; still not started
+    r.addPeer('p2', p2);
+    expect(lobbyOf(p1.messages.at(-1))).toEqual({
+      host: 'p1',
+      connected: ['p1', 'p2'],
+      started: false,
+    });
+
+    // time passes but the clock stays frozen at 0 until Start
+    tick(5000);
+    r.submitAction('p1', action('a1', 'p1', 'Solo'), p1);
+    expect(r.state.time).toBe(0);
+
+    // a NON-host cannot start
+    r.start('p2');
+    expect(r.state.time).toBe(0);
+    expect(lobbyOf(p2.messages.at(-1))?.started).toBe(false);
+
+    // the host starts → clock runs from the press; lobby.started true; waiting clears
+    r.start('p1');
+    expect(lobbyOf(p1.messages.at(-1))?.started).toBe(true);
+    expect((p1.messages.at(-1) as { waiting?: boolean }).waiting).toBeUndefined();
+
+    tick(3000);
+    r.submitAction('p1', action('a2', 'p1', 'Go'), p1);
+    expect(r.state.time).toBe(3000); // accrues from the Start press, not from join
+  });
+
+  it('hands the host role to the remaining player if the host leaves before Start', () => {
+    const { r } = manual();
+    const p1 = new MemoryPeer();
+    const p2 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    r.addPeer('p2', p2);
+    expect(lobbyOf(p2.messages.at(-1))?.host).toBe('p1');
+
+    r.removePeer('p1', p1); // host drops pre-start
+    expect(lobbyOf(p2.messages.at(-1))).toEqual({ host: 'p2', connected: ['p2'], started: false });
+
+    r.start('p2'); // the new host can now start
+    expect(lobbyOf(p2.messages.at(-1))?.started).toBe(true);
+  });
+});

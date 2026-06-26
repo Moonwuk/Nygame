@@ -212,6 +212,8 @@ let rttEma: number | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let netDesync = false; // last snapshot's hash mismatched (server vs our rebuild)
 let netDesyncCount = 0; // how many snapshots have mismatched this session
+// Manual-start lobby roster from the server (host + who's connected + started).
+let lobbyInfo: { host: string | null; connected: string[]; started: boolean } | null = null;
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
 let planetTab: PlanetTab = 'buildings';
 const buildQueues: Record<string, PlanetBuildQueue> = {};
@@ -2981,9 +2983,10 @@ $('cgo').addEventListener('click', () => {
         // mirror apply()'s selection cleanup (we replace `s` directly here)
         if (selFleet && !s.fleets[selFleet]) selFleet = null;
         selFleets = new Set([...selFleets].filter((id) => s.fleets[id]?.owner === ME));
-        // Lobby: the server holds the world clock until both players are in. Show a
-        // waiting banner (only clear our OWN waiting banner, never a victory one).
-        if (snap.waiting) {
+        // Lobby roster (manual-start). The lobby overlay (renderLobby) supersedes the
+        // old "⏳ waiting" banner; fall back to the banner only if no roster is sent.
+        lobbyInfo = snap.lobby ?? null;
+        if (!lobbyInfo && snap.waiting) {
           banner = `⏳ Waiting for ${NAME[ME === 'p1' ? 'p2' : 'p1']} to join…`;
         } else if (banner && banner.startsWith('⏳')) {
           banner = null;
@@ -3019,6 +3022,7 @@ $('cgo').addEventListener('click', () => {
     if (NET) {
       statusEl.textContent = 'disconnected';
       NET = false;
+      lobbyInfo = null; // drop the lobby overlay if we were still in it
       note('● disconnected from server');
       showConnect(true);
     }
@@ -3030,6 +3034,50 @@ $('cgo').addEventListener('click', () => {
     statusEl.textContent = 'connection failed — is the server running / URL right?';
   };
 });
+
+// --- lobby overlay (manual-start) -------------------------------------------
+// Pre-match staging screen: shows every side with its connection status, marks the
+// host + you, and gives the host a Start button. The world clock stays frozen
+// (server-side) until the host presses it.
+const lobbyEl = $('lobby');
+const lrosterEl = $('lroster');
+const lactionsEl = $('lactions');
+let lastLobbyHtml = '';
+// One delegated handler: the host's Start button asks the server to begin.
+lactionsEl.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement | null)?.id === 'lstart') netClient?.start();
+});
+function renderLobby(): void {
+  const info = lobbyInfo;
+  if (!info || info.started) {
+    if (lobbyEl.style.display === 'flex') {
+      lobbyEl.style.display = 'none';
+      lastLobbyHtml = '';
+    }
+    return;
+  }
+  const rosterHtml = Object.keys(s.players)
+    .map((id) => {
+      const on = info.connected.includes(id);
+      const color = COLOR[id] ?? COLOR.null;
+      const badges =
+        (id === ME ? '<span class="me">YOU</span>' : '') +
+        (id === info.host ? '<span class="host">HOST</span>' : '');
+      return `<div class="lrow ${on ? '' : 'off'}"><span class="dot" style="background:${color};color:${color}"></span><span class="nm">${esc(NAME[id] ?? id)}</span>${badges}<span style="font-size:10px;opacity:.75">${on ? 'connected' : 'waiting'}</span></div>`;
+    })
+    .join('');
+  const actionsHtml =
+    ME === info.host
+      ? '<button id="lstart" class="lbtn">▶ START MATCH</button>'
+      : '<div class="lwait">Waiting for the host to start…</div>';
+  const html = rosterHtml + '|' + actionsHtml;
+  if (html !== lastLobbyHtml) {
+    lrosterEl.innerHTML = rosterHtml;
+    lactionsEl.innerHTML = actionsHtml;
+    lastLobbyHtml = html;
+  }
+  if (lobbyEl.style.display !== 'flex') lobbyEl.style.display = 'flex';
+}
 
 // --- loop --------------------------------------------------------------------
 
@@ -3059,6 +3107,7 @@ function frame(nowReal: number) {
   renderPanel();
   renderCmdBar();
   renderSplitDialog();
+  renderLobby();
   // top bar (Iron Order-style resource readouts with +/h deltas)
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
