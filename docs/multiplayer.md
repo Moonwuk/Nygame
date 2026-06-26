@@ -115,11 +115,34 @@ cloudflared tunnel --url http://localhost:8788   # or: ngrok http 8788
 ```
 
 Both (browser **or** APK) paste the printed `wss://…trycloudflare.com` URL; one picks
-Azure, the other Crimson. Or host it (Fly.io/Railway, per `docs/roadmap.md`).
+Azure, the other Crimson.
 
 Keep the server (and tunnel) running for the session — state is in-memory, so a restart
 loses the match. Do **not** leave an unauthenticated server tunnelled long-term (auth is
 brick F7 / SE-0.1).
+
+### Path D — hosted, truly "just a link" (no local server)
+
+Deploy the server once and nobody runs anything locally — you just share a permanent
+URL. The repo ships a `Dockerfile` (builds the prototype + runs the proto-server,
+serving the game at `/`) and a `render.yaml` blueprint:
+
+- **Render (free):** New → Blueprint → point at this repo → it builds the Dockerfile
+  and gives `https://<app>.onrender.com`. Share it; both open it, pick Azure / Crimson.
+  The overlay auto-fills the same-origin `wss://`, so there's nothing to type.
+- **Any Docker host / Fly.io / Railway:** `docker build -t void-dominion . && docker run -p 8788:8788 void-dominion`, or push the image. The server reads `$PORT`.
+
+Free hosts sleep when idle (cold start on first hit) and state is in-memory (a restart
+loses the match) — fine for testing, and the handshake is unauthenticated, so don't
+leave it public long-term (auth is brick F7 / SE-0.1).
+
+### Lobby — the match waits for both players
+
+However you connect, the world starts **paused** ("⏳ Waiting for … to join"): the
+server freezes the clock until BOTH Azure and Crimson are connected, and re-freezes if
+one drops. So whoever opens the link first just waits on the start screen; the match
+clock begins the moment the second player joins. (You can pre-position fleets while
+waiting — orders apply, but no time passes until both are in.)
 
 ### Net-mode scope (first MP test)
 

@@ -1,0 +1,16 @@
+# One-click deploy of the prototype multiplayer server to Render (free tier).
+# Render → New → Blueprint → point at this repo. It builds the Dockerfile and gives
+# a permanent https URL; share it — both players open it, pick Azure / Crimson, play.
+# Free web services sleep when idle (cold start on first hit) and state is in-memory
+# (a restart loses the match) — fine for testing. Don't leave it public long-term
+# (the handshake is unauthenticated — auth is brick F7 / SE-0.1).
+services:
+  - type: web
+    name: void-dominion
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0

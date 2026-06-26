@@ -2884,7 +2884,11 @@ const showConnect = (show: boolean): void => {
 };
 srvInput.value =
   localStorage.getItem('void.server') ??
-  (location.protocol === 'https:' ? '' : `ws://${location.hostname || '127.0.0.1'}:8788`);
+  // Default to the SAME ORIGIN: a deployed https page → wss://<host> (just a link,
+  // no typing); a LAN/local http page → ws://<host>:8788. Remembered after first use.
+  (location.protocol === 'https:'
+    ? `wss://${location.host}`
+    : `ws://${location.hostname || '127.0.0.1'}:8788`);
 
 $('csolo').addEventListener('click', () => {
   NET = false;
