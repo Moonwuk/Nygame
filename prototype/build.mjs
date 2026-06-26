@@ -144,6 +144,40 @@ button.b{background:transparent;color:var(--cyan);border:1px solid var(--cyan-di
 button.b:hover:not(:disabled){background:rgba(53,214,230,.14);box-shadow:0 0 10px rgba(53,214,230,.35);}
 button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:var(--line);}
 
+/* desktop: spread the panel's scrollable sections into side-by-side columns,
+   divided by faint vertical rules, instead of one tall single-width stack. Each
+   .block stays whole (never split across a column). Phones reset this below. */
+.pcols{column-width:240px;column-gap:18px;column-rule:1px solid var(--line);}
+.pcols .block{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;margin-bottom:10px;}
+.pcols .block:first-child .sec:first-child{margin-top:0;}
+
+/* split-fleet modal */
+#splitdlg{position:fixed;inset:0;z-index:45;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#splitdlg .sbox{width:min(440px,94vw);max-height:84vh;overflow:auto;background:var(--glass);
+  border:1px solid var(--cyan);border-radius:10px;padding:18px 18px 14px;
+  box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#splitdlg .shead{font-size:14px;letter-spacing:2px;color:var(--cyan);}
+#splitdlg .shead b{color:#eafffb;}
+#splitdlg .ssub{margin:6px 0 12px;color:var(--dim);font-size:11px;line-height:1.5;}
+#splitdlg .srow{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;
+  padding:7px 0;border-top:1px solid var(--line);}
+#splitdlg .sname{display:flex;align-items:center;gap:6px;color:var(--ink);font-weight:700;}
+#splitdlg .scur{min-width:26px;text-align:center;color:#eafffb;font-variant-numeric:tabular-nums;}
+#splitdlg .snew{min-width:42px;text-align:right;color:var(--grn);font-weight:700;font-variant-numeric:tabular-nums;}
+#splitdlg .sbtns{display:flex;gap:4px;}
+#splitdlg .sbtns button{min-width:34px;height:30px;padding:0 7px;cursor:pointer;border-radius:2px;
+  font:700 11px ui-monospace,monospace;background:transparent;color:var(--cyan);border:1px solid var(--cyan-dim);}
+#splitdlg .sbtns button:hover:not(:disabled){background:rgba(53,214,230,.14);}
+#splitdlg .sbtns button:disabled{opacity:.3;cursor:not-allowed;color:var(--dim);border-color:var(--line);}
+#splitdlg .sfoot{margin:13px 0 2px;color:var(--dim);font-size:12px;text-align:center;}
+#splitdlg .sfoot b{color:#eafffb;}
+#splitdlg .sactions{display:flex;gap:10px;justify-content:center;margin-top:10px;}
+#splitdlg .sactions .cbtn{flex:1;max-width:160px;padding:11px 10px;border-radius:7px;border:1px solid var(--cyan);
+  background:rgba(53,214,230,.12);color:var(--cyan);font:600 13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
+#splitdlg .sactions .cbtn:disabled{opacity:.35;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
+#splitdlg .sactions .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
+
 #botleft{position:fixed;left:6px;bottom:8px;z-index:24;display:flex;align-items:center;gap:8px;}
 .chat{width:40px;height:40px;cursor:pointer;font-size:16px;border-radius:2px;
   background:rgba(2,9,13,.7);border:1px solid var(--line-hi);color:var(--cyan-dim);}
@@ -203,6 +237,9 @@ body.sheet-open #log{display:none;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
+  /* phones: no horizontal columns — a single readable top-to-bottom stack */
+  .pcols{column-width:auto;column-count:1;column-rule:none;}
+  .pcols .block{margin-bottom:0;}
 
   /* speed control sits at the bottom-right; it hides under the sheet, and a
      selection opens the sheet, so it never collides with the command bar */
@@ -279,6 +316,7 @@ const html = `<!doctype html>
   <span class="sep"></span><button data-fog title="Fog of war — dev preview (variant A)">FOG</button>
 </div>
 <div id="cmdbar"></div>
+<div id="splitdlg"></div>
 <div id="fps"></div>
 <div id="banner"></div>
 <div id="connect">

@@ -25,6 +25,7 @@ import {
   unloadArmy,
   launchFleet,
   mergeFleet,
+  splitFleet,
   buildBuilding,
   upgradeBuilding,
   buildUnit,
@@ -157,6 +158,8 @@ let merging = false; // "Merge" armed → next tap on a friendly fleet picks the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
 let pendingMerges: Array<{ mover: string; into: string }> = [];
 let additive = false; // Ctrl/⌘ held on the current tap → add to the fleet selection
+// Split-fleet dialog: which fleet, and how many of each ship type peel off.
+let splitState: { fleetId: string; take: Record<string, number> } | null = null;
 
 // --- multiplayer (net mode) --------------------------------------------------
 // When connected, the server is authoritative: snapshots replace `s`, orders are
@@ -171,6 +174,7 @@ const logLines: string[] = [];
 let lastAiAt = 0;
 let lastPanelHtml = '';
 let lastCmdHtml = '';
+let lastSplitHtml = '';
 let lastHudHtml = '';
 let lastClockText = '';
 let lastDayTimerText = '';
@@ -195,6 +199,7 @@ const bannerEl = $('banner');
 const dayTimer = $('daytimer');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
+const splitdlg = $('splitdlg');
 const burger = $('burger');
 const scrim = $('scrim');
 const topClock = $('topclock');
@@ -767,6 +772,7 @@ function drawSignature(f: Fleet, now: number): void {
 function apply(out: StepOut) {
   s = out.state;
   if (selFleet && !s.fleets[selFleet]) selFleet = null;
+  if (splitState && !s.fleets[splitState.fleetId]) splitState = null; // fleet gone → close
   selFleets = new Set([...selFleets].filter((id) => s.fleets[id]?.owner === ME));
   handleEvents(out.events);
 }
@@ -807,6 +813,7 @@ function clearSelection() {
   selPlanet = null;
   selFleets = new Set();
   merging = false;
+  splitState = null;
   lastPanelHtml = '';
 }
 
@@ -907,6 +914,9 @@ function handleEvents(events: DomainEvent[]) {
         break;
       case 'fleet.merged':
         if (p.owner === ME) note(`⛬ fleets merged at ${p.at}`);
+        break;
+      case 'fleet.split':
+        if (p.owner === ME) note(`⊟ fleet split at ${p.at}`);
         break;
       case 'fleet.destroyed':
         note(`☠️ a ${NAME[p.owner as string]} fleet was destroyed`);
@@ -1768,6 +1778,15 @@ function render(now: number) {
 function btn(act: string, arg: string, label: string, ok: boolean): string {
   return `<button class="b" data-act="${esc(act)}" data-arg="${esc(arg)}" ${ok ? '' : 'disabled'}>${esc(label)}</button>`;
 }
+/** Wrap a panel section so the desktop multi-column layout never splits it across
+ *  columns. Sections are laid out side-by-side on wide screens, stacked on phones. */
+function block(inner: string): string {
+  return `<div class="block">${inner}</div>`;
+}
+/** Lay a set of sections into the responsive multi-column body (see `.pcols` CSS). */
+function pcols(blocks: string[]): string {
+  return `<div class="pcols">${blocks.map(block).join('')}</div>`;
+}
 function cardHeader(color: string, title: string, sub: string): string {
   return `<div class="phead">
     <span class="pflag" style="background:${color}"></span>
@@ -1871,43 +1890,48 @@ function panelHtml(): string {
       } else {
         // enemy/neutral world you can act on — empty space is pass-through only
         const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
+        const cols: string[] = [];
         // orbit toggle
-        h += `<div class="sec">Orbit · ${esc(here!.id)}</div><div class="row">`;
-        h += btn('orbit', 'near', '▼ Descend (near)', orbit !== 'near');
-        h += btn('orbit', 'far', '▲ Pull back (far)', orbit !== 'far');
-        h += `</div>`;
+        let ob = `<div class="sec">Orbit · ${esc(here!.id)}</div><div class="row">`;
+        ob += btn('orbit', 'near', '▼ Descend (near)', orbit !== 'near');
+        ob += btn('orbit', 'far', '▲ Pull back (far)', orbit !== 'far');
+        ob += `</div>`;
+        cols.push(ob);
         if (hostile) {
-          h += `<div class="row">`;
-          h += btn(
+          let at = `<div class="sec">Strike</div><div class="row">`;
+          at += btn(
             'bombard',
             f.bombarding ? 'off' : 'on',
             f.bombarding ? '⊗ Stop bombard' : '⊗ Bombard',
             orbit === 'near' && nShips > 0,
           );
-          h += btn('assault', '', '⚔ Assault', orbit === 'near');
-          h += `</div>`;
-          h += `<div class="hint">Near orbit lets you bombard (wears buildings &amp; freezes their output) but the garrison's AA reaches you; far orbit is safe. Assault lands your carried troops against the garrison.</div>`;
+          at += btn('assault', '', '⚔ Assault', orbit === 'near');
+          at += `</div>`;
+          at += `<div class="hint">Near orbit lets you bombard (wears buildings &amp; freezes their output) but the garrison's AA reaches you; far orbit is safe. Assault lands your carried troops against the garrison.</div>`;
+          cols.push(at);
         }
         // load / unload ground army at your own world
         if (here!.owner === ME) {
-          h += `<div class="sec">Ground army ⇄ garrison</div>`;
+          let ga = `<div class="sec">Ground army ⇄ garrison</div>`;
           const groundHere = here!.garrison.filter((st) => isGround(st.unit));
           const carried = f.landing ?? [];
           if (groundHere.length) {
-            h += `<div class="row">`;
-            for (const st of groundHere) h += btn('load', st.unit, `▲ Load ${st.unit}`, true);
-            h += `</div>`;
+            ga += `<div class="row">`;
+            for (const st of groundHere) ga += btn('load', st.unit, `▲ Load ${st.unit}`, true);
+            ga += `</div>`;
           }
           if (carried.length) {
-            h += `<div class="row">`;
-            for (const st of carried) h += btn('unload', st.unit, `▼ Unload ${st.unit}`, true);
-            h += `</div>`;
+            ga += `<div class="row">`;
+            for (const st of carried) ga += btn('unload', st.unit, `▼ Unload ${st.unit}`, true);
+            ga += `</div>`;
           }
           if (!groundHere.length && !carried.length)
-            h += `<div class="row dim">no ground army here</div>`;
+            ga += `<div class="row dim">no ground army here</div>`;
+          cols.push(ga);
         }
+        h += pcols(cols);
       }
-      h += `<div class="hint">Press <b>Move</b> (command bar), then tap a destination — the fleet routes along the lanes there and stops. <b>Merge…</b> then tap another fleet to combine them (it flies over if they're apart). Tap a world without Move to inspect it.</div>`;
+      h += `<div class="hint">Press <b>Move</b> (command bar), then tap a destination — the fleet routes there and stops. <b>Merge…</b> tap another fleet to combine; <b>Split</b> peels ships into a new fleet.</div>`;
       h += btn('cancel', '', 'Deselect', true);
       return h;
     }
@@ -1963,67 +1987,77 @@ function panelHtml(): string {
     ships.length + here.length,
   )}${tabButton('buildings', 'Buildings', p.buildings.length)}</div>`;
 
+  // Tab content is split into self-contained blocks; on desktop they flow into
+  // side-by-side columns (filling the wide panel), on phones they stack vertically.
+  const cols: string[] = [];
   if (planetTab === 'ground') {
-    h += `<div class="sec">Ground units</div>`;
-    h += unitRows(ground);
+    cols.push(`<div class="sec">Ground units</div>` + unitRows(ground));
     if (mine) {
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
-      h += `<div class="sec">Ground conveyor</div>`;
-      h += conveyorHtml(p.id, 'units');
-      h += buildButtons(p.id, groundBuilds, 'unit');
+      cols.push(
+        `<div class="sec">Ground conveyor</div>` +
+          conveyorHtml(p.id, 'units') +
+          buildButtons(p.id, groundBuilds, 'unit'),
+      );
     }
-    h += `<div class="hint">Ground units defend planets and can be loaded onto fleets from the fleet panel.</div>`;
+    cols.push(
+      `<div class="hint">Ground units defend planets and can be loaded onto fleets from the fleet panel.</div>`,
+    );
   } else if (planetTab === 'ships') {
-    h += `<div class="sec">Spacecraft in garrison</div>`;
-    h += unitRows(ships);
+    let garr = `<div class="sec">Spacecraft in garrison</div>` + unitRows(ships);
     if (mine && ships.length) {
-      h += `<div class="row">${btn('launch', p.id, '🚀 Launch fleet from garrison', true)}</div>`;
+      garr += `<div class="row">${btn('launch', p.id, '🚀 Launch fleet from garrison', true)}</div>`;
     }
+    cols.push(garr);
     if (here.length) {
-      h += `<div class="sec">Fleets in orbit</div>`;
+      let orbit = `<div class="sec">Fleets in orbit</div>`;
       for (const f of here) {
         const fShips = sumUnits(f.units);
         const tr = sumUnits(f.landing ?? []);
         const sel = f.owner === ME ? btn('selfleet', f.id, 'Select →', true) : '';
-        h += `<div class="asset-row" style="color:${ownerColor(f.owner)}"><span class="bicon">▲</span><b>${fShips} ships${tr ? ' +' + tr + ' troops' : ''}</b><span class="dim">orbit ${f.orbit ?? 'far'}</span>${sel}</div>`;
+        orbit += `<div class="asset-row" style="color:${ownerColor(f.owner)}"><span class="bicon">▲</span><b>${fShips} ships${tr ? ' +' + tr + ' troops' : ''}</b><span class="dim">orbit ${f.orbit ?? 'far'}</span>${sel}</div>`;
       }
+      cols.push(orbit);
     }
     if (mine) {
       const shipBuilds = BUILD_UNITS.filter((u) => isShip(u));
-      h += `<div class="sec">Shipyard conveyor</div>`;
-      h += conveyorHtml(p.id, 'units');
-      h += buildButtons(p.id, shipBuilds, 'unit');
+      cols.push(
+        `<div class="sec">Shipyard conveyor</div>` +
+          conveyorHtml(p.id, 'units') +
+          buildButtons(p.id, shipBuilds, 'unit'),
+      );
     }
-    h += `<div class="hint">Built spacecraft join the garrison first; launch creates a mobile fleet.</div>`;
+    cols.push(
+      `<div class="hint">Built spacecraft join the garrison first; launch creates a mobile fleet.</div>`,
+    );
   } else {
-    h += `<div class="sec">Building conveyor</div>`;
-    if (mine) {
-      h += conveyorHtml(p.id, 'buildings');
-    } else {
-      h += `<div class="row dim">enemy construction telemetry unavailable</div>`;
-    }
-    h += `<div class="sec">Buildings</div>`;
-    if (p.buildings.length === 0) h += `<div class="row dim">none</div>`;
+    cols.push(
+      `<div class="sec">Building conveyor</div>` +
+        (mine
+          ? conveyorHtml(p.id, 'buildings')
+          : `<div class="row dim">enemy construction telemetry unavailable</div>`),
+    );
+    let blds = `<div class="sec">Buildings</div>`;
+    if (p.buildings.length === 0) blds += `<div class="row dim">none</div>`;
     for (const b of p.buildings) {
       const def = data.buildings[b.type];
       const max = def ? buildingMaxLevel(def) : 1;
-      h += `<div class="asset-row"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${def?.name ?? b.type}</b><span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
+      blds += `<div class="asset-row"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${def?.name ?? b.type}</b><span class="dim">L${b.level}/${max} · hp ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
       if (mine && b.level < max) {
         const c = def?.upgrades[b.level - 1]?.cost;
-        h += btn('upgrade', b.type, `▲ Upgrade ${cost(c)}`, afford(c));
+        blds += btn('upgrade', b.type, `▲ Upgrade ${cost(c)}`, afford(c));
       }
-      h += `</div>`;
+      blds += `</div>`;
     }
     if (mine) {
       // an asteroid junction can only raise a space fortress; a city builds the rest
       const buildable = SECTOR_OF[p.id] === 'asteroid' ? ['starfort'] : BUILDABLE;
       const missing = buildable.filter((t) => !p.buildings.some((b) => b.type === t));
-      if (missing.length) {
-        h += buildButtons(p.id, missing, 'building');
-      }
+      if (missing.length) blds += buildButtons(p.id, missing, 'building');
     }
+    cols.push(blds);
   }
-  return h;
+  return h + pcols(cols);
 }
 
 function renderPanel() {
@@ -2072,19 +2106,125 @@ function renderCmdBar() {
   // Merge: a group fuses in one tap; a lone fleet arms target-pick (needs a partner).
   const myFleetTotal = Object.values(s.fleets).filter((f) => f.owner === ME).length;
   const canMerge = ids.length >= 2 || (ids.length === 1 && myFleetTotal >= 2);
+  // Split: only a single docked fleet with ≥2 ships can shed some into a new fleet.
+  const lone = ids.length === 1 && fleets[0] ? fleets[0] : null;
+  const canSplit = !!lone && !!lone.location && !lone.movement && !lone.battleId && sumUnits(lone.units) >= 2;
   const html =
     `<span class="cmdlabel">${ids.length > 1 ? ids.length + ' FLEETS' : 'FLEET'}</span>` +
     cmdBtn('move', '⤳', 'Move', aiming ? 'on' : '', false) +
     cmdBtn('stop', '■', 'Stop', 'danger', !anyMoving) +
     cmdBtn('attack', '⚔', 'Attack', '', !canAssault) +
     cmdBtn(descend ? 'near' : 'far', descend ? '▼' : '▲', descend ? 'Near' : 'Far', '', !anyDocked) +
-    cmdBtn('merge', '⛬', ids.length > 1 ? 'Merge' : 'Merge…', merging ? 'on' : '', !canMerge);
+    cmdBtn('merge', '⛬', ids.length > 1 ? 'Merge' : 'Merge…', merging ? 'on' : '', !canMerge) +
+    cmdBtn('split', '⊟', 'Split', splitState ? 'on' : '', !canSplit);
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
     lastCmdHtml = html;
   }
   cmdbar.classList.add('show');
 }
+
+/** Ship counts (by type) of a fleet — the rows of the split dialog. */
+function fleetShipCounts(f: Fleet): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const st of f.units) out[st.unit] = (out[st.unit] ?? 0) + st.count;
+  return out;
+}
+
+/** The "Split fleet" modal: per ship type, +1 / +10 / All (and −1) move ships into
+ *  a new fleet; Confirm peels them off into the same sector. Closes itself if the
+ *  fleet is deselected, vanishes, or starts moving. */
+function renderSplitDialog() {
+  if (splitState && splitState.fleetId !== selFleet) splitState = null; // selection moved on
+  const f = splitState ? s.fleets[splitState.fleetId] : undefined;
+  if (!splitState || !f || f.movement || f.battleId) {
+    splitState = null;
+    if (splitdlg.style.display !== 'none') splitdlg.style.display = 'none';
+    lastSplitHtml = '';
+    return;
+  }
+  const counts = fleetShipCounts(f);
+  let takeTotal = 0;
+  let total = 0;
+  let rows = '';
+  for (const unit of Object.keys(counts)) {
+    const have = counts[unit] ?? 0;
+    total += have;
+    const tk = Math.min(splitState.take[unit] ?? 0, have);
+    splitState.take[unit] = tk;
+    takeTotal += tk;
+    rows += `<div class="srow">
+      <span class="sname"><span class="bicon">${unitIcon(unit)}</span>${esc(displayUnit(unit))}</span>
+      <b class="scur">${have - tk}</b>
+      <span class="sbtns">
+        <button data-sx="dec" data-unit="${esc(unit)}" data-n="1" ${tk <= 0 ? 'disabled' : ''}>−1</button>
+        <button data-sx="inc" data-unit="${esc(unit)}" data-n="1" ${tk >= have ? 'disabled' : ''}>+1</button>
+        <button data-sx="inc" data-unit="${esc(unit)}" data-n="10" ${tk >= have ? 'disabled' : ''}>+10</button>
+        <button data-sx="all" data-unit="${esc(unit)}" ${tk >= have ? 'disabled' : ''}>All</button>
+      </span>
+      <b class="snew">→ ${tk}</b>
+    </div>`;
+  }
+  const valid = takeTotal > 0 && takeTotal < total;
+  const html = `<div class="sbox">
+    <div class="shead">SPLIT FLEET <b>${esc(splitState.fleetId)}</b></div>
+    <div class="ssub">Peel ships into a new fleet — it stays in the same sector. At least one ship stays behind; carried troops stay with the original.</div>
+    <div class="srows">${rows}</div>
+    <div class="sfoot">new fleet: <b>${takeTotal}</b> ships · original keeps <b>${total - takeTotal}</b></div>
+    <div class="sactions">
+      <button data-sx="confirm" class="cbtn" ${valid ? '' : 'disabled'}>Confirm</button>
+      <button data-sx="cancel" class="cbtn ghost">Cancel</button>
+    </div>
+  </div>`;
+  if (html !== lastSplitHtml) {
+    splitdlg.innerHTML = html;
+    lastSplitHtml = html;
+  }
+  splitdlg.style.display = 'flex';
+}
+
+splitdlg.addEventListener('click', (ev) => {
+  if (ev.target === splitdlg && splitState) {
+    // click on the dimmed backdrop (outside the box) cancels
+    splitState = null;
+    renderSplitDialog();
+    lastCmdHtml = '';
+    renderCmdBar();
+    return;
+  }
+  const t = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+  if (!t || t.disabled || !splitState) return;
+  const sx = t.dataset.sx;
+  if (sx === 'cancel') {
+    splitState = null;
+    renderSplitDialog();
+    lastCmdHtml = '';
+    renderCmdBar();
+    return;
+  }
+  if (sx === 'confirm') {
+    const take = Object.entries(splitState.take)
+      .filter(([, n]) => n > 0)
+      .map(([unit, count]) => ({ unit, count }));
+    if (take.length) playerOrder(splitFleet(ME, splitState.fleetId, take));
+    splitState = null;
+    renderSplitDialog();
+    lastCmdHtml = '';
+    lastPanelHtml = '';
+    renderCmdBar();
+    renderPanel();
+    return;
+  }
+  const unit = t.dataset.unit ?? '';
+  const f = s.fleets[splitState.fleetId];
+  if (!f) return;
+  const have = fleetShipCounts(f)[unit] ?? 0;
+  const cur = splitState.take[unit] ?? 0;
+  if (sx === 'inc') splitState.take[unit] = Math.min(have, cur + Number(t.dataset.n));
+  else if (sx === 'dec') splitState.take[unit] = Math.max(0, cur - Number(t.dataset.n));
+  else if (sx === 'all') splitState.take[unit] = have;
+  renderSplitDialog();
+});
 
 side.addEventListener('click', (ev) => {
   const t = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
@@ -2151,6 +2291,13 @@ cmdbar.addEventListener('click', (ev) => {
       if (f?.location && !f.movement) playerOrder(orbitFleet(ME, id, cmd));
     }
     aiming = false;
+  } else if (cmd === 'split') {
+    const id = ids[0];
+    if (id) {
+      splitState = splitState ? null : { fleetId: id, take: {} }; // toggle the dialog
+      aiming = false;
+      renderSplitDialog();
+    }
   }
   lastCmdHtml = '';
   lastPanelHtml = '';
@@ -2453,6 +2600,7 @@ function frame(nowReal: number) {
   render(nowReal);
   renderPanel();
   renderCmdBar();
+  renderSplitDialog();
   // top bar (Iron Order-style resource readouts with +/h deltas)
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
