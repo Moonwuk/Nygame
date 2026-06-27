@@ -61,7 +61,12 @@ export function createMultiplayerServer(
       return;
     }
     if (indexHtml !== undefined && (path === '/' || path === '/index.html')) {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      // The single-file client changes every rebuild; never let a browser serve a
+      // stale cached copy (else client fixes silently don't reach the player).
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store, must-revalidate',
+      });
       response.end(indexHtml);
       return;
     }
