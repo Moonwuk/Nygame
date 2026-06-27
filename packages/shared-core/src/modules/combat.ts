@@ -495,6 +495,21 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
         ? battle.defender.owner
         : null;
 
+  // The battle is over for both sides: survivors return "at rest", so clear the
+  // transient combat HP pool (a UnitStack with `hp` undefined = full health out of
+  // combat, gameState.ts §30-32). Done BEFORE the ground-capture deposit and the
+  // fleet release below, so a freshly-deposited garrison and any released fleet are
+  // normalized too. Without this, stale `hp` (set by applyDamage on every damaged
+  // survivor and never reset) makes findHealthyStack skip those stacks forever —
+  // breaking army.load/unload — and feeds them into their next battle at the wrong
+  // (partial) health. Dead sides already filtered to empty, so this is a no-op there.
+  for (const ref of [battle.attacker.ref, battle.defender.ref]) {
+    const survivors = sideUnits(h.state, ref);
+    if (survivors) {
+      for (const stack of survivors) delete stack.hp;
+    }
+  }
+
   // Ground capture must happen BEFORE releaseOrDestroyFleet — a fleet whose
   // ships were lost but whose landing troops won the assault would otherwise be
   // deleted (units.length === 0) before capturePlanet can deposit them as the
@@ -520,17 +535,29 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
   });
 
   if (battle.phase === 'orbital') {
-    if (battle.attacker.ref.kind === 'fleet' && aAlive) {
-      const f = h.state.fleets[battle.attacker.ref.fleetId];
-      // Victor holds the far orbit — and you can't bombard from far, so clear it
-      // too (the fleet.orbit action enforces the same invariant).
+    // Whichever fleet SURVIVED holds the node — not just the attacker. The victor
+    // returns to the far (safe) orbit (you can't bombard from far, so clear that
+    // too; the fleet.orbit action enforces the same invariant) and must auto-engage
+    // any other hostile fleet idling at the node — one that couldn't engage earlier
+    // because every fleet there already had a battleId (findEnemyFleetAt skips
+    // battleId fleets). Previously only the attacker-victor re-engaged, so a
+    // defender that won left a third hostile fleet coexisting at the node forever.
+    const victorId =
+      battle.attacker.ref.kind === 'fleet' && aAlive
+        ? battle.attacker.ref.fleetId
+        : battle.defender.ref.kind === 'fleet' && dAlive
+          ? battle.defender.ref.fleetId
+          : null;
+    if (victorId !== null) {
+      const f = h.state.fleets[victorId];
       if (f) {
         f.orbit = 'far';
         f.bombarding = false;
         // Chain into any other defender only when the victor holds a NODE; a lane
         // intercept leaves it parked on the edge (location null) — never teleport it.
+        // engageFleets is battleId-guarded, so this starts at most one new battle.
         if (f.location !== null) {
-          engageFleets(h, battle.attacker.ref.fleetId, battle.location);
+          engageFleets(h, victorId, battle.location);
         }
       }
     }

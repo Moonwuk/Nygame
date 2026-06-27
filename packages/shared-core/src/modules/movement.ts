@@ -107,7 +107,11 @@ function beginLeg(
   };
   fleet.location = null;
   fleet.edge = null;
-  h.schedule(fleet.movement.arrivesAt, 'fleet.arrival', { fleetId: fleet.id, departedAt: h.ctx.now });
+  h.schedule(fleet.movement.arrivesAt, 'fleet.arrival', {
+    fleetId: fleet.id,
+    departedAt: h.ctx.now,
+    arrivesAt: fleet.movement.arrivesAt,
+  });
   // A leg just started: the fleet now occupies the lane (`from`,`to`) over a known
   // window. Announced for EVERY leg (journey start AND each intermediate hop, which
   // `fleet.departed` does not cover) so collision modules can compute lane-crossing
@@ -351,14 +355,26 @@ export const movementModule: GameModule = {
     });
 
     api.on('fleet.arrival', (event, h) => {
-      const { fleetId, departedAt } = event.payload as { fleetId: string; departedAt?: number };
+      const { fleetId, departedAt, arrivesAt } = event.payload as {
+        fleetId: string;
+        departedAt?: number;
+        arrivesAt?: number;
+      };
       const fleet = h.state.fleets[fleetId];
       const mv = fleet?.movement;
       if (!fleet || !mv || fleet.battleId) {
         return; // fleet gone, stale leg, or pulled into a battle → journey ends
       }
-      if (departedAt !== undefined && mv.departedAt !== departedAt) {
-        return; // stale arrival from a leg this fleet has since abandoned (stop/re-route)
+      // Stale arrival from a leg this fleet has since abandoned (stop/re-route). The
+      // departure instant alone is NOT a unique leg id: a stop+reroute handled within
+      // the same instant stamps both legs with the same `departedAt`, so we also match
+      // the scheduled arrival time. (When two legs share BOTH, firing either at that
+      // shared instant yields the correct result for the live movement.)
+      if (
+        (departedAt !== undefined && mv.departedAt !== departedAt) ||
+        (arrivesAt !== undefined && mv.arrivesAt !== arrivesAt)
+      ) {
+        return;
       }
       // Final leg ends at a point ON the lane → park there (no node arrival).
       if (mv.endT !== undefined && mv.endT < 1) {

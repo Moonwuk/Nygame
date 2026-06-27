@@ -560,3 +560,66 @@ describe('combat — lane intercept (crossing ON a lane, GDD §7.4)', () => {
     expect(r.state.fleets.F2).toBeDefined();
   });
 });
+
+describe('combat — survivors rest at full health after a battle (bug fix)', () => {
+  it('clears the combat HP pool on a fleet that survives, so it does not carry a stale pool', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    // A (aggressor, attack 30) beats D (guardian) but takes return-fire (guardian defense 20).
+    const st = baseState(
+      [fleet('A', 'p1', 'P', [['aggressor', 1]]), fleet('D', 'p2', 'P', [['guardian', 1]])],
+      [planet('P', null)],
+    );
+    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    // Mid-battle the survivor carries a partial HP pool...
+    const mid = okAdvance(kernel.advanceTo(started.state, ctx(HOUR)));
+    expect(stackOf(mid.state.fleets.A, 'aggressor')?.hp).toBe(80);
+    // ...but once the battle resolves it is reset to "at rest" (hp undefined = full health).
+    const r = okAdvance(kernel.advanceTo(started.state, ctx(6 * HOUR)));
+    expect(r.state.fleets.A?.battleId).toBe(null);
+    expect(r.state.fleets.D).toBeUndefined(); // loser destroyed
+    expect(stackOf(r.state.fleets.A, 'aggressor')?.count).toBe(1);
+    expect(stackOf(r.state.fleets.A, 'aggressor')?.hp).toBeUndefined();
+  });
+
+  it('deposits a won ground assault as a full-health garrison (clears the landing battle HP)', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    // Shipless lander carries aggressors; the world is defended by a guardian (defense 20),
+    // so the landing takes return-fire, wins, and is deposited as the new garrison.
+    const lander = fleet('A', 'p1', 'P', [], [['aggressor', 2]]);
+    lander.orbit = 'near';
+    const st = baseState([lander], [planet('P', 'p2', 0, 0, [['guardian', 1]])]);
+    const started = okApply(kernel.applyAction(st, assault('A'), ctx(0)));
+    const r = okAdvance(kernel.advanceTo(started.state, ctx(6 * HOUR)));
+
+    expect(r.state.planets.P?.owner).toBe('p1');
+    const g = (r.state.planets.P?.garrison ?? []).find((s) => s.unit === 'aggressor');
+    expect(g?.count).toBe(2);
+    // The resting garrison must be at full health — not the partial battle pool it ended with.
+    expect(g?.hp).toBeUndefined();
+  });
+});
+
+describe('combat — defender-win re-engages a leftover hostile fleet (bug fix)', () => {
+  it('the surviving DEFENDER auto-engages a fleet that was idling at the node', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    const st = baseState(
+      [
+        fleet('D', 'p2', 'P', [['aggressor', 2]]), // strong defender — wins both fights
+        fleet('A1', 'p1', 'P', [['fighter', 1]]), // arrives first, loses to D
+        fleet('A2', 'p1', 'P', [['fighter', 1]]), // can't engage while D is busy → idles
+      ],
+      [planet('P', null)],
+    );
+    const s1 = okApply(kernel.applyAction(st, arrive('A1'), ctx(0))); // A1 vs D starts
+    expect(s1.state.fleets.A1?.battleId).toBeTruthy();
+    expect(s1.state.fleets.D?.battleId).toBeTruthy();
+    const s2 = okApply(kernel.applyAction(s1.state, arrive('A2'), ctx(0)));
+    expect(s2.state.fleets.A2?.battleId).toBeFalsy(); // no free enemy → A2 idles at P
+
+    const r = okAdvance(kernel.advanceTo(s2.state, ctx(12 * HOUR)));
+    expect(r.state.fleets.A1).toBeUndefined(); // first loser gone
+    // A2 was beaten too — which can ONLY happen if the defender re-scanned the node after winning.
+    expect(r.state.fleets.A2).toBeUndefined();
+    expect(r.state.fleets.D?.battleId).toBe(null); // D won both, now free
+  });
+});

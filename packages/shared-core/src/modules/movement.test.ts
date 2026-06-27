@@ -394,6 +394,49 @@ describe('movement — march to a point ON a lane (toEdge), and re-route from a 
     expect(atStale.state.fleets.F?.movement).toBe(null);
   });
 
+  it('ignores a stale arrival that shares departedAt with the live leg (same-instant stop+reroute)', () => {
+    // When a stop+reroute is resolved in the SAME instant, both legs are stamped with
+    // the same `departedAt`, so that field alone cannot tell the abandoned leg from the
+    // live one — the arrival must also match the live leg's `arrivesAt`.
+    const kernel = createKernel([movementModule]);
+    const s = baseState(chainABC(), [fleet('F', 'p1', null, ['scout'])]);
+    // F is on a LIVE leg A→B→C that departed at t0=0; this first leg is slow (arrives 12h).
+    s.fleets.F!.movement = {
+      from: 'A',
+      to: 'B',
+      departedAt: 0,
+      arrivesAt: 12 * HOUR,
+      path: ['C'],
+      destination: 'C',
+    };
+    // Two arrivals both stamped departedAt=0: the LIVE one at 12h and a STALE leftover from
+    // the abandoned leg-1 at 3h. The 3h one must be ignored.
+    s.scheduled = [
+      {
+        id: 'evt:live',
+        at: 12 * HOUR,
+        type: 'fleet.arrival',
+        payload: { fleetId: 'F', departedAt: 0, arrivesAt: 12 * HOUR },
+        seq: 1,
+      },
+      {
+        id: 'evt:stale',
+        at: 3 * HOUR,
+        type: 'fleet.arrival',
+        payload: { fleetId: 'F', departedAt: 0, arrivesAt: 3 * HOUR },
+        seq: 0,
+      },
+    ];
+    s.scheduleSeq = 2;
+
+    const r = okAdvance(kernel.advanceTo(s, ctx(4 * HOUR)));
+    const f = r.state.fleets.F;
+    // The stale 3h arrival is rejected: F is still mid-flight on its real A→B leg, not teleported.
+    expect(f?.location).toBeNull();
+    expect(f?.movement?.to).toBe('B');
+    expect(f?.movement?.arrivesAt).toBe(12 * HOUR);
+  });
+
   it('rejects a point that is not on a real lane', () => {
     const kernel = createKernel([movementModule]);
     const st = baseState(lineABC(), [fleet('F', 'p1', 'A', ['scout'])]);
