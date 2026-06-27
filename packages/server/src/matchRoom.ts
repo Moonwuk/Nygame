@@ -428,6 +428,34 @@ export class MatchRoom {
     return { ok: true, seq: receipt.seq, events };
   }
 
+  /** Advance the world to the current clock and broadcast what changed — the
+   *  offline heartbeat. It fires due scheduled events (arrivals, battles,
+   *  captures) with NO player action, so the world keeps running 24/7 while
+   *  everyone is away. A wakeup driver calls this when `msUntilNextEvent` elapses.
+   *  No-op while the clock is frozen (lobby) or when nothing is due yet. */
+  tick(): void {
+    if (this.waiting) return;
+    const advanced = this.advance(this.clock());
+    if (advanced.ok && advanced.events.length > 0) {
+      this.broadcastState(advanced.events);
+      this.observeEndIfNeeded();
+    }
+  }
+
+  /** Wall-ms until the soonest scheduled event comes due — what an offline wakeup
+   *  driver sleeps for before calling `tick`. `null` when nothing is pending or
+   *  the clock is frozen (lobby): there is nothing to wake for. The world clock
+   *  advances 1:1 with wall-time, so the game-ms gap to the event IS the wall-ms
+   *  to sleep; clamped at 0 for an already-overdue event. */
+  msUntilNextEvent(): number | null {
+    if (this.waiting) return null;
+    const scheduled = this.stateValue.scheduled;
+    if (scheduled.length === 0) return null;
+    let soonest = Infinity;
+    for (const e of scheduled) if (e.at < soonest) soonest = e.at;
+    return Math.max(0, soonest - this.clock());
+  }
+
   /** A full per-player resync snapshot (fog applied), e.g. for a deduped retry.
    *  Resets that player's delta baseline. */
   private stateMessageFor(playerId: PlayerId): ServerMessage {
