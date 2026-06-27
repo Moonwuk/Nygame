@@ -385,7 +385,9 @@ volcanic 20, gas_giant 10, barren 5).
 self-contained `dist/void-dominion.html` (открывается с диска, без сервера).
 
 - **Реальное ядро** в браузере: `createKernel([sector, planet-type, economy, movement,
-combat, construction, army, fleetLaunch])`, тик в реальном времени (скорость ⏸/▶/⏩).
+combat, captureOnArrival, construction, army, victory, fleetLaunch])`, тик в реальном
+времени (скорость ⏸/▶/⏩). Концовка матча — из авторитетного `state.match` (`victoryModule`),
+баннер победы/поражения/ничьи (а не хардкод по узлам).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
   показывает тип и его бонусы (prod/def), `netIncome` учитывает множитель производства.
 - **Прототип-модуль `fleet.launch {planetId}`** (`game.ts`, не в ядре) — поднимает

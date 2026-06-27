@@ -19,6 +19,7 @@ import {
   planetTypeModule,
   constructionModule,
   armyModule,
+  victoryModule,
   type GameData,
   type GameModule,
   type GameState,
@@ -677,6 +678,7 @@ export const MODULES: GameModule[] = [
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,
   armyModule,
+  victoryModule, // terminal match state from authoritative state (domination / elimination / score / timeout)
   fleetLaunchModule,
 ];
 

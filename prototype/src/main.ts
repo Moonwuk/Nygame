@@ -1220,17 +1220,35 @@ function checkFleetClashes() {
   }
 }
 
+/** How the match ended, in plain words (perspective comes from the prefix). */
+function endReasonText(reason: string | undefined): string {
+  switch (reason) {
+    case 'domination':
+      return 'by galactic domination';
+    case 'elimination':
+      return 'by elimination';
+    case 'score':
+      return 'by score limit';
+    case 'timeout':
+      return 'on the clock';
+    default:
+      return 'the match has ended';
+  }
+}
+
+/** Terminal banner read from the AUTHORITATIVE `match` state (the victory module
+ *  in the kernel — local sim and the net server both run it), not a hand-rolled
+ *  guess. Fires once; a draw (no winner on timeout) is its own line. */
 function checkEnd() {
   if (banner) return;
-  const mine = Object.values(s.planets).filter((p) => p.owner === ME).length;
-  const foe = Object.values(s.planets).filter((p) => p.owner === 'p2').length;
-  const myFleets = Object.values(s.fleets).some((f) => f.owner === ME);
-  const foeFleets = Object.values(s.fleets).some((f) => f.owner === 'p2');
-  if (s.planets.CRIMSON?.owner === ME || (foe === 0 && !foeFleets)) {
-    banner = '🏆 VICTORY — the Crimson Hegemony has fallen';
-  } else if (s.planets.HOME?.owner !== ME || (mine === 0 && !myFleets)) {
-    banner = '💀 DEFEAT — your home world is lost';
-  }
+  if (s.match?.status !== 'ended') return;
+  const why = endReasonText(s.match.reason);
+  banner =
+    s.match.winner === ME
+      ? `🏆 VICTORY — ${why}`
+      : s.match.winner === null
+        ? `⚖️ DRAW — ${why}`
+        : `💀 DEFEAT — ${why}`;
 }
 
 // --- rendering ---------------------------------------------------------------
@@ -3632,9 +3650,9 @@ function frame(nowReal: number) {
     checkFleetClashes();
     runAI();
     pumpBuildQueues();
-    checkEnd();
   }
   resolvePendingMerges(); // complete fleet merges whose movers have arrived
+  checkEnd(); // terminal banner from `match` — runs in BOTH modes (net snapshots carry it)
   vision = computeVision(); // fog projection for this frame (always on)
   if (vision) updateMemory(vision.identify); // variant B: remember what we see
   render(nowReal);
