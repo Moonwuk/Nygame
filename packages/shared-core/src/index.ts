@@ -51,6 +51,7 @@ export {
   type BuildFromMapOptions,
 } from './state/buildFromMap';
 export { sectorKindDef, isCapturable, isBuildable, hasOrbit } from './state/sectorKind';
+export { factionStart, type FactionStart } from './state/factionStart';
 export {
   planRoute,
   routeDistance,
@@ -156,6 +157,7 @@ export { planetTypeModule } from './modules/planetType';
 export { constructionModule } from './modules/construction';
 export { technologyModule } from './modules/technology';
 export { factionModule } from './modules/faction';
+export { reanimationModule } from './modules/reanimation';
 export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';

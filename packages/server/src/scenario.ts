@@ -9,6 +9,7 @@ import {
   economyModule,
   factionModule,
   heroModule,
+  reanimationModule,
   movementModule,
   parseGameData,
   planetTypeModule,
@@ -62,6 +63,7 @@ export const DEV_MODULES: GameModule[] = [
   movementModule,
   heroModule, // per-player hero: redeploy, temp public lanes, planet annihilation
   combatModule,
+  reanimationModule, // necromancer signature: raise the fallen on `unit.died`
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   technologyModule,

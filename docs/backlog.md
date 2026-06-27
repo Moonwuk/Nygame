@@ -53,9 +53,12 @@
   гарнизон/постройки) + `uniqueUnits` + `passives` (prod/speed/combat, зеркало tech-effects)
   в схеме; `data/factions.json` наполнен 3 фракциями (vanguard/swarm/necromancer), все ссылки
   на юниты/постройки валидны. Тест `factions.test.ts` (4 кейса) + bundle-валидация.
-- **B2** ⏳ `factionModule`: пассивы фракции через хуки (производство/бой/скорость); тесты.
-- **B3** ⏳ Сборка старта матча по фракции (`startingLoadout` → миры/гарнизоны/ресурсы); тесты.
-- **B4** ⏳ Одна сигнатурная механика (некромант: `reanimate`-событие в бою); тесты.
+- **B2** ✅ `factionModule`: пассивы фракции через хуки `economy.production`/`fleet.speed`/
+  `combat.damage` (зеркало tech-effects); мягкая деградация без модуля. 5 тестов.
+- **B3** ✅ `factionStart(data, faction)` — чистая детерминированная сборка старта из
+  `startingLoadout` (казна/флот/гарнизон/постройки, hp из данных); 4 теста.
+- **B4** ✅ `reanimationModule`: некромант (`raise_fallen`) на `unit.died` поднимает долю
+  павших в живом флоте как `reanimated_drone` (детерминированно, бой сходится); 3 теста.
 
 ## Блок C · Ядро: древо технологий `[core]` `[data]`
 
