@@ -121,7 +121,7 @@ export function createMultiplayerServer(
     room.addPeer(playerId, ws);
     ws.on('message', (data) => {
       const raw = typeof data === 'string' ? data : data.toString('utf8');
-      room.receive(playerId, ws, raw);
+      void room.receive(playerId, ws, raw); // fire-and-forget; ping handling may be async
     });
     ws.on('close', () => {
       sockets.delete(ws);

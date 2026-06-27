@@ -18,6 +18,7 @@ import {
   type ServerMessage,
   type ServerRejectionMessage,
 } from './protocol';
+import { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 
 export interface RoomPeer {
   send(data: string): void;
@@ -60,6 +61,10 @@ export interface MatchRoomOptions {
   teams?: Record<PlayerId, string>;
   /** Ping time-to-live in ms (default 5 minutes). */
   pingTtlMs?: number;
+  /** Where ephemeral match data (pings, …) lives. Defaults to an in-memory store;
+   *  swap a Redis-backed impl in to share it across server processes (the seam from
+   *  docs/tech-stack.md — no room-logic change). */
+  ephemeral?: EphemeralStore;
   /** Observation-only room-event stream for metrics/playtest logging (M0). */
   observe?: (event: RoomObservation) => void;
 }
@@ -132,11 +137,11 @@ export class MatchRoom {
   private readonly lastVisible = new Map<PlayerId, GameState>();
   private readonly teams: Record<PlayerId, string>;
   private readonly pingTtlMs: number;
-  /** Ally pings (ephemeral): tactical markers relayed to the owner + allies, never
-   *  stored in GameState. Keyed by ping id. */
-  private readonly pings = new Map<string, Ping>();
+  /** Ally pings live behind the ephemeral store (in-memory now, Redis later) — never
+   *  in GameState, so they can't trip hashState / replay / the schedule. */
+  private readonly ephemeral: EphemeralStore;
   private pingSeq = 0;
-  /** Per-player placement timestamps, for the rate limit. */
+  /** Per-player placement timestamps, for the (local, single-process) rate limit. */
   private readonly pingTimes = new Map<PlayerId, number[]>();
 
   constructor(options: MatchRoomOptions) {
@@ -164,6 +169,8 @@ export class MatchRoom {
     this.observe = options.observe;
     this.teams = options.teams ?? {};
     this.pingTtlMs = options.pingTtlMs ?? PING_DEFAULT_TTL_MS;
+    // Align store expiry with the room's (lobby-adjusted) clock, not raw wall time.
+    this.ephemeral = options.ephemeral ?? new InMemoryEphemeralStore(() => this.clock());
   }
 
   /** `hashState` of a per-player view, for the desync field (only when enabled). */
@@ -295,7 +302,7 @@ export class MatchRoom {
       ...this.hashField(view.base),
       ...this.lobbyField(),
     });
-    this.sendVisiblePings(playerId, peer); // existing ally markers, on join
+    void this.sendVisiblePings(playerId, peer); // existing ally markers, on join (best-effort)
     // Tell already-present peers the wait ended (waitForPlayers) or the lobby
     // roster changed (manualStart, pre-start), so their lobby screen updates.
     if (flipped || (this.manualStart && !this.started)) this.broadcastState([]);
@@ -331,7 +338,7 @@ export class MatchRoom {
     if (this.syncLobbyClock() || (this.manualStart && !this.started)) this.broadcastState([]);
   }
 
-  receive(playerId: PlayerId, peer: RoomPeer, raw: string): void {
+  async receive(playerId: PlayerId, peer: RoomPeer, raw: string): Promise<void> {
     if (raw.length > this.maxPayloadBytes) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_PAYLOAD_TOO_LARGE' });
       return;
@@ -359,11 +366,11 @@ export class MatchRoom {
       return;
     }
     if (message.type === 'ping.place') {
-      this.handlePingPlace(playerId, peer, message);
+      await this.handlePingPlace(playerId, peer, message);
       return;
     }
     if (message.type === 'ping.clear') {
-      this.handlePingClear(playerId, message.pingId);
+      await this.handlePingClear(playerId, message.pingId);
       return;
     }
     this.submitAction(playerId, message.action, peer);
@@ -550,29 +557,25 @@ export class MatchRoom {
     }
   }
 
-  /** Drop expired pings, telling their viewers (lazy expiry — no world timer). */
-  private sweepPings(now: number): void {
-    for (const ping of [...this.pings.values()]) {
-      if (ping.expiresAt <= now) {
-        this.pings.delete(ping.id);
-        this.relayToViewers(ping, {
-          type: 'ping.removed',
-          matchId: this.id,
-          pingId: ping.id,
-          reason: 'expired',
-        });
-      }
-    }
+  private pingKey(pingId: string): string {
+    return `match:${this.id}:ping:${pingId}`;
+  }
+  private get pingPrefix(): string {
+    return `match:${this.id}:ping:`;
   }
 
-  private handlePingPlace(playerId: PlayerId, peer: RoomPeer, message: ClientPingPlaceMessage): void {
+  private async handlePingPlace(
+    playerId: PlayerId,
+    peer: RoomPeer,
+    message: ClientPingPlaceMessage,
+  ): Promise<void> {
     if (!this.hasPlayer(playerId)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_FORBIDDEN' });
       return;
     }
     const now = this.clock();
-    this.sweepPings(now);
-    // rate limit: at most PING_RATE_MAX placements per window
+    // rate limit (local, single-process): at most PING_RATE_MAX placements per window.
+    // Moves into the ephemeral store as an atomic counter once there's >1 process.
     const recent = (this.pingTimes.get(playerId) ?? []).filter((t) => now - t < PING_RATE_WINDOW_MS);
     if (recent.length >= PING_RATE_MAX) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_RATE' });
@@ -606,12 +609,13 @@ export class MatchRoom {
       }
     }
     // Evict this player's oldest pings down to the cap (never hard-block the UX).
-    const mine = [...this.pings.values()]
+    const mine = (await this.ephemeral.entries<Ping>(this.pingPrefix))
+      .map((e) => e.value)
       .filter((p) => p.owner === playerId)
       .sort((a, b) => a.createdAt - b.createdAt);
     while (mine.length >= PING_MAX_PER_PLAYER) {
       const old = mine.shift()!;
-      this.pings.delete(old.id);
+      await this.ephemeral.delete(this.pingKey(old.id));
       this.relayToViewers(old, {
         type: 'ping.removed',
         matchId: this.id,
@@ -630,18 +634,17 @@ export class MatchRoom {
     if (draft.to) ping.to = draft.to;
     if (draft.payload?.building) ping.payload = { building: draft.payload.building };
     if (draft.label) ping.label = draft.label.slice(0, PING_LABEL_MAX);
-    this.pings.set(ping.id, ping);
+    await this.ephemeral.set(this.pingKey(ping.id), ping, this.pingTtlMs);
     recent.push(now);
     this.pingTimes.set(playerId, recent);
     this.relayToViewers(ping, { type: 'ping.added', matchId: this.id, ping });
   }
 
-  private handlePingClear(playerId: PlayerId, pingId?: string): void {
-    this.sweepPings(this.clock());
-    for (const ping of [...this.pings.values()]) {
+  private async handlePingClear(playerId: PlayerId, pingId?: string): Promise<void> {
+    for (const { value: ping } of await this.ephemeral.entries<Ping>(this.pingPrefix)) {
       if (ping.owner !== playerId) continue;
       if (pingId !== undefined && ping.id !== pingId) continue;
-      this.pings.delete(ping.id);
+      await this.ephemeral.delete(this.pingKey(ping.id));
       this.relayToViewers(ping, {
         type: 'ping.removed',
         matchId: this.id,
@@ -651,10 +654,11 @@ export class MatchRoom {
     }
   }
 
-  /** On join: send the recipient every currently-visible, unexpired ping. */
-  private sendVisiblePings(playerId: PlayerId, peer: RoomPeer): void {
-    this.sweepPings(this.clock());
-    for (const ping of this.pings.values()) {
+  /** On join: send the recipient every currently-visible ping. The store drops
+   *  expired ones lazily, so there is no separate sweep; the client fades a ping on
+   *  its own `expiresAt`. */
+  private async sendVisiblePings(playerId: PlayerId, peer: RoomPeer): Promise<void> {
+    for (const { value: ping } of await this.ephemeral.entries<Ping>(this.pingPrefix)) {
       if (this.canSeePing(playerId, ping)) {
         this.send(peer, { type: 'ping.added', matchId: this.id, ping });
       }

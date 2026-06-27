@@ -11,6 +11,7 @@ export {
   type MultiplayerServerHandle,
   type MultiplayerServerOptions,
 } from './wsServer';
+export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export type {
   ClientActionMessage,
   ClientMessage,

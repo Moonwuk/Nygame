@@ -25,14 +25,21 @@
 - Серверные `ping.added` / `ping.removed` (`reason: cleared|expired`).
 - Коды ошибок `E_PING_KIND|TARGET|UNSEEN|BUILD|RATE`.
 
+Хранилище (`packages/server/src/ephemeral.ts`):
+- Пинги живут за интерфейсом **`EphemeralStore`** (KV + TTL + scan), in-memory-импл сейчас
+  → **Redis одной заменой** на мульти-процессе (см. `docs/tech-stack.md`, триггер №5). Не в
+  `GameState` — не трогают `hashState`/реплеи/расписание.
+
 Комната (`packages/server/src/matchRoom.ts`):
 - `teams` + `areAllied` + `canSeePing` (privacy: враг физически не получает пинг).
-- `handlePingPlace` / `handlePingClear`, relay союзникам, выдача видимых пингов на join.
+- `handlePingPlace` / `handlePingClear`, relay союзникам, выдача видимых пингов на join
+  (читается из стора → поздний джойнер видит уже стоящие метки).
 - **Туман у ставящего:** node-якорь требует, чтобы владелец **видел** этот узел
   (`identifiedNodes`), иначе `E_PING_UNSEEN`; point-якорь `{x,y}` — где угодно.
 - **build-валидация:** реальное здание (`data.buildings`), иначе `E_PING_BUILD`.
-- **Просрочка** (TTL, по умолчанию 5 мин) — ленивый sweep, без таймера мира.
-- **Анти-спам:** rate-limit (4 / 2с → `E_PING_RATE`) + лимит 8/игрок с вытеснением старейших.
+- **Просрочка** (TTL, по умолчанию 5 мин) — ленивая, на стороне стора (как у Redis); клиент
+  гасит метку по её `expiresAt`.
+- **Анти-спам:** rate-limit (4 / 2с → `E_PING_RATE`, локальный) + лимит 8/игрок с вытеснением старейших.
 
 Тесты (`packages/server/src/pings.test.ts`): союзник видит / враг нет; туман
 (`E_PING_UNSEEN`); point-якорь свободен; build принимается; просрочка не реплеится

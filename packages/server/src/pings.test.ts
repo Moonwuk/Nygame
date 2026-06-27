@@ -12,7 +12,9 @@ import { DEV_MODULES, loadShippedData } from './scenario';
 /**
  * Ally pings are an EPHEMERAL server side-channel: relayed to the owner + allies,
  * hidden from enemies, fog-gated for node anchors, and never part of GameState.
- * These tests assert the privacy boundary, the fog gate, expiry and the rate limit.
+ * Storage lives behind the EphemeralStore seam (see ephemeral.test.ts for its TTL).
+ * These tests assert the privacy boundary, the fog gate, store-backed join delivery
+ * and the rate limit.
  */
 
 interface WireMsg {
@@ -70,12 +72,11 @@ function makeRoom(opts: { teams?: Record<string, string>; now?: () => number; tt
 }
 
 const place = (ping: unknown): string => JSON.stringify({ type: 'ping.place', ping });
-
-// mirror of the room's internal PING_RATE_MAX (4) + 1
-const PING_RATE_MAX_PLUS_ONE = 5;
+/** Flush the fire-and-forget store read that addPeer kicks off for join-pings. */
+const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 describe('ally pings', () => {
-  it('relays a ping to the owner + allies but never to enemies', () => {
+  it('relays a ping to the owner + allies but never to enemies', async () => {
     const room = makeRoom({ teams: { green: 'A', blue: 'A', red: 'B' } });
     const g = new Peer();
     const b = new Peer();
@@ -84,24 +85,24 @@ describe('ally pings', () => {
     room.addPeer('blue', b);
     room.addPeer('red', r);
 
-    room.receive('green', g, place({ kind: 'mark', target: { node: 'home_green' } }));
+    await room.receive('green', g, place({ kind: 'mark', target: { node: 'home_green' } }));
 
     expect(g.ofType('ping.added')).toHaveLength(1); // owner sees own
     expect(b.ofType('ping.added')).toHaveLength(1); // ally sees it
     expect(r.ofType('ping.added')).toHaveLength(0); // enemy never sees it
   });
 
-  it('allows free point anchors but fog-gates node anchors (E_PING_UNSEEN)', () => {
+  it('allows free point anchors but fog-gates node anchors (E_PING_UNSEEN)', async () => {
     const room = makeRoom({ teams: { green: 'A', blue: 'A' } });
     const g = new Peer();
     room.addPeer('green', g);
 
     // a point ping anywhere is fine (reveals nothing hidden)
-    room.receive('green', g, place({ kind: 'mark', target: { point: { x: 400, y: 0 } } }));
+    await room.receive('green', g, place({ kind: 'mark', target: { point: { x: 400, y: 0 } } }));
     expect(g.ofType('ping.added')).toHaveLength(1);
 
     // an attack arrow whose `to` is an unseen enemy world is rejected
-    room.receive(
+    await room.receive(
       'green',
       g,
       place({ kind: 'attack', target: { node: 'home_green' }, to: { node: 'home_red' } }),
@@ -109,7 +110,7 @@ describe('ally pings', () => {
     expect(g.ofType('error').some((m) => m.code === 'E_PING_UNSEEN')).toBe(true);
 
     // a build ping for a real building on a seen world is accepted
-    room.receive(
+    await room.receive(
       'green',
       g,
       place({ kind: 'build', target: { node: 'home_green' }, payload: { building: 'mine_t1' } }),
@@ -117,27 +118,25 @@ describe('ally pings', () => {
     expect(g.ofType('ping.added')).toHaveLength(2);
   });
 
-  it('expires pings and does not replay them to a late joiner', () => {
-    let t = 0;
-    const room = makeRoom({ teams: { green: 'A', blue: 'A' }, now: () => t, ttl: 1000 });
+  it('delivers existing pings to a late-joining ally via the store', async () => {
+    const room = makeRoom({ teams: { green: 'A', blue: 'A' } });
     const g = new Peer();
     room.addPeer('green', g);
-    room.receive('green', g, place({ kind: 'mark', target: { node: 'home_green' } }));
-    expect(g.ofType('ping.added')).toHaveLength(1);
+    await room.receive('green', g, place({ kind: 'mark', target: { node: 'home_green' } }));
 
-    t = 2000; // past the TTL
+    // blue connects AFTER the ping was placed → gets it on join, read from the store
     const b = new Peer();
-    room.addPeer('blue', b); // join triggers a sweep first
-    expect(b.ofType('ping.added')).toHaveLength(0); // the expired ping is not sent
-    expect(g.ofType('ping.removed').some((m) => m.pingId)).toBe(true); // owner told it expired
+    room.addPeer('blue', b);
+    await flush();
+    expect(b.ofType('ping.added')).toHaveLength(1);
   });
 
-  it('rate-limits a flood of placements', () => {
+  it('rate-limits a flood of placements', async () => {
     const room = makeRoom({ teams: { green: 'A' } });
     const g = new Peer();
     room.addPeer('green', g);
-    for (let i = 0; i < PING_RATE_MAX_PLUS_ONE; i++) {
-      room.receive('green', g, place({ kind: 'mark', target: { point: { x: i, y: 0 } } }));
+    for (let i = 0; i < 5; i++) {
+      await room.receive('green', g, place({ kind: 'mark', target: { point: { x: i, y: 0 } } }));
     }
     expect(g.ofType('error').some((m) => m.code === 'E_PING_RATE')).toBe(true);
   });
