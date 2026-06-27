@@ -117,6 +117,17 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 гарнизонов — суточный дрейн из казны (clamp ≥0). **Бомбардируемый мир не
 производит** (`isBombarded`). Действий нет.
 
+### market (`market`) — сессионная биржа ресурсов
+
+Публичный per-match ордербук `GameState.market` (не путать с мета-аукционом из
+`economy-roadmap.md`). Действия: **`market.list {resource, amount, price}`** —
+выставить ресурс (эскроу: `amount` списывается из казны в ордер); **`market.buy
+{orderId, amount}`** — купить (частично) за деньги (`credits`); **`market.cancel
+{orderId}`** — продавец забирает непроданный остаток. **Комиссия 15% сжигается**
+(сток против инфляции): покупатель платит `amount×price`, продавец получает 85%.
+Коды: `E_BAD_PAYLOAD, E_UNKNOWN_RESOURCE, E_FORBIDDEN, E_INSUFFICIENT, E_NO_ORDER,
+E_OWN_ORDER, E_BAD_AMOUNT`. Публичен (туман не режет); в `delta` META.
+
 ### movement (`movement`)
 
 **Непрерывная позиция (как у Bytro).** Флот — это уже не «узел или в пути»: третье
@@ -309,7 +320,8 @@ Per-player **сущность** (`GameState.heroes[playerId]: {owner, location, 
 
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
-- **resources:** `credits, metal, biomass, dark_matter, artifacts, premium_shard`.
+- **resources:** `credits` (деньги), `metal`, `food`, `energy`, `microelectronics` —
+  внутриматчевый набор из 5. Торгуются на сессионной бирже (модуль `market`).
 - **units** (схема `UnitDef`): `domain('space'|'ground')`, `stats{attack, defense,
 speed, hp, range, cargoCapacity, cargoSize, aaDamage}` (+ любые доп. числа),
   `line, traits, abilities, cost, buildTimeHours, upkeep`, `superUnit`+`scoreValue`

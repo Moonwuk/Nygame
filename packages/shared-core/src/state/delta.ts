@@ -15,6 +15,8 @@ const META_KEYS = [
   'tempLanes',
   'topology',
   'heroSeq',
+  'market',
+  'marketSeq',
 ] as const;
 
 /**

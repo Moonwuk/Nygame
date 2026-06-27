@@ -8,6 +8,7 @@ import {
   createKernel,
   economyModule,
   heroModule,
+  marketModule,
   movementModule,
   parseGameData,
   planetTypeModule,
@@ -64,6 +65,7 @@ export const DEV_MODULES: GameModule[] = [
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   technologyModule,
+  marketModule, // session resource bourse: list / buy (15% burn) / cancel
   armyModule,
   victoryModule,
   visibilityModule, // fog-of-war memory (variant B): records last-seen worlds
