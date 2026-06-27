@@ -80,6 +80,10 @@ const observe = (ev: RoomObservation): void => {
 
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8788);
+// Playtest fast-forward: wall→game clock multiplier. TIME_SCALE=100 ⇒ a real minute
+// is ~1.7 game-hours, so fleets/builds/economy resolve on-screen instead of over real
+// hours. 1 (default) = real-time. Compresses the clock itself, not just durations.
+const TIME_SCALE = Math.max(1, Number(process.env.TIME_SCALE ?? 1) || 1);
 
 // Serve the built prototype HTML at `/` so a peer just opens `http://host:port/`
 // (no file transfer; the connect overlay auto-fills the same-origin ws:// URL).
@@ -148,6 +152,7 @@ const room = new MatchRoom({
   emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
   observe, // M0: log every room event to JSONL + count for the on-exit summary
   initialReceipts, // rehydrated idempotency (deduped action stays deduped after restart)
+  timeScale: TIME_SCALE, // playtest fast-forward (1 = real-time)
 });
 
 // Snapshot the world after changes, debounced so a burst of actions is one write.
@@ -246,6 +251,9 @@ const lines = [
   DATABASE_URL
     ? `  store  : Postgres — durable${restored ? ' (resumed a saved match)' : ''}`
     : '  store  : in-memory — a restart loses the match (set DATABASE_URL for durability)',
+  TIME_SCALE > 1
+    ? `  time   : ×${TIME_SCALE} fast-forward (1 real min ≈ ${(TIME_SCALE / 60).toFixed(1)} game-hours) — playtest mode`
+    : '  time   : ×1 real-time (set TIME_SCALE=100 to fast-forward a playtest)',
   '',
   '  Two-person test:',
   `   • You:    open ${localHttp}/  → Connect → Azure (p1)`,

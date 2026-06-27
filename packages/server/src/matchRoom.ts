@@ -79,6 +79,11 @@ export interface MatchRoomOptions {
    *  genuine retry after backoff still lands). Defaults: 20 per 1000ms. */
   actionRateMax?: number;
   actionRateWindowMs?: number;
+  /** Wall-clock → game-clock multiplier for the running match clock (NOT the kernel's
+   *  duration `config.timeScale`): >1 fast-forwards the whole world for playtests, so a
+   *  real minute becomes many game-hours and fleets/builds/economy resolve on-screen.
+   *  1 = real-time. Requires a lobby gate (manualStart / waitForPlayers). */
+  timeScale?: number;
 }
 
 export interface ActionReceipt {
@@ -175,6 +180,8 @@ export class MatchRoom {
   private readonly actionRateWindowMs: number;
   /** Per-player submit timestamps, for the action rate limit. */
   private readonly actionTimes = new Map<PlayerId, number[]>();
+  /** Wall→game clock multiplier (1 = real-time; >1 fast-forwards the match). */
+  private readonly timeScale: number;
 
   constructor(options: MatchRoomOptions) {
     this.id = options.id;
@@ -202,6 +209,7 @@ export class MatchRoom {
     this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
     this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
     this.actionRateWindowMs = options.actionRateWindowMs ?? ACTION_RATE_WINDOW_MS_DEFAULT;
+    this.timeScale = options.timeScale && options.timeScale > 0 ? options.timeScale : 1;
     if (options.initialReceipts) {
       // Rehydration must respect the cap — seed only the most recent `maxReceipts`.
       for (const r of options.initialReceipts.slice(-this.maxReceipts)) {
@@ -269,9 +277,8 @@ export class MatchRoom {
    *  manualStart) is configured, in which case it only accrues once running. */
   private clock(): number {
     if (!this.waitFor && !this.manualStart) return this.now();
-    return (
-      this.lobbyAccrued + (this.lobbyRunningSince === null ? 0 : this.now() - this.lobbyRunningSince)
-    );
+    const elapsed = this.lobbyRunningSince === null ? 0 : this.now() - this.lobbyRunningSince;
+    return this.lobbyAccrued + elapsed * this.timeScale;
   }
 
   /** Re-evaluate running/paused after a connection change: freeze or resume the
@@ -285,7 +292,7 @@ export class MatchRoom {
       return true;
     }
     if (!running && this.lobbyRunningSince !== null) {
-      this.lobbyAccrued += this.now() - this.lobbyRunningSince; // freeze
+      this.lobbyAccrued += (this.now() - this.lobbyRunningSince) * this.timeScale; // freeze
       this.lobbyRunningSince = null;
       this.observe?.({ kind: 'lobby', waiting: true });
       return true;
@@ -510,7 +517,8 @@ export class MatchRoom {
     if (scheduled.length === 0) return null;
     let soonest = Infinity;
     for (const e of scheduled) if (e.at < soonest) soonest = e.at;
-    return Math.max(0, soonest - this.clock());
+    // game-ms gap → wall-ms to sleep (the clock runs `timeScale`× faster than wall-time).
+    return Math.max(0, (soonest - this.clock()) / this.timeScale);
   }
 
   /** A full per-player resync snapshot (fog applied), e.g. for a deduped retry.

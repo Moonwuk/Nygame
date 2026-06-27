@@ -715,3 +715,46 @@ describe('MatchRoom — DoS bounds (receipts cap + action rate limit)', () => {
     expect(r.state.players.p1?.name).toBe('Three');
   });
 });
+
+// Playtest fast-forward: the running clock advances timeScale× faster than wall-time,
+// so a real minute is many game-hours and fleets/builds/economy resolve on-screen.
+describe('MatchRoom — timeScale (playtest fast-forward clock)', () => {
+  it('runs the world clock timeScale× faster than wall-time after Start', () => {
+    let real = 1000;
+    const r = new MatchRoom({
+      id: 'ts',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => real,
+      manualStart: true,
+      timeScale: 100,
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    r.start('p1'); // host starts the clock at wall=1000
+    real = 1050; // 50 real-ms later → 50 × 100 = 5000 game-ms
+    r.submitAction('p1', action('a1', 'p1', 'Go'), p1);
+    expect(r.state.time).toBe(5000);
+    expect((p1.messages.at(-1) as { serverTime: number }).serverTime).toBe(5000);
+  });
+
+  it('shrinks the offline-wakeup delay by timeScale (event fires sooner in wall-time)', () => {
+    const real = 1000;
+    const r = new MatchRoom({
+      id: 'ts2',
+      initialState: testState(),
+      kernel: createKernel([armModule]),
+      data: testData(),
+      now: () => real,
+      manualStart: true,
+      timeScale: 100,
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    r.start('p1');
+    r.submitAction('p1', { id: 'arm1', type: 'arm', playerId: 'p1', issuedAt: 1, payload: {} }, p1);
+    // boom is scheduled at game-time 1000; at ×100 that is 1000/100 = 10 wall-ms away
+    expect(r.msUntilNextEvent()).toBe(10);
+  });
+});
