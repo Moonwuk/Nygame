@@ -13,6 +13,7 @@ import {
   isBombarded,
   economyModule,
   movementModule,
+  heroModule,
   combatModule,
   captureOnArrivalModule,
   sectorModule,
@@ -23,6 +24,7 @@ import {
   type GameData,
   type GameModule,
   type GameState,
+  type Hero,
   type Planet,
   type Fleet,
   type UnitStack,
@@ -88,6 +90,18 @@ export const data: GameData = parseGameData({
       cost: { metal: 110, credits: 30 },
       buildTimeHours: 4,
       upkeep: { credits: 3 },
+    },
+    // The player's projection hero — cruiser-tier guns but TRIPLE the hull, and the
+    // +5% attack/defense aura it grants its fleet (heroModule). Seeded, not built.
+    hero: {
+      faction: 'blue',
+      stats: { attack: 16, defense: 14, speed: 40, hp: 180 },
+      line: 'front',
+      traits: ['hero'],
+      signature: 6, // a flagship — loud on radar
+      cost: { metal: 400, credits: 200 },
+      buildTimeHours: 10,
+      upkeep: { credits: 8 },
     },
   },
   factions: {},
@@ -619,14 +633,22 @@ export function newGame(): GameState {
       'p1',
       'HOME',
       [
+        ['hero', 1], // the player's projection — flagship of the home fleet
         ['cruiser', 2],
         ['scout', 1],
       ],
       [['marine', 3]],
     ),
-    'red-1': fleet('red-1', 'p2', 'CRIMSON', [['cruiser', 2]], [['marine', 3]]),
+    'red-1': fleet('red-1', 'p2', 'CRIMSON', [['hero', 1], ['cruiser', 2]], [['marine', 3]]),
   };
-  return { ...base, players, planets, fleets };
+  // Each player's first hero is a projection of themselves, named by their nick
+  // (a sensible default here; the net server overrides with the login nick). It
+  // rides in the home fleet and respawns at the home world.
+  const heroes: Record<string, Hero> = {
+    p1: { owner: 'p1', name: players.p1!.name, location: 'HOME', cooldowns: {}, alive: true },
+    p2: { owner: 'p2', name: players.p2!.name, location: 'CRIMSON', cooldowns: {}, alive: true },
+  };
+  return { ...base, players, planets, fleets, heroes };
 }
 
 /** Net per-hour income for a player: production from owned, un-bombarded worlds
@@ -674,6 +696,7 @@ export const MODULES: GameModule[] = [
   planetTypeModule,
   economyModule,
   movementModule,
+  heroModule, // projection hero: fleet combat aura (+5%) + death/respawn
   combatModule,
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,

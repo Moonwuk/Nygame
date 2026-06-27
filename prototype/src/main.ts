@@ -92,6 +92,7 @@ const UNIT_ICON: Record<string, string> = {
   cruiser: '▲',
   scout: '◌',
   siege: '✦',
+  hero: '♔', // the player's projection — a crowned flagship
 };
 let ME = 'p1';
 type PlanetTab = 'ground' | 'ships' | 'buildings';
@@ -2494,6 +2495,12 @@ function panelHtml(): string {
         `${nShips} ships · ${nTr} troops · orbit ${orbit}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
       );
       h += `<div class="pstats"><span>✦ ${shipList}</span></div><div class="row dim">Carrying: ${trList}</div>`;
+
+      // The player's projection hero rides here → name it and flag its fleet aura.
+      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
+        const heroName = s.heroes?.[f.owner]?.name ?? s.players[f.owner]?.name ?? f.owner;
+        h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">— projection · +5% attack/defense to this fleet</span></div>`;
+      }
 
       if (f.movement) {
         // total travel-time estimate to the final destination (next-hop ETA from
