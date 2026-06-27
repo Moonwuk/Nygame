@@ -116,10 +116,20 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
 
-#side{position:fixed;left:58px;right:14px;bottom:0;top:auto;width:auto;max-height:34vh;overflow:auto;z-index:20;
-  display:none;padding:13px 15px;touch-action:pan-y;background:var(--glass);border:1px solid var(--line-hi);
+#side{position:fixed;left:58px;right:14px;bottom:0;top:auto;width:auto;max-height:34vh;overflow:hidden;z-index:20;
+  display:none;align-items:stretch;padding:0;background:var(--glass);border:1px solid var(--line-hi);
   box-shadow:0 0 26px rgba(0,0,0,.6),0 0 0 1px rgba(53,214,230,.08),inset 0 0 30px rgba(53,214,230,.04);
   clip-path:polygon(0 9px,9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%);}
+/* scrollable content (left) + a dossier pane glued to the right edge, filling the
+   panel's otherwise-empty space. The pane shows the hovered object's description. */
+.pscroll{flex:1 1 auto;min-width:0;overflow:auto;padding:13px 15px;touch-action:pan-y;}
+.pdesc{flex:0 0 236px;overflow:auto;padding:14px 15px;border-left:1px solid var(--line-hi);
+  background:rgba(53,214,230,.035);}
+.pdesc .pd-title{font-size:14px;font-weight:700;letter-spacing:1.5px;color:#eafffb;margin-bottom:9px;
+  padding-bottom:7px;border-bottom:1px solid var(--line);}
+.pdesc .pd-body{font-size:12px;line-height:1.65;color:#9fc9c4;}
+.pdesc .pd-empty{font-size:11px;line-height:1.6;color:var(--dim);font-style:italic;}
+.pdesc .hl{font-style:normal;font-weight:700;color:var(--amber);text-shadow:0 0 7px rgba(255,180,58,.35);}
 #side .sec{margin:14px 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--grn-dim);
   border-bottom:1px solid var(--line);padding-bottom:4px;}
 #side .row{margin:4px 0;}
@@ -142,7 +152,12 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .ptab.on{color:var(--cyan);border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 12px rgba(53,214,230,.2);}
 /* wrap (don't overflow) so a trailing Select/Upgrade button never laps onto the
    neighbouring column when the panel is laid out in narrow multi-column blocks */
-.asset-row{display:flex;align-items:center;gap:8px;margin:5px 0;min-height:24px;flex-wrap:wrap;}
+/* thin outline so each menu object reads as one discrete, selectable card; the
+   border warms up on hover, echoing the dossier that lights up on the right. */
+.asset-row{display:flex;align-items:center;gap:8px;margin:5px 0;min-height:24px;flex-wrap:wrap;
+  padding:5px 8px;border:1px solid var(--line);border-radius:2px;background:rgba(53,214,230,.02);
+  transition:border-color .12s ease,background .12s ease;}
+.asset-row:hover{border-color:var(--cyan-dim);background:rgba(53,214,230,.07);}
 .asset-row b{flex:1 1 auto;min-width:96px;font-size:12px;}
 .asset-row .b{margin-left:auto;}
 .bicon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:7px;
@@ -265,6 +280,9 @@ body.sheet-open #log{display:none;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
+  /* phones have no hover and no room — drop the dossier pane, content fills width */
+  .pdesc{display:none;}
+  .pscroll{padding:13px 14px;}
   /* phones: no horizontal columns — a single readable top-to-bottom stack */
   .pcols{column-width:auto;column-count:1;column-rule:none;}
   .pcols .block{margin-bottom:0;}

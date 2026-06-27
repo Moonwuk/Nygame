@@ -91,12 +91,18 @@ export const data: GameData = parseGameData({
   },
   factions: {},
   buildings: {
+    // metal mine — the economy's backbone; each level digs into denser ore and
+    // lifts output by +50% (12 → 18 → 27 metal/h), at a steeper cost in kind.
     mine: {
       name: 'Metal Mine',
       cost: { metal: 80 },
       buildTimeHours: 3,
       produces: { metal: 12 },
       hp: 20,
+      upgrades: [
+        { cost: { metal: 140 }, buildTimeHours: 4, produces: { metal: 18 }, hp: 26 },
+        { cost: { metal: 230, credits: 50 }, buildTimeHours: 5, produces: { metal: 27 }, hp: 32 },
+      ],
     },
     refinery: {
       name: 'Credit Refinery',
