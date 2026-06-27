@@ -67,11 +67,58 @@ export const UnitDefSchema = z.object({
   radarRange: z.number().nonnegative().default(0),
 });
 
+/** One stack in a faction's starting loadout (a unit id + how many). */
+export const StartingStackSchema = z.object({
+  unit: z.string(),
+  count: z.number().int().positive(),
+});
+
+/** What a player of this faction begins a match with (consumed by the match-start
+ *  assembly, brick B3). All fields default to empty so a faction can describe only
+ *  what differs. */
+export const FactionLoadoutSchema = z.object({
+  /** Starting treasury. */
+  resources: ResourceBagSchema.default({}),
+  /** Ships in the starting fleet. */
+  fleet: z.array(StartingStackSchema).default([]),
+  /** Ground units in the homeworld garrison. */
+  garrison: z.array(StartingStackSchema).default([]),
+  /** Buildings already standing on the homeworld (ids → `data.buildings`). */
+  homeBuildings: z.array(z.string()).default([]),
+});
+
+/** Passive faction bonuses — mirrors `TechnologyEffects` so the faction module
+ *  (brick B2) can apply them through the same `economy.production` / `fleet.speed` /
+ *  `combat.damage` hooks. Absent module → no effect (graceful degradation). */
+export const FactionPassivesSchema = z.object({
+  /** Multiplier on owned planetary production, e.g. 0.15 = +15%. */
+  productionBonus: z.number().default(0),
+  /** Multiplier on owned fleet movement speed. */
+  fleetSpeedBonus: z.number().default(0),
+  /** Multiplier on outgoing combat damage. */
+  combatDamageBonus: z.number().default(0),
+});
+
 export const FactionDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   traits: z.array(z.string()).default([]),
   abilities: z.array(z.string()).default([]),
+  /** Unit ids this faction can field that others cannot (its signature roster). */
+  uniqueUnits: z.array(z.string()).default([]),
+  /** Match-start loadout (resources / fleet / garrison / homeworld buildings). */
+  startingLoadout: FactionLoadoutSchema.default({
+    resources: {},
+    fleet: [],
+    garrison: [],
+    homeBuildings: [],
+  }),
+  /** Always-on faction bonuses, applied by the faction module via hooks. */
+  passives: FactionPassivesSchema.default({
+    productionBonus: 0,
+    fleetSpeedBonus: 0,
+    combatDamageBonus: 0,
+  }),
 });
 
 /** Per-level stats of a building (level 2..N). Level 1 uses the base fields. */
@@ -217,6 +264,9 @@ export type ResourceBag = z.infer<typeof ResourceBagSchema>;
 export type UnitStats = z.infer<typeof UnitStatsSchema>;
 export type UnitDef = z.infer<typeof UnitDefSchema>;
 export type FactionDef = z.infer<typeof FactionDefSchema>;
+export type FactionLoadout = z.infer<typeof FactionLoadoutSchema>;
+export type FactionPassives = z.infer<typeof FactionPassivesSchema>;
+export type StartingStack = z.infer<typeof StartingStackSchema>;
 export type BuildingDef = z.infer<typeof BuildingDefSchema>;
 export type BuildingLevel = z.infer<typeof BuildingLevelSchema>;
 export type EffectRule = z.infer<typeof EffectRuleSchema>;

@@ -1,20 +1,54 @@
 {
   "vanguard": {
     "name": "Vanguard Coalition",
-    "description": "The last organized remnant of humanity, holding the line with disciplined fleets.",
-    "traits": [],
-    "abilities": []
+    "description": "The last organized remnant of humanity, holding the line with disciplined fleets and hardened doctrine.",
+    "traits": ["disciplined"],
+    "abilities": [],
+    "uniqueUnits": ["siege_lance"],
+    "startingLoadout": {
+      "resources": { "credits": 300, "metal": 300 },
+      "fleet": [
+        { "unit": "cruiser", "count": 2 },
+        { "unit": "scout_drone", "count": 1 }
+      ],
+      "garrison": [{ "unit": "militia", "count": 2 }],
+      "homeBuildings": ["mine_t1"]
+    },
+    "passives": { "combatDamageBonus": 0.1 }
   },
   "swarm": {
     "name": "The Swarm",
-    "description": "A ravenous bio-collective that converts captured worlds into biomass.",
+    "description": "A ravenous bio-collective that converts captured worlds into biomass and breeds infected hulls.",
     "traits": ["consume_biomass"],
-    "abilities": []
+    "abilities": [],
+    "uniqueUnits": ["infected_cruiser"],
+    "startingLoadout": {
+      "resources": { "credits": 200, "metal": 200, "biomass": 120 },
+      "fleet": [
+        { "unit": "infected_cruiser", "count": 2 },
+        { "unit": "scout_drone", "count": 1 }
+      ],
+      "garrison": [{ "unit": "militia", "count": 2 }],
+      "homeBuildings": ["biomass_pit"]
+    },
+    "passives": { "productionBonus": 0.15 }
   },
   "necromancer": {
     "name": "Void Necromancers",
-    "description": "Cult fleets that raise the fallen from the wreckage of battle.",
+    "description": "Cult fleets that raise the fallen from the wreckage of battle and drive them on with dark resolve.",
     "traits": [],
-    "abilities": ["raise_fallen"]
+    "abilities": ["raise_fallen"],
+    "uniqueUnits": ["reanimated_drone"],
+    "startingLoadout": {
+      "resources": { "credits": 250, "metal": 250, "dark_matter": 60 },
+      "fleet": [
+        { "unit": "cruiser", "count": 1 },
+        { "unit": "reanimated_drone", "count": 2 },
+        { "unit": "scout_drone", "count": 1 }
+      ],
+      "garrison": [{ "unit": "militia", "count": 2 }],
+      "homeBuildings": ["mine_t1"]
+    },
+    "passives": { "fleetSpeedBonus": 0.1, "combatDamageBonus": 0.05 }
   }
 }
