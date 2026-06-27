@@ -111,9 +111,16 @@ describe('visibleState (fog of war as a security boundary)', () => {
     expect(view.players.p2?.name).toBe('p2'); // identity kept (scoreboard)
   });
 
-  it('drops the schedule and unseen battles (no future-intent leak)', () => {
-    const view = visibleState(scenario(), 'p1', data);
-    expect(view.scheduled).toEqual([]);
+  it('keeps the viewer own pending schedule, drops enemy timers (no future-intent leak)', () => {
+    const state = scenario();
+    // own construction (A is p1's) survives; an enemy build (C is p2's) and an
+    // owner-less event are stripped — so a player sees their own build queue, not the foe's.
+    state.scheduled = [
+      { id: 'own', at: 10, type: 'construction.complete', payload: { planetId: 'A', building: 'mine' }, seq: 0 },
+      { id: 'enemy', at: 20, type: 'construction.complete', payload: { planetId: 'C', building: 'mine' }, seq: 1 },
+      { id: 'none', at: 5, type: 'fleet.arrived', payload: {}, seq: 2 },
+    ];
+    expect(visibleState(state, 'p1', data).scheduled.map((e) => e.id)).toEqual(['own']);
   });
 
   it('serialized view never contains hidden data (the real anti-leak test)', () => {

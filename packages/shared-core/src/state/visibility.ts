@@ -1,6 +1,18 @@
 import { buildingLevel, type GameData } from '../data/schemas';
 import { deepClone } from '../util/clone';
-import type { Fleet, GameState, PlanetId, PlayerId } from './gameState';
+import type { Fleet, GameState, PlanetId, PlayerId, ScheduledEvent } from './gameState';
+
+/** A scheduled event belongs to a player when it clearly references their own planet,
+ *  fleet, or is owner-tagged for them. Used to keep a player's OWN pending construction /
+ *  production / arrivals in their view (the client renders the build queue + ETAs from
+ *  them) while every enemy timer stays hidden. */
+function scheduledOwnedBy(event: ScheduledEvent, viewerId: PlayerId, state: GameState): boolean {
+  const p = (event.payload ?? {}) as Record<string, unknown>;
+  if (p.owner === viewerId) return true;
+  if (typeof p.planetId === 'string' && state.planets[p.planetId]?.owner === viewerId) return true;
+  if (typeof p.fleetId === 'string' && state.fleets[p.fleetId]?.owner === viewerId) return true;
+  return false;
+}
 
 /**
  * Fog of war as a SECURITY boundary (docs/modulesystem.md, deep-technical-roadmap
@@ -218,12 +230,15 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   signatures.sort((a, b) => (a.location < b.location ? -1 : a.location > b.location ? 1 : 0));
   view.signatures = signatures;
 
-  // Battles you cannot see, and the whole schedule (it leaks future events).
+  // Battles you cannot see, and enemy timers from the schedule (it leaks future
+  // events) — but KEEP the viewer's own pending events: their construction/production/
+  // arrivals are their own information, and the client renders the build queue + ETAs
+  // from them. (A blanket strip is why the build queue showed nothing in net mode.)
   for (const id of Object.keys(view.battles)) {
     const battle = view.battles[id];
     if (battle && !identify.has(battle.location)) delete view.battles[id];
   }
-  view.scheduled = [];
+  view.scheduled = view.scheduled.filter((e) => scheduledOwnedBy(e, viewerId, state));
 
   return view;
 }
