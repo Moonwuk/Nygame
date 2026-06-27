@@ -70,6 +70,15 @@ export interface MatchRoomOptions {
   /** Seed the idempotency receipts (e.g. rehydrated from a ReceiptStore on restart),
    *  so an action deduped before a crash stays deduped after it. */
   initialReceipts?: ActionReceipt[];
+  /** Cap on retained idempotency receipts; past it the oldest are evicted (FIFO).
+   *  Bounds memory for a long match — a retried action older than the last N is no
+   *  longer deduped (idempotency is needed for minutes, not forever). Default 10000. */
+  maxReceipts?: number;
+  /** Per-player action rate limit: at most `actionRateMax` submits per
+   *  `actionRateWindowMs`. A flood past it is rejected transiently (no receipt — a
+   *  genuine retry after backoff still lands). Defaults: 20 per 1000ms. */
+  actionRateMax?: number;
+  actionRateWindowMs?: number;
 }
 
 export interface ActionReceipt {
@@ -117,6 +126,11 @@ const PING_RATE_WINDOW_MS = 2_000;
 const PING_RATE_MAX = 4;
 const PING_LABEL_MAX = 40;
 
+/** Idempotency-receipt + action-rate bounds (DoS / memory; audit F-03/F-04). */
+const RECEIPTS_MAX_DEFAULT = 10_000;
+const ACTION_RATE_MAX_DEFAULT = 20;
+const ACTION_RATE_WINDOW_MS_DEFAULT = 1_000;
+
 export class MatchRoom {
   readonly id: string;
 
@@ -154,6 +168,13 @@ export class MatchRoom {
   private pingSeq = 0;
   /** Per-player placement timestamps, for the (local, single-process) rate limit. */
   private readonly pingTimes = new Map<PlayerId, number[]>();
+  /** Cap on retained idempotency receipts (FIFO eviction past it — bounds memory). */
+  private readonly maxReceipts: number;
+  /** Per-player action rate limit (local, single-process; → ephemeral store at >1 proc). */
+  private readonly actionRateMax: number;
+  private readonly actionRateWindowMs: number;
+  /** Per-player submit timestamps, for the action rate limit. */
+  private readonly actionTimes = new Map<PlayerId, number[]>();
 
   constructor(options: MatchRoomOptions) {
     this.id = options.id;
@@ -178,8 +199,14 @@ export class MatchRoom {
     this.emitStateHash = options.emitStateHash ?? false;
     this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
     this.observe = options.observe;
+    this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
+    this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
+    this.actionRateWindowMs = options.actionRateWindowMs ?? ACTION_RATE_WINDOW_MS_DEFAULT;
     if (options.initialReceipts) {
-      for (const r of options.initialReceipts) this.receipts.set(r.actionId, r);
+      // Rehydration must respect the cap — seed only the most recent `maxReceipts`.
+      for (const r of options.initialReceipts.slice(-this.maxReceipts)) {
+        this.receipts.set(r.actionId, r);
+      }
     }
     this.teams = options.teams ?? {};
     this.pingTtlMs = options.pingTtlMs ?? PING_DEFAULT_TTL_MS;
@@ -340,6 +367,7 @@ export class MatchRoom {
     playerPeers.delete(peer);
     if (playerPeers.size === 0) {
       this.peers.delete(playerId);
+      this.lastVisible.delete(playerId); // reclaim the per-player snapshot — no leak after a leave
       this.observe?.({ kind: 'leave', playerId });
       // Manual-start lobby: if the host leaves before starting, hand the Start
       // button to whoever's still here (insertion order) so the lobby isn't stuck.
@@ -399,6 +427,28 @@ export class MatchRoom {
       }
       return { ok: cached.ok, seq: cached.seq, events: [], code: cached.code };
     }
+
+    // Rate limit (F-03): cap submits per player per window. A flood past the cap is
+    // rejected TRANSIENTLY — no receipt is recorded, so a genuine retry after backoff
+    // still lands (idempotency must never turn a rate-limit into a permanent reject).
+    const rateNow = this.now();
+    const recent = (this.actionTimes.get(playerId) ?? []).filter(
+      (t) => rateNow - t < this.actionRateWindowMs,
+    );
+    if (recent.length >= this.actionRateMax) {
+      if (peer) {
+        this.send(peer, {
+          type: 'rejection',
+          matchId: this.id,
+          seq: this.seq,
+          actionId: action.id,
+          code: 'E_RATE_LIMIT',
+        });
+      }
+      return { ok: false, seq: this.seq, events: [], code: 'E_RATE_LIMIT' };
+    }
+    recent.push(rateNow);
+    this.actionTimes.set(playerId, recent);
 
     if (action.playerId !== playerId || !this.hasPlayer(playerId)) {
       const receipt = this.recordReceipt(action, playerId, false, 'E_FORBIDDEN');
@@ -506,6 +556,13 @@ export class MatchRoom {
         ? { actionId: action.id, playerId, seq: this.seq, ok }
         : { actionId: action.id, playerId, seq: this.seq, ok, code };
     this.receipts.set(action.id, receipt);
+    // Bound memory (F-04): idempotency is needed for the retry window (minutes), not
+    // forever — evict the oldest receipts past the cap (Map preserves insertion order).
+    while (this.receipts.size > this.maxReceipts) {
+      const oldest = this.receipts.keys().next().value;
+      if (oldest === undefined) break;
+      this.receipts.delete(oldest);
+    }
     this.observe?.({
       kind: 'action',
       actionId: action.id,

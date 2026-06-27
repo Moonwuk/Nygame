@@ -648,3 +648,70 @@ describe('MatchRoom — offline scheduler (tick / msUntilNextEvent)', () => {
     expect(r.state.players.p1?.name).toBe('One'); // tick is a no-op while frozen
   });
 });
+
+// F-03 / F-04 (audit): the in-memory receipts map must not grow without bound, and a
+// flood of actions must be rate-limited — without breaking idempotency (a rate-limited
+// action keeps no receipt, so a genuine retry after backoff still lands).
+describe('MatchRoom — DoS bounds (receipts cap + action rate limit)', () => {
+  it('evicts the oldest receipt past the cap — a retry of an evicted action re-applies', () => {
+    const r = new MatchRoom({
+      id: 'cap',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => 10,
+      maxReceipts: 2, // tiny cap to force eviction
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+
+    const a1 = r.submitAction('p1', action('a1', 'p1', 'A1'), p1);
+    r.submitAction('p1', action('a2', 'p1', 'A2'), p1);
+    r.submitAction('p1', action('a3', 'p1', 'A3'), p1); // size 3 > 2 → evicts a1
+    expect(a1.seq).toBe(1);
+
+    // a3 is still within the cap → its retry is served from the receipt (no re-apply)
+    const a3retry = r.submitAction('p1', action('a3', 'p1', 'ZZ'), p1);
+    expect(a3retry.seq).toBe(3);
+    expect(r.state.players.p1?.name).toBe('A3'); // deduped — 'ZZ' ignored
+
+    // a1's receipt was evicted → its retry is NOT deduped: it re-applies, fresh seq
+    const a1retry = r.submitAction('p1', action('a1', 'p1', 'A1again'), p1);
+    expect(a1retry.seq).toBeGreaterThan(3);
+    expect(r.state.players.p1?.name).toBe('A1again'); // re-applied
+  });
+
+  it('rate-limits a flood transiently — no receipt, so the same id lands after the window', () => {
+    let real = 1000;
+    const r = new MatchRoom({
+      id: 'rate',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => real,
+      actionRateMax: 2,
+      actionRateWindowMs: 1000,
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+
+    expect(r.submitAction('p1', action('a1', 'p1', 'One'), p1).ok).toBe(true);
+    expect(r.submitAction('p1', action('a2', 'p1', 'Two'), p1).ok).toBe(true);
+
+    // 3rd within the window → rate-limited (transient rejection, world untouched)
+    const flooded = r.submitAction('p1', action('a3', 'p1', 'Three'), p1);
+    expect(flooded).toMatchObject({ ok: false, code: 'E_RATE_LIMIT' });
+    expect(p1.messages.at(-1)).toMatchObject({
+      type: 'rejection',
+      actionId: 'a3',
+      code: 'E_RATE_LIMIT',
+    });
+    expect(r.state.players.p1?.name).toBe('Two'); // a3 not applied
+
+    // no receipt was kept for a3 → after the window the SAME id is accepted
+    real += 1001;
+    const retried = r.submitAction('p1', action('a3', 'p1', 'Three'), p1);
+    expect(retried.ok).toBe(true);
+    expect(r.state.players.p1?.name).toBe('Three');
+  });
+});
