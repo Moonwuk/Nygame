@@ -1,0 +1,241 @@
+name: Security scan
+
+# Informational, NON-BLOCKING security pipeline.
+# Runs all scanners on EVERY push (any branch), aggregates results into ONE Markdown
+# report, and posts it back as a sticky PR comment (if the commit has an open PR) or a
+# commit comment otherwise. It never fails the build and is NOT a required status check —
+# findings are for visibility, not gating (by request).
+#
+# TODO (SD-6.1 / audit F-16): pin actions and scanner images by full SHA / image digest.
+# For now first-party actions use major tags and scanner images reuse the versions the
+# prior GitLab pipeline pinned (trivy 0.58.2, osv v1.9.1, syft v1.20.0, gitleaks v8.18.4);
+# semgrep uses :latest pending a pin. Dependabot (github-actions) is the intended way to
+# then pin + maintain these.
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+# One run per ref; a newer commit cancels the older in-flight run (saves CI minutes).
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: nothing by default; each job grants only what it needs.
+permissions: {}
+
+jobs:
+  check:
+    name: lint + typecheck + test + audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm run check
+        id: check
+        continue-on-error: true
+        run: pnpm run check
+      - name: pnpm audit
+        continue-on-error: true
+        run: pnpm audit --json > pnpm-audit.json || true
+      - name: record check status
+        run: |
+          echo '{"check":"${{ steps.check.outcome }}"}' > check-status.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-check
+          path: |
+            pnpm-audit.json
+            check-status.json
+          if-no-files-found: warn
+
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: semgrep
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+            semgrep scan --config=p/typescript --config=p/javascript --config=p/security-audit \
+            --sarif --output=semgrep.sarif --metrics=off || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-semgrep
+          path: semgrep.sarif
+          if-no-files-found: warn
+      - name: upload to code scanning
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  gitleaks:
+    name: Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: gitleaks
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src zricethezav/gitleaks:v8.18.4 \
+            detect --source=/src --no-git --redact \
+            --report-format sarif --report-path gitleaks.sarif || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-gitleaks
+          path: gitleaks.sarif
+          if-no-files-found: warn
+      - name: upload to code scanning
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  osv:
+    name: SCA (OSV-Scanner)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: osv-scanner
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:v1.9.1 \
+            --lockfile=pnpm-lock.yaml --format=sarif --output=osv.sarif || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-osv
+          path: osv.sarif
+          if-no-files-found: warn
+      - name: upload to code scanning
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: osv.sarif
+          category: osv-scanner
+
+  trivy:
+    name: Vuln + IaC (Trivy fs)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: trivy fs
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.2 \
+            fs --scanners vuln,secret,misconfig --format sarif --output trivy.sarif . || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-trivy
+          path: trivy.sarif
+          if-no-files-found: warn
+      - name: upload to code scanning
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  sbom:
+    name: SBOM (Syft / CycloneDX)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: syft sbom
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src anchore/syft:v1.20.0 \
+            scan dir:/src -o cyclonedx-json=sbom.cdx.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-sbom
+          path: sbom.cdx.json
+          if-no-files-found: warn
+
+  report:
+    name: summarize + report
+    needs: [check, semgrep, gitleaks, osv, trivy, sbom]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit comments
+      pull-requests: write # PR comments
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: reports
+      - name: summarize
+        run: node .github/scripts/summarize-security.mjs reports security-report.md
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+      - name: job summary
+        run: cat security-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: |
+            security-report.md
+            reports/**/*.sarif
+            reports/**/*.cdx.json
+          if-no-files-found: warn
+      - name: post report (sticky PR comment or commit comment)
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- void-security-report -->';
+            const body = marker + '\n' + fs.readFileSync('security-report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const sha = context.sha;
+            let prs = [];
+            try {
+              const res = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha });
+              prs = res.data.filter((p) => p.state === 'open');
+            } catch (e) {
+              core.warning('PR lookup failed: ' + e.message);
+            }
+            if (prs.length) {
+              for (const pr of prs) {
+                const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: pr.number, per_page: 100 });
+                const existing = comments.find((c) => c.body && c.body.includes(marker));
+                if (existing) {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                } else {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+                }
+              }
+            } else {
+              await github.rest.repos.createCommitComment({ owner, repo, commit_sha: sha, body });
+            }
