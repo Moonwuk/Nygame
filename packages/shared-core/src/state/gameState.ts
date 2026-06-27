@@ -292,6 +292,24 @@ export interface GameState {
    *  `state/diplomacy.ts`; the future `diplomacyModule` (D2) owns the actions and
    *  exposes it as the `diplomacy` capability that drives combat's `isHostile`. */
   diplomacy?: Record<string, DiplomaticStance>;
+  /** Session resource market: a public per-match order book maintained by
+   *  `marketModule`. Sellers escrow a resource at a price; buyers pay money. */
+  market?: MarketOrder[];
+  /** Monotonic counter handing each market order its id. */
+  marketSeq?: number;
+}
+
+/** A standing sell order on the session market: the `seller` has escrowed `amount`
+ *  of `resource` (deducted from their treasury) and offers it at `price` money per
+ *  unit. Filled (partially) by `market.buy`; the remainder is refunded on cancel. */
+export interface MarketOrder {
+  id: string;
+  seller: PlayerId;
+  resource: ResourceId;
+  /** Remaining units on offer (escrowed). */
+  amount: number;
+  /** Price per unit, in money (`credits`). */
+  price: number;
 }
 
 /** A player's hero — a per-player entity with a position on the map and ability

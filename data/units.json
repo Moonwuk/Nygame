@@ -91,8 +91,8 @@
     "traits": ["infect_planet", "no_food_cost"],
     "abilities": ["spread_biomass"],
     "signature": 4,
-    "cost": { "biomass": 200, "dark_matter": 50 },
-    "upkeep": { "biomass": 6 }
+    "cost": { "food": 200, "energy": 50 },
+    "upkeep": { "food": 6 }
   },
   "reanimated_drone": {
     "faction": "necromancer",
@@ -101,8 +101,8 @@
     "traits": ["reanimate_on_kill"],
     "abilities": [],
     "signature": 2,
-    "cost": { "dark_matter": 30 },
-    "upkeep": { "dark_matter": 2 }
+    "cost": { "energy": 30 },
+    "upkeep": { "energy": 2 }
   },
   "hero": {
     "faction": "vanguard",

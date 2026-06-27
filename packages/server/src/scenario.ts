@@ -9,6 +9,7 @@ import {
   economyModule,
   factionModule,
   heroModule,
+  marketModule,
   reanimationModule,
   movementModule,
   parseGameData,
@@ -70,6 +71,7 @@ export const DEV_MODULES: GameModule[] = [
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)
   technologyModule,
   factionModule, // always-on faction passives (production / speed / combat) via hooks
+  marketModule, // session resource bourse: list / buy (15% burn) / cancel
   armyModule,
   victoryModule,
   visibilityModule, // fog-of-war memory (variant B): records last-seen worlds

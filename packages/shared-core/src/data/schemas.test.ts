@@ -32,7 +32,7 @@ describe('game data schema (docs/architecture.md §2)', () => {
   it('validates the shipped data bundle', () => {
     const data = parseGameData(loadShippedBundle());
     expect(data.version).toBe('0.1.0');
-    expect(data.resources).toContain('dark_matter');
+    expect(data.resources).toContain('microelectronics');
     expect(data.units.infected_cruiser?.stats.attack).toBe(12);
     expect(data.units.siege_lance?.stats.range).toBe(3); // artillery firing range
     expect(data.units.cruiser?.upkeep.credits).toBe(8); // daily upkeep

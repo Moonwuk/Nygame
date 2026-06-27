@@ -16,6 +16,8 @@ const META_KEYS = [
   'topology',
   'heroSeq',
   'diplomacy',
+  'market',
+  'marketSeq',
 ] as const;
 
 /**

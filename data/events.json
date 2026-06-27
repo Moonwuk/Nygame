@@ -14,7 +14,7 @@
   "void_anomaly": {
     "trigger": "schedule",
     "effect": "modify_resource",
-    "params": { "resource": "dark_matter", "amount": 50, "cadenceHours": 8 },
+    "params": { "resource": "energy", "amount": 50, "cadenceHours": 8 },
     "chance": 0.5
   }
 }

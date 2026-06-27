@@ -30,7 +30,7 @@
     "name": "Biomass Pit",
     "cost": { "metal": 150 },
     "buildTimeHours": 8,
-    "produces": { "biomass": 30 },
+    "produces": { "food": 30 },
     "hp": 15,
     "scoreValue": 8,
     "traits": ["infected"]
