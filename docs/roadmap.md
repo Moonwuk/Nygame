@@ -113,7 +113,7 @@ Deliverables:
 - Fastify-скелет
 - PostgreSQL + JSONB: персистентность `GameState`
 - Redis + BullMQ: планировщик событий (отложенные задачи «флот прибудет через N часов»)
-- WebSocket-слой (ws): пуш diff'ов (первый in-memory slice уже есть: `MatchRoom` + full-state broadcast)
+- WebSocket-слой (ws): пуш diff'ов (in-memory slice уже есть: `MatchRoom` + per-player дельта-рассылка с туманом войны)
 - Очередь per-player: последовательная обработка действий одного игрока (закрывает race conditions, A10)
 - Фильтрация по видимости (туман войны) **перед** отправкой клиенту
 - Аутентификация: JWT в WebSocket handshake (A07)

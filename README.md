@@ -61,7 +61,8 @@
 | `util/`    | `deepClone`/`deepFreeze` (immutable-контракт), общие хелперы казны/стеков/времени                    |
 
 **Модули ядра:** `sector`, `planetType`, `technology`, `economy`, `movement`, `combat`
-(орбитальный/наземный бой, двухфазный захват, ПВО, бомбардировка), `construction`,
+(орбитальный/наземный бой, двухфазный захват, ПВО, бомбардировка), `captureOnArrival`
+(walk-in захват необоронённого нейтрального сектора), `construction`,
 `army` (флот ⊕ наземная армия + транспорт), `victory` (data-driven очки/счёт),
 `visibility` (память тумана войны, вариант B). Новая механика = новый модуль (+ данные),
 ядро не трогается.
@@ -98,9 +99,10 @@ pnpm run prototype      # собрать играбельный prototype/dist/v
 pnpm run check          # lint + typecheck + test (как в CI)
 ```
 
-CI: [`ci.yml`](./.github/workflows/ci.yml) гоняет lint, typecheck, тесты и `pnpm audit`
-на каждый push/PR; [`ssdlc.yml`](./.github/workflows/ssdlc.yml) — security-пайплайн
-(Semgrep, Bearer, Trivy, Gitleaks, SCA, SBOM). На сейчас **255 тестов** зелёные.
+CI: гейт качества (lint, typecheck, тесты, `pnpm audit`) и security-пайплайн (Semgrep,
+Bearer, Trivy, Gitleaks, SCA, SBOM) живут в [`.gitlab-ci.yml`](./.gitlab-ci.yml); на
+GitHub — только сборка APK прототипа ([`android.yml`](./.github/workflows/android.yml)).
+На сейчас **304 теста** зелёные.
 
 ## Статус
 
