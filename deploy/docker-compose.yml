@@ -1,0 +1,29 @@
+# Void Dominion — Postgres for durable matches (decided deploy: self-hosted on the VPS).
+#
+#   cd deploy && docker compose up -d          # start Postgres (data persists in a volume)
+#   # then put DATABASE_URL in deploy/server.env and run `pnpm serve`
+#
+# The proto-server (pnpm host / pnpm serve) connects to this DB via DATABASE_URL and
+# snapshots the match to it, so a server restart resumes the game. Postgres is bound to
+# 127.0.0.1 ONLY — never exposed publicly (the server reaches it over loopback). Set a
+# real POSTGRES_PASSWORD in the environment for anything beyond a local test.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: void
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-void}
+      POSTGRES_DB: void
+    ports:
+      - '127.0.0.1:5432:5432' # loopback only — the server is on the same host
+    volumes:
+      - void-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U void -d void']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  void-pgdata:
