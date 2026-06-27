@@ -203,6 +203,9 @@ export interface Battle {
   defender: BattleSide;
   /** Rounds resolved so far. */
   round: number;
+  /** Server time (ms) the next hourly round fires — the live battle timer the
+   *  client counts down to. Set whenever a round is scheduled. */
+  nextRoundAt?: number;
 }
 
 /**

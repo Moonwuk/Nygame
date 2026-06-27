@@ -113,6 +113,9 @@ function move(fleetId: string, to: string, playerId = 'p1'): Action {
     issuedAt: 0,
   };
 }
+function stop(fleetId: string, playerId = 'p1'): Action {
+  return { id: `s:${playerId}:9`, type: 'fleet.stop', playerId, payload: { fleetId }, issuedAt: 0 };
+}
 function orbit(fleetId: string, o: 'near' | 'far', playerId = 'p1'): Action {
   return {
     id: `s:${playerId}:2`,
@@ -465,5 +468,95 @@ describe('combat — attack vs defense stats (return-fire mechanic)', () => {
 
     expect(p.dmgToDefender).toBe(30); // A (aggressor) strikes with its attack stat
     expect(p.dmgToAttacker).toBe(20); // D (standing) returns defense, not its attack (7)
+  });
+});
+
+describe('combat — lane intercept (crossing ON a lane, GDD §7.4)', () => {
+  // A(0,0) — B(60,0), a single lane; fighter speed 10 ⇒ 6h end-to-end.
+  function lane(): Planet[] {
+    const a = planet('A', null, 0, 0);
+    const b = planet('B', null, 60, 0);
+    a.links = ['B'];
+    b.links = ['A'];
+    return [a, b];
+  }
+
+  it('intercepts two hostile fleets crossing head-on, mid-lane', () => {
+    const kernel = createKernel([combatModule, movementModule]);
+    const st = baseState(
+      [fleet('F1', 'p1', 'A', [['fighter', 2]]), fleet('F2', 'p2', 'B', [['fighter', 2]])],
+      lane(),
+    );
+    const m1 = okApply(kernel.applyAction(st, move('F1', 'B', 'p1'), ctx(0)));
+    const m2 = okApply(kernel.applyAction(m1.state, move('F2', 'A', 'p2'), ctx(0)));
+    // Not met yet — a crossing is scheduled for the lane midpoint (3h in), no battle.
+    expect(Object.keys(m2.state.battles)).toHaveLength(0);
+    expect(m2.state.scheduled.some((e) => e.type === 'fleet.intercept')).toBe(true);
+
+    const r = okAdvance(kernel.advanceTo(m2.state, ctx(4 * HOUR)));
+    expect(types(r.events)).toContain('battle.started');
+    // Both pinned to the SAME mid-lane point — neither at a node, both off-transit.
+    const f1 = r.state.fleets.F1;
+    const f2 = r.state.fleets.F2;
+    expect(f1?.location).toBeNull();
+    expect(f1?.movement).toBeNull();
+    expect(f1?.edge).toEqual({ from: 'A', to: 'B', t: 0.5 });
+    expect(f2?.edge).toEqual({ from: 'A', to: 'B', t: 0.5 });
+    // The battle is live and its hourly round clock (the combat timer) is exposed.
+    const battle = Object.values(r.state.battles)[0];
+    expect(battle).toBeDefined();
+    expect(battle?.nextRoundAt).toBe(5 * HOUR); // 3h start → 4h round 1 → next at 5h
+  });
+
+  it('a parked fleet is caught by a hostile fleet running down its lane', () => {
+    const kernel = createKernel([combatModule, movementModule]);
+    const parked: Fleet = {
+      id: 'P',
+      owner: 'p1',
+      location: null,
+      movement: null,
+      edge: { from: 'A', to: 'B', t: 0.5 },
+      units: stacks([['fighter', 2]]),
+      traits: [],
+    };
+    const st = baseState([parked, fleet('E', 'p2', 'A', [['fighter', 2]])], lane());
+    const m = okApply(kernel.applyAction(st, move('E', 'B', 'p2'), ctx(0)));
+    expect(m.state.scheduled.some((e) => e.type === 'fleet.intercept')).toBe(true);
+
+    const r = okAdvance(kernel.advanceTo(m.state, ctx(4 * HOUR)));
+    expect(types(r.events)).toContain('battle.started');
+    expect(Object.keys(r.state.battles)).toHaveLength(1);
+    // The runner was pinned to the parked fleet's point — not carried on to node B.
+    expect(r.state.fleets.E?.edge).toEqual({ from: 'A', to: 'B', t: 0.5 });
+    expect(r.state.fleets.E?.location).toBeNull();
+  });
+
+  it('a re-route off the lane before contact makes the crossing a stale no-op', () => {
+    const kernel = createKernel([combatModule, movementModule]);
+    // A — B — C colinear; F2 can break off down B–C instead of meeting F1 on A–B.
+    const a = planet('A', null, 0, 0);
+    const b = planet('B', null, 60, 0);
+    const c = planet('C', null, 120, 0);
+    a.links = ['B'];
+    b.links = ['A', 'C'];
+    c.links = ['B'];
+    const st = baseState(
+      [fleet('F1', 'p1', 'A', [['fighter', 2]]), fleet('F2', 'p2', 'B', [['fighter', 2]])],
+      [a, b, c],
+    );
+    const m1 = okApply(kernel.applyAction(st, move('F1', 'B', 'p1'), ctx(0)));
+    const m2 = okApply(kernel.applyAction(m1.state, move('F2', 'A', 'p2'), ctx(0)));
+    // Up to just before the 3h crossing — still no battle.
+    const at2 = okAdvance(kernel.advanceTo(m2.state, ctx(2 * HOUR)));
+    expect(Object.keys(at2.state.battles)).toHaveLength(0);
+    // F2 breaks off: stop, then run the other way to C, leaving the A–B lane.
+    const s = okApply(kernel.applyAction(at2.state, stop('F2', 'p2'), ctx(2 * HOUR)));
+    const m3 = okApply(kernel.applyAction(s.state, move('F2', 'C', 'p2'), ctx(2 * HOUR)));
+    // Past the original crossing and on to journey's end: they never meet.
+    const r = okAdvance(kernel.advanceTo(m3.state, ctx(8 * HOUR)));
+    expect(types(r.events)).not.toContain('battle.started');
+    expect(Object.keys(r.state.battles)).toHaveLength(0);
+    expect(r.state.fleets.F1).toBeDefined();
+    expect(r.state.fleets.F2).toBeDefined();
   });
 });

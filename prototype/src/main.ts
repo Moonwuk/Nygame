@@ -43,6 +43,7 @@ import { MultiplayerClient } from '../../packages/client/src/index';
 import type {
   GameState,
   Fleet,
+  Battle,
   Planet,
   Action,
   DomainEvent,
@@ -660,6 +661,19 @@ function fleetPos(f: Fleet): { x: number; y: number } | null {
   const t = s0 + (e0 - s0) * prog;
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
+/** Where to draw a battle: the position of a fleet engaged in it (so a mid-lane
+ *  intercept renders at the crossing point, not the nearest node), falling back to
+ *  the battle's node when no participant is in view. */
+function battleAnchor(b: Battle): { x: number; y: number } | null {
+  for (const f of Object.values(s.fleets)) {
+    if (f.battleId === b.id) {
+      const p = fleetPos(f);
+      if (p) return p;
+    }
+  }
+  return s.planets[b.location]?.position ?? null;
+}
+
 /** The fleets the command bar / move order currently act on (mine only). */
 function selectedFleetIds(): string[] {
   if (selFleets.size) return [...selFleets].filter((id) => s.fleets[id]?.owner === ME);
@@ -1914,15 +1928,25 @@ function render(now: number) {
 
   drawFleetRoutes();
 
-  // battles — pulsing red contact ring
+  // battles — pulsing red contact ring at the actual clash point (an engaged
+  // fleet's position, so a mid-lane intercept shows where it really happens) with a
+  // live countdown to the next hourly damage round (the battle timer).
   const wave = (now / 900) % 1;
   for (const b of Object.values(s.battles)) {
     if (!known(b.location)) continue;
-    const pp = s.planets[b.location];
-    if (!pp) continue;
-    const c = world(pp.position);
+    const anchor = battleAnchor(b);
+    if (!anchor) continue;
+    const c = world(anchor);
     if (!visible(c, 120)) continue;
     drawBattlePulse(c.x, c.y, wave);
+    if (typeof b.nextRoundAt === 'number') {
+      cx.save();
+      cx.font = '700 10px ui-monospace,Menlo,monospace';
+      cx.textAlign = 'center';
+      cx.fillStyle = '#ff8a7d';
+      cx.fillText(`⚔ ${timeLeft(b.nextRoundAt)}`, c.x, c.y - 28);
+      cx.restore();
+    }
   }
 
   // selected sector: its radar detection radius (a physical circle in map space →
@@ -2444,9 +2468,12 @@ function panelHtml(): string {
       const here = planet(f.location);
       const docked = !!here && !f.movement && !f.battleId;
       if (!docked) {
+        const engaged = f.battleId ? s.battles[f.battleId] : undefined;
         h += `<div class="hint">${
           f.battleId
-            ? 'Engaged — orbital battle in progress.'
+            ? engaged?.nextRoundAt !== undefined
+              ? `Engaged — next damage round in ${timeLeft(engaged.nextRoundAt)}.`
+              : 'Engaged — orbital battle in progress.'
             : f.edge
               ? 'Parked on a lane — press Move to march on (it routes from here).'
               : 'In transit — routing along the lanes. Collisions trigger an orbital battle.'

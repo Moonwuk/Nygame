@@ -108,6 +108,11 @@ function beginLeg(
   fleet.location = null;
   fleet.edge = null;
   h.schedule(fleet.movement.arrivesAt, 'fleet.arrival', { fleetId: fleet.id, departedAt: h.ctx.now });
+  // A leg just started: the fleet now occupies the lane (`from`,`to`) over a known
+  // window. Announced for EVERY leg (journey start AND each intermediate hop, which
+  // `fleet.departed` does not cover) so collision modules can compute lane-crossing
+  // intercepts. Carries no journey context — listeners read `fleet.movement`.
+  h.emit('fleet.leg', { fleetId: fleet.id });
   return true;
 }
 
@@ -260,8 +265,10 @@ function planJourney(
  * it can march to a node OR to any point ON a lane (`toEdge`), `fleet.stop` parks
  * it wherever it is, and a parked fleet re-routes from there (Bytro-style). At
  * each node it announces `fleet.transit` (intermediate) or `fleet.arrived` (final)
- * for collision checks; a mid-lane park announces `fleet.parked`. Speed runs
- * through the `fleet.speed` hook (terrain).
+ * for collision checks; a mid-lane park announces `fleet.parked`, and every leg
+ * start announces `fleet.leg` (so collision modules can intercept two hostile
+ * fleets crossing ON a lane, not only at a node). Speed runs through the
+ * `fleet.speed` hook (terrain).
  */
 export const movementModule: GameModule = {
   id: 'movement',

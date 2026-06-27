@@ -1,5 +1,5 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { Battle, CombatantRef, Fleet, GameState, UnitStack } from '../state/gameState';
+import type { Battle, CombatantRef, Fleet, GameState, PlanetId, UnitStack } from '../state/gameState';
 import type { GameData, UnitDef } from '../data/schemas';
 import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
@@ -165,7 +165,13 @@ function applyDamageToSide(
 // --- battle lifecycle --------------------------------------------------------
 
 function scheduleTick(h: HandlerContext, battleId: string): void {
-  h.schedule(h.ctx.now + roundIntervalMs(h.ctx), 'combat.tick', { battleId });
+  const at = h.ctx.now + roundIntervalMs(h.ctx);
+  h.schedule(at, 'combat.tick', { battleId });
+  // Surface the round clock so the client can render a live battle countdown.
+  const battle = h.state.battles[battleId];
+  if (battle) {
+    battle.nextRoundAt = at;
+  }
 }
 
 /** Lowest-id hostile, alive, unengaged fleet sitting at node `at`. */
@@ -243,6 +249,147 @@ function engageFleets(h: HandlerContext, fleetId: string, at: string): void {
     defender: { ref: { kind: 'fleet', fleetId: enemy.id }, owner: enemy.owner },
     round: 0,
   });
+}
+
+// --- lane intercept (two hostile fleets crossing ON a lane, GDD §7.4) ---------
+
+/** |Δfraction| below which two fleets on a lane count as co-located (a crossing). */
+const INTERCEPT_TOL = 1e-6;
+/** Keep a pinned crossing point off the lane's endpoints (avoids a degenerate
+ *  node-equivalent edge); mirrors movement's own EPS. */
+const EDGE_EPS = 1e-4;
+
+/**
+ * A fleet's occupancy of a lane as a linear function of time: its normalized
+ * position `s ∈ [0,1]` along the canonical lane (endpoints sorted `lo`→`hi`, so
+ * fleets travelling opposite ways share one axis), valid over [`t0`,`t1`]. A
+ * moving fleet interpolates s0→s1 across its leg; a parked fleet is constant
+ * (s0===s1) over an unbounded window.
+ */
+interface LaneOcc {
+  lo: PlanetId;
+  hi: PlanetId;
+  s0: number;
+  s1: number;
+  t0: number;
+  t1: number;
+  moving: boolean;
+}
+
+/** Where a fleet sits on a lane as a time-parametrized segment — or null if it is
+ *  at a node / gone (not on a lane). */
+function laneOccupancy(fleet: Fleet): LaneOcc | null {
+  const mv = fleet.movement;
+  if (mv) {
+    if (mv.arrivesAt <= mv.departedAt) {
+      return null; // degenerate zero-length leg — no meaningful segment
+    }
+    const reversed = mv.from > mv.to;
+    const startT = mv.startT ?? 0;
+    const endT = mv.endT ?? 1;
+    return {
+      lo: reversed ? mv.to : mv.from,
+      hi: reversed ? mv.from : mv.to,
+      s0: reversed ? 1 - startT : startT,
+      s1: reversed ? 1 - endT : endT,
+      t0: mv.departedAt,
+      t1: mv.arrivesAt,
+      moving: true,
+    };
+  }
+  const e = fleet.edge;
+  if (e) {
+    const reversed = e.from > e.to;
+    const s = reversed ? 1 - e.t : e.t;
+    return {
+      lo: reversed ? e.to : e.from,
+      hi: reversed ? e.from : e.to,
+      s0: s,
+      s1: s,
+      t0: -Infinity,
+      t1: Infinity,
+      moving: false,
+    };
+  }
+  return null;
+}
+
+/** Normalized position of an occupant at time `t` (linear; constant if parked). */
+function posAt(occ: LaneOcc, t: number): number {
+  if (!occ.moving) {
+    return occ.s0;
+  }
+  return occ.s0 + ((occ.s1 - occ.s0) * (t - occ.t0)) / (occ.t1 - occ.t0);
+}
+
+/** Pulls a fleet out of transit and pins it at a continuous point on a lane. */
+function pinToEdge(fleet: Fleet, from: PlanetId, to: PlanetId, t: number): void {
+  fleet.location = null;
+  fleet.movement = null;
+  fleet.edge = { from, to, t };
+}
+
+/**
+ * Schedules a `fleet.intercept` for every hostile fleet whose lane occupancy
+ * crosses `fleetId`'s on the SAME lane — the analytic "встреча по формуле". Each
+ * pair's position difference is linear in time, so the crossing instant is solved
+ * exactly by interpolating the well-conditioned 0..1 positions at the overlap
+ * window's ends (never dividing by a tiny rate). The intercept re-validates when
+ * it fires, so a re-route before contact harmlessly no-ops a stale crossing.
+ */
+function scanLaneIntercepts(h: HandlerContext, fleetId: string): void {
+  const fleet = h.state.fleets[fleetId];
+  if (!fleet || fleet.battleId || !fleet.units.some((s) => s.count > 0)) {
+    return;
+  }
+  const occA = laneOccupancy(fleet);
+  if (!occA) {
+    return; // not on a lane (at a node / gone)
+  }
+  const now = h.ctx.now;
+  for (const id of Object.keys(h.state.fleets)) {
+    if (id === fleetId) {
+      continue;
+    }
+    const other = h.state.fleets[id];
+    if (!other || other.battleId || !isHostile(h, fleet.owner, other.owner)) {
+      continue;
+    }
+    if (!other.units.some((s) => s.count > 0)) {
+      continue;
+    }
+    const occB = laneOccupancy(other);
+    if (!occB || occB.lo !== occA.lo || occB.hi !== occA.hi) {
+      continue; // not on the same lane
+    }
+    const lo = Math.max(occA.t0, occB.t0, now);
+    const hi = Math.min(occA.t1, occB.t1);
+    if (!(hi >= lo)) {
+      continue; // no shared time window
+    }
+    let tc: number | null = null;
+    if (!occA.moving && !occB.moving) {
+      // Both parked: a crossing only if they sit on the very same point (rare).
+      if (Math.abs(occA.s0 - occB.s0) <= INTERCEPT_TOL) {
+        tc = lo;
+      }
+    } else {
+      // At least one moving ⇒ `hi` is finite. d(t)=posA−posB is linear; find its
+      // zero between the window ends.
+      const dLo = posAt(occA, lo) - posAt(occB, lo);
+      const dHi = posAt(occA, hi) - posAt(occB, hi);
+      if (Math.abs(dLo) <= INTERCEPT_TOL) {
+        tc = lo; // already together at the window's start
+      } else if (Math.abs(dHi) <= INTERCEPT_TOL) {
+        tc = hi; // together exactly at the window's end
+      } else if (dLo < 0 !== dHi < 0) {
+        tc = lo + ((hi - lo) * Math.abs(dLo)) / (Math.abs(dLo) + Math.abs(dHi));
+      }
+    }
+    if (tc !== null) {
+      h.schedule(tc, 'fleet.intercept', { a: fleetId, b: id });
+    }
+  }
 }
 
 /**
@@ -380,8 +527,12 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
       if (f) {
         f.orbit = 'far';
         f.bombarding = false;
+        // Chain into any other defender only when the victor holds a NODE; a lane
+        // intercept leaves it parked on the edge (location null) — never teleport it.
+        if (f.location !== null) {
+          engageFleets(h, battle.attacker.ref.fleetId, battle.location);
+        }
       }
-      engageFleets(h, battle.attacker.ref.fleetId, battle.location); // clear any other defender
     }
   }
 }
@@ -512,6 +663,56 @@ export const combatModule: GameModule = {
     api.on('fleet.transit', (event, h) => {
       const { fleetId, at } = event.payload as { fleetId: string; at: string };
       engageFleets(h, fleetId, at);
+    });
+
+    // Lane combat: a fleet just began a leg / parked on a lane → look for a hostile
+    // fleet it will cross ON the lane (not only at a node) and schedule the meeting.
+    api.on('fleet.leg', (event, h) => {
+      const { fleetId } = event.payload as { fleetId: string };
+      scanLaneIntercepts(h, fleetId);
+    });
+    api.on('fleet.parked', (event, h) => {
+      const { fleetId } = event.payload as { fleetId: string };
+      scanLaneIntercepts(h, fleetId);
+    });
+
+    // The crossing instant arrives: re-validate (both still on the lane, hostile,
+    // alive, free) — a re-route since scheduling makes this a stale no-op — then pin
+    // both fleets to the meeting point and open an orbital fleet-vs-fleet battle.
+    api.on('fleet.intercept', (event, h) => {
+      const { a, b } = event.payload as { a: string; b: string };
+      const fa = h.state.fleets[a];
+      const fb = h.state.fleets[b];
+      if (!fa || !fb || fa.battleId || fb.battleId) {
+        return;
+      }
+      if (!isHostile(h, fa.owner, fb.owner)) {
+        return;
+      }
+      if (!fa.units.some((s) => s.count > 0) || !fb.units.some((s) => s.count > 0)) {
+        return;
+      }
+      const oa = laneOccupancy(fa);
+      const ob = laneOccupancy(fb);
+      if (!oa || !ob || oa.lo !== ob.lo || oa.hi !== ob.hi) {
+        return; // one left the lane (re-routed / arrived) — stale intercept
+      }
+      const sa = posAt(oa, h.ctx.now);
+      const sb = posAt(ob, h.ctx.now);
+      if (Math.abs(sa - sb) > INTERCEPT_TOL) {
+        return; // not actually meeting now — stale
+      }
+      const t = Math.min(1 - EDGE_EPS, Math.max(EDGE_EPS, (sa + sb) / 2));
+      pinToEdge(fa, oa.lo, oa.hi, t);
+      pinToEdge(fb, oa.lo, oa.hi, t);
+      startBattle(h, {
+        id: `battle:${h.state.battleSeq++}`,
+        location: t <= 0.5 ? oa.lo : oa.hi, // nearest node — for display / event labels
+        phase: 'orbital',
+        attacker: { ref: { kind: 'fleet', fleetId: fa.id }, owner: fa.owner },
+        defender: { ref: { kind: 'fleet', fleetId: fb.id }, owner: fb.owner },
+        round: 0,
+      });
     });
 
     // Shift between the far orbit (safe standoff) and the near orbit (lets the
