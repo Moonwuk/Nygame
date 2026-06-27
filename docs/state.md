@@ -103,6 +103,10 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 - `heroes?: Record<id, Hero>` (`{owner, location, cooldowns}`), `tempLanes?: TempLane[]`
   (временные публичные трассы), `topology?` (версия графа для инвалидации `RouteCache`),
   `heroSeq?` (счётчик id лейнов) — модуль `hero`.
+- `diplomacy?: Record<pairKey, DiplomaticStance>` — попарные дип-отношения (`war`/`peace`/
+  `pact`/`alliance`), симметрично и **публично** (туман не режет). Дефолт пары без записи —
+  `war` (= текущее FFA без модуля). Примитивы в `state/diplomacy.ts`; провайдер capability
+  `diplomacy` и действия — будущий `diplomacyModule` (D2).
 
 **Время:** все длительности — через `schedule(at,…)`; `timeScale` (MatchConfig)
 делит реальные длительности (×1/×2/×4). `time.advanced` спаны дают накопление.

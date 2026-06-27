@@ -67,8 +67,12 @@
 
 ## Блок D · Ядро: дипломатия `[core]`
 
-- **D1** ⏳ Состояние дипломатии (война/мир/альянс/пакт) в `GameState`.
-- **D2** 🔒(D1) `diplomacyModule`: действия объявления; `isHostile` управляется им; тесты.
+- **D1** ✅ Состояние дипломатии в `GameState`: `diplomacy?: Record<pairKey, DiplomaticStance>`
+  (`war`/`peace`/`pact`/`alliance`, симметрично, публично — не режется туманом). Чистые
+  примитивы `state/diplomacy.ts` (`pairKey`/`getStance`/`setStance`/`DEFAULT_STANCE='war'`,
+  дефолт сохраняет текущее FFA: разные владельцы = враги без модуля). В `delta`-META; 10 тестов.
+- **D2** 🔒(D1) `diplomacyModule`: действия объявления; провайдит capability `diplomacy`
+  (`getRelation` уже потребляется `combat.isHostile`); маппинг stance→relation; тесты.
 
 ## Блок E · Слой действий (Этап 2) `[act]` _(начат devin)_
 

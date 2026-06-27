@@ -62,6 +62,16 @@ export interface PlayerTechnologyState {
   active?: ActiveResearch;
 }
 
+/** Diplomatic stance between two players (symmetric). Richer than the combat
+ *  `hostile|ally|neutral` relation the `diplomacy` capability projects (D2):
+ *  - `war`      → hostile (fleets engage, worlds can be assaulted)
+ *  - `peace`    → neutral (no auto-combat; the plain "we are not fighting" state)
+ *  - `pact`     → neutral (a non-aggression pact — like peace, but a declared,
+ *                 breakable agreement rather than mere absence of war)
+ *  - `alliance` → ally (shared side; an ally's world can't be attacked)
+ *  The stance→relation mapping itself lives in the future `diplomacyModule`. */
+export type DiplomaticStance = 'war' | 'peace' | 'pact' | 'alliance';
+
 export type MatchStatus = 'ongoing' | 'ended';
 export type MatchEndReason = 'domination' | 'elimination' | 'score' | 'timeout';
 
@@ -275,6 +285,13 @@ export interface GameState {
   topology?: number;
   /** Monotonic counter handing each temp lane its id. */
   heroSeq?: number;
+  /** Pairwise diplomatic stances between players, keyed by a canonical unordered
+   *  pair key (`pairKey`). Symmetric and PUBLIC (not fog-gated — who is at war /
+   *  allied is open knowledge). A pair with no entry defaults to `DEFAULT_STANCE`
+   *  (war), so absence = the engine's no-diplomacy FFA. Read/written through
+   *  `state/diplomacy.ts`; the future `diplomacyModule` (D2) owns the actions and
+   *  exposes it as the `diplomacy` capability that drives combat's `isHostile`. */
+  diplomacy?: Record<string, DiplomaticStance>;
 }
 
 /** A player's hero — a per-player entity with a position on the map and ability
