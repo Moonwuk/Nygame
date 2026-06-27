@@ -19,7 +19,46 @@ export type ServerErrorCode =
   | 'E_FORBIDDEN'
   | 'E_PAYLOAD_TOO_LARGE'
   | 'E_SLOT_TAKEN'
-  | 'E_UNKNOWN_PLAYER';
+  | 'E_UNKNOWN_PLAYER'
+  | 'E_PING_KIND'
+  | 'E_PING_TARGET'
+  | 'E_PING_UNSEEN'
+  | 'E_PING_BUILD'
+  | 'E_PING_RATE';
+
+/**
+ * Ally ping — a tactical marker one player drops to propose a plan to allies
+ * (the icon is `kind`). EPHEMERAL: pings live only in the MatchRoom, never in the
+ * deterministic GameState — so they cannot trip `hashState`, replay or the world
+ * schedule. JSON-serializable; relayed to the owner + allies, hidden from enemies.
+ */
+export type PingKind = 'mark' | 'move' | 'attack' | 'defend' | 'build';
+export const PING_KINDS: readonly PingKind[] = ['mark', 'move', 'attack', 'defend', 'build'];
+
+/** Where a ping points: a map node (snapped) OR a continuous point (free placement). */
+export interface PingAnchor {
+  /** A planet/sector id. */
+  node?: string;
+  /** A free position in map space (empty space, a lane). */
+  point?: { x: number; y: number };
+}
+
+export interface Ping {
+  /** `ping:<owner>:<seq>` (server-assigned). */
+  id: string;
+  owner: PlayerId;
+  kind: PingKind;
+  /** Primary anchor — the marker, or the origin of a move/attack arrow. */
+  target: PingAnchor;
+  /** Second anchor for directional kinds (`move`/`attack`): target → to. */
+  to?: PingAnchor;
+  /** Kind-specific extra. For `build`: the proposed building id. */
+  payload?: { building?: string };
+  /** Optional short label (server-clamped). */
+  label?: string;
+  createdAt: number;
+  expiresAt: number;
+}
 
 export interface ClientActionMessage {
   type: 'action';
@@ -37,7 +76,30 @@ export interface ClientStartMessage {
   type: 'start';
 }
 
-export type ClientMessage = ClientActionMessage | ClientPingMessage | ClientStartMessage;
+/** Drop a tactical ping for allies. The server stamps id / createdAt / expiresAt. */
+export interface ClientPingPlaceMessage {
+  type: 'ping.place';
+  ping: {
+    kind: PingKind;
+    target: PingAnchor;
+    to?: PingAnchor;
+    payload?: { building?: string };
+    label?: string;
+  };
+}
+
+/** Clear one of the sender's pings (or all of them when `pingId` is omitted). */
+export interface ClientPingClearMessage {
+  type: 'ping.clear';
+  pingId?: string;
+}
+
+export type ClientMessage =
+  | ClientActionMessage
+  | ClientPingMessage
+  | ClientStartMessage
+  | ClientPingPlaceMessage
+  | ClientPingClearMessage;
 
 /** Roster shown on the pre-match lobby screen (manual-start mode). */
 export interface LobbyInfo {
@@ -114,13 +176,30 @@ export interface ServerErrorMessage {
   code: ServerErrorCode;
 }
 
+/** A ping became visible to this recipient (placed, or sent on join). */
+export interface ServerPingAddedMessage {
+  type: 'ping.added';
+  matchId: string;
+  ping: Ping;
+}
+
+/** A ping the recipient could see was cleared by its owner or expired. */
+export interface ServerPingRemovedMessage {
+  type: 'ping.removed';
+  matchId: string;
+  pingId: string;
+  reason: 'cleared' | 'expired';
+}
+
 export type ServerMessage =
   | ServerWelcomeMessage
   | ServerStateMessage
   | ServerDeltaMessage
   | ServerRejectionMessage
   | ServerPongMessage
-  | ServerErrorMessage;
+  | ServerErrorMessage
+  | ServerPingAddedMessage
+  | ServerPingRemovedMessage;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -135,6 +214,30 @@ function isAction(value: unknown): value is Action {
     typeof value.issuedAt === 'number' &&
     'payload' in value
   );
+}
+
+/** A well-formed ping anchor: exactly one of a node id OR a finite {x,y} point. */
+function isPingAnchor(value: unknown): value is PingAnchor {
+  if (!isRecord(value)) return false;
+  const hasNode = typeof value.node === 'string';
+  const p = value.point;
+  const hasPoint =
+    isRecord(p) && Number.isFinite(p.x as number) && Number.isFinite(p.y as number);
+  return hasNode !== hasPoint; // exactly one
+}
+
+function isPingDraft(value: unknown): value is ClientPingPlaceMessage['ping'] {
+  if (!isRecord(value)) return false;
+  if (!PING_KINDS.includes(value.kind as PingKind)) return false;
+  if (!isPingAnchor(value.target)) return false;
+  if (value.to !== undefined && !isPingAnchor(value.to)) return false;
+  if (value.label !== undefined && typeof value.label !== 'string') return false;
+  if (value.payload !== undefined) {
+    if (!isRecord(value.payload)) return false;
+    if (value.payload.building !== undefined && typeof value.payload.building !== 'string')
+      return false;
+  }
+  return true;
 }
 
 export function parseClientMessage(raw: string): ClientMessage | null {
@@ -155,6 +258,14 @@ export function parseClientMessage(raw: string): ClientMessage | null {
   }
   if (decoded.type === 'start') {
     return { type: 'start' };
+  }
+  if (decoded.type === 'ping.place' && isPingDraft(decoded.ping)) {
+    return { type: 'ping.place', ping: decoded.ping };
+  }
+  if (decoded.type === 'ping.clear') {
+    return typeof decoded.pingId === 'string'
+      ? { type: 'ping.clear', pingId: decoded.pingId }
+      : { type: 'ping.clear' };
   }
   return null;
 }

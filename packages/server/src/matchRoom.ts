@@ -12,7 +12,9 @@ import { diffState, hashState, identifiedNodes, visibleState } from '@void/share
 import {
   parseClientMessage,
   serializeServerMessage,
+  type ClientPingPlaceMessage,
   type LobbyInfo,
+  type Ping,
   type ServerMessage,
   type ServerRejectionMessage,
 } from './protocol';
@@ -48,6 +50,12 @@ export interface MatchRoomOptions {
    *  the lobby waiting forever for the empty side). A slot frees the moment its
    *  peer disconnects, so reconnect-after-drop still works. Default false. */
   singlePeerPerPlayer?: boolean;
+  /** Static team assignment (playerId → teamId): same team = allies who see each
+   *  other's pings. Omit ⇒ no allies (only self sees own pings). Stopgap until a
+   *  real diplomacy relation exists (then read it instead in `areAllied`). */
+  teams?: Record<PlayerId, string>;
+  /** Ping time-to-live in ms (default 5 minutes). */
+  pingTtlMs?: number;
   /** Observation-only room-event stream for metrics/playtest logging (M0). */
   observe?: (event: RoomObservation) => void;
 }
@@ -82,6 +90,13 @@ function canSend(peer: RoomPeer): boolean {
   return peer.readyState === undefined || peer.readyState === OPEN;
 }
 
+/** Ally-ping tuning (ephemeral, server-side; never part of the deterministic core). */
+const PING_DEFAULT_TTL_MS = 5 * 60_000;
+const PING_MAX_PER_PLAYER = 8;
+const PING_RATE_WINDOW_MS = 2_000;
+const PING_RATE_MAX = 4;
+const PING_LABEL_MAX = 40;
+
 export class MatchRoom {
   readonly id: string;
 
@@ -111,6 +126,14 @@ export class MatchRoom {
    *  *visible* view (fog of war is server-authoritative, so every player holds a
    *  different state). A peer's `welcome` (re)sets its player's baseline. */
   private readonly lastVisible = new Map<PlayerId, GameState>();
+  private readonly teams: Record<PlayerId, string>;
+  private readonly pingTtlMs: number;
+  /** Ally pings (ephemeral): tactical markers relayed to the owner + allies, never
+   *  stored in GameState. Keyed by ping id. */
+  private readonly pings = new Map<string, Ping>();
+  private pingSeq = 0;
+  /** Per-player placement timestamps, for the rate limit. */
+  private readonly pingTimes = new Map<PlayerId, number[]>();
 
   constructor(options: MatchRoomOptions) {
     this.id = options.id;
@@ -128,6 +151,8 @@ export class MatchRoom {
     this.emitStateHash = options.emitStateHash ?? false;
     this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
     this.observe = options.observe;
+    this.teams = options.teams ?? {};
+    this.pingTtlMs = options.pingTtlMs ?? PING_DEFAULT_TTL_MS;
   }
 
   /** `hashState` of a per-player view, for the desync field (only when enabled). */
@@ -254,6 +279,7 @@ export class MatchRoom {
       ...this.hashField(view.base),
       ...this.lobbyField(),
     });
+    this.sendVisiblePings(playerId, peer); // existing ally markers, on join
     // Tell already-present peers the wait ended (waitForPlayers) or the lobby
     // roster changed (manualStart, pre-start), so their lobby screen updates.
     if (flipped || (this.manualStart && !this.started)) this.broadcastState([]);
@@ -314,6 +340,14 @@ export class MatchRoom {
     }
     if (message.type === 'start') {
       this.start(playerId); // host-only; ignored otherwise
+      return;
+    }
+    if (message.type === 'ping.place') {
+      this.handlePingPlace(playerId, peer, message);
+      return;
+    }
+    if (message.type === 'ping.clear') {
+      this.handlePingClear(playerId, message.pingId);
       return;
     }
     this.submitAction(playerId, message.action, peer);
@@ -472,6 +506,143 @@ export class MatchRoom {
       code: receipt.code ?? 'E_INTERNAL',
     };
     this.send(peer, message);
+  }
+
+  // --- ally pings (ephemeral, server-side; never part of the deterministic core) ---
+
+  /** Same player, or the same static team. The single swap-point for a future real
+   *  diplomacy relation (read `this.stateValue` instead of `this.teams`). */
+  private areAllied(a: PlayerId, b: PlayerId): boolean {
+    if (a === b) return true;
+    const ta = this.teams[a];
+    return ta !== undefined && ta === this.teams[b];
+  }
+
+  /** A ping is visible to its owner and the owner's allies; never to enemies. The
+   *  privacy guarantee is enforced HERE (server-side): an enemy is never sent the
+   *  ping at all, exactly like fog. Allies see it even on tiles they can't see —
+   *  that is the whole point ("look here"). */
+  private canSeePing(recipient: PlayerId, ping: Ping): boolean {
+    return this.areAllied(recipient, ping.owner);
+  }
+
+  /** Relay a ping message to every connected peer who may see that ping. */
+  private relayToViewers(ping: Ping, message: ServerMessage): void {
+    for (const [pid, peers] of this.peers) {
+      if (!this.canSeePing(pid, ping)) continue;
+      for (const peer of peers) this.send(peer, message);
+    }
+  }
+
+  /** Drop expired pings, telling their viewers (lazy expiry — no world timer). */
+  private sweepPings(now: number): void {
+    for (const ping of [...this.pings.values()]) {
+      if (ping.expiresAt <= now) {
+        this.pings.delete(ping.id);
+        this.relayToViewers(ping, {
+          type: 'ping.removed',
+          matchId: this.id,
+          pingId: ping.id,
+          reason: 'expired',
+        });
+      }
+    }
+  }
+
+  private handlePingPlace(playerId: PlayerId, peer: RoomPeer, message: ClientPingPlaceMessage): void {
+    if (!this.hasPlayer(playerId)) {
+      this.send(peer, { type: 'error', matchId: this.id, code: 'E_FORBIDDEN' });
+      return;
+    }
+    const now = this.clock();
+    this.sweepPings(now);
+    // rate limit: at most PING_RATE_MAX placements per window
+    const recent = (this.pingTimes.get(playerId) ?? []).filter((t) => now - t < PING_RATE_WINDOW_MS);
+    if (recent.length >= PING_RATE_MAX) {
+      this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_RATE' });
+      return;
+    }
+    const draft = message.ping;
+    if ((draft.kind === 'move' || draft.kind === 'attack') && draft.to === undefined) {
+      this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_TARGET' });
+      return;
+    }
+    if (draft.kind === 'build') {
+      const building = draft.payload?.building;
+      if (typeof building !== 'string' || !this.data.buildings[building]) {
+        this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_BUILD' });
+        return;
+      }
+    }
+    // Node anchors must reference a real planet the owner can currently identify —
+    // you can't pin a precise marker on a world you've never scouted. Point anchors
+    // ({x,y}) are always allowed; they reveal nothing hidden.
+    const seen = identifiedNodes(this.stateValue, playerId, this.data);
+    for (const anchor of [draft.target, draft.to]) {
+      if (!anchor || anchor.node === undefined) continue;
+      if (!this.stateValue.planets[anchor.node]) {
+        this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_TARGET' });
+        return;
+      }
+      if (!seen.has(anchor.node)) {
+        this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_UNSEEN' });
+        return;
+      }
+    }
+    // Evict this player's oldest pings down to the cap (never hard-block the UX).
+    const mine = [...this.pings.values()]
+      .filter((p) => p.owner === playerId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    while (mine.length >= PING_MAX_PER_PLAYER) {
+      const old = mine.shift()!;
+      this.pings.delete(old.id);
+      this.relayToViewers(old, {
+        type: 'ping.removed',
+        matchId: this.id,
+        pingId: old.id,
+        reason: 'cleared',
+      });
+    }
+    const ping: Ping = {
+      id: `ping:${playerId}:${this.pingSeq++}`,
+      owner: playerId,
+      kind: draft.kind,
+      target: draft.target,
+      createdAt: now,
+      expiresAt: now + this.pingTtlMs,
+    };
+    if (draft.to) ping.to = draft.to;
+    if (draft.payload?.building) ping.payload = { building: draft.payload.building };
+    if (draft.label) ping.label = draft.label.slice(0, PING_LABEL_MAX);
+    this.pings.set(ping.id, ping);
+    recent.push(now);
+    this.pingTimes.set(playerId, recent);
+    this.relayToViewers(ping, { type: 'ping.added', matchId: this.id, ping });
+  }
+
+  private handlePingClear(playerId: PlayerId, pingId?: string): void {
+    this.sweepPings(this.clock());
+    for (const ping of [...this.pings.values()]) {
+      if (ping.owner !== playerId) continue;
+      if (pingId !== undefined && ping.id !== pingId) continue;
+      this.pings.delete(ping.id);
+      this.relayToViewers(ping, {
+        type: 'ping.removed',
+        matchId: this.id,
+        pingId: ping.id,
+        reason: 'cleared',
+      });
+    }
+  }
+
+  /** On join: send the recipient every currently-visible, unexpired ping. */
+  private sendVisiblePings(playerId: PlayerId, peer: RoomPeer): void {
+    this.sweepPings(this.clock());
+    for (const ping of this.pings.values()) {
+      if (this.canSeePing(playerId, ping)) {
+        this.send(peer, { type: 'ping.added', matchId: this.id, ping });
+      }
+    }
   }
 
   private send(peer: RoomPeer, message: ServerMessage): void {
