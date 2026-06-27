@@ -48,6 +48,7 @@ export const data: GameData = parseGameData({
       faction: 'blue',
       stats: { attack: 5, defense: 4, speed: 64, hp: 12, cargoCapacity: 1 },
       signature: 1, // quiet recon hull
+      radarRange: 350, // projects fleet radar over the net (core fog) — mirrors main.ts RADAR_SHIP.scout
       cost: { metal: 20 },
       buildTimeHours: 1,
       upkeep: { credits: 1 },
@@ -134,9 +135,14 @@ export const data: GameData = parseGameData({
       cost: { metal: 90, credits: 40 },
       buildTimeHours: 3,
       hp: 18,
+      // Detection radius (map units) per level — drives core fog signatures over the
+      // net (`visibility.ts`). Must mirror main.ts RADAR_LEVEL_DIST[1..3] = 400/550/700
+      // so multiplayer paints the same coarse contacts single-player does; the reach
+      // must clear your own border to the next ring of worlds or there is no signature.
+      radarRange: 400,
       upgrades: [
-        { cost: { metal: 180, credits: 80 }, buildTimeHours: 5, hp: 28 },
-        { cost: { metal: 300, credits: 140 }, buildTimeHours: 7, hp: 38 },
+        { cost: { metal: 180, credits: 80 }, buildTimeHours: 5, hp: 28, radarRange: 550 },
+        { cost: { metal: 300, credits: 140 }, buildTimeHours: 7, hp: 38, radarRange: 700 },
       ],
     },
     // space fortress — only built in an asteroid field; turns the junction into a
