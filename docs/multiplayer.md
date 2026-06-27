@@ -1,6 +1,6 @@
 # Multiplayer slice
 
-This is the first server-authoritative multiplayer slice. It is intentionally smaller than the full Stage 3 server from `docs/roadmap.md`: no database, no Redis scheduler, no auth/JWT and no fog-of-war projection yet.
+This is the server-authoritative multiplayer slice (Stage 3, in progress). **Implemented and code-verified:** per-player fog-of-war deltas (filtered before broadcast) + event visibility filtering; durable, bounded, rate-limited idempotency receipts; a Postgres match/receipt store; and a **v1 offline scheduler** (`MatchRoom.tick()`/`msUntilNextEvent()`) so the world advances 24/7 with nobody connected. **Wiring nuance:** the gate-covered `pnpm dev:server` entry (`main.ts`) is still in-memory; persistence + the wakeup driver are wired in the prototype host (`prototype/netserver.ts`). **Still missing for production:** connection auth/JWT (+ Origin/TLS), a multi-match registry, the durable cross-process scheduler (pg-boss, v2), and wiring `@void/action-layer`. The live, code-verified status is in `state.md`.
 
 ## What exists now
 
@@ -278,9 +278,10 @@ Broadcasts are entity-level deltas (changed entities per collection + removed id
 
 ## Important limitations before real production multiplayer
 
-- **Persistence:** match state and idempotency receipts are memory-only. Stage 3 must store `GameState`, match version and receipts in PostgreSQL.
-- **Scheduling:** delayed events are still advanced on action/sync. Stage 3 needs a Redis/BullMQ wake-up path for long offline durations.
-- **Auth:** `playerId` is currently a query parameter. Production needs JWT/session auth in the WebSocket handshake.
-- **Fog of war:** deltas are diffed against the full state for everyone. Production must diff against `visibleState(playerId)` so a player only ever receives what they can see (needs A1).
-- **Diffs:** ✅ deltas are sent (full snapshots only on join/resync). Reconnect already works via the `welcome`/`state` full snapshot.
-- **Queues:** JavaScript message handling is serialized in one process. Multi-instance deployment needs DB optimistic locking or a per-match/per-player queue.
+- **Persistence:** ✅ a Postgres `GameState`+receipts store exists (`store/postgres.ts`), wired in the prototype host (`netserver.ts`, opt-in via `DATABASE_URL`); durable matches survive restart. ⚠️ the gate-covered `dev:server`/`main.ts` is still memory-only — promoting the store into the Stage-3 server path is the remaining work.
+- **Scheduling:** ✅ a v1 offline scheduler exists — `MatchRoom.tick()`/`msUntilNextEvent()` + a single-process `setTimeout` driver in the prototype host fire due events with nobody connected. ⚠️ a durable, cross-process wake-up (pg-boss, v2 — NOT Redis/BullMQ) is needed for >1 server process.
+- **Auth:** 🔴 `playerId` is a query parameter (`?player=`). Production needs JWT/session auth + an Origin check in the handshake (and `wss://`).
+- **Fog of war:** ✅ done — deltas are diffed per player against `visibleState(playerId)` and events are fog-filtered; nothing a player can't see leaves the server.
+- **Action gate:** 🔴 `@void/action-layer` (envelope/`clientSeq`/authz) is built and tested but not yet imported by the server; the live path uses an inline ownership check + dedup + rate-limit.
+- **Diffs:** ✅ deltas are sent (full snapshots only on join/resync). Reconnect works via the `welcome`/`state` full snapshot.
+- **Queues:** JavaScript message handling is serialized in one process. Multi-instance deployment needs DB optimistic locking / a per-match queue, and a multi-match registry (today: one room per process).

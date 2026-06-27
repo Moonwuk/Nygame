@@ -16,8 +16,11 @@ Monorepo (pnpm workspaces):
 
 - `packages/shared-core` — the deterministic, data-driven simulation. Built first,
   in isolation (no server, no DB, no network). This is where the work currently is.
-- `packages/server` — authoritative server (Stage 3). Placeholder.
-- `packages/client` — React Native client (Stage 4). Placeholder.
+- `packages/server` — authoritative server (Stage 3, in progress). Working in-memory WS slice:
+  `MatchRoom` (advance → applyAction → **per-player fog deltas**), durable+bounded+rate-limited
+  receipts, a Postgres match/receipt store + a **v1 offline scheduler** (both wired in the prototype
+  host, `prototype/netserver.ts`). Not yet: auth/JWT, multi-match registry, `@void/action-layer` wiring.
+- `packages/client` — React Native client (Stage 4). Thin `MultiplayerClient` transport adapter; app shell still a placeholder.
 - `data/` — game content as JSON. `docs/` — design docs.
 
 ## Commands
@@ -31,7 +34,10 @@ pnpm run typecheck    # tsc --noEmit, all packages
 pnpm run format       # Prettier --write
 ```
 
-CI runs lint + typecheck + test + `pnpm audit --audit-level=high`.
+Run the gate locally before committing — `pnpm run check` = lint + typecheck + test
+(+ `pnpm audit --audit-level=high`). There is no automated gate CI yet: the GitLab
+pipeline was dropped in the GitHub migration, and `.github/workflows/` currently builds
+only the Android APK (a GitHub Actions gate is a pending task — see backlog SEC / open-questions #14).
 
 ## Non-negotiable invariants
 

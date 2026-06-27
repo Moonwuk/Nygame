@@ -72,7 +72,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       economy, movement, sector, planetType, technology, combat, construction, army, victory, visibility, hero  (+ *.test.ts)
+  modules/       economy, movement, sector, planetType, technology, combat, construction, captureOnArrival, station, army, victory, visibility, hero  (13 модулей, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -87,7 +87,9 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   игрока** (производство копится сюда, содержание/стоимости списываются),
   `technologies?` = сессионные исследования (`completed[]`, `active`).
 - `planets: Record<id, Planet>` — `owner|null`, `position{x,y}`, `links?`
-  (лейны графа), `sectorType?`, `resources`, **`buildings: BuildingInstance[]`**
+  (лейны графа), `terrain?` (террейн → `sectors`) и `kind?` (тип провинции → `sectorKinds`:
+  capturable/buildable/orbit + ростер `allowedBuildings` + вид `appearance`), `size?`, `resources`,
+  **`buildings: BuildingInstance[]`**
   (`{type, level, hp}`), `garrison: UnitStack[]` (наземная армия мира), `traits`.
 - `fleets: Record<id, Fleet>` — `owner`, `location|null`, `movement|null`,
   `units: UnitStack[]` (корабли), **`landing?: UnitStack[]`** (перевозимая
