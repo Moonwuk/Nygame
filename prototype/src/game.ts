@@ -410,8 +410,14 @@ export const fleetLaunchModule: GameModule = {
       const units = planet.garrison.filter(
         (s) => !h.ctx.data.units[s.unit]?.traits.includes('ground'),
       );
-      const landing = planet.garrison.filter((s) =>
-        h.ctx.data.units[s.unit]?.traits.includes('ground'),
+      // Immobile emplacements (e.g. orbital AA, traits ['ground','immobile']) are
+      // fixed installations: they can't be lifted onto a fleet — the same rule the
+      // core army.load enforces with E_IMMOBILE. They are neither ships nor liftable
+      // cargo, so they stay behind in the garrison (see the garrison reset below).
+      const landing = planet.garrison.filter(
+        (s) =>
+          h.ctx.data.units[s.unit]?.traits.includes('ground') &&
+          !h.ctx.data.units[s.unit]?.traits.includes('immobile'),
       );
       if (units.length === 0) {
         return h.reject('E_NO_SHIPS'); // need at least one ship to form a fleet
@@ -428,7 +434,10 @@ export const fleetLaunchModule: GameModule = {
         traits: [],
         battleId: null,
       };
-      planet.garrison = [];
+      // Keep immobile emplacements behind; only ships + liftable ground cargo left.
+      planet.garrison = planet.garrison.filter((s) =>
+        h.ctx.data.units[s.unit]?.traits.includes('immobile'),
+      );
       h.emit('fleet.launched', { fleetId: id, planetId: planet.id, owner: action.playerId });
     });
 
