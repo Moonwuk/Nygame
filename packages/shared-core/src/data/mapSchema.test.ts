@@ -26,6 +26,34 @@ describe('map schema (map-roadmap.md M1.1)', () => {
     expect(map.sectors.home_green!.buildings[0]!.level).toBe(1);
   });
 
+  it('parses a slot-based AvA map — teams, decoupled from concrete players', () => {
+    const map = parseMatchMap(readMap('ava-duel-1.json'));
+    expect(Object.keys(map.players)).toEqual([]); // no baked-in players
+    expect(map.slots.slot_a!.team).toBe('A');
+    expect(map.slots.slot_b!.team).toBe('B');
+    expect(map.sectors.home_a!.owner).toBe('slot_a'); // a sector owner names a slot
+    expect(map.fleets.fleet_a!.owner).toBe('slot_a'); // a fleet owner too
+    expect(map.slots.slot_a!.resources).toEqual({ credits: 300, metal: 300 });
+  });
+
+  it('defaults a slot spawn policy to fixed and rejects an unknown one', () => {
+    const ok = safeParseMatchMap({
+      id: 'x',
+      seed: 'x',
+      sectors: { a: { position: { x: 0, y: 0 } } },
+      slots: { s: { team: 'A' } },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data.slots.s!.spawn).toBe('fixed');
+    const bad = safeParseMatchMap({
+      id: 'x',
+      seed: 'x',
+      sectors: { a: { position: { x: 0, y: 0 } } },
+      slots: { s: { team: 'A', spawn: 'teleport' } },
+    });
+    expect(bad.success).toBe(false);
+  });
+
   it('rejects a malformed map (missing sectors)', () => {
     expect(safeParseMatchMap({ id: 'x', seed: 'x' }).success).toBe(false);
   });

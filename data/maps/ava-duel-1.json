@@ -1,0 +1,40 @@
+{
+  "id": "ava-duel-1",
+  "seed": "ava-duel-1",
+  "time": 0,
+  "sectors": {
+    "nexus": { "position": { "x": 0, "y": 0 }, "kind": "nebula", "terrain": "nebula" },
+    "home_a": {
+      "position": { "x": -260, "y": 0 },
+      "kind": "planet",
+      "planetType": "terran",
+      "owner": "slot_a",
+      "buildings": [{ "type": "mine_t1" }],
+      "garrison": [{ "unit": "militia", "count": 3 }]
+    },
+    "home_b": {
+      "position": { "x": 260, "y": 0 },
+      "kind": "planet",
+      "planetType": "terran",
+      "owner": "slot_b",
+      "buildings": [{ "type": "mine_t1" }],
+      "garrison": [{ "unit": "militia", "count": 3 }]
+    },
+    "drift": { "position": { "x": 0, "y": -210 }, "kind": "asteroid", "terrain": "asteroid_field" },
+    "veil": { "position": { "x": 0, "y": 210 }, "kind": "nebula", "terrain": "nebula", "planetType": "barren" }
+  },
+  "paths": [
+    ["home_a", "nexus"],
+    ["home_b", "nexus"],
+    ["nexus", "drift"],
+    ["nexus", "veil"]
+  ],
+  "slots": {
+    "slot_a": { "team": "A", "spawn": "fixed", "resources": { "credits": 300, "metal": 300 } },
+    "slot_b": { "team": "B", "spawn": "fixed", "resources": { "credits": 300, "metal": 300 } }
+  },
+  "fleets": {
+    "fleet_a": { "owner": "slot_a", "location": "home_a", "units": [{ "unit": "cruiser", "count": 2 }] },
+    "fleet_b": { "owner": "slot_b", "location": "home_b", "units": [{ "unit": "cruiser", "count": 2 }] }
+  }
+}

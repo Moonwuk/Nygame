@@ -31,10 +31,18 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
   const issues: string[] = [];
   const ids = Object.keys(map.sectors);
   const has = (id: string): boolean => Object.prototype.hasOwnProperty.call(map.sectors, id);
+  const isOwnerRef = (ref: string): boolean =>
+    Object.prototype.hasOwnProperty.call(map.players, ref) ||
+    Object.prototype.hasOwnProperty.call(map.slots, ref);
 
-  // owners reference declared players
+  // a slot id must not collide with a player id (an ambiguous owner reference)
+  for (const sid of Object.keys(map.slots)) {
+    if (Object.prototype.hasOwnProperty.call(map.players, sid)) issues.push(`E_SLOT_PLAYER_ID_CLASH:${sid}`);
+  }
+
+  // owners reference a declared player or slot
   for (const [id, sec] of Object.entries(map.sectors)) {
-    if (sec.owner != null && !map.players[sec.owner]) issues.push(`E_SECTOR_UNKNOWN_OWNER:${id}`);
+    if (sec.owner != null && !isOwnerRef(sec.owner)) issues.push(`E_SECTOR_UNKNOWN_OWNER:${id}`);
     if (data) {
       if (sec.kind && !data.sectorKinds[sec.kind]) issues.push(`E_UNKNOWN_KIND:${id}`);
       if (sec.terrain && !data.sectors[sec.terrain]) issues.push(`E_UNKNOWN_TERRAIN:${id}`);
@@ -73,7 +81,7 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
   // fleets reference an existing sector + a declared player
   for (const [id, fl] of Object.entries(map.fleets)) {
     if (!has(fl.location)) issues.push(`E_FLEET_UNKNOWN_SECTOR:${id}`);
-    if (!map.players[fl.owner]) issues.push(`E_FLEET_UNKNOWN_OWNER:${id}`);
+    if (!isOwnerRef(fl.owner)) issues.push(`E_FLEET_UNKNOWN_OWNER:${id}`);
   }
 
   // graph connectivity (BFS over the valid undirected edges)
@@ -102,11 +110,25 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
   return issues;
 }
 
+/** Seats a concrete player into a map slot at session creation (the server
+ *  orchestrator supplies these once it has matched accounts to slots). */
+export interface SlotAssignment {
+  /** Concrete player id to create and own this slot's sectors/fleets. */
+  playerId: string;
+  /** Display name (defaults to the player id). */
+  name?: string;
+  /** Faction tag — legacy/dormant field on `Player`; defaults to ''. */
+  faction?: string;
+}
+
 export interface BuildFromMapOptions {
   /** Manifest version to pin into the match (defaults to '1'). */
   manifest?: string;
   /** Override the map's start time. */
   time?: number;
+  /** Slot id → the player seated there. Required for every slot referenced as an
+   *  `owner`; a slot-based (AvA) map is inert data until these are supplied. */
+  slots?: Record<string, SlotAssignment>;
 }
 
 /** Build a `GameState` from a validated map. Throws `E_INVALID_MAP` listing the
@@ -129,11 +151,22 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
     links[b]!.push(a);
   }
 
+  // Resolve an owner ref (a player id or a slot id) to a concrete player id.
+  // `validateMatchMap` already proved the ref is a known player or slot; a slot
+  // named as an owner must have an assignment (fail-secure at boot).
+  const slotAssign = options.slots ?? {};
+  const resolveOwner = (ref: string): string => {
+    if (Object.prototype.hasOwnProperty.call(map.players, ref)) return ref;
+    const a = slotAssign[ref];
+    if (!a) throw new Error(`E_SLOT_UNASSIGNED: ${ref}`);
+    return a.playerId;
+  };
+
   const planets: Record<string, Planet> = {};
   for (const [id, sec] of Object.entries(map.sectors)) {
     const planet: Planet = {
       id,
-      owner: sec.owner ?? null,
+      owner: sec.owner == null ? null : resolveOwner(sec.owner),
       position: { x: sec.position.x, y: sec.position.y },
       links: [...new Set(links[id])].sort(),
       resources: {},
@@ -156,12 +189,24 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
   for (const [id, pl] of Object.entries(map.players)) {
     players[id] = { id, name: pl.name, faction: pl.faction, status: 'active', resources: { ...pl.resources } };
   }
+  // seat assigned slots as concrete players (start kit = the slot's resources)
+  for (const [slotId, a] of Object.entries(slotAssign)) {
+    const slot = map.slots[slotId];
+    if (!slot) continue; // ignore assignments for slots this map does not declare
+    players[a.playerId] = {
+      id: a.playerId,
+      name: a.name ?? a.playerId,
+      faction: a.faction ?? '',
+      status: 'active',
+      resources: { ...slot.resources },
+    };
+  }
 
   const fleets: Record<string, Fleet> = {};
   for (const [id, fl] of Object.entries(map.fleets)) {
     fleets[id] = {
       id,
-      owner: fl.owner,
+      owner: resolveOwner(fl.owner),
       location: fl.location,
       movement: null,
       units: fl.units.map((u) => ({ unit: u.unit, count: u.count })),

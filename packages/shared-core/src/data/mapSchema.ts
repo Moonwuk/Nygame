@@ -40,7 +40,8 @@ export const MapSectorSchema = z.object({
    *  borders with neighbours sit proportionally to size, so resizing one shifts
    *  the neighbours' borders evenly. */
   size: z.number().positive().default(1),
-  /** Starting owner (a declared player id); null / absent = neutral. */
+  /** Starting owner — a declared player id OR a slot id (a slot is resolved to a
+   *  concrete player at load by `buildStateFromMap`); null / absent = neutral. */
   owner: z.string().nullable().default(null),
   buildings: z.array(MapBuildingSchema).default([]),
   garrison: z.array(MapUnitStackSchema).default([]),
@@ -59,6 +60,28 @@ const MapFleetSchema = z.object({
   landing: z.array(MapUnitStackSchema).default([]),
 });
 
+/** How a slot's home is placed at session creation (read by the server
+ *  orchestrator; the deterministic loader works on already-resolved ownership).
+ *  `fixed` = the sectors this slot owns in the map; `choice` = player-picked from
+ *  candidates; `random` = randomly assigned. */
+export const SpawnPolicySchema = z.enum(['fixed', 'choice', 'random']);
+
+/**
+ * A team-aware **start slot** (`corporation-wars.md` §4): a start position
+ * decoupled from any concrete player. AvA / matchmade maps declare slots instead
+ * of baking in specific players; the orchestrator seats real players into slots at
+ * session creation (`buildStateFromMap`'s `slots` assignments). A sector or fleet
+ * names a slot id as its `owner`.
+ */
+export const MapSlotSchema = z.object({
+  /** Side this slot fights for (e.g. 'A' / 'B'); a free-for-all map gives each slot its own team. */
+  team: z.string(),
+  /** Home-placement policy at session creation (orchestrator-read). */
+  spawn: SpawnPolicySchema.default('fixed'),
+  /** Starting resources granted to whoever fills the slot (a symmetric start kit). */
+  resources: ResourceBagSchema.default({}),
+});
+
 export const MatchMapSchema = z.object({
   id: z.string(),
   seed: z.string(),
@@ -70,11 +93,17 @@ export const MatchMapSchema = z.object({
    *  in `validateMatchMap`. */
   paths: z.array(z.tuple([z.string(), z.string()])).default([]),
   players: z.record(z.string(), MapPlayerSchema).default({}),
+  /** Team-aware start slots (`corporation-wars.md`): start positions decoupled from
+   *  concrete players. A sector/fleet `owner` may name a slot id; `buildStateFromMap`
+   *  seats real players into slots via its `slots` assignments. */
+  slots: z.record(z.string(), MapSlotSchema).default({}),
   fleets: z.record(z.string(), MapFleetSchema).default({}),
 });
 
 export type MatchMap = z.infer<typeof MatchMapSchema>;
 export type MapSector = z.infer<typeof MapSectorSchema>;
+export type MapSlot = z.infer<typeof MapSlotSchema>;
+export type SpawnPolicy = z.infer<typeof SpawnPolicySchema>;
 
 /** Strict parse — throws on a malformed map (use at trusted boot). */
 export function parseMatchMap(raw: unknown): MatchMap {

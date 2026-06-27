@@ -95,3 +95,41 @@ describe('validateMatchMap — neighbour-only paths + integrity (M1.3)', () => {
     expect(issues).toContain('E_PATH_SELF_LOOP:nexus');
   });
 });
+
+describe('slot-based maps — team-aware start slots (corporation-wars.md §4)', () => {
+  const avaMap = (): MatchMap => parseMatchMap(readJson('data/maps/ava-duel-1.json'));
+
+  it('seats assigned players into slots and resolves slot owners', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        slot_a: { playerId: 'p1', name: 'Alpha' },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    // slot owners resolved to the concrete players
+    expect(state.planets.home_a!.owner).toBe('p1');
+    expect(state.planets.home_b!.owner).toBe('p2');
+    expect(state.fleets.fleet_a!.owner).toBe('p1');
+    // players created from the assignment; start kit = the slot's resources
+    expect(state.players.p1!.name).toBe('Alpha');
+    expect(state.players.p2!.name).toBe('p2'); // defaults to the id
+    expect(state.players.p1!.resources).toEqual({ credits: 300, metal: 300 });
+    expect(Object.keys(state.players).sort()).toEqual(['p1', 'p2']);
+  });
+
+  it('rejects a slot owner with no assignment (fail-secure)', () => {
+    expect(() => buildStateFromMap(avaMap(), data, { slots: { slot_a: { playerId: 'p1' } } })).toThrow(
+      /E_SLOT_UNASSIGNED/,
+    );
+  });
+
+  it('accepts slot ids as sector/fleet owners (validation clean)', () => {
+    expect(validateMatchMap(avaMap(), data)).toEqual([]);
+  });
+
+  it('flags a slot id that collides with a player id', () => {
+    const map = exampleMap(); // has players green/red
+    map.slots.green = { team: 'A', spawn: 'fixed', resources: {} };
+    expect(validateMatchMap(map, data)).toContain('E_SLOT_PLAYER_ID_CLASH:green');
+  });
+});
