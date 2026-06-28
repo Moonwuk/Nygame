@@ -37,6 +37,12 @@ import {
   declareWar,
   canTraverse,
   START_CANDIDATES,
+  DEFAULT_TEMPLATES,
+  FORMATION_UNITS,
+  FORMATION_SLOTS,
+  formationStats,
+  type FormationTemplate,
+  type FormationUnit,
   type SetupConfig,
   type SeatConfig,
   type StepOut,
@@ -4363,6 +4369,78 @@ const setupMapEl = $('setupmap');
 const setupSlotsEl = $('setupslots');
 const setupHintEl = $('setuphint');
 const setupGoEl = $('setupgo') as HTMLButtonElement;
+const setupDivEl = $('setup-div');
+
+// --- division designer (main-menu "Дивизии" tab) ----------------------------
+// The player's 3 templates, composed before the match and LOCKED once it starts.
+// Persisted across openSetup() so a design survives going Back; deep-cloned from the
+// defaults so editing never mutates them.
+const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
+  name: t.name,
+  slots: [...t.slots],
+}));
+let setupTplIdx = 0; // which of the 3 templates is open in the designer
+const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈' };
+const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер' };
+
+function renderTemplates(): void {
+  const tabs = setupTemplates
+    .map((t, i) => `<button data-tpl="${i}" class="${i === setupTplIdx ? 'on' : ''}">${esc(t.name)}</button>`)
+    .join('');
+  const tpl = setupTemplates[setupTplIdx]!;
+  const slots = tpl.slots
+    .map((u, i) => {
+      const cls = u ? '' : 'empty';
+      const ic = u ? FORM_ICON[u] : '＋';
+      const nm = u ? FORM_RU[u] : 'пусто';
+      return `<div class="tslot ${cls}" data-slot="${i}"><span class="ic">${ic}</span><span class="nm">${esc(nm)}</span></div>`;
+    })
+    .join('');
+  const f = formationStats(tpl);
+  const syn = f.synergies.length
+    ? f.synergies.map((x) => `<span class="syn">◈ ${esc(x.name)} — ${esc(x.desc)}</span>`).join('')
+    : `<span class="syn none">◇ Нет бонусов состава — смешай рода войск.</span>`;
+  const cost = Object.entries(f.cost)
+    .map(([r, a]) => `${a} ${r}`)
+    .join(' · ');
+  setupDivEl.innerHTML =
+    `<p class="ssub">Собери 3 шаблона дивизий из 6 слотов. Состав даёт суммарные статы и бонусы; во время боя шаблоны не меняются. Тапни слот, чтобы сменить юнит.</p>` +
+    `<div class="tpl-tabs">${tabs}</div>` +
+    `<div class="tpl-slots">${slots}</div>` +
+    `<div class="tpl-stats"><div class="row"><span>⚔ Атака ${f.attack}</span><span>🛡 Оборона ${f.defense}</span><span>❤ HP ${f.hp}</span><span>№ ${f.count}/${FORMATION_SLOTS}</span></div>${syn}<div class="tpl-cost">Стоимость мобилизации: ${cost || '—'}</div></div>`;
+}
+
+/** Cycle a slot through: пусто → пехота → танк → бомбер → пусто. */
+function cycleSlot(i: number): void {
+  const tpl = setupTemplates[setupTplIdx];
+  if (!tpl) return;
+  const cur = tpl.slots[i] ?? null;
+  const order: (FormationUnit | null)[] = [null, ...FORMATION_UNITS];
+  const next = order[(order.indexOf(cur) + 1) % order.length] ?? null;
+  tpl.slots[i] = next;
+  renderTemplates();
+}
+
+setupDivEl.addEventListener('click', (ev) => {
+  const t = (ev.target as Element).closest('[data-slot],[data-tpl]') as HTMLElement | null;
+  if (!t) return;
+  if (t.dataset.tpl !== undefined) {
+    setupTplIdx = Number(t.dataset.tpl);
+    renderTemplates();
+  } else if (t.dataset.slot !== undefined) {
+    cycleSlot(Number(t.dataset.slot));
+  }
+});
+// Setup tab switch (Старт ↔ Дивизии).
+document.querySelector('#setup .stabs')?.addEventListener('click', (ev) => {
+  const t = (ev.target as Element).closest('[data-stab]') as HTMLElement | null;
+  if (!t) return;
+  const tab = t.dataset.stab;
+  document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === tab));
+  $('setup-start').style.display = tab === 'start' ? '' : 'none';
+  setupDivEl.style.display = tab === 'div' ? '' : 'none';
+  if (tab === 'div') renderTemplates();
+});
 
 function renderSetupMap(): void {
   const pad = 60;
@@ -4430,6 +4508,10 @@ function openSetup(): void {
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
   showConnect(false);
   setupEl.style.display = 'flex';
+  // Always open on the Старт tab (the division designer keeps its own state).
+  document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === 'start'));
+  $('setup-start').style.display = '';
+  setupDivEl.style.display = 'none';
   renderSetup();
 }
 
@@ -4447,7 +4529,8 @@ function buildSetupConfig(): SetupConfig {
     const m = SEAT_META[i]!;
     seats.push({ id: m.id, name: m.name, faction: m.faction, start, ai: true });
   }
-  return { seats };
+  // Carry the player's locked division templates into the match (deep-cloned).
+  return { seats, templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })) };
 }
 
 function startMatch(setup: SetupConfig): void {

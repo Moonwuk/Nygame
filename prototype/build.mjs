@@ -537,6 +537,27 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .sgo:disabled{opacity:.4;cursor:not-allowed;}
 #setup .scancel{width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid var(--line-hi);
   background:transparent;color:var(--dim);font:12px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
+/* setup tabs (Старт / Дивизии) + division designer */
+#setup .stabs{display:flex;gap:6px;margin:12px 0 14px;}
+#setup .stabs button{flex:1;padding:9px;border:1px solid var(--line-hi);border-radius:8px;background:transparent;
+  color:var(--dim);font:600 12px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
+#setup .stabs button.on{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.12);}
+#setup .tpl-tabs{display:flex;gap:6px;margin-bottom:12px;}
+#setup .tpl-tabs button{flex:1;padding:8px 6px;border:1px solid var(--line-hi);border-radius:7px;background:transparent;
+  color:var(--ink);font:12px ui-monospace,monospace;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#setup .tpl-tabs button.on{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.12);}
+#setup .tpl-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;}
+#setup .tslot{padding:12px 6px;border:1px dashed var(--line-hi);border-radius:8px;background:rgba(255,255,255,.02);
+  text-align:center;cursor:pointer;min-height:64px;display:flex;flex-direction:column;justify-content:center;gap:3px;}
+#setup .tslot .ic{font-size:20px;line-height:1;}
+#setup .tslot .nm{font:11px ui-monospace,monospace;color:var(--ink);}
+#setup .tslot.empty{opacity:.5;}
+#setup .tslot.empty .nm{color:var(--dim);}
+#setup .tpl-stats{border:1px solid var(--line-hi);border-radius:8px;padding:12px;margin-bottom:6px;font:12px ui-monospace,monospace;}
+#setup .tpl-stats .row{display:flex;gap:14px;color:var(--ink);margin-bottom:8px;flex-wrap:wrap;}
+#setup .tpl-stats .syn{display:block;color:var(--cyan);font-size:11px;margin-top:4px;line-height:1.5;}
+#setup .tpl-stats .syn.none{color:var(--dim);}
+#setup .tpl-cost{color:var(--dim);font-size:11px;margin-top:6px;}
 `;
 
 const html = `<!doctype html>
@@ -608,11 +629,15 @@ const html = `<!doctype html>
 <div id="setup">
   <div class="sbox">
     <div class="stitle"><span class="dia"></span><b>SKIRMISH SETUP</b></div>
-    <p class="ssub">Pick your homeworld on the map, choose how many rivals join, then launch. Empty
-      slots are taken by the AI — switch a slot OFF to command a smaller sector.</p>
-    <svg id="setupmap" class="smap" preserveAspectRatio="xMidYMid meet"></svg>
-    <p class="smaphint" id="setuphint">Tap a glowing world to choose your start</p>
-    <div id="setupslots" class="sslots"></div>
+    <div class="stabs"><button data-stab="start" class="on">Старт</button><button data-stab="div">Дивизии</button></div>
+    <div id="setup-start" class="spane">
+      <p class="ssub">Pick your homeworld on the map, choose how many rivals join, then launch. Empty
+        slots are taken by the AI — switch a slot OFF to command a smaller sector.</p>
+      <svg id="setupmap" class="smap" preserveAspectRatio="xMidYMid meet"></svg>
+      <p class="smaphint" id="setuphint">Tap a glowing world to choose your start</p>
+      <div id="setupslots" class="sslots"></div>
+    </div>
+    <div id="setup-div" class="spane" style="display:none"></div>
     <button id="setupgo" class="sgo" disabled>LAUNCH</button>
     <button id="setupcancel" class="scancel">Back</button>
   </div>
