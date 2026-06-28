@@ -137,6 +137,22 @@ export class PostgresAccountStore implements AccountStore {
     }
     return null; // every seat taken
   }
+
+  async seatOf(room: string, nick: string): Promise<PlayerId | null> {
+    const r = await this.pool.query<{ player_id: string }>(
+      `SELECT player_id FROM seats WHERE room = $1 AND nick = $2`,
+      [room, nick],
+    );
+    return r.rows[0]?.player_id ?? null;
+  }
+
+  async occupiedSeats(room: string): Promise<number> {
+    const r = await this.pool.query<{ n: string }>(
+      `SELECT count(*) AS n FROM seats WHERE room = $1`,
+      [room],
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  }
 }
 
 interface ReceiptRow {

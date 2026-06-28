@@ -11,6 +11,13 @@ export {
   type MultiplayerServerHandle,
   type MultiplayerServerOptions,
 } from './wsServer';
+export {
+  MatchRegistry,
+  type MatchMeta,
+  type MatchSummary,
+  type MatchLists,
+  type ArchiveResult,
+} from './matchRegistry';
 export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export type {
   ClientActionMessage,
