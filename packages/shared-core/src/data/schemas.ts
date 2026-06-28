@@ -23,7 +23,9 @@ export const UnitStatsSchema = z
     speed: z.number(),
     /** Hit points per ship — aggregate fleet HP = Σ count × hp (GDD §7.1). */
     hp: z.number().nonnegative().default(1),
-    /** Firing range — only meaningful for artillery units (reserved). */
+    /** Standoff firing radius in MAP UNITS — the Euclidean reach of an
+     *  `artillery` unit's ranged attack (combat `runArtillery`). 0 = melee only,
+     *  no ranged attack. The longest gun in a fleet sets the fleet's reach. */
     range: z.number().nonnegative().default(0),
     /** Ground-army transport capacity of a ship (0 = carries nothing; a
      *  dedicated dropship carries a lot). Bigger hulls carry more. */

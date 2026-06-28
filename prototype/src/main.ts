@@ -23,6 +23,7 @@ import {
   orbitFleet,
   assaultFleet,
   bombardFleet,
+  barrageFleet,
   loadArmy,
   unloadArmy,
   mergeFleet,
@@ -235,6 +236,7 @@ let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
+let barrageAim = false; // "Обстрел" armed → next tap picks the artillery's focus target
 // A staged move that would cross territory of a player you're at PEACE with: held
 // until you confirm in the war-prompt (declaring war opens the route) or cancel.
 let warPrompt: {
@@ -862,6 +864,25 @@ function battleAnchor(b: Battle): { x: number; y: number } | null {
 function selectedFleetIds(): string[] {
   if (selFleets.size) return [...selFleets].filter((id) => s.fleets[id]?.owner === ME);
   return selFleet && s.fleets[selFleet]?.owner === ME ? [selFleet] : [];
+}
+
+/** Does this fleet carry artillery (units that fire at range — the `fleet.barrage`
+ *  / standoff-fire mechanic applies)? */
+function fleetHasArtillery(f: Fleet | undefined): boolean {
+  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('artillery') ?? false));
+}
+
+/** A fleet's standoff firing radius (map units) — the longest gun among its live
+ *  artillery units sets the reach (mirrors combat.ts artilleryRange). 0 = none. */
+function artilleryRangeOf(f: Fleet | undefined): number {
+  if (!f) return 0;
+  let r = 0;
+  for (const u of f.units) {
+    if (u.count > 0 && data.units[u.unit]?.traits.includes('artillery')) {
+      r = Math.max(r, data.units[u.unit]?.stats.range ?? 0);
+    }
+  }
+  return r;
 }
 
 const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
@@ -2697,7 +2718,32 @@ function render(now: number) {
     cx.fill();
     cx.restore();
 
-    if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 12, now);
+    if (selFleet === f.id || selFleets.has(f.id)) {
+      targetBrackets(A.x, A.y, 12, now);
+      // Artillery: show the standoff firing radius (and a focus line to a chosen
+      // target) so the player can read the reach — "радиус не очень большой".
+      const aRange = artilleryRangeOf(f);
+      if (aRange > 0) {
+        cx.save();
+        cx.strokeStyle = rgba('#ff7a3a', barrageAim ? 0.7 : 0.42);
+        cx.lineWidth = 1;
+        cx.setLineDash([5, 5]);
+        cx.beginPath();
+        cx.arc(A.x, A.y, aRange * cam.scale, 0, TAU);
+        cx.stroke();
+        cx.setLineDash([]);
+        const tf = f.barrageTarget ? s.fleets[f.barrageTarget] : undefined;
+        const ta = tf ? fleetAnchor(tf) : null;
+        if (ta) {
+          cx.strokeStyle = rgba('#ff7a3a', 0.8);
+          cx.beginPath();
+          cx.moveTo(A.x, A.y);
+          cx.lineTo(ta.x, ta.y);
+          cx.stroke();
+        }
+        cx.restore();
+      }
+    }
 
     cx.fillStyle = rgba(col, 0.95);
     cx.font = '700 10px ui-monospace,Menlo,monospace';
@@ -3790,12 +3836,15 @@ function renderCmdBar() {
   // Split: only a single docked fleet with ≥2 ships can shed some into a new fleet.
   const lone = ids.length === 1 && fleets[0] ? fleets[0] : null;
   const canSplit = !!lone && !!lone.location && !lone.movement && !lone.battleId && sumUnits(lone.units) >= 2;
+  // Artillery in the selection → offer the standoff-fire focus order.
+  const anyArtillery = fleets.some(fleetHasArtillery);
   const html =
     `<span class="cmdlabel">${ids.length > 1 ? ids.length + ' FLEETS' : 'FLEET'}</span>` +
     cmdBtn('move', '⤳', 'Move', aiming ? 'on' : '', false) +
     cmdBtn('stop', '■', 'Stop', 'danger', !anyMoving) +
     cmdBtn('attack', '⚔', 'Attack', '', !canAssault) +
     cmdBtn(descend ? 'near' : 'far', descend ? '▼' : '▲', descend ? 'Near' : 'Far', '', !anyDocked) +
+    (anyArtillery ? cmdBtn('barrage', '🎯', 'Обстрел', barrageAim ? 'on' : '', false) : '') +
     cmdBtn('merge', '⛬', ids.length > 1 ? 'Merge' : 'Merge…', merging ? 'on' : '', !canMerge) +
     cmdBtn('split', '⊟', 'Split', splitState ? 'on' : '', !canSplit);
   if (html !== lastCmdHtml) {
@@ -3973,6 +4022,7 @@ cmdbar.addEventListener('click', (ev) => {
   const cmd = t.dataset.cmd;
   const ids = selectedFleetIds();
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
+  if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
   if (cmd === 'move') {
     aiming = !aiming; // arm / disarm the move order
   } else if (cmd === 'merge') {
@@ -4000,6 +4050,12 @@ cmdbar.addEventListener('click', (ev) => {
       aiming = false;
       renderSplitDialog();
     }
+  } else if (cmd === 'barrage') {
+    // Arm focus-fire: the next tap on an enemy fleet aims the selected artillery
+    // at it; a tap on empty space clears back to auto-targeting the nearest.
+    barrageAim = !barrageAim;
+    aiming = false;
+    if (barrageAim) note('🎯 tap an enemy fleet to focus fire · empty space = auto');
   }
   lastCmdHtml = '';
   lastPanelHtml = '';
@@ -4027,6 +4083,29 @@ function selectAt(mx: number, my: number) {
       }
     }
     merging = false;
+    lastPanelHtml = '';
+    return;
+  }
+  // Barrage armed: the next tap on an enemy fleet focuses the selected artillery's
+  // standoff fire on it; a tap on empty space (no enemy fleet) clears back to
+  // auto-targeting the nearest hostile in range. A mis-aimed/peace target is
+  // rejected server-side (surfaced as a log note).
+  if (barrageAim) {
+    let targetId: string | null = null;
+    for (const f of Object.values(s.fleets)) {
+      if (f.owner === ME) continue;
+      const a = fleetAnchor(f);
+      if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
+        targetId = f.id;
+        break;
+      }
+    }
+    for (const id of selectedFleetIds()) {
+      if (fleetHasArtillery(s.fleets[id])) playerOrder(barrageFleet(ME, id, targetId));
+    }
+    if (targetId) note('🎯 focus fire set');
+    else note('🎯 auto-target');
+    barrageAim = false;
     lastPanelHtml = '';
     return;
   }

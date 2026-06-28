@@ -70,8 +70,11 @@ export const data: GameData = parseGameData({
       upkeep: { credits: 4 },
     },
     siege: {
+      // Artillery: a backline platform that fires from range at one target —
+      // a pure standoff (no return fire) within `range` map units (combat
+      // runArtillery). Reaches ~one neighbouring world (~205 apart), no further.
       faction: 'blue',
-      stats: { attack: 30, defense: 6, speed: 30, hp: 40, range: 3 },
+      stats: { attack: 30, defense: 6, speed: 30, hp: 40, range: 240 },
       traits: ['artillery'],
       signature: 5, // huge siege platform — loudest
       cost: { metal: 90, credits: 40 },
@@ -969,6 +972,10 @@ export const assaultFleet = (playerId: string, fleetId: string) =>
   act(playerId, 'fleet.assault', { fleetId });
 export const bombardFleet = (playerId: string, fleetId: string, on: boolean) =>
   act(playerId, 'fleet.bombard', { fleetId, on });
+/** Focus an artillery fleet's standoff fire on one enemy fleet (targetId), or
+ *  clear (targetId null) to auto-target the nearest hostile in range. */
+export const barrageFleet = (playerId: string, fleetId: string, targetId: string | null) =>
+  act(playerId, 'fleet.barrage', { fleetId, targetId });
 export const loadArmy = (playerId: string, fleetId: string, unit: string, count = 1) =>
   act(playerId, 'army.load', { fleetId, unit, count });
 export const unloadArmy = (playerId: string, fleetId: string, unit: string, count = 1) =>

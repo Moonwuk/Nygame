@@ -21,7 +21,7 @@
   },
   "siege_lance": {
     "faction": "vanguard",
-    "stats": { "attack": 18, "defense": 2, "speed": 5, "hp": 14, "range": 3 },
+    "stats": { "attack": 18, "defense": 2, "speed": 5, "hp": 14, "range": 300 },
     "line": "rear",
     "traits": ["artillery"],
     "abilities": [],

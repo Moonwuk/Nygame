@@ -7,6 +7,7 @@ import { sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
 import { isCapturable } from '../state/sectorKind';
 import { getStance } from '../state/diplomacy';
+import { distance } from '../state/route';
 /** Hard cap on rounds so a zero-damage stalemate can't run forever (fail-secure). */
 const MAX_COMBAT_ROUNDS = 240;
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
@@ -671,6 +672,143 @@ function runOrbital(h: HandlerContext, hours: number): void {
   }
 }
 
+// --- artillery standoff fire (the ranged layer, GDD §7.2) --------------------
+
+/** A fleet's continuous map position at `now`: its node, its parked lane point,
+ *  or its interpolated spot mid-leg (mirrors movement's own progress math). null
+ *  if it has no resolvable position (units missing from the map). */
+function fleetPosition(state: GameState, fleet: Fleet, now: number): { x: number; y: number } | null {
+  if (fleet.location !== null) {
+    return state.planets[fleet.location]?.position ?? null;
+  }
+  const lerp = (from: PlanetId, to: PlanetId, t: number): { x: number; y: number } | null => {
+    const a = state.planets[from]?.position;
+    const b = state.planets[to]?.position;
+    if (!a || !b) return null;
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  };
+  const mv = fleet.movement;
+  if (mv) {
+    const startT = mv.startT ?? 0;
+    const endT = mv.endT ?? 1;
+    const span = mv.arrivesAt - mv.departedAt;
+    const progress = span > 0 ? Math.min(1, Math.max(0, (now - mv.departedAt) / span)) : 1;
+    return lerp(mv.from, mv.to, startT + (endT - startT) * progress);
+  }
+  const e = fleet.edge;
+  if (e) return lerp(e.from, e.to, e.t);
+  return null;
+}
+
+/** A fleet's standoff firepower = Σ over its artillery units (count × attack).
+ *  Only `artillery`-trait units fire at range; the rest are melee-only. */
+function artilleryPower(fleet: Fleet, data: GameData): number {
+  let total = 0;
+  for (const s of fleet.units) {
+    const def = data.units[s.unit];
+    if (def && def.traits.includes('artillery')) {
+      total += s.count * def.stats.attack;
+    }
+  }
+  return total;
+}
+
+/** A fleet's firing radius (map units) = the MAX `range` among its live artillery
+ *  units (the longest gun sets the reach). 0 = no artillery aboard / no range. */
+function artilleryRange(fleet: Fleet, data: GameData): number {
+  let r = 0;
+  for (const s of fleet.units) {
+    if (s.count <= 0) continue;
+    const def = data.units[s.unit];
+    if (def && def.traits.includes('artillery')) {
+      r = Math.max(r, def.stats.range ?? 0);
+    }
+  }
+  return r;
+}
+
+/** The fleet an artillery shooter fires on this span: its player-chosen
+ *  `barrageTarget` if still hostile, alive and in range, else the NEAREST such
+ *  hostile fleet (ties broken by lowest id). null = nothing in range. A
+ *  now-invalid chosen target is cleared as a side effect (falls back to auto). */
+function pickBarrageTarget(
+  h: HandlerContext,
+  shooter: Fleet,
+  from: { x: number; y: number },
+  range: number,
+): Fleet | null {
+  const inRange = (f: Fleet): boolean => {
+    if (f.id === shooter.id || !isHostile(h, shooter.owner, f.owner)) return false;
+    if (!f.units.some((s) => s.count > 0)) return false;
+    const p = fleetPosition(h.state, f, h.ctx.now);
+    return p !== null && distance(from, p) <= range;
+  };
+  const chosen = shooter.barrageTarget;
+  if (chosen != null) {
+    const t = h.state.fleets[chosen];
+    if (t && inRange(t)) return t;
+    shooter.barrageTarget = null; // stale — drop it, fall back to auto-target
+  }
+  let best: Fleet | null = null;
+  let bestDist = Infinity;
+  // Sorted ids ⇒ deterministic; the first at the minimal distance wins ties.
+  for (const id of Object.keys(h.state.fleets).sort()) {
+    const f = h.state.fleets[id];
+    if (!f || !inRange(f)) continue;
+    const d = distance(from, fleetPosition(h.state, f, h.ctx.now)!);
+    if (d < bestDist) {
+      bestDist = d;
+      best = f;
+    }
+  }
+  return best;
+}
+
+/**
+ * Artillery standoff fire (GDD §7.2 — "бьёт на расстоянии"): each FREE fleet
+ * carrying artillery shells ONE hostile fleet within its firing radius. A pure
+ * standoff — no return fire and no battle is entered; the only counter is to
+ * close the distance and engage it in melee. Auto-targets the nearest hostile,
+ * or the player's `fleet.barrage` focus target. Accrues over the continuous span
+ * like orbital AA, so total damage is independent of how finely time advances.
+ */
+function runArtillery(h: HandlerContext, hours: number): void {
+  const data = h.ctx.data;
+  // Sorted ids ⇒ deterministic order; firing mutates/deletes fleets mid-loop, so
+  // re-read each shooter and its target from live state.
+  for (const id of Object.keys(h.state.fleets).sort()) {
+    const shooter = h.state.fleets[id];
+    if (!shooter || shooter.battleId) continue; // pinned in melee → its guns are busy there
+    const range = artilleryRange(shooter, data);
+    const power = artilleryPower(shooter, data);
+    if (range <= 0 || power <= 0) continue;
+    const from = fleetPosition(h.state, shooter, h.ctx.now);
+    if (!from) continue;
+    const target = pickBarrageTarget(h, shooter, from, range);
+    if (!target) continue;
+    const targetId = target.id;
+    applyDamageToSide(
+      h,
+      { kind: 'fleet', fleetId: targetId },
+      power * hours,
+      data,
+      shooter.location ?? target.location ?? id,
+    );
+    h.emit('artillery.fired', {
+      fleetId: shooter.id,
+      owner: shooter.owner,
+      target: targetId,
+      power: power * hours,
+      at: h.ctx.now,
+    });
+    const after = h.state.fleets[targetId];
+    if (after && after.units.length === 0) {
+      h.emit('fleet.destroyed', { fleetId: after.id, owner: after.owner });
+      delete h.state.fleets[targetId];
+    }
+  }
+}
+
 /**
  * Combat — a base module (GDD §7). Battles are stateful entities resolved over
  * real hours, one round per `combat.tick`. Fleets collide at map nodes (a
@@ -811,14 +949,54 @@ export const combatModule: GameModule = {
       h.emit('fleet.bombard', { fleetId, on, owner: action.playerId });
     });
 
-    // The orbital layer accrues over continuous time, like the economy.
+    // The orbital + artillery layers accrue over continuous time, like the economy.
     api.on('time.advanced', (event, h) => {
       const { from, to } = event.payload as { from: number; to: number };
       const span = to - from;
       if (span <= 0) {
         return;
       }
-      runOrbital(h, (span / MS_PER_HOUR) * timeScaleOf(h.ctx));
+      const hours = (span / MS_PER_HOUR) * timeScaleOf(h.ctx);
+      runOrbital(h, hours);
+      runArtillery(h, hours);
+    });
+
+    // Focus-fire order for artillery standoff fire: aim this fleet's guns at a
+    // specific hostile fleet, or clear (targetId null) to resume auto-targeting.
+    // The shot itself fires in `runArtillery` each span; this only records intent
+    // (server-authority — the client sends the order, never the damage).
+    api.onAction('fleet.barrage', (action, h) => {
+      const { fleetId, targetId } = action.payload as { fleetId?: string; targetId?: string | null };
+      if (typeof fleetId !== 'string') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const fleet = h.state.fleets[fleetId];
+      if (!fleet) {
+        return h.reject('E_NO_FLEET');
+      }
+      if (fleet.owner !== action.playerId) {
+        return h.reject('E_FORBIDDEN');
+      }
+      if (artilleryRange(fleet, h.ctx.data) <= 0) {
+        return h.reject('E_NO_ARTILLERY'); // nothing aboard can fire at range
+      }
+      if (targetId == null) {
+        fleet.barrageTarget = null; // clear → auto-target the nearest in range
+        h.emit('fleet.barrage', { fleetId, target: null, owner: action.playerId });
+        return;
+      }
+      if (typeof targetId !== 'string' || targetId === fleetId) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const target = h.state.fleets[targetId];
+      if (!target) {
+        return h.reject('E_NO_TARGET');
+      }
+      if (!isHostile(h, fleet.owner, target.owner)) {
+        return h.reject('E_NOT_HOSTILE');
+      }
+      fleet.barrageTarget = targetId;
+      h.emit('fleet.barrage', { fleetId, target: targetId, owner: action.playerId });
     });
 
     api.on('combat.tick', (event, h) => {

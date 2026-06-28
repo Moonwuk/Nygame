@@ -181,6 +181,10 @@ export interface Fleet {
   traits: TraitId[];
   /** Id of the battle this fleet is engaged in; absent/null when free to move. */
   battleId?: BattleId | null;
+  /** Player-chosen focus-fire target for this fleet's artillery standoff fire
+   *  (`fleet.barrage`). Absent/null = auto-target the nearest hostile in range.
+   *  Cleared automatically once the target dies or drifts out of range. */
+  barrageTarget?: FleetId | null;
 }
 
 /**
