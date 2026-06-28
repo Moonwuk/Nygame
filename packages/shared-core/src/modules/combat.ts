@@ -740,6 +740,11 @@ function pickBarrageTarget(
   const inRange = (f: Fleet): boolean => {
     if (f.id === shooter.id || !isHostile(h, shooter.owner, f.owner)) return false;
     if (!f.units.some((s) => s.count > 0)) return false;
+    // Only a STATIONARY target can be shelled: a fleet in transit has a position
+    // that changes across the span, so a fixed-instant range test over the whole
+    // span would over/under-bill (and make the damage depend on how finely time
+    // advances). A holding/sieging target has a constant position — exact.
+    if (f.movement) return false;
     const p = fleetPosition(h.state, f, h.ctx.now);
     return p !== null && distance(from, p) <= range;
   };
@@ -765,20 +770,29 @@ function pickBarrageTarget(
 }
 
 /**
- * Artillery standoff fire (GDD §7.2 — "бьёт на расстоянии"): each FREE fleet
- * carrying artillery shells ONE hostile fleet within its firing radius. A pure
- * standoff — no return fire and no battle is entered; the only counter is to
- * close the distance and engage it in melee. Auto-targets the nearest hostile,
- * or the player's `fleet.barrage` focus target. Accrues over the continuous span
- * like orbital AA, so total damage is independent of how finely time advances.
+ * Artillery standoff fire (GDD §7.2 — "бьёт на расстоянии"): each FREE,
+ * STATIONARY fleet carrying artillery shells ONE hostile stationary fleet within
+ * its firing radius. A pure standoff — no return fire and no battle is entered;
+ * the only counter is to close the distance and engage it in melee. Auto-targets
+ * the nearest hostile, or the player's `fleet.barrage` focus target.
+ *
+ * Two invariants drive the design:
+ *  - Only stationary shooters AND targets fire/are-hit (no `movement`): their
+ *    positions are constant across the span, so the single-instant range test and
+ *    the full-span damage bill are EXACT — total damage stays independent of how
+ *    finely time advances (a fleet in transit fights via melee collision instead).
+ *  - SIMULTANEOUS resolution: every shot is resolved from the pre-span snapshot
+ *    (pass 1) before any damage lands (pass 2), so two artillery fleets that wipe
+ *    each other both get their shot off — mirroring `combat.tick`'s pre-round model
+ *    (no first-strike advantage to the lower fleet id).
  */
 function runArtillery(h: HandlerContext, hours: number): void {
   const data = h.ctx.data;
-  // Sorted ids ⇒ deterministic order; firing mutates/deletes fleets mid-loop, so
-  // re-read each shooter and its target from live state.
+  // Pass 1 — resolve every shot from the PRE-span state (no damage applied yet).
+  const shots: { shooterId: string; owner: string; targetId: string; dmg: number; at: string }[] = [];
   for (const id of Object.keys(h.state.fleets).sort()) {
     const shooter = h.state.fleets[id];
-    if (!shooter || shooter.battleId) continue; // pinned in melee → its guns are busy there
+    if (!shooter || shooter.battleId || shooter.movement) continue; // pinned in melee / maneuvering
     const range = artilleryRange(shooter, data);
     const power = artilleryPower(shooter, data);
     if (range <= 0 || power <= 0) continue;
@@ -786,25 +800,28 @@ function runArtillery(h: HandlerContext, hours: number): void {
     if (!from) continue;
     const target = pickBarrageTarget(h, shooter, from, range);
     if (!target) continue;
-    const targetId = target.id;
-    applyDamageToSide(
-      h,
-      { kind: 'fleet', fleetId: targetId },
-      power * hours,
-      data,
-      shooter.location ?? target.location ?? id,
-    );
-    h.emit('artillery.fired', {
-      fleetId: shooter.id,
+    shots.push({
+      shooterId: id,
       owner: shooter.owner,
-      target: targetId,
-      power: power * hours,
+      targetId: target.id,
+      dmg: power * hours,
+      at: shooter.location ?? target.location ?? id,
+    });
+  }
+  // Pass 2 — apply all shots in deterministic order, then resolve wiped targets.
+  for (const shot of shots) {
+    applyDamageToSide(h, { kind: 'fleet', fleetId: shot.targetId }, shot.dmg, data, shot.at);
+    h.emit('artillery.fired', {
+      fleetId: shot.shooterId,
+      owner: shot.owner,
+      target: shot.targetId,
+      power: shot.dmg,
       at: h.ctx.now,
     });
-    const after = h.state.fleets[targetId];
+    const after = h.state.fleets[shot.targetId];
     if (after && after.units.length === 0) {
       h.emit('fleet.destroyed', { fleetId: after.id, owner: after.owner });
-      delete h.state.fleets[targetId];
+      delete h.state.fleets[shot.targetId];
     }
   }
 }

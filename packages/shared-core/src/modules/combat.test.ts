@@ -812,4 +812,48 @@ describe('combat — artillery standoff fire (GDD §7.2)', () => {
     setStance(peaceful, 'p1', 'p2', 'peace');
     expect(rej(kernel.applyAction(peaceful, barrage('ART', 'E'), ctx(0)))).toBe('E_NOT_HOSTILE');
   });
+
+  it('a moving shooter holds fire (only stationary artillery shells)', () => {
+    const kernel = createKernel([combatModule]);
+    const st = baseState(
+      [fleet('ART', 'p1', 'PA', [['siege', 1]]), fleet('E', 'p2', 'PB', [['fighter', 2]])],
+      [planet('PA', null, 0, 0), planet('PB', null, 100, 0)],
+    );
+    st.fleets.ART!.location = null; // in transit — its position drifts across the span
+    st.fleets.ART!.movement = { from: 'PA', to: 'PB', departedAt: 0, arrivesAt: 100 * HOUR };
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+
+    expect(stackOf(r.state.fleets.E, 'fighter')?.hp).toBeUndefined(); // not shelled
+    expect(types(r.events)).not.toContain('artillery.fired');
+  });
+
+  it('does not shell a moving target (only a stationary fleet can be hit)', () => {
+    const kernel = createKernel([combatModule]);
+    const st = baseState(
+      [fleet('ART', 'p1', 'PA', [['siege', 1]]), fleet('E', 'p2', 'PB', [['fighter', 2]])],
+      [planet('PA', null, 0, 0), planet('PB', null, 100, 0)], // PB in range
+    );
+    st.fleets.E!.location = null; // in transit through the radius — geometry not constant
+    st.fleets.E!.movement = { from: 'PB', to: 'PA', departedAt: 0, arrivesAt: 100 * HOUR };
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+
+    expect(stackOf(r.state.fleets.E, 'fighter')?.hp).toBeUndefined(); // moving → spared
+    expect(types(r.events)).not.toContain('artillery.fired');
+  });
+
+  it('resolves mutual standoff simultaneously — both artillery fleets get their shot off', () => {
+    const kernel = createKernel([combatModule]);
+    const st = baseState(
+      // Each siege (12/h) over 2h deals 24 ≥ the other's 20 hp pool. Sequential
+      // (lower id first) would let A2 wipe B2 before B2 fires; the pre-span snapshot
+      // makes both shots land, so BOTH die.
+      [fleet('A2', 'p1', 'PA', [['siege', 1]]), fleet('B2', 'p2', 'PB', [['siege', 1]])],
+      [planet('PA', null, 0, 0), planet('PB', null, 100, 0)],
+    );
+    const r = okAdvance(kernel.advanceTo(st, ctx(2 * HOUR)));
+
+    expect(r.state.fleets.A2).toBeUndefined();
+    expect(r.state.fleets.B2).toBeUndefined();
+    expect(types(r.events).filter((t) => t === 'fleet.destroyed')).toHaveLength(2);
+  });
 });
