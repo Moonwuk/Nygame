@@ -5,9 +5,8 @@ import { buildingLevel, buildingMaxLevel } from '../data/schemas';
 import { isBombarded } from '../state/orbit';
 import { allowedBuildings } from '../state/sectorKind';
 import type { Action } from '../action/types';
-import { timeScaleOf } from '../action/types';
+import { hoursToMs } from '../action/types';
 import { canAfford, payCost } from '../util/treasury';
-import { MS_PER_HOUR } from '../util/time';
 import { addUnits } from '../util/stacks';
 
 /** Share of the ground assault's round damage that also wears down the planet's
@@ -51,8 +50,22 @@ function scaleCost(cost: ResourceBag, count: number): ResourceBag {
 /** Schedules a build to finish after `hours`, scaled by the match timeScale
  *  exactly like every other real-time duration (GDD §3.1). */
 function scheduleCompletion(h: HandlerContext, hours: number, payload: CompletePayload): void {
-  const ms = (hours * MS_PER_HOUR) / timeScaleOf(h.ctx);
-  h.schedule(h.ctx.now + ms, 'construction.complete', payload);
+  h.schedule(h.ctx.now + hoursToMs(h.ctx, hours), 'construction.complete', payload);
+}
+
+/** True if a `construction.complete` of this `kind` for this planet+building is already
+ *  in flight — the "already queued?" guard shared verbatim by build and upgrade. */
+function isQueued(
+  h: HandlerContext,
+  kind: CompletePayload['kind'],
+  planetId: string,
+  building: string,
+): boolean {
+  return h.state.scheduled.some((e) => {
+    if (e.type !== 'construction.complete') return false;
+    const p = e.payload as CompletePayload;
+    return p.kind === kind && p.planetId === planetId && p.building === building;
+  });
 }
 
 function requireUnlocked(
@@ -184,15 +197,7 @@ export const constructionModule: GameModule = {
       if (planet.buildings.some((b) => b.type === payload.building)) {
         return h.reject('E_ALREADY_BUILT'); // one of each type; grow it with building.upgrade
       }
-      if (
-        h.state.scheduled.some(
-          (e) =>
-            e.type === 'construction.complete' &&
-            (e.payload as CompletePayload).kind === 'building' &&
-            (e.payload as CompletePayload).planetId === planet.id &&
-            (e.payload as CompletePayload).building === payload.building,
-        )
-      ) {
+      if (isQueued(h, 'building', planet.id, payload.building)) {
         return h.reject('E_ALREADY_QUEUED');
       }
       const level1 = buildingLevel(def, 1);
@@ -235,15 +240,7 @@ export const constructionModule: GameModule = {
       if (nextLevel > buildingMaxLevel(def)) {
         return h.reject('E_MAX_LEVEL');
       }
-      if (
-        h.state.scheduled.some(
-          (e) =>
-            e.type === 'construction.complete' &&
-            (e.payload as CompletePayload).kind === 'upgrade' &&
-            (e.payload as CompletePayload).planetId === planet.id &&
-            (e.payload as CompletePayload).building === instance.type,
-        )
-      ) {
+      if (isQueued(h, 'upgrade', planet.id, instance.type)) {
         return h.reject('E_ALREADY_QUEUED');
       }
       const next = buildingLevel(def, nextLevel);
@@ -318,7 +315,7 @@ export const constructionModule: GameModule = {
       if (isBombarded(h.state, planet.id)) {
         // production frozen under bombardment → re-defer until it lifts (scale the
         // retry by timeScale like every other duration, so a fast match isn't stuck)
-        h.schedule(h.ctx.now + MS_PER_HOUR / timeScaleOf(h.ctx), 'construction.complete', p);
+        h.schedule(h.ctx.now + hoursToMs(h.ctx, 1), 'construction.complete', p);
         return;
       }
       if (p.kind === 'building' && typeof p.building === 'string') {

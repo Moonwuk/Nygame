@@ -2,6 +2,7 @@ import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
 import type { MatchMap } from '../data/mapSchema';
 import { createInitialState, type Fleet, type GameState, type Planet, type Player } from './gameState';
+import { distance } from './route';
 
 /**
  * Map-as-content loader (map-roadmap.md M1.2 / M1.3). Turns a validated `MatchMap`
@@ -10,14 +11,6 @@ import { createInitialState, type Fleet, type GameState, type Planet, type Playe
  * same state. Replaces the procedural prototype map and the hard-coded server
  * scenario with a single "load this map file" path.
  */
-
-function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  // Plain sqrt (not Math.hypot): correctly-rounded √ is bit-exact across JS engines,
-  // matching state/route.ts so map geometry agrees with runtime distances (determinism).
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
 
 /**
  * Structural + geometric validation of a map (M1.3). Returns a list of stable
@@ -71,9 +64,13 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
     seen.add(key);
     const pa = map.sectors[a]!.position;
     const pb = map.sectors[b]!.position;
-    const dab = dist(pa, pb);
+    const dab = distance(pa, pb);
     const between = ids.some(
-      (c) => c !== a && c !== b && dist(pa, map.sectors[c]!.position) < dab && dist(pb, map.sectors[c]!.position) < dab,
+      (c) =>
+        c !== a &&
+        c !== b &&
+        distance(pa, map.sectors[c]!.position) < dab &&
+        distance(pb, map.sectors[c]!.position) < dab,
     );
     if (between) issues.push(`E_PATH_NOT_NEIGHBOR:${key}`);
   }
