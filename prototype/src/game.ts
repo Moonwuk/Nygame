@@ -533,6 +533,56 @@ export const fleetLaunchModule: GameModule = {
       h.emit('fleet.launched', { fleetId: id, planetId: planet.id, owner: action.playerId });
     });
 
+    // Auto-rally: a freshly-built SHIP doesn't sit in the garrison waiting to be
+    // launched — it flies straight to orbit and joins the world's RALLY fleet (the
+    // construction output). Ships ordered in one queue thus pool into a single fleet.
+    // The rally fleet is tagged 'rally'; pre-existing fleets the player already had on
+    // orbit lack the tag, so a new build never silently merges into them. Ground units
+    // (and immobile emplacements) stay in the garrison as before.
+    api.on('unit.built', (event, h) => {
+      const p = event.payload as { planetId?: string; unit?: string; count?: number; owner?: string };
+      if (typeof p?.planetId !== 'string' || typeof p?.unit !== 'string' || typeof p?.owner !== 'string') {
+        return;
+      }
+      const def = h.ctx.data.units[p.unit];
+      if (!def || def.traits.includes('ground')) return; // ground army stays planetside
+      const planet = h.state.planets[p.planetId];
+      if (!planet || planet.owner !== p.owner) return;
+      const want = p.count ?? 0;
+      const gi = planet.garrison.findIndex((st) => st.unit === p.unit);
+      if (want <= 0 || gi < 0) return;
+      const take = Math.min(want, planet.garrison[gi].count);
+      if (take <= 0) return;
+      // pull the just-built ships out of the garrison the core added them to
+      planet.garrison[gi].count -= take;
+      if (planet.garrison[gi].count <= 0) planet.garrison.splice(gi, 1);
+      let rally = Object.values(h.state.fleets).find(
+        (f) =>
+          f.owner === p.owner &&
+          f.location === planet.id &&
+          !f.movement &&
+          !f.battleId &&
+          f.traits.includes('rally'),
+      );
+      if (!rally) {
+        const seq = Object.keys(h.state.fleets).length;
+        rally = {
+          id: `fleet:${p.owner}:${h.ctx.now}:${seq}`,
+          owner: p.owner,
+          location: planet.id,
+          movement: null,
+          units: [],
+          landing: [],
+          traits: ['rally'],
+          battleId: null,
+        };
+        h.state.fleets[rally.id] = rally;
+      }
+      const si = rally.units.findIndex((st) => st.unit === p.unit);
+      if (si >= 0) rally.units[si].count += take;
+      else rally.units.push({ unit: p.unit, count: take });
+    });
+
     // Fuse `from` into `into` when both are docked, idle and in the same sector.
     // Bringing the fleets together (flying one to the other) is the caller's job;
     // by the time this action runs the two must already share a location.

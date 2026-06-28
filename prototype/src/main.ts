@@ -26,7 +26,6 @@ import {
   bombardFleet,
   loadArmy,
   unloadArmy,
-  launchFleet,
   mergeFleet,
   splitFleet,
   engageFleet,
@@ -756,6 +755,31 @@ function selectedFleetIds(): string[] {
 }
 
 const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
+// Past this camera zoom the orbital layer "opens up": rings widen and stationed
+// fleets start to circle their planet. Below it everything stays static (and
+// fixed-size), exactly as before — cheap at the whole-map view where it'd be invisible.
+const ORBIT_ZOOM_IN = 1.6;
+let orbitClock = 0; // real-time ms, refreshed each render — drives the orbit spin
+/** Ring/animation are gated on the same close-zoom threshold. */
+function orbitsLive(): boolean {
+  return cam.scale >= ORBIT_ZOOM_IN;
+}
+/** Orbit-ring radius scale at the current zoom: 1 at the far view, growing once
+ *  zoomed in (so the rings spread out from the planet) up to ~2.4× near max zoom. */
+function orbitZoom(): number {
+  return clamp(cam.scale / ORBIT_ZOOM_IN, 1, 2.4);
+}
+/** Angular position (radians) of a stationed fleet's orbit slot at index `idx` of
+ *  `nPeers` sharing the ring — fanned out, and spinning when zoomed in close. */
+function orbitAngle(orbit: 'near' | 'far', idx: number, nPeers: number): number {
+  let a = -Math.PI / 2 + (idx - (nPeers - 1) / 2) * 0.55;
+  if (orbitsLive()) {
+    // inner (near) ring sweeps a touch faster than the outer (far) one
+    const speed = orbit === 'near' ? 0.00052 : 0.00034; // rad/ms
+    a += orbitClock * speed;
+  }
+  return a;
+}
 
 /** Screen anchor (+ heading) for a fleet's chevron: the interpolated lane
  *  position while moving, or a slot on its near/far orbit ring while stationed
@@ -789,9 +813,11 @@ function fleetAnchor(f: Fleet): { x: number; y: number; ang: number } | null {
     0,
     peers.findIndex((g) => g.id === f.id),
   );
-  const a0 = -Math.PI / 2 + (idx - (peers.length - 1) / 2) * 0.55;
-  const r = ORBIT_R[orbit];
-  return { x: pc.x + Math.cos(a0) * r, y: pc.y + Math.sin(a0) * r, ang: a0 };
+  const a0 = orbitAngle(orbit, idx, peers.length);
+  const r = ORBIT_R[orbit] * orbitZoom();
+  // when circling, the chevron faces along its travel (tangent); static = radial as before
+  const ang = orbitsLive() ? a0 + Math.PI / 2 : a0;
+  return { x: pc.x + Math.cos(a0) * r, y: pc.y + Math.sin(a0) * r, ang };
 }
 function note(msg: string) {
   const d = floor(s.time / DAY) + 1;
@@ -2032,6 +2058,7 @@ function drawRadarRange(now: number): void {
 }
 
 function render(now: number) {
+  orbitClock = now; // time source for the orbit spin (so hit-tests match what's drawn)
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   blitStaticLayer(); // backdrop + province political map (re-baked on camera move, else cached)
   drawScanSweep(now); // slow radar sweep — pure console chrome
@@ -2307,21 +2334,23 @@ function render(now: number) {
     if (!SECTOR_TYPES[SECTOR_OF[pid]]?.orbit && !fortified) continue;
     const pc = world(pl.position);
     if (!visible(pc, 80)) continue;
+    const oz = orbitZoom(); // rings widen as you zoom in (1 at the far view)
     for (const orb of ['far', 'near'] as const) {
       const warm = orb === 'near'; // near = hot zone (bombard / AA reaches), far = safe
+      const rr = ORBIT_R[orb] * oz;
       cx.save();
       cx.setLineDash(warm ? [2, 5] : [7, 6]);
       cx.lineDashOffset = warm ? now / 200 : -now / 280;
       cx.strokeStyle = rgba(ORBIT_COLOR[orb], warm ? 0.42 : 0.22);
       cx.lineWidth = warm ? 1.3 : 1;
       cx.beginPath();
-      cx.arc(pc.x, pc.y, ORBIT_R[orb], 0, TAU);
+      cx.arc(pc.x, pc.y, rr, 0, TAU);
       cx.stroke();
       cx.setLineDash([]);
       cx.fillStyle = rgba(ORBIT_COLOR[orb], 0.7);
       cx.font = '700 7px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
-      cx.fillText(warm ? 'NEAR' : 'FAR', pc.x, pc.y + ORBIT_R[orb] + 8);
+      cx.fillText(warm ? 'NEAR' : 'FAR', pc.x, pc.y + rr + 8);
       cx.restore();
     }
   }
@@ -2742,11 +2771,11 @@ function panelHtml(): string {
       `<div class="hint">Ground units defend planets and can be loaded onto fleets from the fleet panel.</div>`,
     );
   } else if (planetTab === 'ships') {
-    let garr = `<div class="sec">Spacecraft in garrison</div>` + unitRows(ships);
-    if (mine && ships.length) {
-      garr += `<div class="row">${btn('launch', p.id, '🚀 Launch fleet from garrison', true)}</div>`;
+    // Built ships now auto-rally to orbit (see fleetLaunchModule), so the garrison
+    // normally holds no spacecraft — only surface the section if some linger.
+    if (ships.length) {
+      cols.push(`<div class="sec">Spacecraft in garrison</div>` + unitRows(ships));
     }
-    cols.push(garr);
     if (here.length) {
       let orbit = `<div class="sec">Fleets in orbit</div>`;
       for (const f of here) {
@@ -3283,8 +3312,6 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
-  } else if (act === 'launch') {
-    playerOrder(launchFleet(ME, arg));
   } else if (act === 'orbit') {
     playerOrder(orbitFleet(ME, selFleet!, arg as 'near' | 'far'));
   } else if (act === 'bombard') {
