@@ -3400,6 +3400,10 @@ function diploRowsHtml(): string {
       (a, b) => STANCE_RANK[getStance(s, ME, a)] - STANCE_RANK[getStance(s, ME, b)] || byName(a, b),
     );
   const ordered = [ME, ...others].filter(diploPasses);
+  // Keep the expansion in sync with visibility: if a filter (or a stance/capture change
+  // that re-renders) hides the expanded seat, drop the expansion — otherwise the row
+  // re-opens itself when that seat later re-enters the list.
+  if (diploExpanded && !ordered.includes(diploExpanded)) diploExpanded = null;
   if (!ordered.length) return `<div class="dp-empty">Под фильтр никто не подходит.</div>`;
   return ordered
     .map((id) => {
