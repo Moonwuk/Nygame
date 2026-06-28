@@ -693,6 +693,19 @@ function submitQueued(planetId: string, queued: QueuedBuild): StepOut {
   apply(out);
   return out;
 }
+// A rally fleet keeps swallowing freshly-built ships only while its world still has
+// a ship in the pipeline (one building, or one queued). The moment the queue drains,
+// the fleet is "closed" (loses its 'rally' tag) so the NEXT order opens a fresh fleet
+// — ships only pool together if you queue the next batch before the current one finishes.
+// Single-player only: in net mode the server owns the fleets and their tags.
+function closeIdleRallies(): void {
+  for (const f of Object.values(s.fleets)) {
+    if (f.owner !== ME || !f.location || f.movement || !f.traits?.includes('rally')) continue;
+    const pending =
+      !!activeConstruction(f.location, 'units') || (buildQueues[f.location]?.units.length ?? 0) > 0;
+    if (!pending) f.traits = f.traits.filter((t) => t !== 'rally');
+  }
+}
 function pumpBuildQueues(): void {
   for (const planetId of Object.keys(buildQueues)) {
     const q = buildQueues[planetId];
@@ -759,15 +772,17 @@ const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
 // fleets start to circle their planet. Below it everything stays static (and
 // fixed-size), exactly as before — cheap at the whole-map view where it'd be invisible.
 const ORBIT_ZOOM_IN = 1.6;
-let orbitClock = 0; // real-time ms, refreshed each render — drives the orbit spin
+let orbitPhase = 0; // accumulated sim-time ms (frozen on pause) — drives the orbit spin
 /** Ring/animation are gated on the same close-zoom threshold. */
 function orbitsLive(): boolean {
   return cam.scale >= ORBIT_ZOOM_IN;
 }
-/** Orbit-ring radius scale at the current zoom: 1 at the far view, growing once
- *  zoomed in (so the rings spread out from the planet) up to ~2.4× near max zoom. */
+/** Orbit-ring radius scale at the current zoom: compact (half-size) at the far view —
+ *  full rings read as bulky there — blooming open to ~2.4× once zoomed in close so
+ *  stationed fleets get room to circle. */
 function orbitZoom(): number {
-  return clamp(cam.scale / ORBIT_ZOOM_IN, 1, 2.4);
+  if (cam.scale <= ORBIT_ZOOM_IN) return 0.5;
+  return clamp(0.5 + (cam.scale - ORBIT_ZOOM_IN) * 1.2, 0.5, 2.4);
 }
 /** Angular position (radians) of a stationed fleet's orbit slot at index `idx` of
  *  `nPeers` sharing the ring — fanned out, and spinning when zoomed in close. */
@@ -776,7 +791,7 @@ function orbitAngle(orbit: 'near' | 'far', idx: number, nPeers: number): number 
   if (orbitsLive()) {
     // inner (near) ring sweeps a touch faster than the outer (far) one
     const speed = orbit === 'near' ? 0.00052 : 0.00034; // rad/ms
-    a += orbitClock * speed;
+    a += orbitPhase * speed;
   }
   return a;
 }
@@ -2058,7 +2073,6 @@ function drawRadarRange(now: number): void {
 }
 
 function render(now: number) {
-  orbitClock = now; // time source for the orbit spin (so hit-tests match what's drawn)
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   blitStaticLayer(); // backdrop + province political map (re-baked on camera move, else cached)
   drawScanSweep(now); // slow radar sweep — pure console chrome
@@ -2522,9 +2536,13 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   const queued = queueOf(planetId)[lane];
   let html = `<div class="conveyor">`;
   if (active) {
-    const pct = progressPct(active);
-    html += `<div class="current"><span>NOW</span><b>${constructionLabel(active.payload)}</b><em>${timeLeft(active.at)}</em></div>`;
-    html += `<div class="bar"><i style="width:${pct.toFixed(0)}%"></i></div>`;
+    // The live % / remaining-time are patched in each frame by updateConveyors() and
+    // deliberately kept OUT of the panel's HTML signature — otherwise the panel (and its
+    // build buttons) would be rebuilt 60×/s, and a click whose down/up straddle a rebuild
+    // is dropped (the bug where rapid build orders only queued one ship in real time).
+    const dur = buildDurationHours(active.payload) * HOUR;
+    html += `<div class="current"><span>NOW</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em></div>`;
+    html += `<div class="bar"><i class="conv-fill" data-at="${active.at}" data-dur="${dur}" style="width:0%"></i></div>`;
   } else {
     html += `<div class="current idle"><span>IDLE</span><b>ready for next order</b><em>—</em></div>`;
     html += `<div class="bar"><i style="width:0%"></i></div>`;
@@ -3137,6 +3155,23 @@ function renderPanel() {
     lastObjDescHtml = '';
   }
   renderObjDesc();
+  updateConveyors(); // patch live build progress without rebuilding the panel
+}
+
+/** Patch the build conveyor's progress bar + remaining time in place each frame, so
+ *  the panel's HTML (and its buttons) can stay put between structural changes. */
+function updateConveyors(): void {
+  const root = side.querySelector('.pscroll');
+  if (!root) return;
+  for (const el of Array.from(root.querySelectorAll('.conv-fill')) as HTMLElement[]) {
+    const at = Number(el.dataset.at);
+    const dur = Number(el.dataset.dur);
+    const pct = dur > 0 ? Math.max(0, Math.min(100, 100 - ((at - s.time) / dur) * 100)) : 100;
+    el.style.width = `${pct.toFixed(0)}%`;
+  }
+  for (const el of Array.from(root.querySelectorAll('.conv-time')) as HTMLElement[]) {
+    el.textContent = timeLeft(Number(el.dataset.at));
+  }
 }
 
 function cmdBtn(cmd: string, icon: string, label: string, cls: string, disabled: boolean): string {
@@ -4014,7 +4049,11 @@ function frame(nowReal: number) {
     checkFleetClashes();
     runAI();
     pumpBuildQueues();
+    closeIdleRallies(); // drop the 'rally' tag once a world's build pipeline empties
   }
+  // The orbit spin only advances while the world is actually running (sim ticking, or a
+  // live net match), so pausing freezes the ships on their rings instead of drifting on.
+  if (dt > 0 && dt < 1000 && (NET || (speed > 0 && !banner))) orbitPhase += dt;
   resolvePendingMerges(); // complete fleet merges whose movers have arrived
   checkEnd(); // terminal banner from `match` — runs in BOTH modes (net snapshots carry it)
   vision = computeVision(); // fog projection for this frame (always on)
