@@ -56,7 +56,8 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 #top{position:fixed;top:0;left:0;right:0;height:46px;z-index:30;display:flex;align-items:center;
   background:linear-gradient(180deg,rgba(3,13,18,.94),rgba(2,8,12,.82));border-bottom:1px solid var(--line-hi);
   box-shadow:0 0 22px rgba(40,200,210,.10),inset 0 -1px 0 rgba(53,214,230,.28);}
-.crest{display:flex;align-items:center;gap:10px;padding:0 14px;height:100%;flex:0 0 auto;}
+.crest{display:flex;align-items:center;gap:10px;padding:0 14px;height:100%;flex:0 0 auto;cursor:pointer;}
+.crest:active{background:rgba(53,214,230,.12);}
 .dia{width:15px;height:15px;transform:rotate(45deg);flex:0 0 auto;border:1.5px solid var(--cyan);
   box-shadow:0 0 9px rgba(53,214,230,.7),inset 0 0 5px rgba(53,214,230,.35);}
 .who{line-height:1.1;min-width:0;}
@@ -135,7 +136,25 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .cx-close{margin-top:8px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
 
-/* status strip below the top bar: day/time + victory progress + world/fleet counts */
+/* player card — tap the top-left crest for your session dossier */
+#playercard{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#playercard.show{display:flex;}
+#playercard .pcbox{width:min(380px,92vw);max-height:86vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+.pc-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line-hi);}
+.pc-head .pc-dia{width:14px;height:14px;transform:rotate(45deg);flex:0 0 auto;border-radius:2px;}
+.pc-head b{font-size:16px;letter-spacing:1.5px;color:#eafffb;flex:1;}
+.pc-head .pc-tag{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);border:1px solid var(--line);padding:2px 6px;border-radius:2px;}
+.pc-stats{display:flex;flex-direction:column;gap:3px;margin-bottom:10px;}
+.pc-sec{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:4px 0 6px;}
+.pc-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(14,59,64,.4);}
+.pc-row .pc-k{color:var(--dim);}
+.pc-row .pc-v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;}
+.pc-close{margin-top:10px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
+
+/* status strip below the top bar: day/time + victory progress */
 #devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
   white-space:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid rgba(14,59,64,.5);}
@@ -446,6 +465,7 @@ const html = `<!doctype html>
 <div id="hovercard"></div>
 <div id="cmdbar"></div>
 <div id="codex"></div>
+<div id="playercard"></div>
 <div id="splitdlg"></div>
 <div id="fps"></div>
 <div id="banner"></div>

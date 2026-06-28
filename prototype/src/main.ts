@@ -1904,9 +1904,13 @@ function buildStaticLayer(): void {
       ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
     }
     if (poly.length < 3) continue;
-    // unified territory fill (owned a touch stronger, so it reads as held land)
+    // Unified territory fill. Owned land is painted STRONGLY in its owner colour so
+    // who-holds-what reads at a glance — your worlds clearly green, each rival its hue
+    // — and it ignores fog on purpose: a province an enemy has captured keeps showing
+    // its owner colour even when you can't see the garrison (last-known control map,
+    // Bytro/HoI-style). Neutral stays a faint wash.
     trace(poly);
-    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.4 : 0.1);
+    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.58 : 0.1);
     g.fill();
     // faint terrain/kind accent — each province still reads as its own kind of place
     // (nebula slows fleets, gas-giant boosts output, …)
@@ -2993,6 +2997,45 @@ function codexHtml(kind: string, id: string): string {
     `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
   );
 }
+// --- player card (tap the top-left crest) ------------------------------------
+/** Your dossier in this session: faction, worlds, fleets, score, and the treasury.
+ *  Opened by tapping the crest in the top-left corner. */
+function playerCardHtml(): string {
+  const pl = s.players[ME];
+  const name = pl?.name ?? NAME[ME] ?? ME;
+  const faction = SEAT_META.find((m) => m.id === ME)?.faction ?? pl?.faction ?? '—';
+  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
+  const fleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  const need = Math.max(0, SCORE_LIMIT - score);
+  const r = pl?.resources ?? {};
+  const col = ownerColor(ME);
+  const row = (k: string, v: string) => `<div class="pc-row"><span class="pc-k">${k}</span><span class="pc-v">${v}</span></div>`;
+  return (
+    `<div class="pc-head"><span class="pc-dia" style="background:${col};box-shadow:0 0 10px ${col}"></span>` +
+    `<b>${esc(name)}</b><span class="pc-tag">commander</span></div>` +
+    `<div class="pc-stats">` +
+    row('Faction', esc(faction)) +
+    row('Worlds held', String(worlds)) +
+    row('Fleets', String(fleets)) +
+    row('Score', `${score} / ${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}`) +
+    `</div><div class="pc-sec">Treasury</div><div class="pc-stats">` +
+    row('¤ Credits', kfmt(r.credits ?? 0)) +
+    row('❖ Food', kfmt(r.food ?? 0)) +
+    row('⬢ Metal', kfmt(r.metal ?? 0)) +
+    row('↯ Energy', kfmt(r.energy ?? 0)) +
+    row('▦ Microelectronics', kfmt(r.microelectronics ?? 0)) +
+    row('◆ Суверены', kfmt(SOVEREIGNS)) +
+    `</div><button class="pc-close">CLOSE</button>`
+  );
+}
+function openPlayerCard(): void {
+  const el = document.getElementById('playercard');
+  if (!el) return;
+  el.innerHTML = `<div class="pcbox">${playerCardHtml()}</div>`;
+  el.classList.add('show');
+}
+
 /** A compact codex tile (icon + a one-line label) that opens the full info panel on
  *  tap. `label` is the build cost for buildables, or ×count for a fleet's ships. The
  *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
@@ -4036,20 +4079,16 @@ function frame(nowReal: number) {
   renderCmdBar();
   renderSplitDialog();
   renderLobby();
-  // Status strip below the top bar (the top bar itself is just the currencies now):
-  // day/time + victory progress + world/fleet counts.
+  // Status strip below the top bar: day/time + victory progress. (World/fleet counts
+  // moved to the player card — tap the crest in the top-left corner.)
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   const min = floor((s.time % HOUR) / 60000);
-  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
-  const myFleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
   const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
   const need = Math.max(0, SCORE_LIMIT - score);
   const statusHtml =
     `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
-    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>` +
-    `<span class="dstat">⊕ ${worlds} ${worlds === 1 ? 'world' : 'worlds'}</span>` +
-    `<span class="dstat">▲ ${myFleets} ${myFleets === 1 ? 'fleet' : 'fleets'}</span>`;
+    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>`;
   if (statusHtml !== lastClockText) {
     devlineEl.innerHTML = statusHtml;
     lastClockText = statusHtml;
@@ -4120,6 +4159,17 @@ if (codexEl) {
       return;
     }
     if (tg.id === 'codex' || tg.classList.contains('cx-close')) codexEl.classList.remove('show');
+  });
+}
+
+// Player card: tap the top-left crest to open your session dossier (faction, worlds,
+// fleets, score, treasury); tap the backdrop or CLOSE to dismiss.
+document.querySelector('.crest')?.addEventListener('click', () => openPlayerCard());
+const playerCardEl = document.getElementById('playercard');
+if (playerCardEl) {
+  playerCardEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.id === 'playercard' || tg.classList.contains('pc-close')) playerCardEl.classList.remove('show');
   });
 }
 
