@@ -2900,6 +2900,83 @@ function objDossier(key: string): Dossier | null {
   return null;
 }
 
+// --- build/unit codex (bottom palette tiles → full-info popup) ---------------
+/** One stat row for the codex popup. */
+function cxRow(k: string, v: string): string {
+  return `<div class="cx-row"><span class="cx-k">${k}</span><span class="cx-v">${v}</span></div>`;
+}
+/** Full info card — cost + every stat + the lore blurb — for a building ('b') or unit ('u'). */
+function codexHtml(kind: string, id: string): string {
+  if (kind === 'b') {
+    const def = data.buildings[id];
+    if (!def) return '';
+    const lv = buildingLevel(def, 1);
+    const maxLvl = 1 + (def.upgrades?.length ?? 0);
+    const rows = [cxRow('Cost', cost(def.cost)), cxRow('Build time', `${def.buildTimeHours ?? 0} h`), cxRow('Structure HP', String(def.hp ?? 0))];
+    const prod = Object.entries(lv.produces ?? {})
+      .filter(([, n]) => (n ?? 0) > 0)
+      .map(([r, n]) => `${n} ${r}/h`)
+      .join(', ');
+    if (prod) rows.push(cxRow('Produces', prod));
+    if ((lv.defenseBonus ?? 0) > 0.01) rows.push(cxRow('Garrison defense', `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
+    if ((lv.radarRange ?? 0) > 0) rows.push(cxRow('Radar reach', String(lv.radarRange)));
+    if ((def.scoreValue ?? 0) > 0) rows.push(cxRow('Victory points', `${def.scoreValue} / level`));
+    rows.push(cxRow('Tiers', maxLvl > 1 ? `${maxLvl} (upgradeable)` : '1'));
+    const dos = buildingDossier(id, 1);
+    return (
+      `<div class="cx-head"><span class="cx-ic">${BUILD_ICON[id] ?? '▣'}</span><b>${esc(def.name)}</b><span class="cx-tag">building</span></div>` +
+      `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
+    );
+  }
+  const def = data.units[id];
+  if (!def) return '';
+  const st = def.stats;
+  const rows = [
+    cxRow('Cost', cost(def.cost)),
+    cxRow('Build time', `${def.buildTimeHours ?? 0} h`),
+    cxRow('Attack / Defense', `${st.attack ?? 0} / ${st.defense ?? 0}`),
+    cxRow('Hull HP', String(st.hp ?? 0)),
+  ];
+  if ((st.speed ?? 0) > 0) rows.push(cxRow('Speed', String(st.speed)));
+  if ((st.range ?? 0) > 0) rows.push(cxRow('Range', String(st.range)));
+  if ((st.cargoCapacity ?? 0) > 0) rows.push(cxRow('Cargo capacity', String(st.cargoCapacity)));
+  if ((st.aaDamage ?? 0) > 0) rows.push(cxRow('Anti-air', String(st.aaDamage)));
+  rows.push(cxRow('Radar signature', String(def.signature ?? 1)));
+  if ((def.radarRange ?? 0) > 0) rows.push(cxRow('Radar reach', String(def.radarRange)));
+  const upkeep = Object.entries(def.upkeep ?? {})
+    .map(([r, n]) => `${n} ${r}/day`)
+    .join(', ');
+  if (upkeep) rows.push(cxRow('Upkeep', upkeep));
+  const tags = [def.domain ?? 'space', def.line, ...(def.traits ?? [])].filter(Boolean).join(', ');
+  if (tags) rows.push(cxRow('Class', tags));
+  const dos = unitDossier(id);
+  return (
+    `<div class="cx-head"><span class="cx-ic">${unitIcon(id)}</span><b>${esc(dos?.name ?? displayUnit(id))}</b><span class="cx-tag">${def.domain === 'ground' ? 'ground unit' : 'ship'}</span></div>` +
+    `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
+  );
+}
+/** Bottom palette: a tile (icon + cost) per buildable building + unit. */
+const PALETTE_BUILDINGS = ['mine', 'refinery', 'barracks', 'radar', 'fort', 'starfort', 'metal_station'];
+function paletteHtml(): string {
+  const tile = (kind: 'b' | 'u', id: string): string => {
+    const def = kind === 'b' ? data.buildings[id] : data.units[id];
+    if (!def) return '';
+    const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
+    const name = kind === 'b' ? def.name : unitDossier(id)?.name ?? displayUnit(id);
+    return `<button class="ptile" data-codex="${kind}:${id}" title="${esc(name)} — ${cost(def.cost)} · click for full info"><span class="pt-ic">${icon}</span><span class="pt-c">${cost(def.cost)}</span></button>`;
+  };
+  const blds = PALETTE_BUILDINGS.map((id) => tile('b', id)).filter(Boolean).join('');
+  const units = BUILD_UNITS.map((id) => tile('u', id)).filter(Boolean).join('');
+  return `<div class="pgroup"><span class="pglabel">BUILD</span>${blds}</div><div class="pgroup"><span class="pglabel">UNITS</span>${units}</div>`;
+}
+function openCodex(key: string): void {
+  const [kind, id] = key.split(':');
+  const el = document.getElementById('codex');
+  if (!el) return;
+  el.innerHTML = `<div class="cxbox">${codexHtml(kind, id)}<button class="cx-close">CLOSE</button></div>`;
+  el.classList.add('show');
+}
+
 /** Right-docked description pane HTML for the currently hovered menu object. */
 function objDescHtml(): string {
   const d = hoverObj ? objDossier(hoverObj) : null;
@@ -3833,6 +3910,23 @@ function frame(nowReal: number) {
     bannerEl.style.display = 'block';
   }
   requestAnimationFrame(frame);
+}
+
+// Build/unit palette: fill the bottom strip once; a tile click pops its full codex.
+const paletteEl = document.getElementById('palette');
+if (paletteEl) {
+  paletteEl.innerHTML = paletteHtml();
+  paletteEl.addEventListener('click', (e) => {
+    const t = (e.target as HTMLElement).closest('.ptile') as HTMLElement | null;
+    if (t?.dataset.codex) openCodex(t.dataset.codex);
+  });
+}
+const codexEl = document.getElementById('codex');
+if (codexEl) {
+  codexEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.id === 'codex' || tg.classList.contains('cx-close')) codexEl.classList.remove('show');
+  });
 }
 
 note(

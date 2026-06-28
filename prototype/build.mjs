@@ -102,6 +102,39 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 /* panel is glued to the bottom edge — lift the fleet command bar above it (mobile overrides below) */
 body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 
+/* build/unit palette — a browse-the-catalog strip at the bottom; hover a tile for its
+   cost, click for the full dossier. Hidden while a selection sheet is open. */
+#palette{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:23;display:flex;gap:10px;
+  align-items:center;padding:5px 8px;background:rgba(3,12,16,.8);border:1px solid var(--line);border-radius:4px;
+  box-shadow:0 0 18px rgba(40,200,210,.1);max-width:94vw;overflow-x:auto;scrollbar-width:none;}
+#palette::-webkit-scrollbar{display:none;}
+body.sheet-open #palette{display:none;}
+.pgroup{display:flex;align-items:center;gap:4px;}
+.pgroup+.pgroup{border-left:1px solid var(--line);padding-left:8px;}
+.pglabel{font-size:8px;letter-spacing:1.5px;color:var(--cyan-dim);padding-right:2px;flex:0 0 auto;}
+.ptile{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:46px;padding:4px 5px;cursor:pointer;
+  background:rgba(53,214,230,.04);border:1px solid var(--line);border-radius:3px;color:var(--cyan);}
+.ptile:hover{border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 8px rgba(53,214,230,.25);}
+.ptile .pt-ic{font-size:16px;line-height:1;}
+.ptile .pt-c{font-size:8px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
+/* codex popup — full stats + description on tile click */
+#codex{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#codex.show{display:flex;}
+#codex .cxbox{width:min(440px,94vw);max-height:84vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+.cx-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line-hi);}
+.cx-head .cx-ic{font-size:22px;color:var(--cyan);}
+.cx-head b{font-size:16px;letter-spacing:1.5px;color:#eafffb;flex:1;}
+.cx-head .cx-tag{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);border:1px solid var(--line);padding:2px 6px;border-radius:2px;}
+.cx-stats{display:flex;flex-direction:column;gap:3px;margin-bottom:12px;}
+.cx-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(14,59,64,.4);}
+.cx-row .cx-k{color:var(--dim);}
+.cx-row .cx-v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;}
+.cx-desc{font-size:12px;line-height:1.6;color:#9fc9c4;}
+.cx-close{margin-top:12px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
+
 #devline{position:fixed;top:46px;left:0;right:0;height:18px;z-index:24;display:flex;align-items:center;gap:12px;
   padding:0 14px;background:rgba(2,8,11,.5);color:var(--cyan-dim);font-size:10px;letter-spacing:1px;
   white-space:nowrap;overflow:hidden;border-bottom:1px solid rgba(14,59,64,.5);}
@@ -386,6 +419,8 @@ const html = `<!doctype html>
 </div>
 <div id="hovercard"></div>
 <div id="cmdbar"></div>
+<div id="palette"></div>
+<div id="codex"></div>
 <div id="splitdlg"></div>
 <div id="fps"></div>
 <div id="banner"></div>
