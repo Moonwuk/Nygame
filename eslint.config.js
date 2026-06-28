@@ -36,6 +36,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Node tooling scripts (plain JS run by `node` in CI — e.g. the security-scan
+    // summarizer). TS files get `no-undef` disabled by typescript-eslint, but these
+    // `.mjs` fall under js.configs.recommended, so declare Node globals explicitly.
+    files: ['.github/scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly' },
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',
