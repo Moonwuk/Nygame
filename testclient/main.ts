@@ -27,7 +27,15 @@ let me = 'green';
 let seq = 0;
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Escape for both text and double/single-quoted attribute contexts. esc()'s output
+  // lands inside value="…" / data-*="…" attributes (see renderActions), so quotes must
+  // be escaped too or a value with a `"` breaks out of the attribute (CWE-79 XSS).
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 function log(msg: string): void {
   logEl.insertAdjacentHTML('afterbegin', `<div>${new Date().toLocaleTimeString()} · ${esc(msg)}</div>`);
