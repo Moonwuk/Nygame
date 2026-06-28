@@ -122,7 +122,7 @@ pnpm run check          # lint + typecheck + test — гонять перед к
 прототипа** ([`android.yml`](./.github/workflows/android.yml), публикует rolling-релиз
 `alpha`) и крутится **security-пайплайн** ([`security.yml`](./.github/workflows/security.yml):
 Trivy, Scorecard, zizmor, SHA-pin экшенов). GitLab-пайплайн снят при переезде на GitHub.
-На сейчас **419 тестов** зелёные (51 файл, 4 skip).
+На сейчас **422 теста** зелёные (51 файл, 4 skip).
 
 ## Статус
 
