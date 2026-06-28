@@ -50,6 +50,14 @@ export class MemoryAccountStore implements AccountStore {
     byNick.set(nick, free);
     return Promise.resolve({ playerId: free, isNew: true });
   }
+
+  seatOf(room: string, nick: string): Promise<PlayerId | null> {
+    return Promise.resolve(this.rooms.get(room)?.get(nick) ?? null);
+  }
+
+  occupiedSeats(room: string): Promise<number> {
+    return Promise.resolve(this.rooms.get(room)?.size ?? 0);
+  }
 }
 
 /** In-memory receipt store — `matchId → actionId → receipt`. */

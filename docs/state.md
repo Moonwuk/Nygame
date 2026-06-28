@@ -351,6 +351,23 @@ Per-player **сущность** (`GameState.heroes[playerId]: {owner, location, 
 на dev-карте green не видит флот red и `red_1` **не появляется по проводу** ни в стейте,
 ни в событиях. **Дальше:** AOI-оптимизация, JWT в рукопожатии (F7).
 
+**Реестр матчей / мета-шелл (`packages/server/MatchRegistry`, первый кирпич MM-0.1).**
+Мульти-матч реестр поверх `MatchRoom` + **мета-запись рядом с матчем** (`MatchMeta`:
+`mapId, rules:MatchConfig, createdAt, startedAt, archivedBy`) — **вне `GameState`**
+(инвариант `main-menu.md` §2: мета-состояние не живёт в ядре). Read-model браузера
+матчей `MatchRegistry.list(nick)` отдаёт три вкладки для зрителя: **available**
+(присоединяемые — есть слот, не `ended`, ты не в них), **active** (ты держишь слот),
+**archived** (ты перенёс в свой архив — **per-player** флаг, не глобальный). Строка
+статуса: `days` (игровые дни от старта = `(state.time-startedAt)/MS_PER_DAY`), `players`
+(занято/всего — занятость через `AccountStore.occupiedSeats`), `mapId`, `rules`, `status`.
+Интент **archive/unarchive** — fail-secure (`E_NO_MATCH`/`E_FORBIDDEN`, авторизация по
+посадке nick). По проводу: `wsServer` маршрутит `/matches/<id>` по реестру (404 на
+неизвестный id), `GET /matches?nick=` (read-model) + `POST /matches/<id>/archive?nick=`
+(интент). Идентичность — лёгкая, по nick (`AccountStore.seatOf`), **без аккаунтов**
+(полное меню ждёт `AC-0.1`). `main.ts` сидит 2-3 dev-матча. **Дальше:** клиентский
+экран меню (Этап 4), персистентность меты + `MatchStore.list` (Postgres уже под это
+индексирован), лобби/создание матча (MM-1.1).
+
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
 - **resources:** `credits, metal, biomass, dark_matter, artifacts, premium_shard`.

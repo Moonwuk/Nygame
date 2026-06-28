@@ -3,10 +3,17 @@ import type { Duplex } from 'node:stream';
 import type { PlayerId } from '@void/shared-core';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { MatchRoom } from './matchRoom';
-import type { AccountStore } from './store';
+import { MatchRegistry } from './matchRegistry';
+import { MemoryAccountStore, type AccountStore } from './store';
 
 export interface MultiplayerServerOptions {
-  room: MatchRoom;
+  /** Multi-match mode: the registry of joinable matches. The WS layer routes
+   *  `/<pathPrefix>/<id>` to the registered room and exposes the match-browser
+   *  read-model (`GET /matches`) + archive intents over HTTP. */
+  registry?: MatchRegistry;
+  /** Single-match mode (legacy): one room, wrapped into a registry-of-one so the
+   *  routing/serving path is identical. */
+  room?: MatchRoom;
   host?: string;
   port?: number;
   pathPrefix?: string;
@@ -14,9 +21,10 @@ export interface MultiplayerServerOptions {
    *  the client the game itself, so a peer just opens `http://host:port/` (no file
    *  transfer, and the connect overlay auto-fills the same-origin ws:// URL). */
   indexHtml?: string;
-  /** Optional nick-login: when a client connects with `?nick=…` (instead of
-   *  `?player=`), the seat is resolved/assigned here so a returning nick gets its
-   *  own side back. Absent ⇒ only the direct `?player=` handshake works. */
+  /** Optional nick-login for the single-match path: when a client connects with
+   *  `?nick=…` (instead of `?player=`), the seat is resolved/assigned here so a
+   *  returning nick gets its own side back. Absent ⇒ only `?player=` works. In
+   *  multi-match mode the registry's own account store is used instead. */
   accountStore?: AccountStore;
 }
 
@@ -43,21 +51,82 @@ function rejectUpgrade(socket: Duplex, status: number): void {
   socket.destroy();
 }
 
+/** In single-match mode, wrap the one room in a registry-of-one so routing and the
+ *  read-model have a uniform source. The legacy meta is a placeholder (legacy callers
+ *  don't read the browser); real metadata comes from the caller's registry. */
+function toRegistry(options: MultiplayerServerOptions): MatchRegistry {
+  if (options.registry) return options.registry;
+  const registry = new MatchRegistry(options.accountStore ?? new MemoryAccountStore());
+  if (options.room) {
+    registry.register(options.room, { mapId: 'dev', rules: { timeScale: 1 }, createdAt: Date.now() });
+  }
+  return registry;
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export function createMultiplayerServer(
   options: MultiplayerServerOptions,
 ): MultiplayerServerHandle {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 0;
   const pathPrefix = options.pathPrefix ?? '/matches';
-  const room = options.room;
+  const registry = toRegistry(options);
+  // Seat resolver for `?nick=`: the registry's store in multi-match mode, or the
+  // explicitly-provided store in legacy mode (absent ⇒ `?nick=` is rejected, as before).
+  const seatResolver: AccountStore | undefined = options.registry
+    ? registry.accounts
+    : options.accountStore;
+  // listen() reports a concrete match URL when there is one (back-compat: tests dial it).
+  const firstRoomId = options.room?.id ?? registry.ids()[0];
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32_768 });
 
+  const archiveRe = new RegExp(`^${escapeRe(pathPrefix)}/([^/]+)/(archive|unarchive)$`);
   const indexHtml = options.indexHtml;
   const httpServer = createServer((request, response) => {
+    const method = request.method ?? 'GET';
     const path = (request.url ?? '/').split('?')[0] ?? '/';
+    const json = (status: number, body: unknown): void => {
+      response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      response.end(JSON.stringify(body));
+    };
     if (path === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, matchId: room.id, seq: room.sequence }));
+      json(200, { ok: true, matches: registry.ids() });
+      return;
+    }
+    // Match-browser read-model: the three tabs (available/active/archived) for a
+    // viewer (`?nick=`). A server projection — the client only reads it (A10/fog rule).
+    if (path === pathPrefix || path === `${pathPrefix}/`) {
+      void (async () => {
+        try {
+          const nick = new URL(request.url ?? '/', baseUrl(request)).searchParams.get('nick');
+          json(200, await registry.list(nick));
+        } catch {
+          json(500, { ok: false, code: 'E_INTERNAL' });
+        }
+      })();
+      return;
+    }
+    // Archive / restore intent: POST /<prefix>/<id>/archive?nick=… — fail-secure.
+    const archive = archiveRe.exec(path);
+    if (archive) {
+      if (method !== 'POST') {
+        json(405, { ok: false, code: 'E_METHOD' });
+        return;
+      }
+      void (async () => {
+        try {
+          const matchId = decodeURIComponent(archive[1] ?? '');
+          const nick = new URL(request.url ?? '/', baseUrl(request)).searchParams.get('nick') ?? '';
+          const result =
+            archive[2] === 'archive'
+              ? await registry.archive(matchId, nick)
+              : await registry.unarchive(matchId, nick);
+          json(result.ok ? 200 : result.code === 'E_NO_MATCH' ? 404 : 403, result);
+        } catch {
+          json(500, { ok: false, code: 'E_INTERNAL' });
+        }
+      })();
       return;
     }
     if (indexHtml !== undefined && (path === '/' || path === '/index.html')) {
@@ -74,22 +143,27 @@ export function createMultiplayerServer(
     response.end('not found');
   });
 
-  const accountStore = options.accountStore;
   httpServer.on('upgrade', (request, socket, head) => {
     // Async because nick-login resolves a seat through the (possibly DB-backed)
     // account store before we accept the upgrade.
     void (async () => {
       try {
         const url = new URL(request.url ?? '/', baseUrl(request));
-        if (url.pathname !== `${pathPrefix}/${room.id}`) {
+        if (!url.pathname.startsWith(`${pathPrefix}/`)) {
+          rejectUpgrade(socket, 404);
+          return;
+        }
+        const matchId = decodeURIComponent(url.pathname.slice(pathPrefix.length + 1));
+        const room = registry.get(matchId);
+        if (!room) {
           rejectUpgrade(socket, 404);
           return;
         }
         let playerId = url.searchParams.get('player') ?? '';
         const nick = url.searchParams.get('nick');
-        if (!playerId && nick && accountStore) {
+        if (!playerId && nick && seatResolver) {
           const seats = Object.keys(room.state.players) as PlayerId[];
-          const seat = await accountStore.resolveSeat(room.id, nick, seats);
+          const seat = await seatResolver.resolveSeat(matchId, nick, seats);
           if (!seat) {
             rejectUpgrade(socket, 409); // every side already taken by another nick
             return;
@@ -101,7 +175,7 @@ export function createMultiplayerServer(
           return;
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request, playerId);
+          wss.emit('connection', ws, request, { room, playerId });
         });
       } catch {
         rejectUpgrade(socket, 500);
@@ -126,29 +200,33 @@ export function createMultiplayerServer(
   const FLOOD_WINDOW_MS = 1_000;
   const FLOOD_MAX = 50; // a legit client sends a few msgs/s (actions + a 2s ping); 50 is slack
   const inbound = new WeakMap<WebSocket, { n: number; since: number }>();
-  wss.on('connection', (ws: WebSocket, _request: IncomingMessage, playerId: string) => {
-    sockets.add(ws);
-    alive.set(ws, true);
-    ws.on('pong', () => alive.set(ws, true));
-    room.addPeer(playerId, ws);
-    ws.on('message', (data) => {
-      const now = Date.now();
-      const c = inbound.get(ws) ?? { n: 0, since: now };
-      if (now - c.since >= FLOOD_WINDOW_MS) {
-        c.n = 0;
-        c.since = now;
-      }
-      c.n += 1;
-      inbound.set(ws, c);
-      if (c.n > FLOOD_MAX) return; // drop a raw flood before the parse (cheap)
-      const raw = typeof data === 'string' ? data : data.toString('utf8');
-      void room.receive(playerId, ws, raw); // fire-and-forget; ping handling may be async
-    });
-    ws.on('close', () => {
-      sockets.delete(ws);
-      room.removePeer(playerId, ws);
-    });
-  });
+  wss.on(
+    'connection',
+    (ws: WebSocket, _request: IncomingMessage, ctx: { room: MatchRoom; playerId: string }) => {
+      const { room, playerId } = ctx;
+      sockets.add(ws);
+      alive.set(ws, true);
+      ws.on('pong', () => alive.set(ws, true));
+      room.addPeer(playerId, ws);
+      ws.on('message', (data) => {
+        const now = Date.now();
+        const c = inbound.get(ws) ?? { n: 0, since: now };
+        if (now - c.since >= FLOOD_WINDOW_MS) {
+          c.n = 0;
+          c.since = now;
+        }
+        c.n += 1;
+        inbound.set(ws, c);
+        if (c.n > FLOOD_MAX) return; // drop a raw flood before the parse (cheap)
+        const raw = typeof data === 'string' ? data : data.toString('utf8');
+        void room.receive(playerId, ws, raw); // fire-and-forget; ping handling may be async
+      });
+      ws.on('close', () => {
+        sockets.delete(ws);
+        room.removePeer(playerId, ws);
+      });
+    },
+  );
 
   // Each round: reap any socket that didn't answer last round's ping, then ping
   // the rest. Reap window is one interval, so a slot frees within ~2×HEARTBEAT.
@@ -165,6 +243,11 @@ export function createMultiplayerServer(
   }, HEARTBEAT_MS);
   heartbeat.unref(); // never keep the process alive just for the heartbeat
 
+  const matchUrl = (addrPort: number): string =>
+    firstRoomId !== undefined
+      ? `ws://${host}:${addrPort}${pathPrefix}/${firstRoomId}`
+      : `ws://${host}:${addrPort}`;
+
   return {
     httpServer,
     listen: () =>
@@ -173,11 +256,7 @@ export function createMultiplayerServer(
         httpServer.listen(port, host, () => {
           httpServer.off('error', reject);
           const address = httpServer.address();
-          if (typeof address === 'object' && address !== null) {
-            resolve(`ws://${host}:${address.port}${pathPrefix}/${room.id}`);
-            return;
-          }
-          resolve(`ws://${host}:${port}${pathPrefix}/${room.id}`);
+          resolve(matchUrl(typeof address === 'object' && address !== null ? address.port : port));
         });
       }),
     close: () =>
