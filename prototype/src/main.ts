@@ -12,6 +12,7 @@ import {
   data,
   MAP,
   SECTOR_TYPES,
+  SCORE_LIMIT,
   HOUR,
   DAY,
   hpOfLevel,
@@ -2559,7 +2560,32 @@ function panelHtml(): string {
         'FLEET',
         `${nShips} ships · ${nTr} troops · orbit ${orbit}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
       );
-      h += `<div class="pstats"><span>✦ ${shipList}</span></div><div class="row dim">Carrying: ${trList}</div>`;
+      // Aggregate combat weight, summed across the squadron's ships (it moves at its
+      // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
+      let atk = 0,
+        def = 0,
+        hpTot = 0,
+        spd = Infinity;
+      for (const u of f.units) {
+        const st = data.units[u.unit]?.stats;
+        if (!st || u.count <= 0) continue;
+        atk += (st.attack ?? 0) * u.count;
+        def += (st.defense ?? 0) * u.count;
+        hpTot += (st.hp ?? 0) * u.count;
+        if ((st.speed ?? 0) > 0) spd = Math.min(spd, st.speed ?? Infinity);
+      }
+      const spdTxt = spd === Infinity ? '—' : String(spd);
+      const flavor: string[] = [];
+      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) flavor.push('with a hero flagship');
+      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery'))) flavor.push('packing siege artillery');
+      if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0)) flavor.push('running its own radar picket');
+      const blurb =
+        nShips === 0
+          ? 'An empty hull group — no ships aboard.'
+          : `A squadron of ${nShips} ship${nShips > 1 ? 's' : ''}${flavor.length ? ' — ' + flavor.join(', ') : ''}. Its combined weight is below; it advances at its slowest hull.`;
+      h += `<div class="row dim">${blurb}</div>`;
+      h += `<div class="pstats"><span>⚔ ATK ${atk}</span><span>🛡 DEF ${def}</span><span>❤ HP ${hpTot}</span><span>⚡ SPD ${spdTxt}</span></div>`;
+      h += `<div class="row"><span class="dim">Ships:</span> ${shipList}</div><div class="row dim">Carrying: ${trList}</div>`;
 
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
@@ -3774,11 +3800,18 @@ function frame(nowReal: number) {
         : `<em class="${delta >= 0 ? 'up' : 'dn'}">${delta >= 0 ? '+' : ''}${Math.round(delta)}/h</em>`;
     return `<span class="res"><i>${icon}</i><span class="rv"><b>${val}</b>${dh}</span></span>`;
   };
+  // Victory progress: your authoritative score (victoryModule) and how far to the win.
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  const need = Math.max(0, SCORE_LIMIT - score);
+  const scoreChip =
+    `<span class="res"><i>SCR</i><span class="rv"><b>${score}<small style="opacity:.55;font-weight:400">/${SCORE_LIMIT}</small></b>` +
+    `<em class="${need === 0 ? 'up' : 'dn'}">${need === 0 ? '★ WIN' : need + ' to win'}</em></span></span>`;
   const hudHtml =
     chip('MTL', kfmt(r.metal ?? 0), inc.metal ?? 0) +
     chip('CRD', kfmt(r.credits ?? 0), inc.credits ?? 0) +
     chip('WLD', String(worlds)) +
-    chip('FLT', String(myFleets));
+    chip('FLT', String(myFleets)) +
+    scoreChip;
   if (hudHtml !== lastHudHtml) {
     purse.innerHTML = hudHtml;
     lastHudHtml = hudHtml;

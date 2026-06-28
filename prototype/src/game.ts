@@ -734,10 +734,12 @@ export const MODULES: GameModule[] = [
 
 export const kernel = createKernel(MODULES);
 
+// Win at 600 of the board's ~1000 base points (also the core default now; set explicitly
+// so the prototype's win condition is self-documenting and tunable here — and read by the
+// HUD score readout). Exported as the single source of truth.
+export const SCORE_LIMIT = 600;
 export function ctx(now: number): Context {
-  // Solo win at 600 of the board's ~1000 base points (also the core default now; set
-  // explicitly so the prototype's win condition is self-documenting and tunable here).
-  return { now, data, config: { timeScale: 1, victory: { scoreLimit: 600 } } };
+  return { now, data, config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } } };
 }
 
 export interface StepOut {
