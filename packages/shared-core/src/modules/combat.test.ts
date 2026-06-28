@@ -808,9 +808,39 @@ describe('combat — artillery standoff fire (GDD §7.2)', () => {
     expect(rej(kernel.applyAction(base(), barrage('PLAIN', 'E'), ctx(0)))).toBe('E_NO_ARTILLERY');
     expect(rej(kernel.applyAction(base(), barrage('ART', 'ART'), ctx(0)))).toBe('E_BAD_PAYLOAD');
     expect(rej(kernel.applyAction(base(), barrage('ART', 'GONE'), ctx(0)))).toBe('E_NO_TARGET');
+    // prototype-chain ids must not resolve to Object.prototype (own-key lookup)
+    expect(rej(kernel.applyAction(base(), barrage('ART', '__proto__'), ctx(0)))).toBe('E_NO_TARGET');
+    expect(rej(kernel.applyAction(base(), barrage('ART', 'constructor'), ctx(0)))).toBe('E_NO_TARGET');
+    expect(rej(kernel.applyAction(base(), barrage('__proto__', 'E'), ctx(0)))).toBe('E_NO_FLEET');
     const peaceful = base();
     setStance(peaceful, 'p1', 'p2', 'peace');
     expect(rej(kernel.applyAction(peaceful, barrage('ART', 'E'), ctx(0)))).toBe('E_NOT_HOSTILE');
+  });
+
+  it('self-heals a poisoned barrageTarget instead of crashing the span (DoS guard)', () => {
+    const kernel = createKernel([combatModule]);
+    const st = baseState(
+      [fleet('ART', 'p1', 'PA', [['siege', 1]]), fleet('E', 'p2', 'PB', [['fighter', 2]])],
+      [planet('PA', null, 0, 0), planet('PB', null, 100, 0)],
+    );
+    st.fleets.ART!.barrageTarget = '__proto__'; // a value that resolves to Object.prototype
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR))); // must NOT throw / discard the span
+
+    expect(r.state.fleets.ART?.barrageTarget).toBe(null); // poisoned target cleared
+    expect(stackOf(r.state.fleets.E, 'fighter')?.hp).toBe(28); // span ran: auto-targeted the enemy
+  });
+
+  it('does not shell a target already pinned in a melee battle', () => {
+    const kernel = createKernel([combatModule]);
+    const st = baseState(
+      [fleet('ART', 'p1', 'PA', [['siege', 1]]), fleet('E', 'p2', 'PB', [['fighter', 2]])],
+      [planet('PA', null, 0, 0), planet('PB', null, 100, 0)],
+    );
+    st.fleets.E!.battleId = 'battle:elsewhere'; // engaged — not a standoff target
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+
+    expect(stackOf(r.state.fleets.E, 'fighter')?.hp).toBeUndefined(); // spared
+    expect(types(r.events)).not.toContain('artillery.fired');
   });
 
   it('a moving shooter holds fire (only stationary artillery shells)', () => {

@@ -700,6 +700,14 @@ function fleetPosition(state: GameState, fleet: Fleet, now: number): { x: number
   return null;
 }
 
+/** Look up a fleet by id treating `fleets` as a plain map — an OWN key only, so a
+ *  prototype-chain string (`__proto__` / `constructor` / `toString`) can never
+ *  resolve to `Object.prototype` and slip a non-fleet object past validation
+ *  (fail-secure: a poisoned id reads as "no such fleet", not a later crash). */
+function ownFleet(state: GameState, id: string): Fleet | undefined {
+  return Object.prototype.hasOwnProperty.call(state.fleets, id) ? state.fleets[id] : undefined;
+}
+
 /** A fleet's standoff firepower = Σ over its artillery units (count × attack).
  *  Only `artillery`-trait units fire at range; the rest are melee-only. */
 function artilleryPower(fleet: Fleet, data: GameData): number {
@@ -739,7 +747,11 @@ function pickBarrageTarget(
 ): Fleet | null {
   const inRange = (f: Fleet): boolean => {
     if (f.id === shooter.id || !isHostile(h, shooter.owner, f.owner)) return false;
-    if (!f.units.some((s) => s.count > 0)) return false;
+    if (!Array.isArray(f.units) || !f.units.some((s) => s.count > 0)) return false;
+    // A fleet already pinned in a melee battle is not a standoff target: shelling
+    // (and deleting) a combatant from outside the fight would let a third party
+    // decide a battle it isn't in. Free fleets only — matching the shooter guard.
+    if (f.battleId) return false;
     // Only a STATIONARY target can be shelled: a fleet in transit has a position
     // that changes across the span, so a fixed-instant range test over the whole
     // span would over/under-bill (and make the damage depend on how finely time
@@ -750,9 +762,11 @@ function pickBarrageTarget(
   };
   const chosen = shooter.barrageTarget;
   if (chosen != null) {
-    const t = h.state.fleets[chosen];
+    // own-key lookup: a poisoned `barrageTarget` (e.g. an injected `__proto__`)
+    // reads as no-fleet → cleared → auto-target, never a crash on the next span.
+    const t = ownFleet(h.state, chosen);
     if (t && inRange(t)) return t;
-    shooter.barrageTarget = null; // stale — drop it, fall back to auto-target
+    shooter.barrageTarget = null; // stale / invalid — drop it, fall back to auto-target
   }
   let best: Fleet | null = null;
   let bestDist = Infinity;
@@ -804,8 +818,10 @@ function runArtillery(h: HandlerContext, hours: number): void {
       shooterId: id,
       owner: shooter.owner,
       targetId: target.id,
+      // a node id for the casualty tag — fall back to a lane endpoint, never a
+      // fleet id (both may be lane-parked with `location` null).
+      at: shooter.location ?? target.location ?? shooter.edge?.from ?? target.edge?.from ?? id,
       dmg: power * hours,
-      at: shooter.location ?? target.location ?? id,
     });
   }
   // Pass 2 — apply all shots in deterministic order, then resolve wiped targets.
@@ -987,7 +1003,7 @@ export const combatModule: GameModule = {
       if (typeof fleetId !== 'string') {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const fleet = h.state.fleets[fleetId];
+      const fleet = ownFleet(h.state, fleetId); // own-key — rejects an injected `__proto__`
       if (!fleet) {
         return h.reject('E_NO_FLEET');
       }
@@ -1005,7 +1021,7 @@ export const combatModule: GameModule = {
       if (typeof targetId !== 'string' || targetId === fleetId) {
         return h.reject('E_BAD_PAYLOAD');
       }
-      const target = h.state.fleets[targetId];
+      const target = ownFleet(h.state, targetId); // own-key — a poisoned id can't persist
       if (!target) {
         return h.reject('E_NO_TARGET');
       }
