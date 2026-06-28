@@ -688,7 +688,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
     ];
     home.garrison = [{ unit: 'marine', count: 3 }];
-    players[seat.id] = player(seat.id, seat.name, seat.faction, { credits: 260, metal: 320 });
+    players[seat.id] = player(seat.id, seat.name, seat.faction, {
+      credits: 260,
+      metal: 320,
+      food: 120,
+      energy: 90,
+      microelectronics: 40,
+    });
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,
       seat.id,

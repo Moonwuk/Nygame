@@ -65,21 +65,21 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 #purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow-x:auto;height:100%;margin:0 4px;
   border-left:1px solid var(--line);border-right:1px solid var(--line);scrollbar-width:none;}
 #purse::-webkit-scrollbar{display:none;}
-.res{display:flex;align-items:center;gap:7px;padding:0 12px;height:100%;flex:0 0 auto;}
-.res+.res{border-left:1px solid var(--line);}
-.res i{font-style:normal;font-size:9px;letter-spacing:1.5px;color:var(--cyan-dim);}
-.res .rv{display:flex;flex-direction:column;line-height:1.05;}
-.res .rv b{color:#eafffb;font-weight:700;font-size:13px;font-variant-numeric:tabular-nums;}
-.res .rv em{font-style:normal;font-size:9px;font-weight:700;}
-.res em.up{color:var(--up);}.res em.dn{color:var(--dn);}
+.res{display:flex;align-items:center;gap:5px;padding:0 9px;height:100%;flex:0 0 auto;}
+.res i{font-style:normal;font-size:14px;line-height:1;}
+.res b{color:#eafffb;font-weight:700;font-size:13px;font-variant-numeric:tabular-nums;}
+/* donate/premium currency (Суверены): pinned to the far-right corner, gold accent */
+.res.donate{margin-left:auto;border-left:1px solid var(--line);}
+.res.donate i{color:#ffd45e;text-shadow:0 0 7px rgba(255,212,94,.5);}
+.res.donate b{color:#ffe6a3;}
 #speedbar{position:fixed;right:14px;bottom:14px;z-index:24;display:flex;align-items:center;gap:4px;
   padding:5px 7px;background:rgba(3,12,16,.78);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 16px rgba(40,200,210,.10);transition:bottom .2s ease;}
 body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
-#fps{position:fixed;top:50px;right:10px;z-index:25;pointer-events:none;
+#fps{position:fixed;top:70px;right:10px;z-index:25;pointer-events:none;
   font:700 10px ui-monospace,Menlo,monospace;color:var(--grn);opacity:.72;letter-spacing:.5px;
   text-shadow:0 0 6px rgba(0,0,0,.85);}
-@media (max-width:720px){#fps{top:48px;}}
+@media (max-width:720px){#fps{top:68px;}}
 .spd button{min-width:30px;height:26px;padding:0 5px;border-radius:2px;cursor:pointer;font:11px ui-monospace,monospace;
   background:transparent;color:var(--cyan-dim);border:1px solid var(--line-hi);}
 .spd button.on{background:rgba(53,214,230,.16);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 10px rgba(53,214,230,.4);}
@@ -132,10 +132,14 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .cx-close{margin-top:8px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
 
-#devline{position:fixed;top:46px;left:0;right:0;height:18px;z-index:24;display:flex;align-items:center;gap:12px;
-  padding:0 14px;background:rgba(2,8,11,.5);color:var(--cyan-dim);font-size:10px;letter-spacing:1px;
-  white-space:nowrap;overflow:hidden;border-bottom:1px solid rgba(14,59,64,.5);}
-#devline #clock{color:var(--grn);}
+/* status strip below the top bar: day/time + victory progress + world/fleet counts */
+#devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
+  padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
+  white-space:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid rgba(14,59,64,.5);}
+#devline::-webkit-scrollbar{display:none;}
+#devline #clock{color:var(--grn);font-variant-numeric:tabular-nums;flex:0 0 auto;}
+#devline .dstat{flex:0 0 auto;}
+#devline .dstat.win{color:var(--up);font-weight:700;}
 
 #rail{position:fixed;left:0;top:66px;bottom:0;width:44px;z-index:24;display:flex;flex-direction:column;
   align-items:center;gap:2px;padding-top:6px;background:rgba(2,9,13,.6);border-right:1px solid var(--line);}
@@ -273,8 +277,6 @@ body.sheet-open #log{display:none;}
 #burger{display:none;flex:0 0 auto;width:42px;height:100%;border:0;border-right:1px solid var(--line);
   background:transparent;color:var(--cyan);font-size:18px;cursor:pointer;align-items:center;justify-content:center;}
 #burger:active{background:rgba(53,214,230,.14);}
-#topclock{display:none;flex:0 0 auto;padding:0 10px;color:var(--grn);font-size:11px;letter-spacing:.5px;
-  white-space:nowrap;font-variant-numeric:tabular-nums;}
 #scrim{display:none;position:fixed;inset:44px 0 0 0;z-index:34;background:rgba(1,5,9,.58);}
 #drawer{display:contents;}
 .rlabel{display:none;}
@@ -288,9 +290,8 @@ body.sheet-open #log{display:none;}
     border:1px solid var(--line-hi);border-radius:4px;background:var(--glass);z-index:36;
     box-shadow:0 0 16px rgba(0,0,0,.5);}
   body.sheet-open #burger{display:none;}
-  #topclock{display:block;}
-  .res{padding:0 9px;gap:5px;}
-  #devline{display:none;}
+  .res{padding:0 7px;gap:4px;}
+  #devline{top:44px;}
 
   /* left rail + event log + comms collapse into a slide-in drawer */
   #drawer{display:flex;flex-direction:column;position:fixed;left:0;top:44px;bottom:0;width:80vw;max-width:300px;
@@ -416,10 +417,9 @@ const html = `<!doctype html>
   <div class="crest"><span class="dia"></span>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
-  <span id="topclock">Day 1</span>
   <div id="purse"></div>
 </header>
-<div id="devline">VOID CORE v0.1 · SESSION skirmish-1 · GRID sector-7 · <span id="clock">Day 1</span></div>
+<div id="devline"></div>
 <div id="scrim"></div>
 <div id="drawer">
   <nav id="rail">

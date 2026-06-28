@@ -16,7 +16,6 @@ import {
   HOUR,
   DAY,
   hpOfLevel,
-  netIncome,
   moveFleet,
   moveFleetEdge,
   stopFleet,
@@ -114,6 +113,10 @@ const UNIT_ICON: Record<string, string> = {
   hero: '♔', // the player's projection — a crowned flagship
 };
 let ME = 'p1';
+// Суверены — the donate/premium currency (docs/economy-roadmap.md). It's a meta-layer
+// account balance, NOT match state, so the prototype shows a placeholder here; the real
+// balance comes from the account once monetization is wired.
+const SOVEREIGNS = 25;
 type PlanetTab = 'ground' | 'ships' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
@@ -279,7 +282,7 @@ const canvas = $('map') as unknown as HTMLCanvasElement;
 const cx = canvas.getContext('2d') as CanvasRenderingContext2D;
 const side = $('side');
 const logEl = $('log');
-const clock = $('clock');
+const devlineEl = $('devline'); // status strip below the top bar: day/time + worlds/fleets/score
 const purse = $('purse');
 const bannerEl = $('banner');
 const hovercard = $('hovercard');
@@ -288,7 +291,6 @@ const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
 const burger = $('burger');
 const scrim = $('scrim');
-const topClock = $('topclock');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -4034,15 +4036,23 @@ function frame(nowReal: number) {
   renderCmdBar();
   renderSplitDialog();
   renderLobby();
-  // top bar (Iron Order-style resource readouts with +/h deltas)
+  // Status strip below the top bar (the top bar itself is just the currencies now):
+  // day/time + victory progress + world/fleet counts.
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   const min = floor((s.time % HOUR) / 60000);
-  const clockText = `Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-  if (clockText !== lastClockText) {
-    clock.textContent = clockText;
-    topClock.textContent = clockText;
-    lastClockText = clockText;
+  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
+  const myFleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  const need = Math.max(0, SCORE_LIMIT - score);
+  const statusHtml =
+    `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
+    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>` +
+    `<span class="dstat">⊕ ${worlds} ${worlds === 1 ? 'world' : 'worlds'}</span>` +
+    `<span class="dstat">▲ ${myFleets} ${myFleets === 1 ? 'fleet' : 'fleets'}</span>`;
+  if (statusHtml !== lastClockText) {
+    devlineEl.innerHTML = statusHtml;
+    lastClockText = statusHtml;
   }
   // Dev net overlay (M0): FPS always; when connected, append round-trip latency and
   // a desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
@@ -4057,29 +4067,18 @@ function frame(nowReal: number) {
     fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
     lastFpsText = fpsText;
   }
+  // Top bar = the six currencies (icon + amount). Five are session resources; the
+  // donate currency (Суверены ◆) is a meta-layer balance pinned to the far-right corner.
   const r = s.players[ME]?.resources ?? {};
-  const inc = netIncome(s, ME);
-  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
-  const myFleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
-  const chip = (icon: string, val: string, delta?: number) => {
-    const dh =
-      delta === undefined
-        ? ''
-        : `<em class="${delta >= 0 ? 'up' : 'dn'}">${delta >= 0 ? '+' : ''}${Math.round(delta)}/h</em>`;
-    return `<span class="res"><i>${icon}</i><span class="rv"><b>${val}</b>${dh}</span></span>`;
-  };
-  // Victory progress: your authoritative score (victoryModule) and how far to the win.
-  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
-  const need = Math.max(0, SCORE_LIMIT - score);
-  const scoreChip =
-    `<span class="res"><i>SCR</i><span class="rv"><b>${score}<small style="opacity:.55;font-weight:400">/${SCORE_LIMIT}</small></b>` +
-    `<em class="${need === 0 ? 'up' : 'dn'}">${need === 0 ? '★ WIN' : need + ' to win'}</em></span></span>`;
+  const chip = (icon: string, val: string, donate = false) =>
+    `<span class="res${donate ? ' donate' : ''}"><i>${icon}</i><b>${val}</b></span>`;
   const hudHtml =
-    chip('MTL', kfmt(r.metal ?? 0), inc.metal ?? 0) +
-    chip('CRD', kfmt(r.credits ?? 0), inc.credits ?? 0) +
-    chip('WLD', String(worlds)) +
-    chip('FLT', String(myFleets)) +
-    scoreChip;
+    chip('💰', kfmt(r.credits ?? 0)) +
+    chip('🌾', kfmt(r.food ?? 0)) +
+    chip('⚙', kfmt(r.metal ?? 0)) +
+    chip('⚡', kfmt(r.energy ?? 0)) +
+    chip('🔌', kfmt(r.microelectronics ?? 0)) +
+    chip('◆', kfmt(SOVEREIGNS), true);
   if (hudHtml !== lastHudHtml) {
     purse.innerHTML = hudHtml;
     lastHudHtml = hudHtml;
