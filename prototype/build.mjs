@@ -154,6 +154,22 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pc-close{margin-top:10px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
 
+/* war prompt — confirm before a move declares war on a player you're at peace with */
+#warprompt{position:fixed;inset:0;z-index:48;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(20,2,1,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#warprompt.show{display:flex;}
+#warprompt .wpbox{width:min(360px,92vw);background:var(--glass);border:1px solid var(--red);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 44px rgba(255,90,77,.22),inset 0 0 0 1px rgba(255,90,77,.06);}
+.wp-head{font-size:15px;letter-spacing:2px;color:var(--red);text-shadow:0 0 10px rgba(255,90,77,.5);
+  padding-bottom:9px;margin-bottom:9px;border-bottom:1px solid #5a201a;}
+.wp-body{font-size:12.5px;line-height:1.65;color:#e7c6c2;margin-bottom:14px;}
+.wp-body b{color:#ffd9d3;}
+.wp-actions{display:flex;gap:8px;}
+.wp-actions button{flex:1;padding:11px;cursor:pointer;border-radius:6px;font:700 12px ui-monospace,monospace;letter-spacing:1px;}
+.wp-no{border:1px solid var(--cyan-dim);background:rgba(53,214,230,.1);color:var(--cyan);}
+.wp-yes{border:1px solid #7a221c;background:rgba(255,90,77,.16);color:var(--red);}
+.wp-yes:active{background:rgba(255,90,77,.3);}
+
 /* status strip below the top bar: day/time + victory progress */
 #devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
@@ -466,6 +482,7 @@ const html = `<!doctype html>
 <div id="cmdbar"></div>
 <div id="codex"></div>
 <div id="playercard"></div>
+<div id="warprompt"></div>
 <div id="splitdlg"></div>
 <div id="fps"></div>
 <div id="banner"></div>

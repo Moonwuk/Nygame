@@ -11,6 +11,7 @@ import {
   type UnitStack,
 } from '../state/gameState';
 import { parseGameData, type GameData } from '../data/schemas';
+import { setStance } from '../state/diplomacy';
 import type { Action, AdvanceResult, ApplyResult, Context } from '../action/types';
 
 const data: GameData = parseGameData({
@@ -177,6 +178,32 @@ describe('combat — engagement (GDD §7)', () => {
     const r = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
     expect(Object.keys(r.state.battles)).toHaveLength(0);
     expect(types(r.events)).not.toContain('battle.started');
+  });
+
+  it('does not start a battle when the two owners are at peace (diplomacy)', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    const st = baseState(
+      [fleet('A', 'p1', 'P', [['fighter', 2]]), fleet('D', 'p2', 'P', [['fighter', 1]])],
+      [planet('P', null)],
+    );
+    setStance(st, 'p1', 'p2', 'peace'); // hold fire until war is declared
+    const r = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    expect(Object.keys(r.state.battles)).toHaveLength(0);
+    expect(r.state.fleets.A?.battleId).toBeFalsy();
+    expect(types(r.events)).not.toContain('battle.started');
+  });
+
+  it('starts the battle once that peace turns to war', () => {
+    const kernel = createKernel([combatModule, arrivalModule]);
+    const st = baseState(
+      [fleet('A', 'p1', 'P', [['fighter', 2]]), fleet('D', 'p2', 'P', [['fighter', 1]])],
+      [planet('P', null)],
+    );
+    setStance(st, 'p1', 'p2', 'peace');
+    setStance(st, 'p1', 'p2', 'war'); // declaration overrides the peace
+    const r = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    expect(Object.keys(r.state.battles)).toHaveLength(1);
+    expect(types(r.events)).toContain('battle.started');
   });
 });
 

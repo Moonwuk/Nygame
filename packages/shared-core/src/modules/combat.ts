@@ -6,6 +6,7 @@ import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
 import { isCapturable } from '../state/sectorKind';
+import { getStance } from '../state/diplomacy';
 /** Hard cap on rounds so a zero-damage stalemate can't run forever (fail-secure). */
 const MAX_COMBAT_ROUNDS = 240;
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
@@ -15,11 +16,6 @@ type Tier = 'front' | 'mid' | 'rear' | 'artillery';
 /** Damage-receiving order (GDD §7.2): artillery is only reachable once the
  *  front, mid and rear lines are gone. */
 const TIER_ORDER: readonly Tier[] = ['front', 'mid', 'rear', 'artillery'];
-
-/** Optional diplomacy capability — absent ⇒ different owner = hostile. */
-interface Diplomacy {
-  getRelation(a: string, b: string): 'hostile' | 'ally' | 'neutral';
-}
 
 const roundIntervalMs = (ctx: Context): number => MS_PER_HOUR / timeScaleOf(ctx);
 
@@ -86,8 +82,10 @@ function isHostile(h: HandlerContext, a: string, b: string): boolean {
   if (a === b) {
     return false;
   }
-  const diplomacy = h.capability<Diplomacy>('diplomacy');
-  return (diplomacy?.getRelation(a, b) ?? 'hostile') === 'hostile';
+  // Diplomacy lives in `state.diplomacy` (D1). Only an explicit `war` stance is
+  // hostile; the default for an unrecorded pair is `war` (FFA), so behaviour is
+  // unchanged unless a game seeds peace/pact/alliance (the prototype does).
+  return getStance(h.state, a, b) === 'war';
 }
 
 // --- damage ------------------------------------------------------------------

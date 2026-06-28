@@ -107,8 +107,12 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   `heroSeq?` (счётчик id лейнов) — модуль `hero`.
 - `diplomacy?: Record<pairKey, DiplomaticStance>` — попарные дип-отношения (`war`/`peace`/
   `pact`/`alliance`), симметрично и **публично** (туман не режет). Дефолт пары без записи —
-  `war` (= текущее FFA без модуля). Примитивы в `state/diplomacy.ts`; провайдер capability
-  `diplomacy` и действия — будущий `diplomacyModule` (D2).
+  `war` (= FFA). Примитивы в `state/diplomacy.ts`. **`combat.isHostile` читает стойку прямо из
+  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне (не
+  через capability: она статична и не видит живой `state`). Прототип сеет всем парам `peace`
+  в `newGame`, даёт `diplomacyModule` (действие `diplomacy.declare` → `setStance`) и клиентский
+  гейт: маршрут через чужую территорию без войны блокируется, ручной тык по ней открывает
+  предупреждение «это объявит войну», ИИ объявляет войну, когда нейтралы кончились.
 
 **Время:** все длительности — через `schedule(at,…)`; `timeScale` (MatchConfig)
 делит реальные длительности (×1/×2/×4). `time.advanced` спаны дают накопление.

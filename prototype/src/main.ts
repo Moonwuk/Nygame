@@ -32,6 +32,8 @@ import {
   upgradeBuilding,
   buildUnit,
   aiOrders,
+  declareWar,
+  canTraverse,
   START_CANDIDATES,
   type SetupConfig,
   type SeatConfig,
@@ -230,6 +232,14 @@ let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
+// A staged move that would cross territory of a player you're at PEACE with: held
+// until you confirm in the war-prompt (declaring war opens the route) or cancel.
+let warPrompt: {
+  fleetIds: string[];
+  destId: string;
+  edge?: { from: string; to: string; t: number };
+  blockers: string[];
+} | null = null;
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
@@ -1155,6 +1165,94 @@ function playerOrder(action: Action) {
   const out = order(s, action, s.time);
   apply(out);
   if (out.error) note('✖ ' + out.error.replace(/^E_/, '').toLowerCase().replace(/_/g, ' '));
+}
+
+// --- diplomacy gate (client order layer) -------------------------------------
+// A move that would cross or end on territory of a player you're at PEACE with is
+// blocked: you must declare war first. Such a move opens a confirmation ("this
+// declares war on …") instead of dispatching. The AI honours the same rule (see
+// aiOrders); the kernel only fights once a `war` stance exists (combat.isHostile).
+function blockerName(id: string): string {
+  return s.players[id]?.name ?? NAME[id] ?? id;
+}
+/** Distinct PEACE owners a fleet at node `from` would cross or land on reaching `toId`
+ *  — each must be at war before the route opens. Empty ⇒ the move is free. */
+function peaceBlockers(from: string | null, toId: string): string[] {
+  if (!from || from === toId) return [];
+  const route = planRoute(s, from, toId) ?? [toId]; // hops after `from`, incl. dest
+  const set = new Set<string>();
+  for (const hop of route) {
+    const owner = s.planets[hop]?.owner ?? null;
+    if (owner != null && !canTraverse(s, ME, owner)) set.add(owner);
+  }
+  return [...set];
+}
+/** Order every selected fleet to a world. If the route crosses PEACE territory, stage
+ *  a war-declaration prompt instead of dispatching (confirm → declare war + advance). */
+function tryMoveGroup(fleetIds: string[], destId: string): void {
+  const movers = fleetIds.filter((id) => s.fleets[id] && s.fleets[id]!.location !== destId);
+  if (!movers.length) return;
+  const blockers = new Set<string>();
+  for (const id of movers)
+    for (const b of peaceBlockers(fleetNode(s.fleets[id]!), destId)) blockers.add(b);
+  if (blockers.size) {
+    warPrompt = { fleetIds: movers, destId, blockers: [...blockers] };
+    renderWarPrompt();
+    return;
+  }
+  for (const id of movers) playerOrder(moveFleet(ME, id, destId));
+}
+/** As tryMoveGroup, but the target is a point on a lane (continuous order). Either lane
+ *  endpoint sitting on PEACE territory blocks the march until war is declared. */
+function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; t: number }): void {
+  const blockers = new Set<string>();
+  for (const id of fleetIds) {
+    const node = fleetNode(s.fleets[id]!);
+    for (const end of [edge.from, edge.to]) for (const b of peaceBlockers(node, end)) blockers.add(b);
+  }
+  if (blockers.size) {
+    warPrompt = { fleetIds: [...fleetIds], destId: edge.to, edge, blockers: [...blockers] };
+    renderWarPrompt();
+    return;
+  }
+  for (const id of fleetIds) playerOrder(moveFleetEdge(ME, id, edge));
+}
+/** Confirm the staged move: declare war on each blocker (opens the lanes), then issue
+ *  the held move for every fleet. War-first ordering means the routes are clear when
+ *  the moves apply (solo: sequential; net: server applies in send order). */
+function confirmWarPrompt(): void {
+  if (!warPrompt) return;
+  const wp = warPrompt;
+  warPrompt = null;
+  hideWarPrompt();
+  for (const b of wp.blockers) playerOrder(declareWar(ME, b));
+  for (const id of wp.fleetIds) {
+    if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
+    else playerOrder(moveFleet(ME, id, wp.destId));
+  }
+  note('⚔ War declared — fleets advancing');
+}
+function cancelWarPrompt(): void {
+  warPrompt = null;
+  hideWarPrompt();
+}
+function renderWarPrompt(): void {
+  const el = document.getElementById('warprompt');
+  if (!el || !warPrompt) return;
+  const names = warPrompt.blockers.map((b) => esc(blockerName(b))).join(', ');
+  el.innerHTML =
+    `<div class="wpbox">` +
+    `<div class="wp-head">⚔ DECLARE WAR?</div>` +
+    `<div class="wp-body">This route crosses worlds held by <b>${names}</b>, ` +
+    `with whom you are at <b>peace</b>. There is no peaceful passage — ` +
+    `advancing here declares <b>war</b>.</div>` +
+    `<div class="wp-actions"><button class="wp-no">CANCEL</button>` +
+    `<button class="wp-yes">DECLARE WAR</button></div>` +
+    `</div>`;
+  el.classList.add('show');
+}
+function hideWarPrompt(): void {
+  document.getElementById('warprompt')?.classList.remove('show');
 }
 
 const NAME: Record<string, string> = { p1: 'Azure', p2: 'Crimson', p3: 'Amber', p4: 'Violet' };
@@ -3533,11 +3631,9 @@ function selectAt(mx: number, my: number) {
     if (Math.hypot(mx - c.x, my - c.y) < 24) {
       if (aiming) {
         // Move armed → send the selected fleet(s) here; they route along the lanes to
-        // this world and stop. Keep them selected for follow-up orders.
-        for (const fleetId of selectedFleetIds()) {
-          const f = s.fleets[fleetId];
-          if (f && f.location !== n.id) playerOrder(moveFleet(ME, fleetId, n.id));
-        }
+        // this world and stop. Keep them selected for follow-up orders. A route through
+        // a player you're at peace with stages a war prompt instead of dispatching.
+        tryMoveGroup(selectedFleetIds(), n.id);
         aiming = false;
         lastPanelHtml = '';
         return;
@@ -3555,9 +3651,7 @@ function selectAt(mx: number, my: number) {
   if (aiming) {
     const lane = nearestLanePoint(mx, my);
     if (lane) {
-      for (const fleetId of selectedFleetIds()) {
-        playerOrder(moveFleetEdge(ME, fleetId, { from: lane.from, to: lane.to, t: lane.t }));
-      }
+      tryMoveEdgeGroup(selectedFleetIds(), { from: lane.from, to: lane.to, t: lane.t });
     }
     aiming = false;
     lastPanelHtml = '';
@@ -4219,6 +4313,17 @@ if (playerCardEl) {
   playerCardEl.addEventListener('click', (e) => {
     const tg = e.target as HTMLElement;
     if (tg.id === 'playercard' || tg.classList.contains('pc-close')) playerCardEl.classList.remove('show');
+  });
+}
+
+// War prompt: a move routed through a player you're at peace with asks for
+// confirmation — DECLARE WAR dispatches it (after declaring war), CANCEL/backdrop drops it.
+const warPromptEl = document.getElementById('warprompt');
+if (warPromptEl) {
+  warPromptEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.classList.contains('wp-yes')) confirmWarPrompt();
+    else if (tg.id === 'warprompt' || tg.classList.contains('wp-no')) cancelWarPrompt();
   });
 }
 
