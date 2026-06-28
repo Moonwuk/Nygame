@@ -3,9 +3,9 @@
 Packages the **prototype** (`prototype/dist/void-dominion.html`, a self-contained
 offline HTML game) into an installable Android APK by wrapping it in a Capacitor
 WebView. No hosting needed — the HTML ships inside the app. The app is **branded**
-(diamond crest icon + splash) and **locked to landscape** (the province map is wide;
-portrait collapses it into a thin strip). Standalone project (not in the pnpm
-workspace); uses `npm`.
+(diamond crest icon + splash) and **locked to portrait** — the map defaults to a
+zoomed-in view of your home region and you pan to explore. Standalone project (not in
+the pnpm workspace); uses `npm`.
 
 This is `cross-platform-roadmap.md` CP6.2 (Capacitor route — pulled forward ahead of
 the CP6.1 TWA route to enable the multiplayer-via-APK test). The wrapped prototype
@@ -22,10 +22,22 @@ with the latest build, at a stable link:
 - **Direct APK:** https://github.com/Moonwuk/Nygame/releases/download/alpha/void-dominion-alpha.apk
 
 On the phone: open the direct link → download → open the APK → allow "install from
-unknown sources" if prompted → launch. **Single-player runs fully offline** (landscape).
+unknown sources" if prompted → launch. **Single-player runs fully offline** (portrait).
 
-It is a **debug** APK (signed with Android's debug key) — fine for testing, not for
-the Play Store. A release/AAB needs a signing keystore (a later step).
+It is a **debug** APK, signed with a **committed debug keystore** (`mobile/debug.keystore`,
+standard `android`/`android` credentials — not a secret) so every build shares one
+signature and updates install over the previous build. A Play-Store release/AAB still
+needs a real (secret) keystore — a later step.
+
+### If the install fails
+
+- **"App not installed — it conflicts with another package"** — you have an older build
+  installed that was signed with a *different* key (older builds regenerated the debug
+  key each time). **Uninstall Void Dominion once**, then install this build; from now on
+  the signature is stable, so future updates install straight over the top.
+- **Google Play Protect "blocked for your protection"** — expected for a sideloaded
+  debug APK from an unverified developer. Tap **Подробнее → Установить всё равно**
+  (More details → Install anyway). It's the same code you build here.
 
 ## Get the APK as a CI artifact (any branch build)
 

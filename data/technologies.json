@@ -35,5 +35,15 @@
     "researchTimeHours": 8,
     "prerequisites": ["industrial_automation"],
     "unlocks": { "buildings": ["fort"] }
+  },
+  "microelectronics_fabrication": {
+    "name": "Microelectronics Fabrication",
+    "description": "Cleanroom doctrine that unlocks orbital fabs turning energy and metal into microelectronics.",
+    "tier": 2,
+    "cost": { "credits": 220, "metal": 180, "energy": 120 },
+    "researchTimeHours": 10,
+    "prerequisites": ["industrial_automation"],
+    "unlocks": { "buildings": ["fabricator"] },
+    "effects": { "productionBonus": 0.05 }
   }
 }

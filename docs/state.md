@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 402 зелёных** (4 skip, 49 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 422 зелёных** (4 skip, 51 файл).
 
 ---
 
@@ -107,8 +107,30 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   `heroSeq?` (счётчик id лейнов) — модуль `hero`.
 - `diplomacy?: Record<pairKey, DiplomaticStance>` — попарные дип-отношения (`war`/`peace`/
   `pact`/`alliance`), симметрично и **публично** (туман не режет). Дефолт пары без записи —
-  `war` (= текущее FFA без модуля). Примитивы в `state/diplomacy.ts`; провайдер capability
-  `diplomacy` и действия — будущий `diplomacyModule` (D2).
+  `war` (= FFA). Примитивы в `state/diplomacy.ts`. **`combat.isHostile` читает стойку прямо из
+  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне (не
+  через capability: она статична и не видит живой `state`). Прототип сеет всем парам `peace`
+  в `newGame`, даёт `diplomacyModule` (действие `diplomacy.declare` → `setStance`) и клиентский
+  гейт: маршрут через чужую территорию без войны блокируется, ручной тык по ней открывает
+  предупреждение «это объявит войну», ИИ объявляет войну, когда нейтралы кончились.
+  **Сессионное меню дипломатии/сообщений** (прототип, рейл → Дипломатия/Dispatches):
+  ростер всех участников (иконка человек ☻ / ИИ ⌬, сорт. по имени/провинциям/отношению +
+  фильтры-чипы по отношению и типу человек/ИИ — AND между категориями, OR внутри),
+  смена стойки предложениями — повышение ранга (мир<пакт<союз, и мир из войны) требует
+  согласия ИИ (детерминированно по числу провинций), понижение/война односторонни.
+  Вкладка «Сообщения» — переписки master-detail: слева список чатов (групповой
+  «⚡ Коалиция» = ты + союзники, закреплён сверху; ниже личные DM по участникам),
+  справа открывается выбранный тред + composer. Системные дип-события с твоим участием
+  ложатся в DM с этой стороной (через `diplomacy.changed`). В чате коалиции — **пинги**:
+  выделил провинцию → 📍 шлёт метку; тык по метке → камера летит туда (`centerOn`) и
+  меню закрывается. **Пинг виден и на карте** как маркер-булавка (цвет владельца): тык по
+  нему → попап с автором и **коротким описанием, которое пишет ставящий** (текст из
+  composer'а) + «↪ камера» и «убрать» (для своих). Сообщения живут в клиенте (не в ядре —
+  на симуляцию не влияют). **Сеть (пинги):** `MultiplayerClient` теперь шлёт `ping.place`/
+  `ping.clear` и принимает `ping.added`/`ping.removed` (`onPingAdded`/`onPingRemoved`); в
+  NET-режиме прототип ставит/убирает пинг через сервер (авторитетный — штампует id/TTL,
+  раздаёт владельцу+союзникам по командам, прячет от врагов), а эхо `ping.added` рисует
+  маркер. Текстовый чат (DM/коалиция) пока клиентский — в протоколе только пинги.
 
 **Время:** все длительности — через `schedule(at,…)`; `timeScale` (MatchConfig)
 делит реальные длительности (×1/×2/×4). `time.advanced` спаны дают накопление.
@@ -387,6 +409,23 @@ Per-player **сущность** (`GameState.heroes[playerId]: {owner, location, 
 на dev-карте green не видит флот red и `red_1` **не появляется по проводу** ни в стейте,
 ни в событиях. **Дальше:** AOI-оптимизация, JWT в рукопожатии (F7).
 
+**Реестр матчей / мета-шелл (`packages/server/MatchRegistry`, первый кирпич MM-0.1).**
+Мульти-матч реестр поверх `MatchRoom` + **мета-запись рядом с матчем** (`MatchMeta`:
+`mapId, rules:MatchConfig, createdAt, startedAt, archivedBy`) — **вне `GameState`**
+(инвариант `main-menu.md` §2: мета-состояние не живёт в ядре). Read-model браузера
+матчей `MatchRegistry.list(nick)` отдаёт три вкладки для зрителя: **available**
+(присоединяемые — есть слот, не `ended`, ты не в них), **active** (ты держишь слот),
+**archived** (ты перенёс в свой архив — **per-player** флаг, не глобальный). Строка
+статуса: `days` (игровые дни от старта = `(state.time-startedAt)/MS_PER_DAY`), `players`
+(занято/всего — занятость через `AccountStore.occupiedSeats`), `mapId`, `rules`, `status`.
+Интент **archive/unarchive** — fail-secure (`E_NO_MATCH`/`E_FORBIDDEN`, авторизация по
+посадке nick). По проводу: `wsServer` маршрутит `/matches/<id>` по реестру (404 на
+неизвестный id), `GET /matches?nick=` (read-model) + `POST /matches/<id>/archive?nick=`
+(интент). Идентичность — лёгкая, по nick (`AccountStore.seatOf`), **без аккаунтов**
+(полное меню ждёт `AC-0.1`). `main.ts` сидит 2-3 dev-матча. **Дальше:** клиентский
+экран меню (Этап 4), персистентность меты + `MatchStore.list` (Postgres уже под это
+индексирован), лобби/создание матча (MM-1.1).
+
 ## 6. Данные (`data/*.json`, версия `0.1.0`)
 
 - **resources:** `credits` (деньги), `metal`, `food`, `energy`, `microelectronics` —
@@ -400,11 +439,20 @@ drop_infantry, tank(cargoSize 3), orbital_aa(aaDamage), infected_cruiser,
 reanimated_drone`.
 - **buildings** (`BuildingDef`): `cost, buildTimeHours, produces, hp,
 defenseBonus, upgrades[{…}], traits, scoreValue, radarRange`. Есть: `mine_t1, mine_t2,
-shipyard, biomass_pit, barracks, spaceport, radar, fort` (форт — 3 уровня: HP 35→50→65,
-  defenseBonus 0.35→0.50→0.65; **радар — 3 уровня**: `radarRange` 300→500→700 (расстояние),
-  HP 18→26→34). `radarRange` теперь **уровневый** (`BuildingLevelSchema`), `visibleState`
-  читает его через `buildingLevel(def, level)`. `scoreValue`: fort 20·уровень, shipyard 12,
-  mine/biomass 8, barracks/spaceport/radar 6.
+shipyard, biomass_pit, barracks, spaceport, radar, fort, metal_station, power_plant, fabricator`
+  (форт — 3 уровня: HP 35→50→65, defenseBonus 0.35→0.50→0.65; **радар — 3 уровня**: `radarRange`
+  300→500→700 (расстояние), HP 18→26→34). `radarRange` теперь **уровневый** (`BuildingLevelSchema`),
+  `visibleState` читает его через `buildingLevel(def, level)`. `scoreValue`: fort 20·уровень,
+  shipyard 12, fabricator 14, mine/biomass/power_plant 8, barracks/spaceport/radar 6.
+  **ECON-3 — производители недостающих ресурсов:** `power_plant` (Fusion Reactor, 3 уровня:
+  `energy` 25→60→110) и `fabricator` (Microelectronics Fab, 3 уровня: `microelectronics`
+  8→18→32; стоит metal+credits+`energy` — премиум-ресурс «варится» из энергии, гейтится
+  технологией `microelectronics_fabrication`). Так у каждого экономического ресурса
+  (кроме `credits` — валюта/сток) есть хотя бы одно здание-производитель; экономика
+  начисляет любой `produces`-ресурс агностично (движок не трогался). Ростеры
+  `sectorKinds`: реактор — планета/астероид/туманность/`void_station`, фабрикатор —
+  планета/`void_station`. Referential-integrity тест следит, что любой `produces`/`cost`/
+  `upkeep`-ресурс контента есть в `resources`.
 - **sectors:** `empty_space(+скорость), asteroid_field(−скорость/+живучесть/score 5),
 nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
 volcanic 20, gas_giant 10, barren 5).
@@ -412,7 +460,8 @@ volcanic 20, gas_giant 10, barren 5).
 - **events:** `reanimate_on_kill, infect_planet, void_anomaly` (правила
   trigger→effect; движок трейтов пока не построен).
 - **technologies:** сессионное дерево (`industrial_automation`,
-  `orbital_logistics`, `siege_doctrine`, `fortified_infrastructure`): стоимость,
+  `orbital_logistics`, `siege_doctrine`, `fortified_infrastructure`,
+  `microelectronics_fabrication`): стоимость,
   длительность, prerequisite-цепочки, unlocks юнитов/зданий и бонусы к
   production/speed/damage.
 
@@ -427,11 +476,12 @@ combat, captureOnArrival, construction, army, victory, fleetLaunch])`, тик в
 баннер победы/поражения/ничьи (а не хардкод по узлам).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
   показывает тип и его бонусы (prod/def), `netIncome` учитывает множитель производства.
-- **Карта (большая, генерится в `game.ts::buildField`):** 52 провинции — ровно **12
-  «планет»** (по 50 очков) + 40 не-планет (по 10) = **1000** базовых очков на доске; две
-  базы (`HOME`/`CRIMSON`) по краям, планетные клетки точечно-симметричны для честной дуэли.
-  Победа по очкам — **600** (`ctx` config). Стаггер-решётка, RNG-линки и границы канваса
-  выводятся из констант `FIELD`/`*_CELLS` — карта переформировывается правкой списков клеток.
+- **Карта (квадратная 7×7, генерится в `game.ts::buildField`):** 49 провинций — ровно **12
+  «планет»** (по 50 очков) + 37 не-планет (по 10) = **~970** базовых очков на доске; 4 старт-
+  кандидата по углам (инсет), нейтральные планеты по центру. Квадратный аспект — чтобы карта
+  читалась в портрете (заполняет ширину, панится по вертикали). Победа по очкам — **600**
+  (`ctx` config). Джиттер-решётка, RNG-линки и границы канваса выводятся из констант
+  `FIELD`/`*_CELLS` — карта переформировывается правкой списков клеток.
 - **Прототип-модуль `fleet.launch {planetId}`** (`game.ts`, не в ядре) — поднимает
   флот из гарнизона (корабли→`units`, наземные→`landing`). Кандидат в ядро.
 - **UI — тактический пульт (DEFCON-вайб):** векторно-каркасный стиль на чёрном.

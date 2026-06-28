@@ -132,7 +132,12 @@
 - **ECON-2** ✅ Сессионная биржа (`marketModule`, `GameState.market`): `market.list`
   (эскроу) / `market.buy` (за деньги, **15% комиссия сжигается**, частичная покупка) /
   `market.cancel` (возврат остатка). Публичный ордербук, в delta. 5 тестов.
-- **ECON-3** ⏳ Производители `energy`/`microelectronics` (здания) + балансировка цен/стоков.
+- **ECON-3** ✅ Производители `energy`/`microelectronics` (здания): `power_plant` (Fusion
+  Reactor, 3 ур.: energy 25→60→110) и `fabricator` (Microelectronics Fab, 3 ур.:
+  microelectronics 8→18→32; стоит metal+credits+energy, гейт техом `microelectronics_fabrication`).
+  Прописаны в ростеры `sectorKinds`; теперь у каждого экономического ресурса (кроме `credits`)
+  есть производитель. Тесты: производство energy/micro экономикой + referential-integrity
+  (любой `produces`/`cost`/`upkeep`-ресурс ∈ `resources`). Движок не тронут (агностичен). +3 теста.
 - **ECON-4** 🔒(F4) UI биржи в клиенте/прототипе (листинг/покупка/отмена).
 
 ## Блок HERO · Ядро: герои `[core]` `[data]`

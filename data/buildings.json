@@ -120,5 +120,51 @@
       }
     ],
     "traits": []
+  },
+  "power_plant": {
+    "name": "Fusion Reactor I",
+    "cost": { "metal": 110, "credits": 30 },
+    "buildTimeHours": 6,
+    "produces": { "energy": 25 },
+    "hp": 16,
+    "scoreValue": 8,
+    "upgrades": [
+      {
+        "cost": { "metal": 280, "credits": 110 },
+        "buildTimeHours": 16,
+        "produces": { "energy": 60 },
+        "hp": 26
+      },
+      {
+        "cost": { "metal": 460, "credits": 210 },
+        "buildTimeHours": 22,
+        "produces": { "energy": 110 },
+        "hp": 36
+      }
+    ],
+    "traits": []
+  },
+  "fabricator": {
+    "name": "Microelectronics Fab I",
+    "cost": { "metal": 200, "credits": 120, "energy": 60 },
+    "buildTimeHours": 14,
+    "produces": { "microelectronics": 8 },
+    "hp": 22,
+    "scoreValue": 14,
+    "upgrades": [
+      {
+        "cost": { "metal": 360, "credits": 220, "energy": 140 },
+        "buildTimeHours": 20,
+        "produces": { "microelectronics": 18 },
+        "hp": 32
+      },
+      {
+        "cost": { "metal": 560, "credits": 360, "energy": 260 },
+        "buildTimeHours": 28,
+        "produces": { "microelectronics": 32 },
+        "hp": 44
+      }
+    ],
+    "traits": []
   }
 }

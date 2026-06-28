@@ -26,18 +26,18 @@ let r = advance(s, 5 * HOUR);
 s = r.state;
 note(s.time, `p1 treasury after 5h: ${treas(s, 'p1')}`);
 
-// 2) order a refinery + a cruiser at C1R0
-r = order(s, buildBuilding('p1', 'C1R0', 'refinery'), s.time);
+// 2) order a refinery + a cruiser at C1R1
+r = order(s, buildBuilding('p1', 'C1R1', 'refinery'), s.time);
 s = r.state;
-note(s.time, `build refinery @C1R0 → ${r.error ?? 'ok'}`);
-r = order(s, buildUnit('p1', 'C1R0', 'cruiser', 1), s.time);
+note(s.time, `build refinery @C1R1 → ${r.error ?? 'ok'}`);
+r = order(s, buildUnit('p1', 'C1R1', 'cruiser', 1), s.time);
 s = r.state;
-note(s.time, `build cruiser @C1R0 → ${r.error ?? 'ok'}`);
+note(s.time, `build cruiser @C1R1 → ${r.error ?? 'ok'}`);
 
 // 3) send the blue fleet to take a nearby neutral world
-r = order(s, moveFleet('p1', 'p1-1', 'C6R0'), s.time);
+r = order(s, moveFleet('p1', 'p1-1', 'C3R3'), s.time);
 s = r.state;
-note(s.time, `move blue-1 → C6R0 → ${r.error ?? 'ok'}`);
+note(s.time, `move blue-1 → C3R3 → ${r.error ?? 'ok'}`);
 
 // 4) run the world forward; when blue-1 is idle over a hostile world, descend & land
 for (let t = s.time + HOUR; t <= 40 * HOUR; t += HOUR) {
@@ -66,14 +66,14 @@ for (let t = s.time + HOUR; t <= 40 * HOUR; t += HOUR) {
   }
 }
 
-note(s.time, `C6R0 owner = ${s.planets.C6R0?.owner}`);
-note(s.time, `C1R0 garrison = ${JSON.stringify(s.planets.C1R0?.garrison)}`);
+note(s.time, `C3R3 owner = ${s.planets.C3R3?.owner}`);
+note(s.time, `C1R1 garrison = ${JSON.stringify(s.planets.C1R1?.garrison)}`);
 
-// 5) launch a fresh fleet from C1R0's garrison
-r = order(s, launchFleet('p1', 'C1R0'), s.time);
+// 5) launch a fresh fleet from C1R1's garrison
+r = order(s, launchFleet('p1', 'C1R1'), s.time);
 s = r.state;
-note(s.time, `launch fleet @C1R0 → ${r.error ?? 'ok'}`);
-const launched = Object.values(s.fleets).find((f) => f.owner === 'p1' && f.location === 'C1R0');
+note(s.time, `launch fleet @C1R1 → ${r.error ?? 'ok'}`);
+const launched = Object.values(s.fleets).find((f) => f.owner === 'p1' && f.location === 'C1R1');
 note(s.time, `launched fleet units = ${JSON.stringify(launched?.units)} landing=${JSON.stringify(launched?.landing)}`);
 
 note(s.time, `final p1 treasury: ${treas(s, 'p1')}`);

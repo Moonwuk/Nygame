@@ -5,7 +5,7 @@
     "capturable": true,
     "buildable": true,
     "orbit": true,
-    "allowedBuildings": ["mine_t1", "mine_t2", "shipyard", "biomass_pit", "barracks", "spaceport", "radar", "fort"],
+    "allowedBuildings": ["mine_t1", "mine_t2", "shipyard", "biomass_pit", "barracks", "spaceport", "radar", "fort", "power_plant", "fabricator"],
     "appearance": { "color": "#5fd0ff", "label": "planet", "shape": "city" }
   },
   "asteroid": {
@@ -13,7 +13,7 @@
     "capturable": true,
     "buildable": true,
     "orbit": false,
-    "allowedBuildings": ["mine_t1", "mine_t2", "radar", "fort"],
+    "allowedBuildings": ["mine_t1", "mine_t2", "radar", "fort", "power_plant"],
     "appearance": { "color": "#d6a645", "label": "asteroid field", "shape": "junction" }
   },
   "nebula": {
@@ -21,7 +21,7 @@
     "capturable": true,
     "buildable": true,
     "orbit": true,
-    "allowedBuildings": ["radar", "fort"],
+    "allowedBuildings": ["radar", "fort", "power_plant"],
     "appearance": { "color": "#8f6dff", "label": "nebula", "shape": "city" }
   },
   "empty": {
@@ -54,7 +54,7 @@
     "capturable": true,
     "buildable": true,
     "orbit": false,
-    "allowedBuildings": ["shipyard", "spaceport", "radar", "fort"],
+    "allowedBuildings": ["shipyard", "spaceport", "radar", "fort", "power_plant", "fabricator"],
     "appearance": { "color": "#5f8f8c", "label": "void fortress", "shape": "station" }
   }
 }

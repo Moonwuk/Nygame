@@ -26,6 +26,31 @@ export interface LobbyRoster {
   started: boolean;
 }
 
+// Tactical ally pings — mirrors the server's `@void/server` protocol wire shape. They
+// are ephemeral coordination markers (never part of GameState); the server stamps the
+// id/timestamps and relays only to the owner + allies.
+export type PingKind = 'mark' | 'move' | 'attack' | 'defend' | 'build';
+export interface PingAnchor {
+  /** A planet/sector id (snapped). */
+  node?: string;
+  /** A free position in map space. */
+  point?: { x: number; y: number };
+}
+export interface MultiplayerPing {
+  id: string;
+  owner: PlayerId;
+  kind: PingKind;
+  target: PingAnchor;
+  to?: PingAnchor;
+  payload?: { building?: string };
+  /** Short label written by the placer (server-clamped). */
+  label?: string;
+  createdAt: number;
+  expiresAt: number;
+}
+/** A ping to place — the server fills in id/createdAt/expiresAt. */
+export type PingDraft = Pick<MultiplayerPing, 'kind' | 'target' | 'to' | 'payload' | 'label'>;
+
 export interface MultiplayerClientHandlers {
   onStatus?(status: MultiplayerStatus): void;
   onSnapshot?(snapshot: MultiplayerSnapshot): void;
@@ -35,6 +60,10 @@ export interface MultiplayerClientHandlers {
    *  the value we sent (absent if we pinged without one) — the caller, which owns
    *  the clock, computes round-trip as `now − clientTime`. */
   onPong?(serverTime: number, clientTime?: number): void;
+  /** A tactical ping became visible to us (placed by us or an ally, or on join). */
+  onPingAdded?(ping: MultiplayerPing): void;
+  /** A ping we could see was cleared by its owner or expired. */
+  onPingRemoved?(pingId: string, reason: 'cleared' | 'expired'): void;
 }
 
 interface InboundBase {
@@ -51,6 +80,9 @@ interface InboundBase {
   lobby?: LobbyRoster;
   serverTime?: number;
   clientTime?: number;
+  ping?: MultiplayerPing;
+  pingId?: string;
+  reason?: 'cleared' | 'expired';
 }
 
 function decode(raw: string): InboundBase | null {
@@ -99,6 +131,19 @@ export class MultiplayerClient {
   /** Host-only: ask the server to begin the match (manual-start lobby). */
   start(): void {
     this.socket.send(JSON.stringify({ type: 'start' }));
+  }
+
+  /** Drop a tactical ping for allies; the server stamps id/createdAt/expiresAt and
+   *  relays a `ping.added` back to us + allies. */
+  placePing(ping: PingDraft): void {
+    this.socket.send(JSON.stringify({ type: 'ping.place', ping }));
+  }
+
+  /** Clear one of our pings (or all of them when `pingId` is omitted). */
+  clearPing(pingId?: string): void {
+    this.socket.send(
+      JSON.stringify(pingId ? { type: 'ping.clear', pingId } : { type: 'ping.clear' }),
+    );
   }
 
   receive(raw: string): void {
@@ -150,6 +195,14 @@ export class MultiplayerClient {
     }
     if (message.type === 'pong' && typeof message.serverTime === 'number') {
       this.handlers.onPong?.(message.serverTime, message.clientTime);
+      return;
+    }
+    if (message.type === 'ping.added' && message.ping) {
+      this.handlers.onPingAdded?.(message.ping);
+      return;
+    }
+    if (message.type === 'ping.removed' && message.pingId) {
+      this.handlers.onPingRemoved?.(message.pingId, message.reason ?? 'cleared');
       return;
     }
     if (message.type === 'rejection' && message.actionId && message.code) {

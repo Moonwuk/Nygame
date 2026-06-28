@@ -24,6 +24,7 @@ import {
   type GameModule,
   type GameState,
   type Hero,
+  type MatchConfig,
   type Planet,
   type Player,
 } from '@void/shared-core';
@@ -78,6 +79,8 @@ export const DEV_MODULES: GameModule[] = [
 ];
 
 export interface DevMatchOptions {
+  /** Match/room id (default `'dev'`). Distinct ids let a registry hold many matches. */
+  id?: string;
   /** Server clock. Defaults (in `MatchRoom`) to wall time; pinned in tests. */
   now?: () => number;
   /** World time the scenario starts at. Match it to the first `now` so the
@@ -87,6 +90,9 @@ export interface DevMatchOptions {
    *  one idle fleet, all joined through a neutral `nexus` — lets soak/load tests
    *  seat N players against one room. */
   players?: string[];
+  /** Ruleset for this match (time scale + victory conditions). Defaults in `MatchRoom`
+   *  to `{ timeScale: 1 }`; the match browser shows it as the match's "rules". */
+  config?: MatchConfig;
 }
 
 function player(id: string, name: string, faction: string): Player {
@@ -174,10 +180,11 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
   });
   const state: GameState = { ...base, players, planets, fleets, heroes };
   return new MatchRoom({
-    id: 'dev',
+    id: options.id ?? 'dev',
     initialState: state,
     kernel: createKernel(DEV_MODULES),
     data,
     now: options.now,
+    ...(options.config ? { config: options.config } : {}),
   });
 }

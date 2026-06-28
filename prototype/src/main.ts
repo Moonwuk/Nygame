@@ -16,7 +16,6 @@ import {
   HOUR,
   DAY,
   hpOfLevel,
-  netIncome,
   TAX_OFFICE_BONUS,
   moveFleet,
   moveFleetEdge,
@@ -33,6 +32,8 @@ import {
   upgradeBuilding,
   buildUnit,
   aiOrders,
+  declareWar,
+  canTraverse,
   START_CANDIDATES,
   type SetupConfig,
   type SeatConfig,
@@ -43,16 +44,18 @@ import {
   buildingMaxLevel,
   estimateTravelHours,
   fleetBaseSpeed,
+  getStance,
   hashState,
   planRoute,
 } from '../../packages/shared-core/src/index';
-import { MultiplayerClient } from '../../packages/client/src/index';
+import { MultiplayerClient, type MultiplayerPing } from '../../packages/client/src/index';
 import type {
   GameState,
   Fleet,
   Battle,
   Planet,
   Action,
+  DiplomaticStance,
   DomainEvent,
 } from '../../packages/shared-core/src/index';
 
@@ -114,7 +117,23 @@ const UNIT_ICON: Record<string, string> = {
   siege: '✦',
   hero: '♔', // the player's projection — a crowned flagship
 };
+// A small glyph per province KIND, drawn above each province so its type reads at a
+// glance (planet / asteroid / nebula / wreck-field / storm / …). Text glyphs only.
+const KIND_ICON: Record<string, string> = {
+  planet: '◉',
+  dead_world: '⊗',
+  asteroid: '⬡',
+  nebula: '≋',
+  dense_nebula: '❋',
+  graveyard: '⊘',
+  ion_storm: '⌁',
+  solar_flare: '✸',
+};
 let ME = 'p1';
+// Суверены — the donate/premium currency (docs/economy-roadmap.md). It's a meta-layer
+// account balance, NOT match state, so the prototype shows a placeholder here; the real
+// balance comes from the account once monetization is wired.
+const SOVEREIGNS = 25;
 type PlanetTab = 'ground' | 'ships' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
@@ -216,6 +235,14 @@ let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
+// A staged move that would cross territory of a player you're at PEACE with: held
+// until you confirm in the war-prompt (declaring war opens the route) or cancel.
+let warPrompt: {
+  fleetIds: string[];
+  destId: string;
+  edge?: { from: string; to: string; t: number };
+  blockers: string[];
+} | null = null;
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
@@ -224,10 +251,44 @@ let additive = false; // Ctrl/⌘ held on the current tap → add to the fleet s
 // Split-fleet dialog: which fleet, and how many of each ship type peel off.
 let splitState: { fleetId: string; take: Record<string, number> } | null = null;
 
+// --- session diplomacy & comms menu state ------------------------------------
+// Messages are a prototype-local session log — they don't touch the deterministic
+// core (they don't affect the sim, so they stay out of GameState). Stances DO live
+// in the core (state.diplomacy); the menu drives them through diplomacy.declare.
+// `to` is a conversation key: a seat id (a 1:1 DM) or COALITION (the allies' group
+// chat). `ping` (coalition only) carries a province id → a clickable map marker.
+// `pingId` (net only) is the server-assigned id, so a `ping.removed` can find its line.
+type SessionMsg = {
+  at: number;
+  from: string;
+  to: string;
+  text: string;
+  sys: boolean;
+  ping?: string;
+  pingId?: string;
+};
+const COALITION = 'coalition';
+let sessionMessages: SessionMsg[] = [];
+let diploOpen = false;
+let diploTab: 'diplo' | 'msgs' = 'diplo';
+let diploSort: 'name' | 'worlds' | 'stance' = 'stance';
+let diploExpanded: string | null = null; // participant row showing its action buttons
+// Roster filters (alongside sort): show only seats matching the picked stance(s) and
+// type(s). Empty set = no constraint from that category. They AND across categories,
+// OR within one. A stance filter excludes your own seat (you have no self-stance).
+const diploStanceFilter = new Set<DiplomaticStance>();
+const diploTypeFilter = new Set<'human' | 'ai'>();
+let convoOpen = COALITION; // the open conversation in the messages tab (seat id or COALITION)
+// Screen hit-boxes for the on-map ping markers, rebuilt every frame by drawPings().
+let pingHits: Array<{ loc: string; x: number; y: number }> = [];
+
 // --- multiplayer (net mode) --------------------------------------------------
 // When connected, the server is authoritative: snapshots replace `s`, orders are
 // sent (not applied locally), and the local sim/AI is suspended (see frame()).
 let NET = false;
+/** The match this client is in / will (re)connect to. Set when joining from the menu;
+ *  `connect()` (and auto-reconnect) dial `/matches/<currentMatchId>`. */
+let currentMatchId = 'proto';
 let netClient: MultiplayerClient | null = null;
 let netSock: WebSocket | null = null;
 // M0 net telemetry (dev overlay): smoothed round-trip ms, and a desync check that
@@ -254,6 +315,12 @@ const logLines: string[] = [];
 let lastAiAt = 0;
 // Player ids the local sim drives as AI (empty seats become AI). Default solo = p2.
 let AI_PLAYERS = new Set<string>(['p2']);
+// Session war record (from `unit.died` events): enemy units you destroyed vs your own
+// units lost. Cumulative since the match started; reset on a new match. Only battles
+// YOU take part in are counted (tracked by location via battle.started/resolved), so
+// the AI's fights elsewhere don't inflate your tally.
+let killStats = { destroyed: 0, lost: 0 };
+const myBattleLocs = new Set<string>();
 // Single-player setup screen state: per-seat role (seat 0 is always you) + your
 // chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
@@ -280,7 +347,7 @@ const canvas = $('map') as unknown as HTMLCanvasElement;
 const cx = canvas.getContext('2d') as CanvasRenderingContext2D;
 const side = $('side');
 const logEl = $('log');
-const clock = $('clock');
+const devlineEl = $('devline'); // status strip below the top bar: day/time + worlds/fleets/score
 const purse = $('purse');
 const bannerEl = $('banner');
 const hovercard = $('hovercard');
@@ -289,7 +356,6 @@ const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
 const burger = $('burger');
 const scrim = $('scrim');
-const topClock = $('topclock');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -497,10 +563,11 @@ function projBase(p: { x: number; y: number }): { x: number; y: number } {
 // in screen pixels; only positions transform (a node-graph style zoom).
 const cam = { scale: 1, x: 0, y: 0 };
 // Zoom range tied to content: 1 = the whole-map fit (you can't zoom out past it into
-// empty void); 4 = close enough to inspect one province + its neighbours. The default
-// (and double-tap reset) is the whole-map view.
+// empty void); 6 = close enough to read one province + its neighbours on a phone. On a
+// phone the opening view zooms onto your home region (the wide map is too dense to read
+// whole on a narrow screen); double-tap resets to that view, pinch out to the overview.
 const MIN_SCALE = 1;
-const MAX_SCALE = 4;
+const MAX_SCALE = 6;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // node sector type by id — drives asteroid-junction rendering + capture-by-arrival
 const SECTOR_OF: Record<string, string> = Object.fromEntries(MAP.map((n) => [n.id, n.sector]));
@@ -522,10 +589,10 @@ function zoomAt(fx: number, fy: number, factor: number) {
   clampCam();
 }
 
-/** Keep the map filling the play area: it can never be panned/zoomed to expose empty
- *  space past its own edges, and at the whole-map (min-zoom) floor it sits centred and
- *  still. A zoomed-in map pans freely across its content. Because the clamp hugs the
- *  content exactly (no slack margin), it doesn't fight the zoom anchor. */
+/** Keep the map filling the play area, but with SLACK at the edges so the outermost
+ *  provinces don't jam against the screen border — you can pan a comfortable margin
+ *  past the content edge, which makes edge navigation easy. At the whole-map (min-zoom)
+ *  floor the map sits centred and still; a zoomed-in map pans freely across its content. */
 function clampCam(): void {
   const { left, right, top, bottom } = insets();
   const tl = projBase({ x: MINX, y: MINY });
@@ -534,17 +601,49 @@ function clampCam(): void {
   const pR = br.x * cam.scale;
   const pT = tl.y * cam.scale;
   const pB = br.y * cam.scale;
-  // Per axis: if the map is at least as big as the play area, pan within it so neither
-  // edge comes inside (no void); otherwise it fits, so park it centred in the play area.
+  // Breathing room: allow panning ~16% of the play area past each edge.
+  const mx = (right - left) * 0.16;
+  const my = (bottom - top) * 0.16;
+  // Per axis: if the map is at least as big as the play area, pan within it (+ slack) so
+  // an edge can sit a margin inside; otherwise it fits, so park it centred in the play area.
   cam.x =
     pR - pL >= right - left
-      ? clamp(cam.x, right - pR, left - pL)
+      ? clamp(cam.x, right - pR - mx, left - pL + mx)
       : (left + right - pL - pR) / 2;
   cam.y =
     pB - pT >= bottom - top
-      ? clamp(cam.y, bottom - pB, top - pT)
+      ? clamp(cam.y, bottom - pB - my, top - pT + my)
       : (top + bottom - pT - pB) / 2;
 }
+
+/** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
+function centerOn(p: { x: number; y: number }, scale: number): void {
+  cam.scale = clamp(scale, MIN_SCALE, MAX_SCALE);
+  const b = projBase(p);
+  const { left, right, top, bottom } = insets();
+  cam.x = (left + right) / 2 - b.x * cam.scale;
+  cam.y = (top + bottom) / 2 - b.y * cam.scale;
+  clampCam();
+}
+/** The opening / reset view. On a phone the wide map is too dense to read whole, so
+ *  zoom onto your home region and pan to explore; on a wide screen the whole-map fit
+ *  reads fine. The zoom is RELATIVE to the screen-fit, so it autoscales across screens. */
+function defaultView(): void {
+  const home =
+    Object.values(s.planets).find((p) => p.owner === ME && p.buildings.length > 0) ??
+    Object.values(s.planets).find((p) => p.owner === ME);
+  if (MOBILE && home) {
+    centerOn(home.position, 3);
+  } else {
+    cam.scale = 1;
+    cam.x = 0;
+    cam.y = 0;
+    clampCam();
+  }
+}
+// Re-validate the camera after a real resize (orientation / window). Attached after
+// `cam` exists so the initial in-module resize() call never touches it (TDZ-safe).
+if (typeof window !== 'undefined') window.addEventListener('resize', () => clampCam());
 
 // --- helpers -----------------------------------------------------------------
 
@@ -1147,6 +1246,94 @@ function playerOrder(action: Action) {
   if (out.error) note('✖ ' + out.error.replace(/^E_/, '').toLowerCase().replace(/_/g, ' '));
 }
 
+// --- diplomacy gate (client order layer) -------------------------------------
+// A move that would cross or end on territory of a player you're at PEACE with is
+// blocked: you must declare war first. Such a move opens a confirmation ("this
+// declares war on …") instead of dispatching. The AI honours the same rule (see
+// aiOrders); the kernel only fights once a `war` stance exists (combat.isHostile).
+function blockerName(id: string): string {
+  return s.players[id]?.name ?? NAME[id] ?? id;
+}
+/** Distinct PEACE owners a fleet at node `from` would cross or land on reaching `toId`
+ *  — each must be at war before the route opens. Empty ⇒ the move is free. */
+function peaceBlockers(from: string | null, toId: string): string[] {
+  if (!from || from === toId) return [];
+  const route = planRoute(s, from, toId) ?? [toId]; // hops after `from`, incl. dest
+  const set = new Set<string>();
+  for (const hop of route) {
+    const owner = s.planets[hop]?.owner ?? null;
+    if (owner != null && !canTraverse(s, ME, owner)) set.add(owner);
+  }
+  return [...set];
+}
+/** Order every selected fleet to a world. If the route crosses PEACE territory, stage
+ *  a war-declaration prompt instead of dispatching (confirm → declare war + advance). */
+function tryMoveGroup(fleetIds: string[], destId: string): void {
+  const movers = fleetIds.filter((id) => s.fleets[id] && s.fleets[id]!.location !== destId);
+  if (!movers.length) return;
+  const blockers = new Set<string>();
+  for (const id of movers)
+    for (const b of peaceBlockers(fleetNode(s.fleets[id]!), destId)) blockers.add(b);
+  if (blockers.size) {
+    warPrompt = { fleetIds: movers, destId, blockers: [...blockers] };
+    renderWarPrompt();
+    return;
+  }
+  for (const id of movers) playerOrder(moveFleet(ME, id, destId));
+}
+/** As tryMoveGroup, but the target is a point on a lane (continuous order). Either lane
+ *  endpoint sitting on PEACE territory blocks the march until war is declared. */
+function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; t: number }): void {
+  const blockers = new Set<string>();
+  for (const id of fleetIds) {
+    const node = fleetNode(s.fleets[id]!);
+    for (const end of [edge.from, edge.to]) for (const b of peaceBlockers(node, end)) blockers.add(b);
+  }
+  if (blockers.size) {
+    warPrompt = { fleetIds: [...fleetIds], destId: edge.to, edge, blockers: [...blockers] };
+    renderWarPrompt();
+    return;
+  }
+  for (const id of fleetIds) playerOrder(moveFleetEdge(ME, id, edge));
+}
+/** Confirm the staged move: declare war on each blocker (opens the lanes), then issue
+ *  the held move for every fleet. War-first ordering means the routes are clear when
+ *  the moves apply (solo: sequential; net: server applies in send order). */
+function confirmWarPrompt(): void {
+  if (!warPrompt) return;
+  const wp = warPrompt;
+  warPrompt = null;
+  hideWarPrompt();
+  for (const b of wp.blockers) playerOrder(declareWar(ME, b));
+  for (const id of wp.fleetIds) {
+    if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
+    else playerOrder(moveFleet(ME, id, wp.destId));
+  }
+  note('⚔ War declared — fleets advancing');
+}
+function cancelWarPrompt(): void {
+  warPrompt = null;
+  hideWarPrompt();
+}
+function renderWarPrompt(): void {
+  const el = document.getElementById('warprompt');
+  if (!el || !warPrompt) return;
+  const names = warPrompt.blockers.map((b) => esc(blockerName(b))).join(', ');
+  el.innerHTML =
+    `<div class="wpbox">` +
+    `<div class="wp-head">⚔ DECLARE WAR?</div>` +
+    `<div class="wp-body">This route crosses worlds held by <b>${names}</b>, ` +
+    `with whom you are at <b>peace</b>. There is no peaceful passage — ` +
+    `advancing here declares <b>war</b>.</div>` +
+    `<div class="wp-actions"><button class="wp-no">CANCEL</button>` +
+    `<button class="wp-yes">DECLARE WAR</button></div>` +
+    `</div>`;
+  el.classList.add('show');
+}
+function hideWarPrompt(): void {
+  document.getElementById('warprompt')?.classList.remove('show');
+}
+
 const NAME: Record<string, string> = { p1: 'Azure', p2: 'Crimson', p3: 'Amber', p4: 'Violet' };
 function setFleetSelection(ids: string[]) {
   const picked = ids.filter((id) => s.fleets[id]?.owner === ME);
@@ -1234,15 +1421,38 @@ function handleEvents(events: DomainEvent[]) {
     switch (e.type) {
       case 'battle.started':
         note(`⚔️ battle at ${p.location} (${p.phase})`);
+        if (p.attacker === ME || p.defender === ME) myBattleLocs.add(p.location as string);
         break;
       case 'battle.resolved':
         note(
           `battle at ${p.location} ended — ${p.winner ? NAME[p.winner as string] + ' won' : 'stalemate'}`,
         );
+        myBattleLocs.delete(p.location as string);
         break;
       case 'planet.captured':
         note(`🚩 ${NAME[p.owner as string]} captured ${p.planetId}`);
+        if (diploOpen && diploTab === 'diplo') renderDiplo(); // province counts shifted
         break;
+      case 'diplomacy.changed': {
+        const a = p.a as string;
+        const b = p.b as string;
+        const st = p.stance as DiplomaticStance;
+        const na = NAME[a] ?? a;
+        const nb = NAME[b] ?? b;
+        // Only events that involve YOU land in a conversation (your DM with the other
+        // party); two AIs re-stancing each other isn't part of any of your chats.
+        if (a === ME || b === ME) {
+          pushMsg(
+            b,
+            st === 'war' ? `${na} объявил войну ${nb}` : `${na} и ${nb}: ${STANCE_RU[st].toLowerCase()}`,
+            true,
+            a,
+          );
+          note(`${na} → ${nb}: ${STANCE_RU[st]}`);
+        }
+        if (diploOpen && diploTab === 'diplo') renderDiplo();
+        break;
+      }
       case 'building.constructed':
         note(`🏗️ ${p.building} built at ${p.planetId}`);
         if (p.building === 'starfort') installFortressAA(p.planetId as string);
@@ -1268,6 +1478,16 @@ function handleEvents(events: DomainEvent[]) {
       case 'fleet.destroyed':
         note(`☠️ a ${NAME[p.owner as string]} fleet was destroyed`);
         break;
+      case 'unit.died': {
+        // War record — only count casualties in battles you're part of, so the AI's
+        // fights elsewhere don't pad your numbers. Your dead = lost; the rest = destroyed.
+        if (myBattleLocs.has(p.at as string)) {
+          const n = (p.count as number) ?? 0;
+          if (p.owner === ME) killStats.lost += n;
+          else killStats.destroyed += n;
+        }
+        break;
+      }
     }
   }
 }
@@ -1915,9 +2135,13 @@ function buildStaticLayer(): void {
       ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
     }
     if (poly.length < 3) continue;
-    // unified territory fill (owned a touch stronger, so it reads as held land)
+    // Unified territory fill. Owned land is painted STRONGLY in its owner colour so
+    // who-holds-what reads at a glance — your worlds clearly green, each rival its hue
+    // — and it ignores fog on purpose: a province an enemy has captured keeps showing
+    // its owner colour even when you can't see the garrison (last-known control map,
+    // Bytro/HoI-style). Neutral stays a faint wash.
     trace(poly);
-    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.4 : 0.1);
+    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.58 : 0.1);
     g.fill();
     // faint terrain/kind accent — each province still reads as its own kind of place
     // (nebula slows fleets, gas-giant boosts output, …)
@@ -2166,6 +2390,20 @@ function render(now: number) {
       cx.fill();
       cx.restore();
       continue;
+    }
+
+    // province-type badge: a small kind glyph above the node so the type reads at a
+    // glance, regardless of the bespoke art below it (planet / asteroid / nebula / …).
+    if (KIND_ICON[n.sector]) {
+      cx.save();
+      cx.font = '13px ui-monospace,Menlo,monospace';
+      cx.textAlign = 'center';
+      cx.textBaseline = 'middle';
+      cx.shadowColor = 'rgba(0,0,0,0.85)';
+      cx.shadowBlur = 3;
+      cx.fillStyle = rgba(SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd', 1);
+      cx.fillText(KIND_ICON[n.sector]!, c.x, c.y - 18);
+      cx.restore();
     }
 
     // asteroid-field sector: a lane junction, not a city — scattered rocks + a
@@ -2491,6 +2729,7 @@ function render(now: number) {
     cx.strokeRect(x, y, w, h);
     cx.restore();
   }
+  drawPings(now); // ally ping markers (coalition), with screen hit-boxes for taps
   drawAimPreview();
 }
 
@@ -2556,19 +2795,15 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   }
   return html + `</div>`;
 }
-function buildButtons(planetId: string, ids: string[], kind: 'building' | 'unit'): string {
-  let html = `<div class="row">`;
-  for (const id of ids) {
-    const c = kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost;
-    const icon = kind === 'unit' ? unitIcon(id) : (BUILD_ICON[id] ?? '+');
-    const label =
-      kind === 'unit'
-        ? `${icon} ${displayUnit(id)} ${cost(c)}`
-        : `${icon} ${data.buildings[id]?.name ?? id} ${cost(c)}`;
-    const desc = kind === 'unit' ? `u:${id}` : `b:${id}:1`;
-    html += btn(kind === 'unit' ? 'unit' : 'build', id, label, s.planets[planetId]?.owner === ME, desc);
-  }
-  return html + `</div>`;
+// Buildable options as codex tiles (icon + cost). Tapping a tile opens the full-info
+// panel, which carries a "Build here" button for the selected province — so browsing
+// specs and committing the build share one control (no separate text button row).
+function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit'): string {
+  const k = kind === 'unit' ? 'u' : 'b';
+  const tiles = ids
+    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost)))
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
 
 function panelHtml(): string {
@@ -2600,8 +2835,6 @@ function panelHtml(): string {
   if (selFleet) {
     const f = s.fleets[selFleet];
     if (f) {
-      const shipList = f.units.map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
-      const trList = (f.landing ?? []).map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
       const nShips = sumUnits(f.units);
       const nTr = sumUnits(f.landing ?? []);
       const orbit = f.orbit ?? '—';
@@ -2635,7 +2868,8 @@ function panelHtml(): string {
           : `A squadron of ${nShips} ship${nShips > 1 ? 's' : ''}${flavor.length ? ' — ' + flavor.join(', ') : ''}. Its combined weight is below; it advances at its slowest hull.`;
       h += `<div class="row dim">${blurb}</div>`;
       h += `<div class="pstats"><span>⚔ ATK ${atk}</span><span>🛡 DEF ${def}</span><span>❤ HP ${hpTot}</span><span>⚡ SPD ${spdTxt}</span></div>`;
-      h += `<div class="row"><span class="dim">Ships:</span> ${shipList}</div><div class="row dim">Carrying: ${trList}</div>`;
+      h += nShips ? `<div class="sec">Ships — tap for specs</div>` + unitTilesHtml(f.units) : '';
+      if (nTr > 0) h += `<div class="sec">Carrying troops</div>` + unitTilesHtml(f.landing ?? []);
 
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
@@ -2965,7 +3199,7 @@ function objDossier(key: string): Dossier | null {
   return null;
 }
 
-// --- build/unit codex (bottom palette tiles → full-info popup) ---------------
+// --- build/unit codex (contextual tile → full-info popup + Build here) -------
 /** One stat row for the codex popup. */
 function cxRow(k: string, v: string): string {
   return `<div class="cx-row"><span class="cx-k">${k}</span><span class="cx-v">${v}</span></div>`;
@@ -3020,26 +3254,377 @@ function codexHtml(kind: string, id: string): string {
     `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
   );
 }
-/** Bottom palette: a tile (icon + cost) per buildable building + unit. */
-const PALETTE_BUILDINGS = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort', 'starfort', 'metal_station'];
-function paletteHtml(): string {
-  const tile = (kind: 'b' | 'u', id: string): string => {
-    const def = kind === 'b' ? data.buildings[id] : data.units[id];
-    if (!def) return '';
-    const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
-    const name = kind === 'b' ? def.name : unitDossier(id)?.name ?? displayUnit(id);
-    return `<button class="ptile" data-codex="${kind}:${id}" title="${esc(name)} — ${cost(def.cost)} · click for full info"><span class="pt-ic">${icon}</span><span class="pt-c">${cost(def.cost)}</span></button>`;
-  };
-  const blds = PALETTE_BUILDINGS.map((id) => tile('b', id)).filter(Boolean).join('');
-  const units = BUILD_UNITS.map((id) => tile('u', id)).filter(Boolean).join('');
-  return `<div class="pgroup"><span class="pglabel">BUILD</span>${blds}</div><div class="pgroup"><span class="pglabel">UNITS</span>${units}</div>`;
+// --- player card (tap the top-left crest) ------------------------------------
+/** Your dossier in this session: faction, worlds, fleets, score, and the treasury.
+ *  Opened by tapping the crest in the top-left corner. */
+function playerCardHtml(): string {
+  const pl = s.players[ME];
+  const name = pl?.name ?? NAME[ME] ?? ME;
+  const faction = SEAT_META.find((m) => m.id === ME)?.faction ?? pl?.faction ?? '—';
+  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
+  // Total units you command: ships + carried troops across your fleets, plus every
+  // garrison on your worlds.
+  let units = 0;
+  for (const f of Object.values(s.fleets))
+    if (f.owner === ME) units += sumUnits(f.units) + sumUnits(f.landing ?? []);
+  for (const pp of Object.values(s.planets)) if (pp.owner === ME) units += sumUnits(pp.garrison);
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  const need = Math.max(0, SCORE_LIMIT - score);
+  const col = ownerColor(ME);
+  const row = (k: string, v: string) => `<div class="pc-row"><span class="pc-k">${k}</span><span class="pc-v">${v}</span></div>`;
+  return (
+    `<div class="pc-head"><span class="pc-dia" style="background:${col};box-shadow:0 0 10px ${col}"></span>` +
+    `<b>${esc(name)}</b><span class="pc-tag">commander</span></div>` +
+    `<div class="pc-stats">` +
+    row('Faction', esc(faction)) +
+    row('Worlds held', String(worlds)) +
+    row('Units', String(units)) +
+    row('Score', `${score} / ${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}`) +
+    `</div><div class="pc-sec">War record</div><div class="pc-stats">` +
+    row('⚔ Enemy units destroyed', kfmt(killStats.destroyed)) +
+    row('☠ Own units lost', kfmt(killStats.lost)) +
+    `</div><button class="pc-close">CLOSE</button>`
+  );
+}
+function openPlayerCard(): void {
+  const el = document.getElementById('playercard');
+  if (!el) return;
+  el.innerHTML = `<div class="pcbox">${playerCardHtml()}</div>`;
+  el.classList.add('show');
+}
+
+// --- session diplomacy & comms menu ------------------------------------------
+// Opened from the left rail (Diplomacy / Dispatches). Two tabs: the participant
+// roster (icon = human vs AI, sortable by name / provinces / stance, with stance
+// actions) and the session message log. Stances run through the core's
+// `diplomacy.declare`; messages are a client-side session log (SessionMsg).
+const STANCE_RU: Record<DiplomaticStance, string> = {
+  war: 'Война',
+  peace: 'Мир',
+  pact: 'Пакт',
+  alliance: 'Союз',
+};
+const STANCE_COLOR: Record<DiplomaticStance, string> = {
+  war: '#ff5a4d',
+  peace: '#9fb8c0',
+  pact: '#35d6e6',
+  alliance: '#5ff0a8',
+};
+// Friendliness rank: war (hostile) < peace < pact < alliance (closest). Warming the
+// relation up a rank needs the other side's consent; cooling it down is unilateral.
+const STANCE_RANK: Record<DiplomaticStance, number> = { war: 0, peace: 1, pact: 2, alliance: 3 };
+const STANCES: DiplomaticStance[] = ['war', 'peace', 'pact', 'alliance'];
+
+function worldsOf(id: string): number {
+  let n = 0;
+  for (const p of Object.values(s.planets)) if (p.owner === id) n++;
+  return n;
+}
+/** A seat the AI drives. Everyone else (ME, or another human in net play) is human —
+ *  this drives the roster's human/AI icon and whether a proposal is auto-decided. */
+function isAiSeat(id: string): boolean {
+  return AI_PLAYERS.has(id);
+}
+/** Seats taking part in the match, in the fixed seat order. */
+function diploSeats(): string[] {
+  return SEAT_META.map((m) => m.id).filter((id) => !!s.players[id]);
+}
+/** `Day N · HH:MM` stamp for a sim time (mirrors the status strip). */
+function fmtStamp(at: number): string {
+  const d = floor(at / DAY) + 1;
+  const h = floor((at % DAY) / HOUR);
+  const m = floor((at % HOUR) / 60000);
+  return `D${d} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** Deterministic AI verdict on a proposal to warm relations, by relative strength
+ *  (provinces). A side that's winning won't de-escalate; a weaker/even one takes it. */
+function aiAcceptsStance(target: string, to: DiplomaticStance): boolean {
+  const mine = worldsOf(ME);
+  const theirs = worldsOf(target);
+  switch (to) {
+    case 'war':
+      return true; // war never needs consent
+    case 'peace':
+      return mine >= theirs; // sue for peace works unless they're ahead
+    case 'pact':
+      return mine * 4 >= theirs * 3; // mine ≥ 0.75× theirs — a respectable partner
+    case 'alliance':
+      return mine >= theirs; // ally only an equal-or-stronger power
+  }
+}
+
+/** Append a line to the session log (bounded). Patches the feed if it's on screen. */
+function pushMsg(to: string, text: string, sys: boolean, from = ME, ping?: string): void {
+  sessionMessages.push({ at: s.time, from, to, text, sys, ping });
+  if (sessionMessages.length > 300) sessionMessages.shift();
+  if (diploOpen && diploTab === 'msgs') renderDiploFeed();
+}
+
+/** Player-driven stance change toward `target`. War (and any cooling-off) is
+ *  unilateral; warming the relation up a rank asks the target — an AI decides by
+ *  strength, a (net) human can't negotiate here yet. */
+function proposeStance(target: string, to: DiplomaticStance): void {
+  if (target === ME || !s.players[target]) return;
+  const from = getStance(s, ME, target);
+  if (from === to) return;
+  if (STANCE_RANK[to] > STANCE_RANK[from]) {
+    if (!isAiSeat(target)) {
+      note('переговоры с другими игроками — позже (нужен сервер)');
+      return;
+    }
+    if (!aiAcceptsStance(target, to)) {
+      pushMsg(target, `${NAME[target] ?? target} отклонил предложение: ${STANCE_RU[to]}`, true, target);
+      note(`✖ ${NAME[target] ?? target} отклонил: ${STANCE_RU[to]}`);
+      return;
+    }
+  }
+  // diplomacy.declare sets the stance and emits diplomacy.changed → the log line + note
+  // are appended uniformly in handleEvents (the same path the AI's declarations take).
+  playerOrder(declareWar(ME, target, to));
+}
+
+function openDiplo(tab: 'diplo' | 'msgs'): void {
+  diploOpen = true;
+  diploTab = tab;
+  renderDiplo();
+  document.getElementById('diplo')?.classList.add('show');
+  document.body.classList.remove('drawer-open'); // tuck the rail drawer away behind it
+}
+function closeDiplo(): void {
+  diploOpen = false;
+  document.getElementById('diplo')?.classList.remove('show');
+}
+
+/** Roster icon + tag for a seat: a human commander vs a synthetic (AI) one. */
+function seatBadge(id: string): { icon: string; tag: string } {
+  if (id === ME) return { icon: '☻', tag: 'ВЫ' };
+  if (isAiSeat(id)) return { icon: '⌬', tag: 'ИИ' };
+  return { icon: '☻', tag: 'ИГРОК' };
+}
+
+/** Does a seat pass the active roster filters? Stance filter never matches ME (no
+ *  self-stance); an empty category imposes no constraint. */
+function diploPasses(id: string): boolean {
+  if (diploStanceFilter.size) {
+    if (id === ME || !diploStanceFilter.has(getStance(s, ME, id))) return false;
+  }
+  if (diploTypeFilter.size && !diploTypeFilter.has(isAiSeat(id) ? 'ai' : 'human')) return false;
+  return true;
+}
+function diploRowsHtml(): string {
+  const others = diploSeats().filter((id) => id !== ME);
+  const byName = (a: string, b: string) => (NAME[a] ?? a).localeCompare(NAME[b] ?? b);
+  if (diploSort === 'name') others.sort(byName);
+  else if (diploSort === 'worlds') others.sort((a, b) => worldsOf(b) - worldsOf(a) || byName(a, b));
+  else
+    others.sort(
+      (a, b) => STANCE_RANK[getStance(s, ME, a)] - STANCE_RANK[getStance(s, ME, b)] || byName(a, b),
+    );
+  const ordered = [ME, ...others].filter(diploPasses);
+  // Keep the expansion in sync with visibility: if a filter (or a stance/capture change
+  // that re-renders) hides the expanded seat, drop the expansion — otherwise the row
+  // re-opens itself when that seat later re-enters the list.
+  if (diploExpanded && !ordered.includes(diploExpanded)) diploExpanded = null;
+  if (!ordered.length) return `<div class="dp-empty">Под фильтр никто не подходит.</div>`;
+  return ordered
+    .map((id) => {
+      const bdg = seatBadge(id);
+      const col = ownerColor(id);
+      const w = worldsOf(id);
+      const isMe = id === ME;
+      const st = isMe ? null : getStance(s, ME, id);
+      const stanceTag = isMe
+        ? `<span class="dp-tag">ВЫ</span>`
+        : `<span class="dp-stance" style="color:${STANCE_COLOR[st!]};border-color:${STANCE_COLOR[st!]}">${STANCE_RU[st!]}</span>`;
+      const expanded = diploExpanded === id && !isMe;
+      const actions = expanded
+        ? `<div class="dp-actions">` +
+          STANCES.map(
+            (t) =>
+              `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}">${STANCE_RU[t]}</button>`,
+          ).join('') +
+          `<button class="dp-msg" data-msgseat="${id}">✉</button></div>`
+        : '';
+      return (
+        `<div class="dp-row${expanded ? ' open' : ''}${isMe ? ' me' : ''}"${isMe ? '' : ` data-seat="${id}"`}>` +
+        `<span class="dp-ic" style="color:${col}">${bdg.icon}</span>` +
+        `<span class="dp-name">${esc(NAME[id] ?? id)} <em>${bdg.tag}</em></span>` +
+        `<span class="dp-w" title="провинций">⬣ ${w}</span>` +
+        stanceTag +
+        `</div>` +
+        actions
+      );
+    })
+    .join('');
+}
+
+// --- conversations (messages tab: list of chats + the open thread) -----------
+/** Your coalition: you + everyone you're at `alliance` with. */
+function coalitionMembers(): string[] {
+  return [ME, ...diploSeats().filter((id) => id !== ME && getStance(s, ME, id) === 'alliance')];
+}
+/** Messages in a conversation: COALITION = the group channel; a seat id = the 1:1
+ *  DM between you and them (either direction). */
+function convoMessages(key: string): SessionMsg[] {
+  if (key === COALITION) return sessionMessages.filter((m) => m.to === COALITION);
+  return sessionMessages.filter(
+    (m) => m.to !== COALITION && ((m.from === ME && m.to === key) || (m.from === key && m.to === ME)),
+  );
+}
+function convoLast(key: string): SessionMsg | undefined {
+  const ms = convoMessages(key);
+  return ms[ms.length - 1];
+}
+function fromName(id: string): string {
+  return id === ME ? 'Вы' : NAME[id] ?? id;
+}
+/** One message line. A ping renders as a clickable marker that flies the camera. */
+function convoLineHtml(m: SessionMsg): string {
+  const t = fmtStamp(m.at);
+  if (m.ping) {
+    return (
+      `<div class="dp-line ping" data-ping="${esc(m.ping)}"><span class="dp-when">${t}</span>` +
+      `📍 <b>${esc(fromName(m.from))}</b> ${esc(m.ping)}: ${esc(m.text)}<span class="dp-jump">↪ камера</span></div>`
+    );
+  }
+  if (m.sys) return `<div class="dp-line sys"><span class="dp-when">${t}</span>${esc(m.text)}</div>`;
+  return `<div class="dp-line${m.from === ME ? ' me' : ''}"><span class="dp-when">${t}</span><b>${esc(fromName(m.from))}:</b> ${esc(m.text)}</div>`;
+}
+function convoFeedInnerHtml(key: string): string {
+  const msgs = convoMessages(key);
+  if (msgs.length) return msgs.map(convoLineHtml).join('');
+  return `<div class="dp-empty">${key === COALITION ? 'Чат коалиции пуст.<br>Отметьте провинцию пингом 📍 или напишите.' : 'Сообщений пока нет.'}</div>`;
+}
+/** Left column: the coalition channel pinned on top, then a DM per participant
+ *  (most-recently-active first). Selecting one opens its thread on the right. */
+function convoListHtml(): string {
+  const dms = diploSeats()
+    .filter((id) => id !== ME)
+    .sort(
+      (a, b) =>
+        (convoLast(b)?.at ?? -1) - (convoLast(a)?.at ?? -1) ||
+        (NAME[a] ?? a).localeCompare(NAME[b] ?? b),
+    );
+  const coal =
+    `<button class="dp-cv coal${convoOpen === COALITION ? ' on' : ''}" data-convo="${COALITION}">` +
+    `<span class="dp-cv-ic" style="color:var(--amber)">⚡</span>` +
+    `<span class="dp-cv-nm">Коалиция<em>${coalitionMembers().length} уч.</em></span></button>`;
+  const items = dms
+    .map((id) => {
+      const last = convoLast(id);
+      const prev = last ? esc((last.from === ME ? 'Вы: ' : '') + (last.ping ? '📍 ' + last.ping : last.text)) : '—';
+      return (
+        `<button class="dp-cv${convoOpen === id ? ' on' : ''}" data-convo="${id}">` +
+        `<span class="dp-cv-ic" style="color:${ownerColor(id)}">${seatBadge(id).icon}</span>` +
+        `<span class="dp-cv-nm">${esc(NAME[id] ?? id)}<em>${prev}</em></span></button>`
+      );
+    })
+    .join('');
+  return `<div class="dp-cvlist">${coal}${items}</div>`;
+}
+/** Right column: header, the open conversation's messages, and the composer (with a
+ *  ping button in the coalition channel). */
+function convoThreadHtml(): string {
+  const isCoal = convoOpen === COALITION;
+  const title = isCoal
+    ? `⚡ Коалиция · ${coalitionMembers().length} уч.`
+    : `${seatBadge(convoOpen).icon} ${esc(NAME[convoOpen] ?? convoOpen)}`;
+  const pingBtn = isCoal
+    ? `<button class="dp-ping" title="Отметить выбранную провинцию пингом">📍</button>`
+    : '';
+  return (
+    `<div class="dp-thread">` +
+    `<div class="dp-thhead">${title}</div>` +
+    `<div class="dp-feed" id="dp-feed">${convoFeedInnerHtml(convoOpen)}</div>` +
+    `<div class="dp-compose">${pingBtn}<input id="dp-text" maxlength="160" placeholder="Сообщение…" autocomplete="off"><button class="dp-send">▶</button></div>` +
+    `</div>`
+  );
+}
+
+function renderDiplo(): void {
+  const el = document.getElementById('diplo');
+  if (!el) return;
+  const tabBtn = (k: 'diplo' | 'msgs', label: string) =>
+    `<button class="dp-tab${diploTab === k ? ' on' : ''}" data-tab="${k}">${label}</button>`;
+  const sortBtn = (k: typeof diploSort, label: string) =>
+    `<button class="dp-sortb${diploSort === k ? ' on' : ''}" data-sort="${k}">${label}</button>`;
+  const stChip = (k: DiplomaticStance) =>
+    `<button class="dp-fchip${diploStanceFilter.has(k) ? ' on' : ''}" data-fstance="${k}" style="--sc:${STANCE_COLOR[k]}">${STANCE_RU[k]}</button>`;
+  const tyChip = (k: 'human' | 'ai', label: string) =>
+    `<button class="dp-fchip ty${diploTypeFilter.has(k) ? ' on' : ''}" data-ftype="${k}">${label}</button>`;
+  const anyFilter = diploStanceFilter.size || diploTypeFilter.size;
+  const filterRow =
+    `<div class="dp-filters"><span>Фильтр:</span>` +
+    STANCES.map(stChip).join('') +
+    `<span class="dp-fsep"></span>${tyChip('human', '☻ Человек')}${tyChip('ai', '⌬ ИИ')}` +
+    (anyFilter ? `<button class="dp-fclear" data-fclear="1">Сброс</button>` : '') +
+    `</div>`;
+  const body =
+    diploTab === 'diplo'
+      ? `<div class="dp-sorts"><span>Сорт.:</span>${sortBtn('name', 'Имя')}${sortBtn('worlds', 'Провинции')}${sortBtn('stance', 'Отношение')}</div>` +
+        filterRow +
+        `<div class="dp-list">${diploRowsHtml()}</div>`
+      : `<div class="dp-convo">${convoListHtml()}${convoThreadHtml()}</div>`;
+  el.innerHTML =
+    `<div class="dpbox">` +
+    `<div class="dp-head"><b>СЕССИЯ</b>${tabBtn('diplo', 'Дипломатия')}${tabBtn('msgs', 'Сообщения')}<button class="dp-close">✕</button></div>` +
+    body +
+    `</div>`;
+  if (diploTab === 'msgs') scrollFeedToEnd();
+}
+/** Patch just the open thread's feed (so a new line doesn't wipe a half-typed reply). */
+function renderDiploFeed(): void {
+  const feed = document.getElementById('dp-feed');
+  if (!feed) return;
+  feed.innerHTML = convoFeedInnerHtml(convoOpen);
+  feed.scrollTop = feed.scrollHeight;
+}
+function scrollFeedToEnd(): void {
+  const feed = document.getElementById('dp-feed');
+  if (feed) feed.scrollTop = feed.scrollHeight;
+}
+
+/** A compact codex tile (icon + a one-line label) that opens the full info panel on
+ *  tap. `label` is the build cost for buildables, or ×count for a fleet's ships. The
+ *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
+ *  panel — not in a global HUD strip. */
+function codexTile(kind: 'b' | 'u', id: string, label: string): string {
+  if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
+  const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
+  const name = kind === 'b' ? data.buildings[id]?.name ?? id : unitDossier(id)?.name ?? displayUnit(id);
+  return `<button class="ptile" data-codex="${kind}:${id}" title="${esc(name)} — tap for full specs"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+}
+/** A row of ship/troop tiles for a fleet's composition — tap one for its full specs. */
+function unitTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
+  const tiles = stacks
+    .filter((u) => u.count > 0)
+    .map((u) => codexTile('u', u.unit, '×' + u.count))
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
 function openCodex(key: string): void {
   const [kind, id] = key.split(':');
   const el = document.getElementById('codex');
-  if (!el) return;
-  el.innerHTML = `<div class="cxbox">${codexHtml(kind, id)}<button class="cx-close">CLOSE</button></div>`;
+  if (!el || !kind || !id) return;
+  el.innerHTML = `<div class="cxbox">${codexHtml(kind, id)}${codexBuildBtn(kind, id)}<button class="cx-close">CLOSE</button></div>`;
   el.classList.add('show');
+}
+/** A "Build here" action inside the codex when the selected province can raise this
+ *  thing — so the codex doubles as the build menu (tap a build tile → specs → build). */
+function codexBuildBtn(kind: string, id: string): string {
+  const p = selPlanet ? s.planets[selPlanet] : null;
+  if (!p || p.owner !== ME) return ''; // only when you're looking at one of your worlds
+  if (kind === 'b') {
+    const buildable = (SECTOR_TYPES[SECTOR_OF[p.id]]?.allowedBuildings ?? BUILDABLE).includes(id);
+    const built = p.buildings.some((b) => b.type === id);
+    if (!buildable || built) return '';
+    return `<button class="cx-build" data-build="building:${id}">▣ Build here · ${cost(data.buildings[id]?.cost)}</button>`;
+  }
+  if (kind === 'u' && data.units[id]) {
+    return `<button class="cx-build" data-build="unit:${id}">${unitIcon(id)} Build here · ${cost(data.units[id]?.cost)}</button>`;
+  }
+  return '';
 }
 
 /** Right-docked description pane HTML for the currently hovered menu object. */
@@ -3328,6 +3913,10 @@ splitdlg.addEventListener('click', (ev) => {
 side.addEventListener('click', (ev) => {
   const t = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
   if (!t || t.disabled) return;
+  if (t.dataset.codex) {
+    openCodex(t.dataset.codex); // a build/ship tile → full specs (+ Build here)
+    return;
+  }
   const act = t.dataset.act;
   const arg = t.dataset.arg ?? '';
   if (act === 'close') {
@@ -3425,6 +4014,7 @@ cmdbar.addEventListener('click', (ev) => {
 
 // Tap/click selection at a screen point (drag-aware — see the pointer handlers).
 function selectAt(mx: number, my: number) {
+  closePingPop(); // any map tap dismisses an open ping popup (a marker tap reopens below)
   // Merge armed: the next tap on a friendly fleet (not itself in the selection) is
   // the anchor — the selected fleet(s) fly to it and fuse. Any other tap cancels.
   if (merging) {
@@ -3445,6 +4035,16 @@ function selectAt(mx: number, my: number) {
   }
   // Plain tap = selection. Movement happens only when "Move" is armed (aiming), so a
   // fleet selection never blocks picking a planet (and vice versa).
+  // A tap on an ally ping marker opens its description popup (takes priority over
+  // selection, since markers float above the node they mark).
+  if (!aiming) {
+    for (const h of pingHits) {
+      if (Math.hypot(mx - h.x, my - h.y) < 12) {
+        openPingPop(h.loc);
+        return;
+      }
+    }
+  }
   if (!aiming) {
     for (const f of Object.values(s.fleets)) {
       if (f.owner !== ME) continue;
@@ -3461,11 +4061,9 @@ function selectAt(mx: number, my: number) {
     if (Math.hypot(mx - c.x, my - c.y) < 24) {
       if (aiming) {
         // Move armed → send the selected fleet(s) here; they route along the lanes to
-        // this world and stop. Keep them selected for follow-up orders.
-        for (const fleetId of selectedFleetIds()) {
-          const f = s.fleets[fleetId];
-          if (f && f.location !== n.id) playerOrder(moveFleet(ME, fleetId, n.id));
-        }
+        // this world and stop. Keep them selected for follow-up orders. A route through
+        // a player you're at peace with stages a war prompt instead of dispatching.
+        tryMoveGroup(selectedFleetIds(), n.id);
         aiming = false;
         lastPanelHtml = '';
         return;
@@ -3483,9 +4081,7 @@ function selectAt(mx: number, my: number) {
   if (aiming) {
     const lane = nearestLanePoint(mx, my);
     if (lane) {
-      for (const fleetId of selectedFleetIds()) {
-        playerOrder(moveFleetEdge(ME, fleetId, { from: lane.from, to: lane.to, t: lane.t }));
-      }
+      tryMoveEdgeGroup(selectedFleetIds(), { from: lane.from, to: lane.to, t: lane.t });
     }
     aiming = false;
     lastPanelHtml = '';
@@ -3586,11 +4182,7 @@ canvas.addEventListener(
   },
   { passive: false },
 );
-canvas.addEventListener('dblclick', () => {
-  cam.scale = 1;
-  cam.x = 0;
-  cam.y = 0;
-});
+canvas.addEventListener('dblclick', () => defaultView());
 // track the pointer for the "Move" preview line and hover tooltip (desktop only)
 canvas.addEventListener('pointermove', (ev) => {
   aimPointer = ptXY(ev);
@@ -3778,10 +4370,10 @@ function startMatch(setup: SetupConfig): void {
   merging = false;
   additive = false;
   splitState = null;
+  killStats = { destroyed: 0, lost: 0 };
+  myBattleLocs.clear();
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
-  cam.scale = 1;
-  cam.x = 0;
-  cam.y = 0;
+  defaultView(); // phone: zoom onto home; desktop: whole-map fit
   setupEl.style.display = 'none';
 }
 
@@ -3805,39 +4397,12 @@ $('setupcancel').addEventListener('click', () => {
 });
 
 function connect(): void {
-  let raw = srvInput.value.trim();
-  if (!raw) {
-    statusEl.textContent = 'enter a server URL';
-    return;
-  }
-  // Accept whatever the user pasted — http(s)://, ws(s)://, or a bare host:port —
-  // and normalize to a ws(s):// ORIGIN. This kills three silent failure modes:
-  //  • an https page opening ws:// is blocked as mixed content → force wss://;
-  //  • a pasted full URL with a /matches/… path would double the path → 404;
-  //  • a bare host with no scheme can't open at all.
-  raw = raw.replace(/^http(s?):\/\//i, 'ws$1://'); // http→ws, https→wss
-  if (!/^wss?:\/\//i.test(raw)) {
-    raw = (location.protocol === 'https:' ? 'wss://' : 'ws://') + raw;
-  }
-  if (location.protocol === 'https:' && raw.startsWith('ws://')) {
-    raw = 'wss://' + raw.slice('ws://'.length);
-  }
-  let base: string;
-  try {
-    const u = new URL(raw);
-    base = `${u.protocol}//${u.host}`; // drop any path/query the user pasted
-  } catch {
-    statusEl.textContent = 'bad server URL';
-    return;
-  }
-  const nick = nickInput.value.trim();
-  if (!nick) {
-    statusEl.textContent = 'enter your name';
-    return;
-  }
+  const srv = resolveServer();
+  if (!srv) return;
+  const { base, nick } = srv;
   // Nick-login: the server maps this name → a fixed side and hands it back, so we
   // learn our seat from the welcome (snap.playerId), not from a side picker.
-  const url = `${base}/matches/proto?nick=${encodeURIComponent(nick)}`;
+  const url = `${base}/matches/${encodeURIComponent(currentMatchId)}?nick=${encodeURIComponent(nick)}`;
   statusEl.textContent = `connecting as ${nick}…`;
   localStorage.setItem('void.server', base);
   localStorage.setItem('void.nick', nick); // resume this seat next visit
@@ -3902,6 +4467,28 @@ function connect(): void {
       },
       onRejection: (_id, code) =>
         note('✖ ' + code.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')),
+      // Server-relayed ally pings (own + allies, hidden from enemies): merge them into
+      // the coalition channel so they render as map markers + chat lines, same as solo.
+      onPingAdded: (ping: MultiplayerPing) => {
+        const node = ping.target.node;
+        if (!node) return; // prototype markers are province-anchored
+        if (sessionMessages.some((m) => m.pingId === ping.id)) return; // dedup the echo
+        sessionMessages.push({
+          at: ping.createdAt,
+          from: ping.owner,
+          to: COALITION,
+          text: ping.label ?? `метка ${node}`,
+          sys: false,
+          ping: node,
+          pingId: ping.id,
+        });
+        if (diploOpen && diploTab === 'msgs') renderDiploFeed();
+      },
+      onPingRemoved: (pingId: string) => {
+        sessionMessages = sessionMessages.filter((m) => m.pingId !== pingId);
+        closePingPop();
+        if (diploOpen && diploTab === 'msgs') renderDiploFeed();
+      },
       onError: (code) => {
         if (sock !== netSock) return; // ignore errors from a superseded socket
         if (!admitted && code === 'E_SLOT_TAKEN') {
@@ -3951,8 +4538,68 @@ function connect(): void {
   };
 }
 
-// Manual Connect: start a fresh session (clear any pending auto-reconnect).
-$('cgo').addEventListener('click', () => {
+// --- match browser (the meta-shell "Play" tab) -------------------------------
+// Reads the server's read-model (`GET /matches?nick=`) into three tabs and joins /
+// archives a chosen match. Meta lives on the server (no menu state in GameState).
+
+/** Normalize the pasted server box to a ws(s):// ORIGIN + read the nick. Returns
+ *  null (and sets the status line) when either is missing/invalid. Shared by the
+ *  match browser and `connect()`. */
+function resolveServer(): { base: string; nick: string } | null {
+  let raw = srvInput.value.trim();
+  if (!raw) {
+    statusEl.textContent = 'enter a server URL';
+    return null;
+  }
+  // Accept http(s)://, ws(s)://, or a bare host:port and normalize. Kills three
+  // silent failures: https page + ws:// (mixed content) → wss://; a pasted /matches
+  // path → 404; a bare host with no scheme can't open.
+  raw = raw.replace(/^http(s?):\/\//i, 'ws$1://');
+  if (!/^wss?:\/\//i.test(raw)) {
+    raw = (location.protocol === 'https:' ? 'wss://' : 'ws://') + raw;
+  }
+  if (location.protocol === 'https:' && raw.startsWith('ws://')) {
+    raw = 'wss://' + raw.slice('ws://'.length);
+  }
+  let base: string;
+  try {
+    base = `${new URL(raw).protocol}//${new URL(raw).host}`; // drop any path/query
+  } catch {
+    statusEl.textContent = 'bad server URL';
+    return null;
+  }
+  const nick = nickInput.value.trim();
+  if (!nick) {
+    statusEl.textContent = 'enter your name';
+    return null;
+  }
+  return { base, nick };
+}
+
+const httpBase = (wsBase: string): string => wsBase.replace(/^ws/, 'http');
+
+interface MatchRow {
+  matchId: string;
+  mapId: string;
+  rules: { timeScale?: number; victory?: { dominationPercent?: number; scoreLimit?: number } };
+  days: number;
+  players: { seated: number; capacity: number };
+  status: string;
+}
+type MatchTab = 'available' | 'active' | 'archived';
+let matchLists: Record<MatchTab, MatchRow[]> | null = null;
+let activeTab: MatchTab = 'available';
+
+function ruleSummary(r: MatchRow['rules']): string {
+  const parts = [`×${r.timeScale ?? 1}`];
+  if (r.victory?.scoreLimit) parts.push(`до ${r.victory.scoreLimit} очк.`);
+  if (r.victory?.dominationPercent) parts.push(`${Math.round(r.victory.dominationPercent * 100)}% карты`);
+  return parts.join(' · ');
+}
+
+/** Join a chosen match: set it as the (re)connect target, then dial via `connect()`. */
+function connectToMatch(id: string): void {
+  currentMatchId = id;
   reconnecting = false;
   reconnectAttempts = 0;
   userClosed = false;
@@ -3961,7 +4608,104 @@ $('cgo').addEventListener('click', () => {
     reconnectTimer = null;
   }
   connect();
-});
+}
+
+async function refreshMatches(): Promise<void> {
+  const srv = resolveServer();
+  if (!srv) return;
+  statusEl.textContent = 'загрузка матчей…';
+  try {
+    const res = await fetch(`${httpBase(srv.base)}/matches?nick=${encodeURIComponent(srv.nick)}`);
+    if (!res.ok) throw new Error('http ' + res.status);
+    matchLists = (await res.json()) as Record<MatchTab, MatchRow[]>;
+    localStorage.setItem('void.server', srv.base);
+    localStorage.setItem('void.nick', srv.nick);
+    statusEl.textContent = '';
+  } catch {
+    matchLists = null;
+    statusEl.textContent = 'сервер недоступен';
+  }
+  renderMatches();
+}
+
+async function toggleArchive(id: string, restore: boolean): Promise<void> {
+  const srv = resolveServer();
+  if (!srv) return;
+  const op = restore ? 'unarchive' : 'archive';
+  try {
+    const res = await fetch(
+      `${httpBase(srv.base)}/matches/${encodeURIComponent(id)}/${op}?nick=${encodeURIComponent(srv.nick)}`,
+      { method: 'POST' },
+    );
+    if (!res.ok) {
+      statusEl.textContent = restore ? 'не удалось восстановить' : 'не удалось в архив';
+      return;
+    }
+    await refreshMatches();
+  } catch {
+    statusEl.textContent = 'ошибка архива';
+  }
+}
+
+function renderMatches(): void {
+  const el = $('mlist');
+  if (!matchLists) {
+    el.innerHTML = '<div class="mempty">нажмите «Обновить список»</div>';
+    return;
+  }
+  const rows = matchLists[activeTab] ?? [];
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="mempty">пусто</div>';
+    return;
+  }
+  el.textContent = '';
+  for (const m of rows) {
+    const row = document.createElement('div');
+    row.className = 'mrow';
+    const info = document.createElement('div');
+    info.className = 'minfo';
+    info.innerHTML =
+      `<div class="mname">${esc(m.mapId)} <span class="mid">${esc(m.matchId)}</span></div>` +
+      `<div class="mmeta">День ${m.days} · ${m.players.seated}/${m.players.capacity} игроков · ` +
+      `${esc(ruleSummary(m.rules))} · ${m.status === 'ended' ? 'завершён' : 'идёт'}</div>`;
+    row.appendChild(info);
+    const btns = document.createElement('div');
+    btns.className = 'mbtns';
+    const join = document.createElement('button');
+    join.className = 'mbtn';
+    join.textContent = 'Войти';
+    join.addEventListener('click', () => connectToMatch(m.matchId));
+    btns.appendChild(join);
+    if (activeTab !== 'available') {
+      const restore = activeTab === 'archived';
+      const arch = document.createElement('button');
+      arch.className = 'mbtn ghost';
+      arch.textContent = restore ? 'Восстановить' : 'В архив';
+      arch.addEventListener('click', () => void toggleArchive(m.matchId, restore));
+      btns.appendChild(arch);
+    }
+    row.appendChild(btns);
+    el.appendChild(row);
+  }
+}
+
+for (const btn of Array.from(document.querySelectorAll('.mtab'))) {
+  btn.addEventListener('click', () => {
+    activeTab = ((btn as HTMLElement).dataset.tab as MatchTab) ?? 'available';
+    for (const b of Array.from(document.querySelectorAll('.mtab'))) {
+      b.classList.toggle('active', b === btn);
+    }
+    renderMatches();
+  });
+}
+
+// "Обновить список" reloads the read-model; per-row "Войти"/"В архив" act on a match.
+$('cgo').addEventListener('click', () => void refreshMatches());
+
+// Open the menu populated when a server is reachable (the page is usually served BY
+// the dev server, so the same-origin default just works); otherwise it shows a prompt
+// and Single-player still works.
+void refreshMatches();
 
 // Auto-reconnect after an unexpected drop: rejoin our seat with capped exponential
 // backoff (1,2,4,8,8,8s, then give up). Same saved server + nick → same side.
@@ -4064,15 +4808,19 @@ function frame(nowReal: number) {
   renderCmdBar();
   renderSplitDialog();
   renderLobby();
-  // top bar (Iron Order-style resource readouts with +/h deltas)
+  // Status strip below the top bar: day/time + victory progress. (World/fleet counts
+  // moved to the player card — tap the crest in the top-left corner.)
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   const min = floor((s.time % HOUR) / 60000);
-  const clockText = `Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-  if (clockText !== lastClockText) {
-    clock.textContent = clockText;
-    topClock.textContent = clockText;
-    lastClockText = clockText;
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  const need = Math.max(0, SCORE_LIMIT - score);
+  const statusHtml =
+    `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
+    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>`;
+  if (statusHtml !== lastClockText) {
+    devlineEl.innerHTML = statusHtml;
+    lastClockText = statusHtml;
   }
   // Dev net overlay (M0): FPS always; when connected, append round-trip latency and
   // a desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
@@ -4087,29 +4835,20 @@ function frame(nowReal: number) {
     fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
     lastFpsText = fpsText;
   }
+  // Top bar = the six currencies (icon + amount). Five are session resources; the
+  // donate currency (Суверены ◆) is a meta-layer balance pinned to the far-right corner.
   const r = s.players[ME]?.resources ?? {};
-  const inc = netIncome(s, ME);
-  const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
-  const myFleets = Object.values(s.fleets).filter((f) => f.owner === ME).length;
-  const chip = (icon: string, val: string, delta?: number) => {
-    const dh =
-      delta === undefined
-        ? ''
-        : `<em class="${delta >= 0 ? 'up' : 'dn'}">${delta >= 0 ? '+' : ''}${Math.round(delta)}/h</em>`;
-    return `<span class="res"><i>${icon}</i><span class="rv"><b>${val}</b>${dh}</span></span>`;
-  };
-  // Victory progress: your authoritative score (victoryModule) and how far to the win.
-  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
-  const need = Math.max(0, SCORE_LIMIT - score);
-  const scoreChip =
-    `<span class="res"><i>SCR</i><span class="rv"><b>${score}<small style="opacity:.55;font-weight:400">/${SCORE_LIMIT}</small></b>` +
-    `<em class="${need === 0 ? 'up' : 'dn'}">${need === 0 ? '★ WIN' : need + ' to win'}</em></span></span>`;
+  // Monochrome line glyphs from the console's own icon family (no emoji variants, so
+  // they render as text, not colour emoji). Name in `title` for hover/long-press.
+  const chip = (icon: string, val: string, name: string, donate = false) =>
+    `<span class="res${donate ? ' donate' : ''}" title="${name}"><i>${icon}</i><b>${val}</b></span>`;
   const hudHtml =
-    chip('MTL', kfmt(r.metal ?? 0), inc.metal ?? 0) +
-    chip('CRD', kfmt(r.credits ?? 0), inc.credits ?? 0) +
-    chip('WLD', String(worlds)) +
-    chip('FLT', String(myFleets)) +
-    scoreChip;
+    chip('¤', kfmt(r.credits ?? 0), 'Credits') +
+    chip('❖', kfmt(r.food ?? 0), 'Food') +
+    chip('⬢', kfmt(r.metal ?? 0), 'Metal') +
+    chip('↯', kfmt(r.energy ?? 0), 'Energy') +
+    chip('▦', kfmt(r.microelectronics ?? 0), 'Microelectronics') +
+    chip('◆', kfmt(SOVEREIGNS), 'Суверены — donate currency', true);
   if (hudHtml !== lastHudHtml) {
     purse.innerHTML = hudHtml;
     lastHudHtml = hudHtml;
@@ -4133,20 +4872,262 @@ function frame(nowReal: number) {
   requestAnimationFrame(frame);
 }
 
-// Build/unit palette: fill the bottom strip once; a tile click pops its full codex.
-const paletteEl = document.getElementById('palette');
-if (paletteEl) {
-  paletteEl.innerHTML = paletteHtml();
-  paletteEl.addEventListener('click', (e) => {
-    const t = (e.target as HTMLElement).closest('.ptile') as HTMLElement | null;
-    if (t?.dataset.codex) openCodex(t.dataset.codex);
-  });
-}
+// Codex popup: full specs for a building/ship tile, with a contextual "Build here"
+// button. Tiles live in the build menu + fleet panel now (no global HUD strip).
 const codexEl = document.getElementById('codex');
 if (codexEl) {
   codexEl.addEventListener('click', (e) => {
     const tg = e.target as HTMLElement;
+    const build = (tg.closest('.cx-build') as HTMLElement | null)?.dataset.build;
+    if (build && selPlanet) {
+      const [kind, id] = build.split(':');
+      enqueueBuild(selPlanet, { kind: kind as BuildKind, id: id!, count: 1 });
+      codexEl.classList.remove('show');
+      lastPanelHtml = '';
+      renderPanel();
+      return;
+    }
     if (tg.id === 'codex' || tg.classList.contains('cx-close')) codexEl.classList.remove('show');
+  });
+}
+
+// Player card: tap the top-left crest to open your session dossier (faction, worlds,
+// fleets, score, treasury); tap the backdrop or CLOSE to dismiss.
+document.querySelector('.crest')?.addEventListener('click', () => openPlayerCard());
+const playerCardEl = document.getElementById('playercard');
+if (playerCardEl) {
+  playerCardEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.id === 'playercard' || tg.classList.contains('pc-close')) playerCardEl.classList.remove('show');
+  });
+}
+
+// War prompt: a move routed through a player you're at peace with asks for
+// confirmation — DECLARE WAR dispatches it (after declaring war), CANCEL/backdrop drops it.
+const warPromptEl = document.getElementById('warprompt');
+if (warPromptEl) {
+  warPromptEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.classList.contains('wp-yes')) confirmWarPrompt();
+    else if (tg.id === 'warprompt' || tg.classList.contains('wp-no')) cancelWarPrompt();
+  });
+}
+
+// Ping marker popup: jump the camera to the marker, or (your own) remove it.
+const pingPopEl = document.getElementById('pingpop');
+if (pingPopEl) {
+  pingPopEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    const jump = (tg.closest('.pp-jump') as HTMLElement | null)?.dataset.loc;
+    if (jump) {
+      closePingPop();
+      jumpToPing(jump);
+      return;
+    }
+    const del = (tg.closest('.pp-del') as HTMLElement | null)?.dataset.loc;
+    if (del) removePing(del);
+  });
+}
+
+// Session menu: the rail's Diplomacy / Dispatches buttons open the roster / message log.
+document.getElementById('rail-diplo')?.addEventListener('click', () => openDiplo('diplo'));
+document.getElementById('rail-msgs')?.addEventListener('click', () => openDiplo('msgs'));
+function toggleSet<T>(set: Set<T>, v: T): void {
+  if (set.has(v)) set.delete(v);
+  else set.add(v);
+}
+function sendDiploMsg(): void {
+  const input = document.getElementById('dp-text') as HTMLInputElement | null;
+  const text = input?.value.trim();
+  if (!text) return;
+  pushMsg(convoOpen, text, false); // to the open conversation (in net play this would broadcast)
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+}
+/** Ping the selected province into the coalition channel — also a clickable map
+ *  marker. The composer text becomes the marker's short description. */
+function pingSelected(): void {
+  if (!selPlanet || !s.planets[selPlanet]) {
+    note('Сначала выберите провинцию на карте');
+    return;
+  }
+  const input = document.getElementById('dp-text') as HTMLInputElement | null;
+  const desc = (input?.value.trim() ?? '').slice(0, 80);
+  if (NET && netClient) {
+    // The server is authoritative for pings: it stamps the marker and relays a
+    // `ping.added` back to us + allies — that echo is what adds it (see onPingAdded).
+    netClient.placePing({ kind: 'mark', target: { node: selPlanet }, label: desc });
+  } else {
+    pushMsg(COALITION, desc || `метка ${selPlanet}`, false, ME, selPlanet);
+  }
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+}
+/** Active coalition pings, one marker per province (the latest ping there wins). The
+ *  coalition chat log and the map markers share this single source. */
+function activePings(): SessionMsg[] {
+  const byLoc = new Map<string, SessionMsg>();
+  for (const m of sessionMessages) if (m.to === COALITION && m.ping) byLoc.set(m.ping, m);
+  return [...byLoc.values()];
+}
+/** Drop the marker (and its chat lines) for one of YOUR pings. */
+function removePing(loc: string): void {
+  const mine = activePings().find((p) => p.ping === loc && p.from === ME);
+  if (NET && netClient && mine?.pingId) {
+    netClient.clearPing(mine.pingId); // server echoes ping.removed → drops it for everyone
+    closePingPop();
+    return;
+  }
+  sessionMessages = sessionMessages.filter((m) => !(m.to === COALITION && m.ping === loc && m.from === ME));
+  closePingPop();
+  if (diploOpen && diploTab === 'msgs') renderDiploFeed();
+}
+/** A tapped map marker → a small popup with who pinged it and their description. */
+function openPingPop(loc: string): void {
+  const m = activePings().find((p) => p.ping === loc);
+  const pl = s.planets[loc];
+  const el = document.getElementById('pingpop');
+  if (!m || !pl || !el) return;
+  const c = world(pl.position);
+  const r = canvas.getBoundingClientRect();
+  const who = m.from === ME ? 'Вы' : NAME[m.from] ?? m.from;
+  const mine = m.from === ME;
+  el.innerHTML =
+    `<div class="pp-top"><b style="color:${ownerColor(m.from)}">📍 ${esc(who)}</b><span>${esc(loc)}</span></div>` +
+    `<div class="pp-desc">${m.text ? esc(m.text) : '<i>без описания</i>'}</div>` +
+    `<div class="pp-act"><button class="pp-jump" data-loc="${esc(loc)}">↪ камера</button>` +
+    (mine ? `<button class="pp-del" data-loc="${esc(loc)}">убрать</button>` : '') +
+    `</div>`;
+  el.style.left = `${Math.round(r.left + (c.x / VW) * r.width)}px`;
+  el.style.top = `${Math.round(r.top + (c.y / VH) * r.height)}px`;
+  el.classList.add('show');
+}
+function closePingPop(): void {
+  document.getElementById('pingpop')?.classList.remove('show');
+}
+/** Draw a pin per active coalition ping (owner-coloured), recording screen hit-boxes
+ *  for tap detection. Pins float just above the node, tip pointing at it. */
+function drawPings(now: number): void {
+  pingHits = [];
+  for (const m of activePings()) {
+    const pl = s.planets[m.ping!];
+    if (!pl) continue;
+    const c = world(pl.position);
+    if (!visible(c, 40)) continue;
+    const x = c.x;
+    const y = c.y - 18; // pin head floats above the node
+    const col = ownerColor(m.from);
+    const pulse = 0.7 + 0.3 * Math.sin(now / 360 + x * 0.05);
+    cx.save();
+    cx.shadowColor = 'rgba(0,0,0,.7)';
+    cx.shadowBlur = 4;
+    cx.fillStyle = rgba(col, pulse);
+    cx.strokeStyle = 'rgba(4,10,12,.85)';
+    cx.lineWidth = 1.4;
+    cx.beginPath(); // teardrop pin: head + tip toward the node
+    cx.moveTo(x, y + 11);
+    cx.lineTo(x - 5, y);
+    cx.arc(x, y - 1, 5.5, Math.PI, 0);
+    cx.lineTo(x, y + 11);
+    cx.fill();
+    cx.stroke();
+    cx.shadowBlur = 0;
+    cx.fillStyle = 'rgba(6,18,22,.95)';
+    cx.beginPath();
+    cx.arc(x, y - 1, 2.1, 0, TAU);
+    cx.fill();
+    cx.restore();
+    pingHits.push({ loc: m.ping!, x, y: y - 1 });
+  }
+}
+/** Tap a ping → fly the camera to that province (and select it); close the menu. */
+function jumpToPing(id: string): void {
+  const pl = s.planets[id];
+  if (!pl) return;
+  centerOn(pl.position, 3);
+  selPlanet = id;
+  selFleet = null;
+  selFleets = new Set();
+  lastPanelHtml = '';
+  closeDiplo();
+}
+const diploEl = document.getElementById('diplo');
+if (diploEl) {
+  diploEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    if (tg.id === 'diplo' || tg.closest('.dp-close')) return closeDiplo();
+    const tab = (tg.closest('.dp-tab') as HTMLElement | null)?.dataset.tab;
+    if (tab) {
+      diploTab = tab as 'diplo' | 'msgs';
+      renderDiplo();
+      return;
+    }
+    const sort = (tg.closest('.dp-sortb') as HTMLElement | null)?.dataset.sort;
+    if (sort) {
+      diploSort = sort as typeof diploSort;
+      renderDiplo();
+      return;
+    }
+    const fstance = (tg.closest('.dp-fchip[data-fstance]') as HTMLElement | null)?.dataset.fstance;
+    if (fstance) {
+      toggleSet(diploStanceFilter, fstance as DiplomaticStance);
+      renderDiplo();
+      return;
+    }
+    const ftype = (tg.closest('.dp-fchip[data-ftype]') as HTMLElement | null)?.dataset.ftype;
+    if (ftype) {
+      toggleSet(diploTypeFilter, ftype as 'human' | 'ai');
+      renderDiplo();
+      return;
+    }
+    if (tg.closest('.dp-fclear')) {
+      diploStanceFilter.clear();
+      diploTypeFilter.clear();
+      renderDiplo();
+      return;
+    }
+    const actBtn = tg.closest('.dp-act') as HTMLElement | null;
+    if (actBtn) {
+      proposeStance(actBtn.dataset.seat!, actBtn.dataset.stance as DiplomaticStance);
+      renderDiplo();
+      return;
+    }
+    const msgseat = (tg.closest('.dp-msg') as HTMLElement | null)?.dataset.msgseat;
+    if (msgseat) {
+      convoOpen = msgseat;
+      diploTab = 'msgs';
+      renderDiplo();
+      document.getElementById('dp-text')?.focus();
+      return;
+    }
+    const convo = (tg.closest('.dp-cv') as HTMLElement | null)?.dataset.convo;
+    if (convo) {
+      convoOpen = convo;
+      renderDiplo();
+      document.getElementById('dp-text')?.focus();
+      return;
+    }
+    if (tg.closest('.dp-ping')) return pingSelected();
+    const ping = (tg.closest('.dp-line.ping') as HTMLElement | null)?.dataset.ping;
+    if (ping) return jumpToPing(ping);
+    if (tg.closest('.dp-send')) return sendDiploMsg();
+    const row = tg.closest('.dp-row') as HTMLElement | null;
+    if (row?.dataset.seat) {
+      diploExpanded = diploExpanded === row.dataset.seat ? null : row.dataset.seat;
+      renderDiplo();
+    }
+  });
+  // Enter sends the composed message.
+  diploEl.addEventListener('keydown', (e) => {
+    const ke = e as KeyboardEvent;
+    if (ke.key === 'Enter' && (ke.target as HTMLElement).id === 'dp-text') {
+      e.preventDefault();
+      sendDiploMsg();
+    }
   });
 }
 

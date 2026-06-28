@@ -56,6 +56,57 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.technologies.industrial_automation?.effects.productionBonus).toBeCloseTo(0.1);
   });
 
+  it('ships producers for every economy resource (ECON-3: energy + microelectronics)', () => {
+    const data = parseGameData(loadShippedBundle());
+    // Fusion reactor feeds energy, scaling across its 3 levels.
+    const power = data.buildings.power_plant;
+    expect(power).toBeDefined();
+    expect(buildingMaxLevel(power!)).toBe(3);
+    expect(buildingLevel(power!, 1).produces.energy).toBe(25);
+    expect(buildingLevel(power!, 3).produces.energy).toBe(110);
+    // The fab turns energy+metal into microelectronics (premium, gated by tech).
+    const fab = data.buildings.fabricator;
+    expect(fab).toBeDefined();
+    expect(buildingLevel(fab!, 1).produces.microelectronics).toBe(8);
+    expect(buildingLevel(fab!, 1).cost.energy).toBe(60); // consumes energy to build
+    expect(data.technologies.microelectronics_fabrication?.unlocks.buildings).toContain('fabricator');
+    // Every economy resource now has at least one building that produces it.
+    const produced = new Set<string>();
+    for (const def of Object.values(data.buildings)) {
+      for (let lvl = 1; lvl <= buildingMaxLevel(def); lvl++) {
+        for (const res of Object.keys(buildingLevel(def, lvl).produces)) produced.add(res);
+      }
+    }
+    for (const res of data.resources) {
+      if (res === 'credits') continue; // credits are a sink/trade currency, not building-produced
+      expect(produced.has(res)).toBe(true);
+    }
+  });
+
+  it('every resource referenced by content exists in the resource list (referential integrity)', () => {
+    const data = parseGameData(loadShippedBundle());
+    const known = new Set(data.resources);
+    const check = (bag: Record<string, number>, where: string) => {
+      for (const res of Object.keys(bag)) {
+        expect(known.has(res), `${where} references unknown resource "${res}"`).toBe(true);
+      }
+    };
+    for (const [id, def] of Object.entries(data.buildings)) {
+      for (let lvl = 1; lvl <= buildingMaxLevel(def); lvl++) {
+        const level = buildingLevel(def, lvl);
+        check(level.cost, `building ${id} L${lvl} cost`);
+        check(level.produces, `building ${id} L${lvl} produces`);
+      }
+    }
+    for (const [id, def] of Object.entries(data.units)) {
+      check(def.cost, `unit ${id} cost`);
+      check(def.upkeep, `unit ${id} upkeep`);
+    }
+    for (const [id, def] of Object.entries(data.technologies)) {
+      check(def.cost, `technology ${id} cost`);
+    }
+  });
+
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {
     const data = parseGameData(loadShippedBundle());
     const fort = data.buildings.fort;

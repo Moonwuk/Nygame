@@ -21,6 +21,15 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run prototype # bake prototype/dist/void-dominion.html (served at /)
 
+# Harden the shipped image (audit SD-5.1 / F-09). Drop build-only tooling the running
+# server never uses (it runs `node` directly): the corepack/pnpm build cache and the
+# base image's global npm — both carry CVEs that `trivy image` flags but that have no
+# runtime path here. Then run as the built-in non-root `node` user; it must own /app
+# because the server writes playtest-logs/ at startup.
+RUN rm -rf /root/.cache /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+  && chown -R node:node /app
+USER node
+
 ENV HOST=0.0.0.0
 ENV PORT=8788
 EXPOSE 8788

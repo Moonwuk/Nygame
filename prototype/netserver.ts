@@ -17,6 +17,7 @@ import { networkInterfaces } from 'node:os';
 import pgPkg from 'pg';
 import {
   MatchRoom,
+  MatchRegistry,
   createMultiplayerServer,
   MemoryAccountStore,
   MemoryMatchStore,
@@ -250,7 +251,16 @@ function onWake(): void {
   armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
 }
 
-const server = createMultiplayerServer({ room, host, port, indexHtml, accountStore });
+// One match for now, exposed through the registry so the client's match browser
+// (GET /matches) lists it with its real status (map / rules / day / players).
+const registry = new MatchRegistry(accountStore);
+registry.register(room, {
+  mapId: 'nexus',
+  rules: { timeScale: TIME_SCALE },
+  createdAt: Date.now(),
+  startedAt: initialState.time,
+});
+const server = createMultiplayerServer({ registry, host, port, indexHtml });
 let wsUrl: string;
 try {
   wsUrl = await server.listen();

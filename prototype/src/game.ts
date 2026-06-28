@@ -23,6 +23,10 @@ import {
   constructionModule,
   armyModule,
   victoryModule,
+  getStance,
+  setStance,
+  pairKey,
+  type DiplomaticStance,
   type GameData,
   type GameModule,
   type GameState,
@@ -300,19 +304,20 @@ export interface MapNode {
 
 type KeyNode = Omit<MapNode, 'links'>;
 
-// A LARGE, ORGANIC contested field: a jittered lattice (no rigid grid look) of provinces
-// wired to neighbours by a relative-neighbourhood graph. EXACTLY 12 are 'planet' kind —
-// 4 of them START candidates (one per corner region, where players & AI spawn) + 8 neutral
-// worlds — and the other 40 are non-planet provinces, so the board totals ~1000 base points
-// (12×50 + 40×10); a solo win needs 600. All planets start NEUTRAL; newGame() seeds owners +
-// homes at the chosen starts. The jitter is deterministic (seeded sine hash) → reproducible.
-const FIELD = { cols: 13, rows: 4, x0: 152, dx: 124, y0: 206, dy: 166, jitter: 0.42 };
+// A SQUARE, ORGANIC contested field: a jittered 7×7 lattice (equal cell spacing, no rigid
+// grid look) wired to neighbours by a relative-neighbourhood graph. EXACTLY 12 are 'planet'
+// kind — 4 of them START candidates (one per corner region, where players & AI spawn) + 8
+// neutral worlds — and the other 37 are non-planet provinces, so the board totals ~970 base
+// points (12×50 + 37×10); a solo win needs 600. All planets start NEUTRAL; newGame() seeds
+// owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
+// reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
+const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
 const NON_PLANET_KINDS = ['asteroid', 'nebula', 'graveyard', 'ion_storm', 'dense_nebula', 'solar_flare'];
 const NEUTRAL_PLANET_TYPES = ['oceanic', 'volcanic', 'fortress_world', 'relic_world', 'gas_giant', 'irradiated', 'ringworld', 'crystalline'];
-// 4 start candidates — one per corner region, spread wide so multi-player starts don't crowd.
-const START_CELLS = ['1,0', '11,0', '1,3', '11,3'];
+// 4 start candidates — one per corner region (inset), spread wide so starts don't crowd.
+const START_CELLS = ['1,1', '5,1', '1,5', '5,5'];
 // 8 neutral 'planet' worlds, spread through the middle.
-const NEUTRAL_PLANET_CELLS = ['6,0', '6,3', '4,1', '8,2', '3,2', '9,1', '6,1', '6,2'];
+const NEUTRAL_PLANET_CELLS = ['3,3', '1,3', '5,3', '3,1', '3,5', '2,2', '4,4', '2,4'];
 
 const cellId = (cell: string): string => {
   const [c, r] = cell.split(',');
@@ -786,7 +791,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
     ];
     home.garrison = [{ unit: 'marine', count: 3 }];
-    players[seat.id] = player(seat.id, seat.name, seat.faction, { credits: 260, metal: 320 });
+    players[seat.id] = player(seat.id, seat.name, seat.faction, {
+      credits: 260,
+      metal: 320,
+      food: 120,
+      energy: 90,
+      microelectronics: 40,
+    });
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,
       seat.id,
@@ -801,7 +812,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     // The first hero is a projection of the commander, named by their nick.
     heroes[seat.id] = { owner: seat.id, name: seat.name, location: seat.start, cooldowns: {}, alive: true };
   }
-  return { ...base, players, planets, fleets, heroes };
+  // Everyone starts at PEACE (not the core's war default): no marching through another
+  // commander's space and no combat until war is declared (diplomacy.declare).
+  const diplomacy: Record<string, DiplomaticStance> = {};
+  const ids = setup.seats.map((seat) => seat.id);
+  for (let i = 0; i < ids.length; i++)
+    for (let j = i + 1; j < ids.length; j++) diplomacy[pairKey(ids[i]!, ids[j]!)] = 'peace';
+  return { ...base, players, planets, fleets, heroes, diplomacy };
 }
 
 /** Net per-hour income for a player: production from owned, un-bombarded worlds
@@ -855,6 +872,27 @@ export function hpOfLevel(type: string, level: number): number {
   return def.upgrades[level - 2]?.hp ?? def.hp;
 }
 
+// --- diplomacy (prototype) ---------------------------------------------------
+// Stances live in `state.diplomacy` (core D1). `combat.isHostile` now reads them, so
+// seeding `peace` (newGame) keeps two players from fighting until one declares war.
+// This module exposes the declaration action; `declareWar` is the action builder.
+export const diplomacyModule: GameModule = {
+  id: 'diplomacy',
+  version: '0.1.0',
+  setup(api) {
+    api.onAction('diplomacy.declare', (action, h) => {
+      const p = action.payload as { target?: string; stance?: DiplomaticStance };
+      if (typeof p?.target !== 'string' || p.target === action.playerId) {
+        return h.reject('E_BAD_TARGET');
+      }
+      if (!h.state.players[p.target]) return h.reject('E_NO_PLAYER');
+      const stance: DiplomaticStance = p.stance ?? 'war';
+      setStance(h.state, action.playerId, p.target, stance);
+      h.emit('diplomacy.changed', { a: action.playerId, b: p.target, stance });
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -868,6 +906,7 @@ export const MODULES: GameModule[] = [
   armyModule,
   victoryModule, // terminal match state from authoritative state (domination / elimination / score / timeout)
   fleetLaunchModule,
+  diplomacyModule, // peace-by-default + declare-war action (combat reads state.diplomacy)
 ];
 
 export const kernel = createKernel(MODULES);
@@ -951,6 +990,17 @@ export const buildUnit = (playerId: string, planetId: string, unit: string, coun
   act(playerId, 'unit.build', { planetId, unit, count });
 export const engageFleet = (playerId: string, fleetId: string, targetId: string) =>
   act(playerId, 'fleet.engage', { fleetId, targetId });
+/** Declare war on (or otherwise re-stance) another commander. */
+export const declareWar = (playerId: string, target: string, stance: DiplomaticStance = 'war') =>
+  act(playerId, 'diplomacy.declare', { target, stance });
+
+/** Can `mover`'s fleets enter/traverse a province owned by `owner`? Neutral, your own,
+ *  and players you're at war / pact / alliance with are passable; a player you're at
+ *  PEACE with is blocked (you'd have to declare war first). */
+export function canTraverse(state: GameState, mover: string, owner: string | null): boolean {
+  if (owner == null || owner === mover) return true;
+  return getStance(state, mover, owner) !== 'peace';
+}
 
 // --- AI ----------------------------------------------------------------------
 
@@ -965,7 +1015,9 @@ export function aiOrders(state: GameState, ai: string): Action[] {
   const capturable = (p: Planet): boolean => SECTOR_TYPES[p.kind ?? '']?.capturable ?? false;
   const d = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
     Math.hypot(a.x - b.x, a.y - b.y);
-  // Send each idle AI fleet toward the nearest capturable world it doesn't own.
+  // Send each idle AI fleet toward the nearest capturable world it can reach — only
+  // neutral worlds or territory of someone it's at WAR with (peace = off-limits).
+  let blockedByPeace = false;
   for (const f of Object.values(state.fleets)) {
     if (f.owner !== ai || f.location == null || f.movement || f.battleId) continue;
     const here = state.planets[f.location];
@@ -974,6 +1026,10 @@ export function aiOrders(state: GameState, ai: string): Action[] {
     let bestD = Infinity;
     for (const p of Object.values(state.planets)) {
       if (p.owner === ai || !capturable(p)) continue;
+      if (!canTraverse(state, ai, p.owner)) {
+        blockedByPeace = true; // a target it could only take by declaring war
+        continue;
+      }
       const dd = d(here.position, p.position);
       if (dd < bestD) {
         bestD = dd;
@@ -981,6 +1037,23 @@ export function aiOrders(state: GameState, ai: string): Action[] {
       }
     }
     if (best) out.push(moveFleet(ai, f.id, best.id));
+  }
+  // Peaceful expansion exhausted (only peace-locked targets left) → commit to a war on
+  // the nearest such rival, so the match doesn't stall. Next tick it advances on them.
+  if (out.length === 0 && blockedByPeace) {
+    const base0 = Object.values(state.planets).find((p) => p.owner === ai);
+    let foe: string | null = null;
+    let foeD = Infinity;
+    for (const p of Object.values(state.planets)) {
+      if (!capturable(p) || p.owner == null || p.owner === ai) continue;
+      if (getStance(state, ai, p.owner) !== 'peace') continue;
+      const dd = base0 ? d(base0.position, p.position) : 0;
+      if (dd < foeD) {
+        foeD = dd;
+        foe = p.owner;
+      }
+    }
+    if (foe) out.push(declareWar(ai, foe));
   }
   // Build + launch from this AI's home base (its first developed owned world).
   const base =

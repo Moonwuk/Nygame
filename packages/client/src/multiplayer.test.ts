@@ -101,4 +101,46 @@ describe('MultiplayerClient', () => {
     client.close();
     expect(socket.closed).toBe(true);
   });
+
+  it('sends ping.place / ping.clear as wire messages', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket, {});
+    client.placePing({ kind: 'mark', target: { node: 'C1R1' }, label: 'rally here' });
+    expect(JSON.parse(socket.sent[0] ?? '{}')).toEqual({
+      type: 'ping.place',
+      ping: { kind: 'mark', target: { node: 'C1R1' }, label: 'rally here' },
+    });
+    client.clearPing('ping:p1:0');
+    expect(JSON.parse(socket.sent[1] ?? '{}')).toEqual({ type: 'ping.clear', pingId: 'ping:p1:0' });
+    client.clearPing();
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ type: 'ping.clear' });
+  });
+
+  it('dispatches ping.added and ping.removed to handlers', () => {
+    const socket = new FakeSocket();
+    const added: unknown[] = [];
+    const removed: Array<[string, string]> = [];
+    const client = new MultiplayerClient(socket, {
+      onPingAdded: (p) => added.push(p),
+      onPingRemoved: (id, reason) => removed.push([id, reason]),
+    });
+    const ping = {
+      id: 'ping:p2:3',
+      owner: 'p2',
+      kind: 'mark' as const,
+      target: { node: 'C3R3' },
+      label: 'enemy seen',
+      createdAt: 10,
+      expiresAt: 310,
+    };
+    client.receive(JSON.stringify({ type: 'ping.added', matchId: 'm', ping }));
+    expect(added).toEqual([ping]);
+    client.receive(
+      JSON.stringify({ type: 'ping.removed', matchId: 'm', pingId: 'ping:p2:3', reason: 'expired' }),
+    );
+    expect(removed).toEqual([['ping:p2:3', 'expired']]);
+    // a ping.removed without a reason defaults to 'cleared'
+    client.receive(JSON.stringify({ type: 'ping.removed', matchId: 'm', pingId: 'ping:p2:4' }));
+    expect(removed[1]).toEqual(['ping:p2:4', 'cleared']);
+  });
 });

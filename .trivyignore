@@ -1,0 +1,19 @@
+# Trivy ignore list — base-OS CVEs in the node:22-slim (Debian bookworm) base image
+# that have NO fix available AND no runtime path in our Node-only proto server
+# (the container runs `node prototype/netserver.mjs` — no perl, no terminal UI, etc.).
+# Each is an accepted, documented risk; re-review whenever the base image is bumped.
+# Ties to audit SD-5.1 (minimal image) / F-15 (base-image hygiene). The fixable image
+# CVEs (corepack/pnpm cache, global npm) are removed in the Dockerfile, not ignored.
+
+# zlib1g: the vulnerable minizip code is NOT built by Debian → not applicable.
+CVE-2023-45853
+
+# ncurses / libtinfo6: no fixed version; terminal library is unused by the server.
+CVE-2025-69720
+
+# perl-base: perl is never invoked at runtime; no fixed version published.
+CVE-2026-42496
+CVE-2026-8376
+CVE-2026-42497
+CVE-2026-48962
+CVE-2026-9538

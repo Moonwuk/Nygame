@@ -96,6 +96,25 @@ describe('economy module — production into the player treasury', () => {
     expect(Object.keys(r.state.players)).toHaveLength(0); // nothing created, no crash
   });
 
+  it('credits any resource a building produces (energy / microelectronics)', () => {
+    const data2 = parseGameData({
+      version: '0.1.0',
+      resources: ['energy', 'microelectronics'],
+      units: {},
+      factions: {},
+      buildings: {
+        reactor: { name: 'Reactor', produces: { energy: 25 }, buildTimeHours: 0 },
+        fab: { name: 'Fab', produces: { microelectronics: 8 }, buildTimeHours: 0 },
+      },
+      events: {},
+    });
+    const kernel = createKernel([economyModule]);
+    const st = stateWith({ players: [player('p1')], planets: [planet('a', 'p1', ['reactor', 'fab'])] });
+    const r = okAdvance(kernel.advanceTo(st, { now: 2 * HOUR, data: data2 }));
+    expect(r.state.players.p1?.resources.energy).toBe(50); // 25/h × 2h
+    expect(r.state.players.p1?.resources.microelectronics).toBe(16); // 8/h × 2h
+  });
+
   it('lets a module scale production through the economy.production hook', () => {
     const rich: GameModule = {
       id: 'rich-deposits',

@@ -39,6 +39,13 @@ export interface AccountStore {
     nick: string,
     seats: readonly PlayerId[],
   ): Promise<SeatAssignment | null>;
+  /** Read-only: the seat this nick already holds in a room, or null if it holds none.
+   *  Unlike `resolveSeat` this never assigns — it answers "is this nick a participant
+   *  of this match?" for the match-browser read-model and archive authorization. */
+  seatOf(room: string, nick: string): Promise<PlayerId | null>;
+  /** Read-only: how many seats are currently claimed in a room (occupied count), for
+   *  the browser's "players X/Y" status line. */
+  occupiedSeats(room: string): Promise<number>;
   close?(): Promise<void>;
 }
 

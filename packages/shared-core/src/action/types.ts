@@ -1,5 +1,6 @@
 import type { GameState, PlayerId } from '../state/gameState';
 import type { GameData } from '../data/schemas';
+import { MS_PER_HOUR } from '../util/time';
 
 /**
  * The action contract: the client sends an *intention*, never state
@@ -60,6 +61,13 @@ export interface Context {
 export function timeScaleOf(ctx: Context): number {
   const scale = ctx.config?.timeScale;
   return scale && scale > 0 ? scale : 1;
+}
+
+/** Milliseconds for `hours` of game time, compressed by the match timeScale (GDD §3.1).
+ *  The one place a real-time duration turns into a scheduled offset — modules schedule
+ *  `now + hoursToMs(ctx, hours)` instead of re-deriving `(hours * MS_PER_HOUR) / scale`. */
+export function hoursToMs(ctx: Context, hours: number): number {
+  return (hours * MS_PER_HOUR) / timeScaleOf(ctx);
 }
 
 /** A fact the simulation announces; modules may react, or it harmlessly fades

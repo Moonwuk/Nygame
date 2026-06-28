@@ -1,9 +1,8 @@
 import type { Action } from '../action/types';
-import { timeScaleOf } from '../action/types';
+import { hoursToMs } from '../action/types';
 import type { GameData, ResourceBag, TechnologyDef } from '../data/schemas';
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Player, PlayerTechnologyState } from '../state/gameState';
-import { MS_PER_HOUR } from '../util/time';
 import { canAfford, payCost } from '../util/treasury';
 
 interface ResearchPayload {
@@ -97,7 +96,7 @@ function scheduleCompletion(
   playerId: string,
   hours: number,
 ): number {
-  const completesAt = h.ctx.now + (hours * MS_PER_HOUR) / timeScaleOf(h.ctx);
+  const completesAt = h.ctx.now + hoursToMs(h.ctx, hours);
   h.schedule(completesAt, 'technology.complete', { playerId, technology, completesAt });
   return completesAt;
 }
