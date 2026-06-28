@@ -1,9 +1,8 @@
-import { timeScaleOf } from '../action/types';
+import { hoursToMs } from '../action/types';
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Fleet, GameState, Hero, PlanetId, PlayerId, TempLane } from '../state/gameState';
 import { distance } from '../state/route';
 import { isCapturable } from '../state/sectorKind';
-import { MS_PER_HOUR } from '../util/time';
 
 /**
  * Hero — a per-player entity (one hero each) with a position on the map and ability
@@ -56,7 +55,7 @@ function fleetHasHero(h: HandlerContext, fleetId: string): boolean {
 
 /** ms from now after `hours`, compressed by the match timeScale like every duration. */
 function after(h: HandlerContext, hours: number): number {
-  return h.ctx.now + (hours * MS_PER_HOUR) / timeScaleOf(h.ctx);
+  return h.ctx.now + hoursToMs(h.ctx, hours);
 }
 
 function onCooldown(hero: Hero, ability: string, now: number): boolean {
