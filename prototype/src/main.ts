@@ -17,6 +17,7 @@ import {
   DAY,
   hpOfLevel,
   netIncome,
+  TAX_OFFICE_BONUS,
   moveFleet,
   moveFleetEdge,
   stopFleet,
@@ -95,11 +96,12 @@ const LOCK = '#7df0d0'; // selection / targeting reticle accent
 const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
-const BUILDABLE = ['mine', 'refinery', 'barracks', 'radar', 'fort'];
+const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'];
 const BUILD_UNITS = ['marine', 'orbital_aa', 'cruiser', 'scout', 'siege'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
+  tax_office: '⛁',
   barracks: '▤',
   fort: '⬡',
   starfort: '✦',
@@ -2853,6 +2855,11 @@ function buildingDossier(id: string, level: number): Dossier | null {
         name: def.name,
         body: `Добывающая платформа, вгрызающаяся в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает ${hl(metal)} металла в час, и каждый новый ярус наращивает поток. Единственная причина держать выжженное пепелище под флагом.`,
       };
+    case 'tax_office':
+      return {
+        name: def.name,
+        body: `Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на ${hl(pct(TAX_OFFICE_BONUS))}. Возводится один раз — бюрократию не масштабируют, её терпят.`,
+      };
     default:
       return { name: def.name, body: 'Планетарное сооружение.' };
   }
@@ -2967,7 +2974,7 @@ function codexHtml(kind: string, id: string): string {
   );
 }
 /** Bottom palette: a tile (icon + cost) per buildable building + unit. */
-const PALETTE_BUILDINGS = ['mine', 'refinery', 'barracks', 'radar', 'fort', 'starfort', 'metal_station'];
+const PALETTE_BUILDINGS = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort', 'starfort', 'metal_station'];
 function paletteHtml(): string {
   const tile = (kind: 'b' | 'u', id: string): string => {
     const def = kind === 'b' ? data.buildings[id] : data.units[id];
