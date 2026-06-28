@@ -18,8 +18,8 @@ the friend-test runbook (server + `wss://` tunnel → sideload → both connect)
 Every push to `main` that touches the game refreshes a rolling **`alpha`** prerelease
 with the latest build, at a stable link:
 
-- **Releases page:** https://github.com/moonwuk/nygame/releases/tag/alpha
-- **Direct APK:** https://github.com/moonwuk/nygame/releases/download/alpha/void-dominion-alpha.apk
+- **Releases page:** https://github.com/Moonwuk/Nygame/releases/tag/alpha
+- **Direct APK:** https://github.com/Moonwuk/Nygame/releases/download/alpha/void-dominion-alpha.apk
 
 On the phone: open the direct link → download → open the APK → allow "install from
 unknown sources" if prompted → launch. **Single-player runs fully offline** (landscape).
