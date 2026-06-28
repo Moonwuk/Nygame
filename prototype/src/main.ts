@@ -496,10 +496,11 @@ function projBase(p: { x: number; y: number }): { x: number; y: number } {
 // in screen pixels; only positions transform (a node-graph style zoom).
 const cam = { scale: 1, x: 0, y: 0 };
 // Zoom range tied to content: 1 = the whole-map fit (you can't zoom out past it into
-// empty void); 4 = close enough to inspect one province + its neighbours. The default
-// (and double-tap reset) is the whole-map view.
+// empty void); 6 = close enough to read one province + its neighbours on a phone. On a
+// phone the opening view zooms onto your home region (the wide map is too dense to read
+// whole on a narrow screen); double-tap resets to that view, pinch out to the overview.
 const MIN_SCALE = 1;
-const MAX_SCALE = 4;
+const MAX_SCALE = 6;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // node sector type by id — drives asteroid-junction rendering + capture-by-arrival
 const SECTOR_OF: Record<string, string> = Object.fromEntries(MAP.map((n) => [n.id, n.sector]));
@@ -544,6 +545,35 @@ function clampCam(): void {
       ? clamp(cam.y, bottom - pB, top - pT)
       : (top + bottom - pT - pB) / 2;
 }
+
+/** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
+function centerOn(p: { x: number; y: number }, scale: number): void {
+  cam.scale = clamp(scale, MIN_SCALE, MAX_SCALE);
+  const b = projBase(p);
+  const { left, right, top, bottom } = insets();
+  cam.x = (left + right) / 2 - b.x * cam.scale;
+  cam.y = (top + bottom) / 2 - b.y * cam.scale;
+  clampCam();
+}
+/** The opening / reset view. On a phone the wide map is too dense to read whole, so
+ *  zoom onto your home region and pan to explore; on a wide screen the whole-map fit
+ *  reads fine. The zoom is RELATIVE to the screen-fit, so it autoscales across screens. */
+function defaultView(): void {
+  const home =
+    Object.values(s.planets).find((p) => p.owner === ME && p.buildings.length > 0) ??
+    Object.values(s.planets).find((p) => p.owner === ME);
+  if (MOBILE && home) {
+    centerOn(home.position, 3);
+  } else {
+    cam.scale = 1;
+    cam.x = 0;
+    cam.y = 0;
+    clampCam();
+  }
+}
+// Re-validate the camera after a real resize (orientation / window). Attached after
+// `cam` exists so the initial in-module resize() call never touches it (TDZ-safe).
+if (typeof window !== 'undefined') window.addEventListener('resize', () => clampCam());
 
 // --- helpers -----------------------------------------------------------------
 
@@ -2507,19 +2537,15 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   }
   return html + `</div>`;
 }
-function buildButtons(planetId: string, ids: string[], kind: 'building' | 'unit'): string {
-  let html = `<div class="row">`;
-  for (const id of ids) {
-    const c = kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost;
-    const icon = kind === 'unit' ? unitIcon(id) : (BUILD_ICON[id] ?? '+');
-    const label =
-      kind === 'unit'
-        ? `${icon} ${displayUnit(id)} ${cost(c)}`
-        : `${icon} ${data.buildings[id]?.name ?? id} ${cost(c)}`;
-    const desc = kind === 'unit' ? `u:${id}` : `b:${id}:1`;
-    html += btn(kind === 'unit' ? 'unit' : 'build', id, label, s.planets[planetId]?.owner === ME, desc);
-  }
-  return html + `</div>`;
+// Buildable options as codex tiles (icon + cost). Tapping a tile opens the full-info
+// panel, which carries a "Build here" button for the selected province — so browsing
+// specs and committing the build share one control (no separate text button row).
+function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit'): string {
+  const k = kind === 'unit' ? 'u' : 'b';
+  const tiles = ids
+    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost)))
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
 
 function panelHtml(): string {
@@ -2551,8 +2577,6 @@ function panelHtml(): string {
   if (selFleet) {
     const f = s.fleets[selFleet];
     if (f) {
-      const shipList = f.units.map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
-      const trList = (f.landing ?? []).map((u) => `${u.count}×${esc(u.unit)}`).join(', ') || '—';
       const nShips = sumUnits(f.units);
       const nTr = sumUnits(f.landing ?? []);
       const orbit = f.orbit ?? '—';
@@ -2586,7 +2610,8 @@ function panelHtml(): string {
           : `A squadron of ${nShips} ship${nShips > 1 ? 's' : ''}${flavor.length ? ' — ' + flavor.join(', ') : ''}. Its combined weight is below; it advances at its slowest hull.`;
       h += `<div class="row dim">${blurb}</div>`;
       h += `<div class="pstats"><span>⚔ ATK ${atk}</span><span>🛡 DEF ${def}</span><span>❤ HP ${hpTot}</span><span>⚡ SPD ${spdTxt}</span></div>`;
-      h += `<div class="row"><span class="dim">Ships:</span> ${shipList}</div><div class="row dim">Carrying: ${trList}</div>`;
+      h += nShips ? `<div class="sec">Ships — tap for specs</div>` + unitTilesHtml(f.units) : '';
+      if (nTr > 0) h += `<div class="sec">Carrying troops</div>` + unitTilesHtml(f.landing ?? []);
 
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
@@ -2911,7 +2936,7 @@ function objDossier(key: string): Dossier | null {
   return null;
 }
 
-// --- build/unit codex (bottom palette tiles → full-info popup) ---------------
+// --- build/unit codex (contextual tile → full-info popup + Build here) -------
 /** One stat row for the codex popup. */
 function cxRow(k: string, v: string): string {
   return `<div class="cx-row"><span class="cx-k">${k}</span><span class="cx-v">${v}</span></div>`;
@@ -2966,26 +2991,46 @@ function codexHtml(kind: string, id: string): string {
     `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
   );
 }
-/** Bottom palette: a tile (icon + cost) per buildable building + unit. */
-const PALETTE_BUILDINGS = ['mine', 'refinery', 'barracks', 'radar', 'fort', 'starfort', 'metal_station'];
-function paletteHtml(): string {
-  const tile = (kind: 'b' | 'u', id: string): string => {
-    const def = kind === 'b' ? data.buildings[id] : data.units[id];
-    if (!def) return '';
-    const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
-    const name = kind === 'b' ? def.name : unitDossier(id)?.name ?? displayUnit(id);
-    return `<button class="ptile" data-codex="${kind}:${id}" title="${esc(name)} — ${cost(def.cost)} · click for full info"><span class="pt-ic">${icon}</span><span class="pt-c">${cost(def.cost)}</span></button>`;
-  };
-  const blds = PALETTE_BUILDINGS.map((id) => tile('b', id)).filter(Boolean).join('');
-  const units = BUILD_UNITS.map((id) => tile('u', id)).filter(Boolean).join('');
-  return `<div class="pgroup"><span class="pglabel">BUILD</span>${blds}</div><div class="pgroup"><span class="pglabel">UNITS</span>${units}</div>`;
+/** A compact codex tile (icon + a one-line label) that opens the full info panel on
+ *  tap. `label` is the build cost for buildables, or ×count for a fleet's ships. The
+ *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
+ *  panel — not in a global HUD strip. */
+function codexTile(kind: 'b' | 'u', id: string, label: string): string {
+  if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
+  const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
+  const name = kind === 'b' ? data.buildings[id]?.name ?? id : unitDossier(id)?.name ?? displayUnit(id);
+  return `<button class="ptile" data-codex="${kind}:${id}" title="${esc(name)} — tap for full specs"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+}
+/** A row of ship/troop tiles for a fleet's composition — tap one for its full specs. */
+function unitTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
+  const tiles = stacks
+    .filter((u) => u.count > 0)
+    .map((u) => codexTile('u', u.unit, '×' + u.count))
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
 function openCodex(key: string): void {
   const [kind, id] = key.split(':');
   const el = document.getElementById('codex');
-  if (!el) return;
-  el.innerHTML = `<div class="cxbox">${codexHtml(kind, id)}<button class="cx-close">CLOSE</button></div>`;
+  if (!el || !kind || !id) return;
+  el.innerHTML = `<div class="cxbox">${codexHtml(kind, id)}${codexBuildBtn(kind, id)}<button class="cx-close">CLOSE</button></div>`;
   el.classList.add('show');
+}
+/** A "Build here" action inside the codex when the selected province can raise this
+ *  thing — so the codex doubles as the build menu (tap a build tile → specs → build). */
+function codexBuildBtn(kind: string, id: string): string {
+  const p = selPlanet ? s.planets[selPlanet] : null;
+  if (!p || p.owner !== ME) return ''; // only when you're looking at one of your worlds
+  if (kind === 'b') {
+    const buildable = (SECTOR_TYPES[SECTOR_OF[p.id]]?.allowedBuildings ?? BUILDABLE).includes(id);
+    const built = p.buildings.some((b) => b.type === id);
+    if (!buildable || built) return '';
+    return `<button class="cx-build" data-build="building:${id}">▣ Build here · ${cost(data.buildings[id]?.cost)}</button>`;
+  }
+  if (kind === 'u' && data.units[id]) {
+    return `<button class="cx-build" data-build="unit:${id}">${unitIcon(id)} Build here · ${cost(data.units[id]?.cost)}</button>`;
+  }
+  return '';
 }
 
 /** Right-docked description pane HTML for the currently hovered menu object. */
@@ -3257,6 +3302,10 @@ splitdlg.addEventListener('click', (ev) => {
 side.addEventListener('click', (ev) => {
   const t = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
   if (!t || t.disabled) return;
+  if (t.dataset.codex) {
+    openCodex(t.dataset.codex); // a build/ship tile → full specs (+ Build here)
+    return;
+  }
   const act = t.dataset.act;
   const arg = t.dataset.arg ?? '';
   if (act === 'close') {
@@ -3517,11 +3566,7 @@ canvas.addEventListener(
   },
   { passive: false },
 );
-canvas.addEventListener('dblclick', () => {
-  cam.scale = 1;
-  cam.x = 0;
-  cam.y = 0;
-});
+canvas.addEventListener('dblclick', () => defaultView());
 // track the pointer for the "Move" preview line and hover tooltip (desktop only)
 canvas.addEventListener('pointermove', (ev) => {
   aimPointer = ptXY(ev);
@@ -3710,9 +3755,7 @@ function startMatch(setup: SetupConfig): void {
   additive = false;
   splitState = null;
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
-  cam.scale = 1;
-  cam.x = 0;
-  cam.y = 0;
+  defaultView(); // phone: zoom onto home; desktop: whole-map fit
   setupEl.style.display = 'none';
 }
 
@@ -4060,19 +4103,21 @@ function frame(nowReal: number) {
   requestAnimationFrame(frame);
 }
 
-// Build/unit palette: fill the bottom strip once; a tile click pops its full codex.
-const paletteEl = document.getElementById('palette');
-if (paletteEl) {
-  paletteEl.innerHTML = paletteHtml();
-  paletteEl.addEventListener('click', (e) => {
-    const t = (e.target as HTMLElement).closest('.ptile') as HTMLElement | null;
-    if (t?.dataset.codex) openCodex(t.dataset.codex);
-  });
-}
+// Codex popup: full specs for a building/ship tile, with a contextual "Build here"
+// button. Tiles live in the build menu + fleet panel now (no global HUD strip).
 const codexEl = document.getElementById('codex');
 if (codexEl) {
   codexEl.addEventListener('click', (e) => {
     const tg = e.target as HTMLElement;
+    const build = (tg.closest('.cx-build') as HTMLElement | null)?.dataset.build;
+    if (build && selPlanet) {
+      const [kind, id] = build.split(':');
+      enqueueBuild(selPlanet, { kind: kind as BuildKind, id: id!, count: 1 });
+      codexEl.classList.remove('show');
+      lastPanelHtml = '';
+      renderPanel();
+      return;
+    }
     if (tg.id === 'codex' || tg.classList.contains('cx-close')) codexEl.classList.remove('show');
   });
 }

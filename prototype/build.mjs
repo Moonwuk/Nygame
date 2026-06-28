@@ -102,21 +102,15 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 /* panel is glued to the bottom edge — lift the fleet command bar above it (mobile overrides below) */
 body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 
-/* build/unit palette — a browse-the-catalog strip at the bottom; hover a tile for its
-   cost, click for the full dossier. Hidden while a selection sheet is open. */
-#palette{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:23;display:flex;gap:10px;
-  align-items:center;padding:5px 8px;background:rgba(3,12,16,.8);border:1px solid var(--line);border-radius:4px;
-  box-shadow:0 0 18px rgba(40,200,210,.1);max-width:94vw;overflow-x:auto;scrollbar-width:none;}
-#palette::-webkit-scrollbar{display:none;}
-body.sheet-open #palette{display:none;}
-.pgroup{display:flex;align-items:center;gap:4px;}
-.pgroup+.pgroup{border-left:1px solid var(--line);padding-left:8px;}
-.pglabel{font-size:8px;letter-spacing:1.5px;color:var(--cyan-dim);padding-right:2px;flex:0 0 auto;}
-.ptile{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:46px;padding:4px 5px;cursor:pointer;
-  background:rgba(53,214,230,.04);border:1px solid var(--line);border-radius:3px;color:var(--cyan);}
+/* contextual build/ship tiles — live inside the build menu + fleet panel (icon +
+   cost/count); tap one for the full dossier, with a "Build here" action for buildables. */
+.ptiles{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px;}
+.ptile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:54px;min-height:50px;
+  padding:6px 7px;cursor:pointer;background:rgba(53,214,230,.05);border:1px solid var(--line-hi);border-radius:5px;color:var(--cyan);}
 .ptile:hover{border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 8px rgba(53,214,230,.25);}
-.ptile .pt-ic{font-size:16px;line-height:1;}
-.ptile .pt-c{font-size:8px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
+.ptile:active{background:rgba(53,214,230,.24);}
+.ptile .pt-ic{font-size:18px;line-height:1;}
+.ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
 /* codex popup — full stats + description on tile click */
 #codex{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:18px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
@@ -132,7 +126,10 @@ body.sheet-open #palette{display:none;}
 .cx-row .cx-k{color:var(--dim);}
 .cx-row .cx-v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;}
 .cx-desc{font-size:12px;line-height:1.6;color:#9fc9c4;}
-.cx-close{margin-top:12px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
+.cx-build{margin-top:12px;width:100%;padding:12px;cursor:pointer;border-radius:6px;border:1px solid var(--grn-dim);
+  background:rgba(95,240,168,.12);color:var(--grn);font:700 13px ui-monospace,monospace;letter-spacing:1px;}
+.cx-build:active{background:rgba(95,240,168,.24);}
+.cx-close{margin-top:8px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
 
 #devline{position:fixed;top:46px;left:0;right:0;height:18px;z-index:24;display:flex;align-items:center;gap:12px;
@@ -445,7 +442,6 @@ const html = `<!doctype html>
 </div>
 <div id="hovercard"></div>
 <div id="cmdbar"></div>
-<div id="palette"></div>
 <div id="codex"></div>
 <div id="splitdlg"></div>
 <div id="fps"></div>
