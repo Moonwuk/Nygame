@@ -63,17 +63,17 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 .who{line-height:1.1;min-width:0;}
 .who b{display:block;color:#eafffb;font-weight:700;font-size:12px;letter-spacing:2px;white-space:nowrap;}
 .who span{color:var(--cyan-dim);font-size:9px;letter-spacing:2.5px;white-space:nowrap;}
-#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow-x:auto;height:100%;margin:0 4px;
-  border-left:1px solid var(--line);border-right:1px solid var(--line);scrollbar-width:none;}
-#purse::-webkit-scrollbar{display:none;}
-/* uniform chips so the currencies line up evenly: fixed-width centred icon box +
-   tabular value, equal min-width per chip */
-.res{display:flex;align-items:center;gap:6px;padding:0 10px;height:100%;flex:0 0 auto;min-width:58px;}
-.res i{display:inline-block;width:16px;text-align:center;font-style:normal;font-size:14px;line-height:1;
+/* the six currencies always fit the bar — no scroll. Chips share the width and shrink
+   together (flex:1 1 0; min-width:0) so the row scales down instead of overflowing. */
+#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow:hidden;height:100%;margin:0 4px;
+  border-left:1px solid var(--line);border-right:1px solid var(--line);}
+.res{display:flex;align-items:center;justify-content:center;gap:4px;padding:0 4px;height:100%;flex:1 1 0;min-width:0;}
+.res i{flex:0 0 auto;text-align:center;font-style:normal;font-size:13px;line-height:1;
   color:var(--cyan);font-variant-emoji:text;text-shadow:0 0 6px rgba(53,214,230,.4);}
-.res b{color:#eafffb;font-weight:700;font-size:13px;font-variant-numeric:tabular-nums;}
-/* donate/premium currency (Суверены): pinned to the far-right corner, gold accent */
-.res.donate{margin-left:auto;border-left:1px solid var(--line);}
+.res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* donate/premium currency (Суверены): gold accent */
+.res.donate{border-left:1px solid var(--line);}
 .res.donate i{color:#ffd45e;text-shadow:0 0 7px rgba(255,212,94,.5);}
 .res.donate b{color:#ffe6a3;}
 #speedbar{position:fixed;right:14px;bottom:14px;z-index:24;display:flex;align-items:center;gap:4px;
@@ -277,11 +277,14 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #devline .dstat{flex:0 0 auto;}
 #devline .dstat.win{color:var(--up);font-weight:700;}
 
-#rail{position:fixed;left:0;top:66px;bottom:0;width:44px;z-index:24;display:flex;flex-direction:column;
-  align-items:center;gap:2px;padding-top:6px;background:rgba(2,9,13,.6);border-right:1px solid var(--line);}
-#rail button{position:relative;width:44px;height:40px;background:transparent;border:0;cursor:pointer;
-  font-size:16px;color:var(--cyan-dim);}
-#rail button:hover{color:var(--cyan);background:rgba(53,214,230,.08);text-shadow:0 0 8px rgba(53,214,230,.6);}
+/* slim icon rail, always on the left edge (just the wired tools); each icon opens a
+   window. Short — wraps its icons, so the map below it stays tappable. */
+#rail{position:fixed;left:8px;top:70px;width:42px;z-index:25;display:flex;flex-direction:column;gap:4px;
+  padding:4px;background:rgba(3,12,16,.72);border:1px solid var(--line-hi);border-radius:9px;
+  box-shadow:0 0 16px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#rail button{position:relative;width:34px;height:34px;background:transparent;border:0;cursor:pointer;
+  font-size:17px;color:var(--cyan-dim);border-radius:6px;font-variant-emoji:text;}
+#rail button:hover,#rail button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
 #rail .badge{position:absolute;right:5px;top:4px;min-width:15px;height:15px;border-radius:8px;
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
@@ -383,9 +386,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #splitdlg .sactions .cbtn:disabled{opacity:.35;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
 #splitdlg .sactions .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
 
-#botleft{position:fixed;left:6px;bottom:8px;z-index:24;display:flex;align-items:center;gap:8px;}
-.chat{width:40px;height:40px;cursor:pointer;font-size:16px;border-radius:2px;
-  background:rgba(2,9,13,.7);border:1px solid var(--line-hi);color:var(--cyan-dim);}
 #hovercard{position:fixed;top:70px;right:14px;width:220px;z-index:22;pointer-events:none;
   padding:12px 14px;background:rgba(3,12,16,.88);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 18px rgba(40,200,210,.12);font-size:11px;line-height:1.55;display:none;}
@@ -396,11 +396,19 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #hovercard .hc-val{color:var(--ink);font-weight:700;text-align:right;}
 #hovercard .hc-sub{color:var(--cyan-dim);font-size:10px;margin-top:5px;}
 @media (max-width:720px){#hovercard{display:none!important;}}
-#log{position:fixed;left:58px;bottom:58px;width:360px;height:92px;z-index:20;overflow:auto;touch-action:pan-y;
-  padding:7px 11px;background:rgba(2,9,13,.72);border:1px solid var(--line);border-left:2px solid var(--grn-dim);
-  font:11px/1.55 ui-monospace,Menlo,monospace;color:#73b6a2;scrollbar-width:thin;}
+/* event log lives in a tap-to-open window (rail ≡), not a permanent panel */
+#logwin{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#logwin.show{display:flex;}
+#logwin .lwbox{display:flex;flex-direction:column;width:min(440px,94vw);max-height:70vh;overflow:hidden;
+  background:var(--glass);border:1px solid var(--cyan);border-radius:10px;
+  box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+.lw-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line-hi);}
+.lw-head b{font-size:12px;letter-spacing:2px;color:var(--cyan);}
+.lw-close{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
+#log{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:10px 14px;
+  font:11px/1.6 ui-monospace,Menlo,monospace;color:#73b6a2;scrollbar-width:thin;}
 #log div::before{content:"> ";color:var(--grn-dim);}
-body.sheet-open #log{display:none;}
 
 #banner{display:none;position:fixed;inset:0;margin:auto;height:fit-content;width:fit-content;z-index:40;
   padding:18px 34px;font-size:20px;font-weight:700;letter-spacing:3px;text-align:center;text-transform:uppercase;
@@ -408,42 +416,11 @@ body.sheet-open #log{display:none;}
   box-shadow:0 0 40px rgba(53,214,230,.25),inset 0 0 30px rgba(53,214,230,.06);
   clip-path:polygon(0 12px,12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);}
 
-/* mobile chrome: hamburger + slide-in drawer. On desktop the drawer is a layout
-   no-op (display:contents) so the rail / log / comms keep their fixed spots. */
-#burger{display:none;flex:0 0 auto;width:42px;height:100%;border:0;border-right:1px solid var(--line);
-  background:transparent;color:var(--cyan);font-size:18px;cursor:pointer;align-items:center;justify-content:center;}
-#burger:active{background:rgba(53,214,230,.14);}
-#scrim{display:none;position:fixed;inset:44px 0 0 0;z-index:34;background:rgba(1,5,9,.58);}
-#drawer{display:contents;}
-.rlabel{display:none;}
-
 @media (max-width:720px){
   #top{height:44px;}
   .who{display:none;}
   .crest{padding:0 10px;}
-  /* hamburger drops out of the top bar to a thumb-reachable button, lower-left */
-  #burger{display:flex;position:fixed;left:8px;bottom:14px;top:auto;width:46px;height:46px;
-    border:1px solid var(--line-hi);border-radius:4px;background:var(--glass);z-index:36;
-    box-shadow:0 0 16px rgba(0,0,0,.5);}
-  body.sheet-open #burger{display:none;}
-  .res{padding:0 6px;gap:4px;min-width:52px;}
   #devline{top:44px;}
-
-  /* left rail + event log + comms collapse into a slide-in drawer */
-  #drawer{display:flex;flex-direction:column;position:fixed;left:0;top:44px;bottom:0;width:80vw;max-width:300px;
-    z-index:35;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;
-    background:var(--glass);border-right:1px solid var(--cyan);box-shadow:0 0 40px rgba(0,0,0,.7);}
-  body.drawer-open #drawer{transform:none;}
-  body.drawer-open #scrim{display:block;}
-  #drawer #rail{position:static;width:auto;flex-direction:column;align-items:stretch;gap:0;padding:6px 0;
-    background:transparent;border:0;border-bottom:1px solid var(--line);}
-  #drawer #rail button{width:100%;height:46px;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:17px;}
-  #drawer #rail button:active{background:rgba(53,214,230,.1);}
-  #drawer #rail .rlabel{display:inline;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;}
-  #drawer #rail .badge{left:auto;right:14px;top:50%;transform:translateY(-50%);}
-  #drawer #log{position:static;left:auto;right:auto;bottom:auto;width:auto;height:150px;margin:0;border:0;
-    border-bottom:1px solid var(--line);}
-  #drawer #botleft{position:static;left:auto;bottom:auto;padding:12px 16px;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
@@ -566,29 +543,20 @@ const html = `<!doctype html>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
-  <button id="burger" title="Menu" aria-label="Menu">☰</button>
   <div class="crest"><span class="dia"></span>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>
 </header>
 <div id="devline"></div>
-<div id="scrim"></div>
-<div id="drawer">
-  <nav id="rail">
-    <button id="rail-msgs" title="Dispatches">≡<span class="rlabel">Dispatches</span></button>
-    <button id="rail-diplo" title="Diplomacy">⬡<span class="rlabel">Diplomacy</span></button>
-    <button title="Economy">¤<span class="rlabel">Economy</span></button>
-    <button title="Military">△<span class="rlabel">Military</span></button>
-    <button title="Army">▤<span class="rlabel">Army</span></button>
-    <button title="Espionage (soon)">◎<span class="rlabel">Espionage</span></button>
-    <button title="Markers">⚑<span class="rlabel">Markers</span></button>
-    <button title="Research (soon)">✛<span class="rlabel">Research</span></button>
-    <button title="Alerts">⚠<span class="rlabel">Alerts</span><span class="badge" id="alertbadge" style="display:none">0</span></button>
-  </nav>
-  <div id="log"></div>
-  <footer id="botleft"><button class="chat" title="Comms">◈</button></footer>
-</div>
+<!-- slim left rail: only the wired tools (each opens its window). More icons land here as
+     features get wired. -->
+<nav id="rail">
+  <button id="rail-diplo" title="Дипломатия">⬡</button>
+  <button id="rail-msgs" title="Сообщения">✉</button>
+  <button id="rail-log" title="Сводки">≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+</nav>
+<div id="logwin"><div class="lwbox"><div class="lw-head"><b>СВОДКИ</b><button class="lw-close">✕</button></div><div id="log"></div></div></div>
 <aside id="side"></aside>
 <div id="speedbar" class="spd">
   <button data-speed="0">‖</button><button data-speed="2" class="on">▶</button><button data-speed="6">▶▶</button>

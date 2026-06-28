@@ -354,8 +354,6 @@ const hovercard = $('hovercard');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
-const burger = $('burger');
-const scrim = $('scrim');
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -3389,7 +3387,6 @@ function openDiplo(tab: 'diplo' | 'msgs'): void {
   diploTab = tab;
   renderDiplo();
   document.getElementById('diplo')?.classList.add('show');
-  document.body.classList.remove('drawer-open'); // tuck the rail drawer away behind it
 }
 function closeDiplo(): void {
   diploOpen = false;
@@ -4223,10 +4220,14 @@ for (const b of Array.from(document.querySelectorAll('[data-speed]'))) {
   });
 }
 
-// Mobile: hamburger toggles the slide-in drawer (rail + log + comms); the scrim
-// behind it closes on tap. No-op on desktop, where the drawer is always shown.
-burger.addEventListener('click', () => document.body.classList.toggle('drawer-open'));
-scrim.addEventListener('click', () => document.body.classList.remove('drawer-open'));
+// Event-log window: the rail's ≡ opens it; ✕ or the backdrop closes it. The feed
+// (#log) updates in place each frame whether the window is open or not.
+const logWin = document.getElementById('logwin');
+document.getElementById('rail-log')?.addEventListener('click', () => logWin?.classList.add('show'));
+logWin?.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.id === 'logwin' || tg.classList.contains('lw-close')) logWin.classList.remove('show');
+});
 
 // --- connect overlay (single-player vs join a live session) ------------------
 // Entry screen: pick a faction, then run a local skirmish or connect to a server
