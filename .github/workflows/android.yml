@@ -1,7 +1,7 @@
 name: Android APK (prototype)
 
 # Builds an installable debug APK of the prototype by wrapping the self-contained
-# prototype HTML in a Capacitor WebView (branded icon/splash, locked to portrait).
+# prototype HTML in a Capacitor WebView (branded icon/splash, rotates freely).
 # Runs on GitHub's ubuntu runner, which has the Android SDK preinstalled. On main it
 # also publishes the APK to a rolling "alpha" prerelease for a stable download link;
 # every run still uploads the APK as a build artifact too.
@@ -59,7 +59,7 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Brand the app (icon + splash) and lock to portrait
+      - name: Brand the app (icon + splash) and enable rotation
         working-directory: mobile
         run: |
           npx capacitor-assets generate --android
@@ -100,7 +100,7 @@ jobs:
             echo "Install on Android:"
             echo "1. Download void-dominion-alpha.apk below."
             echo "2. Open it; allow \"install from unknown sources\" if prompted."
-            echo "3. Launch — single-player works fully offline. The app runs in portrait."
+            echo "3. Launch — single-player works fully offline. Rotates freely (phone / tablet)."
             echo
             echo "Debug-signed (testing only, not Play-Store ready). For multiplayer, point the"
             echo "connect screen at a host running pnpm dev:proto-server (see docs/multiplayer.md)."

@@ -532,12 +532,18 @@ for (const n of MAP) {
 // no longer reserves the left rail (it folds into the drawer) → the map claims that
 // space; desktop keeps the rail + label gutter and the right panel column.
 function insets(): { left: number; right: number; top: number; bottom: number } {
-  return {
-    left: MOBILE ? 14 : RAIL + 80,
-    right: VW - (MOBILE ? 24 : 372),
-    top: TOP + (MOBILE ? 54 : 80),
-    bottom: VH - (MOBILE ? 96 : 150),
-  };
+  if (MOBILE) {
+    return { left: 14, right: VW - 24, top: TOP + 54, bottom: VH - 96 };
+  }
+  // Wide screens (tablets + landscape): frame the board with reserves that SCALE to the
+  // viewport rather than fixed desktop constants. The old fixed 372px right column and
+  // 80/150 top/bottom bars wasted most of a tablet's width and squeezed a short landscape
+  // screen to a sliver — so the whole-map fit rendered tiny. Clamped so it stays sane
+  // across a 9" tablet up to a desktop window.
+  const rightPad = Math.min(360, Math.max(120, VW * 0.16));
+  const topPad = Math.min(80, Math.max(44, VH * 0.09));
+  const botPad = Math.min(150, Math.max(78, VH * 0.16));
+  return { left: RAIL + 80, right: VW - rightPad, top: TOP + topPad, bottom: VH - botPad };
 }
 // Leave a little breathing room around the whole-map (scale-1) view so it reads as a
 // framed board, not edge-to-edge. This is the floor of the zoom range (MIN_SCALE = 1).

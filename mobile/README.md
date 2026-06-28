@@ -3,9 +3,9 @@
 Packages the **prototype** (`prototype/dist/void-dominion.html`, a self-contained
 offline HTML game) into an installable Android APK by wrapping it in a Capacitor
 WebView. No hosting needed — the HTML ships inside the app. The app is **branded**
-(diamond crest icon + splash) and **locked to portrait** — the map defaults to a
-zoomed-in view of your home region and you pan to explore. Standalone project (not in
-the pnpm workspace); uses `npm`.
+(diamond crest icon + splash) and **rotates freely** — the responsive layout serves
+phones in portrait and tablets / landscape with the wider framing. Standalone project
+(not in the pnpm workspace); uses `npm`.
 
 This is `cross-platform-roadmap.md` CP6.2 (Capacitor route — pulled forward ahead of
 the CP6.1 TWA route to enable the multiplayer-via-APK test). The wrapped prototype
@@ -22,7 +22,8 @@ with the latest build, at a stable link:
 - **Direct APK:** https://github.com/Moonwuk/Nygame/releases/download/alpha/void-dominion-alpha.apk
 
 On the phone: open the direct link → download → open the APK → allow "install from
-unknown sources" if prompted → launch. **Single-player runs fully offline** (portrait).
+unknown sources" if prompted → launch. **Single-player runs fully offline**; rotate
+freely on a phone or tablet.
 
 It is a **debug** APK, signed with a **committed debug keystore** (`mobile/debug.keystore`,
 standard `android`/`android` credentials — not a secret) so every build shares one
@@ -61,7 +62,8 @@ npm run apk          # sync → brand (icon/splash + landscape) → ./gradlew as
 
 `npm run apk` runs `npm run brand` between sync and the Gradle build:
 `capacitor-assets generate --android` (icons + splash from `assets/`) then
-`node patch-android.mjs` (forces `sensorLandscape` on the WebView activity).
+`node patch-android.mjs` (enables rotation — `fullUser` + in-place `configChanges`
+so rotating never reloads the WebView / drops game state).
 
 Requirements: JDK 17, Android SDK (set `ANDROID_HOME`), and accepted SDK licenses.
 `gradlew` downloads its own Gradle. Capacitor 6 ⇒ JDK 17.
