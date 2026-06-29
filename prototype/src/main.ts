@@ -257,6 +257,47 @@ function blitGlow(color: string, x: number, y: number, r: number, a: number): vo
   cx.globalAlpha = 1;
 }
 
+// EXPERIMENT (holographic volume): give map objects a sense of depth so they read as
+// orbs projected on the ship's command terminal, not flat rings. Bake one shaded sphere
+// per colour — lit from the upper-left with a Fresnel rim — and blit it scaled to the
+// node, same cache-and-blit trick as the glow (no per-node gradient on the hot path).
+const sphereCache = new Map<string, HTMLCanvasElement>();
+function sphereSprite(color: string): HTMLCanvasElement {
+  const hit = sphereCache.get(color);
+  if (hit) return hit;
+  const rad = 32;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = Math.ceil(rad * 2 * DPR);
+  const g = cv.getContext('2d') as CanvasRenderingContext2D;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // specular highlight up-left → colour body → translucent rim = a lit sphere
+  const grd = g.createRadialGradient(rad - rad * 0.34, rad - rad * 0.4, rad * 0.06, rad, rad, rad);
+  grd.addColorStop(0, rgba('#ffffff', 0.8));
+  grd.addColorStop(0.18, rgba(color, 0.62));
+  grd.addColorStop(0.55, rgba(color, 0.26));
+  grd.addColorStop(0.85, rgba(color, 0.1));
+  grd.addColorStop(1, rgba(color, 0.02));
+  g.fillStyle = grd;
+  g.beginPath();
+  g.arc(rad, rad, rad - 1, 0, TAU);
+  g.fill();
+  g.strokeStyle = rgba('#ffffff', 0.26); // holographic rim
+  g.lineWidth = 1.2;
+  g.beginPath();
+  g.arc(rad, rad, rad - 1.4, 0, TAU);
+  g.stroke();
+  sphereCache.set(color, cv);
+  return cv;
+}
+/** Blit the cached shaded sphere of `color` centred at (x,y) at node radius r, scaled
+ *  by `a` (fade the volume out at the far/whole-map view where nodes pack together). */
+function blitSphere(color: string, x: number, y: number, r: number, a = 1): void {
+  if (a <= 0.02) return;
+  cx.globalAlpha = a;
+  cx.drawImage(sphereSprite(color), x - r, y - r, r * 2, r * 2);
+  cx.globalAlpha = 1;
+}
+
 /** Total count across a stack of units (ships, garrison or landing troops). */
 const sumUnits = (stacks: ReadonlyArray<{ count: number }>): number =>
   stacks.reduce((a, s) => a + s.count, 0);
@@ -2684,6 +2725,10 @@ function render(now: number) {
       }
       cx.restore();
     }
+
+    // holographic volume: a lit sphere inside the ring — subtle at the far view (nodes
+    // pack together there), blooming to full once you zoom into a region
+    blitSphere(col, c.x, c.y, R, clamp(0.3 + (cam.scale - 1) * 0.7, 0.3, 1));
 
     // wireframe body + bright core (glow comes from the cached aura/bloom discs,
     // not shadowBlur — shadowBlur per node per frame is a major CPU cost)
