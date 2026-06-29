@@ -615,6 +615,12 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup-hero .mcell .badge{position:absolute;top:3px;right:6px;font:700 10px ui-monospace,monospace;color:var(--cyan);}
 #heldghost{position:fixed;z-index:80;pointer-events:none;display:none;transform:translate(-50%,-50%);
   font-size:26px;filter:drop-shadow(0 0 7px rgba(53,214,230,.9));}
+/* hero grade (rarity) line — colour by tier */
+#setup-hero .hgradeline{font:600 12px ui-monospace,monospace;letter-spacing:.5px;margin:2px 0 10px;}
+#setup-hero .hgradeline.g-common{color:#8fa6ad;}
+#setup-hero .hgradeline.g-rare{color:#5fd0ff;}
+#setup-hero .hgradeline.g-legendary{color:var(--amber);}
+#setup-hero .hgradeline.g-main{color:var(--grn);}
 
 /* === DEV TEST MODE — self-contained; delete this whole block to cut the styles === */
 #connect .tm-open{flex:none;width:100%;margin-top:10px;border-style:dashed;border-color:var(--line-hi);color:var(--cyan-dim);}

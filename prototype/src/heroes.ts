@@ -1,19 +1,36 @@
 /**
- * Hero roster model — the "модули = набор способностей" design (confirmed with the
- * designer). A player fields up to HERO_ROSTER_COUNT heroes per session; each carries
- * HERO_SLOTS ability slots ("modules") filled from a shared pool, plus the implicit
- * base combat aura every hero grants its fleet.
+ * Hero roster model — grades + ability "modules". Confirmed design: heroes come in
+ * GRADES (rarity), and a hero's module-slot count grows with its grade —
+ *   обычный 1 · редкий 2 · легендарный 3 · главный 4.
+ * The "главный" hero is special: it is always present, named after the player's
+ * callsign, and (Phase B) handed out from the start. Grade is an intrinsic property of
+ * a hero (like a collectible's rarity) — the player doesn't pick it; until a hero
+ * acquisition/collection system lands, the roster is a fixed set of default heroes.
  *
- * Pure + data-driven, exactly like the formation roster (`game.ts` formations): this
- * module is just the menu-facing MODEL + preview. The in-match hero instances, the
- * designatable capital, death→24h→player-respawn, and in-match re-fitting land in the
- * next phases — here we only let the player COMPOSE the roster before the match.
+ * Pure + data-driven, like the formation roster. This is the menu-facing MODEL +
+ * preview; in-match instances / capital / respawn / in-match re-fit are later phases.
  */
 
-/** Ability slots ("modules") per hero. */
-export const HERO_SLOTS = 2;
-/** Heroes a player fields per session. */
-export const HERO_ROSTER_COUNT = 3;
+/** Hero grades, lowest → highest. The slot count is the number of module slots. */
+export type HeroGrade = 'common' | 'rare' | 'legendary' | 'main';
+export interface HeroGradeDef {
+  name: string;
+  slots: number;
+  icon: string;
+}
+export const HERO_GRADES: Record<HeroGrade, HeroGradeDef> = {
+  common: { name: 'Обычный', slots: 1, icon: '◦' },
+  rare: { name: 'Редкий', slots: 2, icon: '◈' },
+  legendary: { name: 'Легендарный', slots: 3, icon: '★' },
+  main: { name: 'Главный', slots: 4, icon: '♛' },
+};
+/** Module slots a grade grants (degrades to 1 on an unknown grade). */
+export function heroSlots(grade: HeroGrade): number {
+  return HERO_GRADES[grade]?.slots ?? 1;
+}
+
+/** Heroes a player fields per session (the main hero + 3 others). */
+export const HERO_ROSTER_COUNT = 4;
 
 /** One selectable hero ability ("module"). `live` = its in-match effect already exists
  *  in the engine (the core heroModule); a non-live ability is designed but shows as
@@ -81,42 +98,47 @@ export const HERO_ABILITIES: Record<string, HeroAbility> = {
   },
 };
 
-/** Ability ids the slot cycler walks (the pool keys, stable order). */
+/** Ability ids the inventory walks (the pool keys, stable order). */
 export const HERO_ABILITY_IDS: string[] = Object.keys(HERO_ABILITIES);
 
-/** A hero in the roster: a name + exactly HERO_SLOTS ability slots (id or null). The
- *  base +5% combat aura is implicit on every hero; the slots add tactical abilities. */
+/** A hero in the roster: a name + grade (fixes the slot count) + ability slots (id or
+ *  null), one entry per grade slot. The base +5% combat aura is implicit on every hero. */
 export interface HeroLoadout {
   name: string;
+  grade: HeroGrade;
   abilities: (string | null)[];
 }
 
-/** Three starter heroes (the player renames / re-fits them before the match, and can
- *  re-fit in-match at the capital — a later phase). */
+/** The default roster: the main hero (renamed to the player's callsign) + one of each
+ *  other grade, so all four rarities are represented until hero acquisition lands. */
 export const DEFAULT_HEROES: HeroLoadout[] = [
-  { name: 'Авангард', abilities: ['corridor', 'rally'] },
-  { name: 'Разрушитель', abilities: ['annihilate', 'scan'] },
-  { name: 'Страж', abilities: ['bulwark', 'recall'] },
+  { name: 'Командир', grade: 'main', abilities: ['corridor', 'rally', 'scan', 'bulwark'] },
+  { name: 'Разрушитель', grade: 'legendary', abilities: ['annihilate', 'scan', 'recall'] },
+  { name: 'Авангард', grade: 'rare', abilities: ['corridor', 'rally'] },
+  { name: 'Страж', grade: 'common', abilities: ['bulwark'] },
 ];
 
 /** Aggregate readout of a loadout for the designer preview. */
 export interface HeroLoadoutInfo {
   /** Filled slots (non-null, resolvable). */
   count: number;
+  /** Total slots the grade grants. */
+  slots: number;
   /** Resolved abilities in slot order (unknown ids dropped). */
   abilities: HeroAbility[];
   /** How many chosen abilities aren't wired in the engine yet (shown as "скоро"). */
   planned: number;
 }
 
-/** Resolve a loadout's filled slots to ability defs + counts. Pure; unknown / empty
- *  slots are skipped, so it degrades gracefully on stale data. */
+/** Resolve a loadout's filled slots to ability defs + counts, bounded by its grade's
+ *  slot count. Pure; unknown / empty / over-cap slots are skipped (graceful). */
 export function heroLoadoutInfo(loadout: HeroLoadout): HeroLoadoutInfo {
+  const slots = heroSlots(loadout.grade);
   const abilities: HeroAbility[] = [];
-  for (const id of loadout.abilities) {
+  for (const id of loadout.abilities.slice(0, slots)) {
     if (!id) continue;
     const a = HERO_ABILITIES[id];
     if (a) abilities.push(a);
   }
-  return { count: abilities.length, abilities, planned: abilities.filter((a) => !a.live).length };
+  return { count: abilities.length, slots, abilities, planned: abilities.filter((a) => !a.live).length };
 }

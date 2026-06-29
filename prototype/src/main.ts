@@ -60,7 +60,9 @@ import {
   DEFAULT_HEROES,
   HERO_ABILITIES,
   HERO_ABILITY_IDS,
-  HERO_SLOTS,
+  HERO_GRADES,
+  HERO_ROSTER_COUNT,
+  heroSlots,
   heroLoadoutInfo,
   type HeroLoadout,
 } from './heroes';
@@ -4662,7 +4664,7 @@ setupDivEl.addEventListener('click', (ev) => {
 // The player's hero roster: up to 3 loadouts, each with HERO_SLOTS ability "modules"
 // + the implicit base aura. Composed before the match (in-match capital/respawn/refit
 // land in a later phase). Reuses the division designer's tab/slot/stats chrome.
-const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, abilities: [...h.abilities] }));
+const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 let setupHeroIdx = 0; // which hero is open in the designer
 let heldModule: string | null = null; // the module on the "cursor" (grab → place, Minecraft-style)
 const heldGhostEl = $('heldghost');
@@ -4680,19 +4682,25 @@ function moveGhost(x: number, y: number): void {
   heldGhostEl.style.top = `${y}px`;
 }
 
+/** The hero's display name — the главный hero shows the player's callsign (nick). */
+function heroName(h: HeroLoadout): string {
+  return h.grade === 'main' ? nickInput.value.trim() || h.name : h.name;
+}
+
 function renderHeroes(): void {
   const tabs = setupHeroes
-    .map((h, i) => `<button data-hero="${i}" class="${i === setupHeroIdx ? 'on' : ''}">${esc(h.name)}</button>`)
+    .map((h, i) => `<button data-hero="${i}" class="${i === setupHeroIdx ? 'on' : ''}">${HERO_GRADES[h.grade].icon} ${esc(heroName(h))}</button>`)
     .join('');
   const hero = setupHeroes[setupHeroIdx]!;
+  const grade = HERO_GRADES[hero.grade];
+  const slots = heroSlots(hero.grade);
   const holding = heldModule != null;
-  // Equip "bays" — the drop targets (highlighted while a module is held).
-  const bays = hero.abilities
-    .map((id, i) => {
-      const ab = id ? HERO_ABILITIES[id] : undefined;
-      return `<div class="tslot ${ab ? '' : 'empty'} ${holding ? 'drop' : ''}" data-aslot="${i}"><span class="ic">${ab ? ab.icon : '＋'}</span><span class="nm">${esc(ab ? ab.name : 'пусто')}</span></div>`;
-    })
-    .join('');
+  // Equip "bays" — one per grade slot; the drop targets while a module is held.
+  const bays = Array.from({ length: slots }, (_, i) => {
+    const id = hero.abilities[i] ?? null;
+    const ab = id ? HERO_ABILITIES[id] : undefined;
+    return `<div class="tslot ${ab ? '' : 'empty'} ${holding ? 'drop' : ''}" data-aslot="${i}"><span class="ic">${ab ? ab.icon : '＋'}</span><span class="nm">${esc(ab ? ab.name : 'пусто')}</span></div>`;
+  }).join('');
   const info = heroLoadoutInfo(hero);
   const syn = info.abilities.length
     ? info.abilities
@@ -4700,7 +4708,7 @@ function renderHeroes(): void {
         .join('')
     : `<span class="syn none">◇ Слоты пусты — возьми модуль из инвентаря ниже.</span>`;
   // Module "inventory" grid — tap a cell to grab it onto the cursor, then tap a hero slot.
-  const equipped = new Set(hero.abilities.filter(Boolean) as string[]);
+  const equipped = new Set(hero.abilities.slice(0, slots).filter(Boolean) as string[]);
   const inv = HERO_ABILITY_IDS.map((id) => {
     const a = HERO_ABILITIES[id]!;
     const cls = `${equipped.has(id) ? 'equip' : ''} ${heldModule === id ? 'held' : ''} ${a.live ? '' : 'planned'}`;
@@ -4711,10 +4719,11 @@ function renderHeroes(): void {
     ? `<div class="mheld active" data-drop="1">В руке: ${heldA.icon} <b>${esc(heldA.name)}</b> — тапни слот героя · <em>(тап сюда — убрать)</em></div>`
     : `<div class="mheld">Возьми модуль из инвентаря и тапни слот героя. Тап по занятому слоту — снять модуль.</div>`;
   setupHeroEl.innerHTML =
-    `<p class="ssub">Выбери до 3 героев. У каждого ${HERO_SLOTS} слота под модули + базовая аура (+5% бой флоту героя). Бери модуль из инвентаря и вставляй в слот, как предмет в инвентаре. В матче модули меняются в столице.</p>` +
+    `<p class="ssub">${HERO_ROSTER_COUNT} героя: главный (имя = твой ник) + по одному грейду. Грейд задаёт число слотов под модули (обычный ${HERO_GRADES.common.slots} · редкий ${HERO_GRADES.rare.slots} · легендарный ${HERO_GRADES.legendary.slots} · главный ${HERO_GRADES.main.slots}) + базовая аура (+5% бой флоту). Бери модуль из инвентаря и вставляй в слот. В матче меняется в столице.</p>` +
     `<div class="tpl-tabs">${tabs}</div>` +
-    `<div class="tpl-slots heroslots">${bays}</div>` +
-    `<div class="tpl-stats"><div class="row"><span>★ Модули ${info.count}/${HERO_SLOTS}</span><span>✦ Аура +5%</span></div>${syn}</div>` +
+    `<div class="hgradeline g-${hero.grade}">${grade.icon} ${esc(grade.name)} · ${slots} ${slots === 1 ? 'слот' : 'слота'} под модули</div>` +
+    `<div class="tpl-slots heroslots" style="grid-template-columns:repeat(${Math.min(slots, 4)},1fr)">${bays}</div>` +
+    `<div class="tpl-stats"><div class="row"><span>★ Модули ${info.count}/${slots}</span><span>✦ Аура +5%</span></div>${syn}</div>` +
     heldBar +
     `<div class="hpal-h">Инвентарь модулей</div><div class="minv">${inv}</div>`;
 }
@@ -4876,7 +4885,7 @@ function buildSetupConfig(): SetupConfig {
   return {
     seats,
     templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
-    heroes: setupHeroes.map((h) => ({ name: h.name, abilities: [...h.abilities] })),
+    heroes: setupHeroes.map((h) => ({ name: heroName(h), grade: h.grade, abilities: [...h.abilities] })),
   };
 }
 
