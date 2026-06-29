@@ -296,8 +296,10 @@ export interface GameState {
    *  each seen world. Maintained by `visibilityModule`; read by `visibleState`
    *  to show greyed "last known" worlds. Internal — stripped from projections. */
   fog?: Record<PlayerId, FogMemory>;
-  /** Per-player hero entity (one per player), maintained by `heroModule`. */
-  heroes?: Record<PlayerId, Hero>;
+  /** Hero instances, keyed by instance id (`Hero.id`), maintained by `heroModule`.
+   *  A player may field several — filter by `owner`. (Key was the `PlayerId` in the
+   *  one-hero-per-player skeleton; instance-keyed since the roster migration.) */
+  heroes?: Record<string, Hero>;
   /** Active temporary lanes opened by hero abilities — real graph edges for their
    *  duration (added to `Planet.links`), with a per-owner speed bonus. */
   tempLanes?: TempLane[];
@@ -336,6 +338,9 @@ export interface MarketOrder {
 /** A player's hero — a per-player entity with a position on the map and ability
  *  cooldowns. Acts from its current node (`location`); relocates with `hero.move`. */
 export interface Hero {
+  /** Instance id — the key under which this hero lives in `GameState.heroes`.
+   *  Identifies the hero across events (death/respawn) independently of `owner`. */
+  id: string;
   owner: PlayerId;
   /** Display name — the player's projection of themselves (their nick). Cosmetic;
    *  set at match seed. Absent ⇒ the client falls back to the owner's name. */

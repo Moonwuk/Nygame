@@ -3069,7 +3069,8 @@ function panelHtml(): string {
 
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
-        const heroName = s.heroes?.[f.owner]?.name ?? s.players[f.owner]?.name ?? f.owner;
+        const hero = Object.values(s.heroes ?? {}).find((x) => x.owner === f.owner);
+        const heroName = hero?.name ?? s.players[f.owner]?.name ?? f.owner;
         h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">— projection · +5% attack/defense to this fleet</span></div>`;
       }
 

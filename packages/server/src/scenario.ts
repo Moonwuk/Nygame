@@ -176,7 +176,8 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
       ['cruiser', 2],
       ['scout_drone', 1],
     ]);
-    heroes[id] = { owner: id, location: `home_${id}`, cooldowns: {} };
+    const heroId = `hero:${id}`;
+    heroes[heroId] = { id: heroId, owner: id, location: `home_${id}`, cooldowns: {} };
   });
   const state: GameState = { ...base, players, planets, fleets, heroes };
   return new MatchRoom({

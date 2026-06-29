@@ -1002,7 +1002,8 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       [['marine', 3]],
     );
     // The first hero is a projection of the commander, named by their nick.
-    heroes[seat.id] = { owner: seat.id, name: seat.name, location: seat.start, cooldowns: {}, alive: true };
+    const heroId = `hero:${seat.id}`;
+    heroes[heroId] = { id: heroId, owner: seat.id, name: seat.name, location: seat.start, cooldowns: {}, alive: true };
   }
   // Everyone starts at PEACE (not the core's war default): no marching through another
   // commander's space and no combat until war is declared (diplomacy.declare).

@@ -94,6 +94,10 @@ function errCode(r: ApplyResult): string {
   if (r.ok) throw new Error('expected rejection, got ok');
   return r.code;
 }
+/** state.heroes is instance-keyed; tests read a player's hero by owner. */
+function heroOf(s: GameState, owner: string) {
+  return Object.values(s.heroes ?? {}).find((h) => h.owner === owner);
+}
 
 /**
  * A→B is a real 30-unit lane (both p1's). C(400,0) is p2's, unlinked, within
@@ -111,7 +115,7 @@ function world(): GameState {
       C: planet('C', 'p2', 400, 0, [], 'planet'),
       F: planet('F', 'p2', 700, 0, [], 'planet'),
     },
-    heroes: { p1: { owner: 'p1', location: 'A', cooldowns: {} } },
+    heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'A', cooldowns: {} } },
   };
 }
 
@@ -120,7 +124,7 @@ describe('hero — move (redeploy)', () => {
 
   it('redeploys the hero to a world the player owns', () => {
     const r = okApply(kernel.applyAction(world(), act('hero.move', 'p1', { to: 'B' }), ctx(0)));
-    expect(r.state.heroes?.p1?.location).toBe('B');
+    expect(heroOf(r.state, 'p1')?.location).toBe('B');
     expect(r.events.map((e) => e.type)).toContain('hero.moved');
   });
 
@@ -141,7 +145,7 @@ describe('hero — move (redeploy)', () => {
   it('does not mutate the input state', () => {
     const st = deepFreeze(world());
     okApply(kernel.applyAction(st, act('hero.move', 'p1', { to: 'B' }), ctx(0)));
-    expect(st.heroes?.p1?.location).toBe('A');
+    expect(heroOf(st, 'p1')?.location).toBe('A');
   });
 });
 
@@ -158,7 +162,7 @@ describe('hero — temp public lane (path.create / expire)', () => {
     const lane = s.tempLanes![0]!;
     expect(lane).toMatchObject({ owner: 'p1', from: 'A', to: 'C', addedLink: true });
     expect(lane.expiresAt).toBe(6 * HOUR); // PATH_DURATION_HOURS, timeScale 1
-    expect(s.heroes?.p1?.cooldowns.path).toBe(12 * HOUR); // PATH_COOLDOWN_HOURS
+    expect(heroOf(s, 'p1')?.cooldowns.path).toBe(12 * HOUR); // PATH_COOLDOWN_HOURS
     expect(s.scheduled.some((e) => e.type === 'hero.path.expire')).toBe(true);
     expect(r.events.map((e) => e.type)).toContain('hero.path.created');
   });
@@ -236,7 +240,7 @@ describe('hero — planet annihilation', () => {
     expect(c.planetType).toBe('dead_world');
     expect(c.buildings).toHaveLength(0);
     expect(c.garrison).toHaveLength(0);
-    expect(r.state.heroes?.p1?.cooldowns.annihilate).toBe(48 * HOUR); // ANNIHILATE_COOLDOWN_HOURS
+    expect(heroOf(r.state, 'p1')?.cooldowns.annihilate).toBe(48 * HOUR); // ANNIHILATE_COOLDOWN_HOURS
     expect(r.events.map((e) => e.type)).toContain('planet.destroyed');
     // The node remains routable — annihilation does not delete it from the map.
     expect(r.state.planets.C).toBeDefined();
@@ -327,7 +331,7 @@ describe('hero — death and respawn', () => {
         F: { id: 'F', owner: 'p1', location: 'P', movement: null, traits: [], units: [{ unit: 'hero', count: 1 }] },
         D: { id: 'D', owner: 'p2', location: 'P', movement: null, traits: [], units: [{ unit: 'killer', count: 1 }] },
       },
-      heroes: { p1: { owner: 'p1', name: 'Ada', location: 'HOME', cooldowns: {}, alive: true } },
+      heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', name: 'Ada', location: 'HOME', cooldowns: {}, alive: true } },
     };
   }
 
@@ -353,7 +357,7 @@ describe('hero — death and respawn', () => {
     const dead = okAdvance(kernel.advanceTo(started.state, kctx(2 * HOUR)));
 
     // The hero died: entity flagged dead, a respawn is scheduled, no hero unit remains.
-    expect(dead.state.heroes?.p1?.alive).toBe(false);
+    expect(heroOf(dead.state, 'p1')?.alive).toBe(false);
     expect(dead.state.scheduled.some((e) => e.type === 'hero.respawn')).toBe(true);
     expect(
       Object.values(dead.state.fleets).some((f) => f.units.some((u) => u.unit === 'hero')),
@@ -362,7 +366,7 @@ describe('hero — death and respawn', () => {
 
     // After the 24h cooldown the hero re-forms as a fresh fleet at HOME.
     const reborn = okAdvance(kernel.advanceTo(dead.state, kctx(30 * HOUR)));
-    expect(reborn.state.heroes?.p1?.alive).toBe(true);
+    expect(heroOf(reborn.state, 'p1')?.alive).toBe(true);
     const heroFleet = Object.values(reborn.state.fleets).find(
       (f) => f.owner === 'p1' && f.units.some((u) => u.unit === 'hero' && u.count > 0),
     );

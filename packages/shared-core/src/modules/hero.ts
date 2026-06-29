@@ -41,7 +41,9 @@ const HERO_COMBAT_BONUS = 0.05;
 const HERO_RESPAWN_HOURS = 24;
 
 function heroOf(state: GameState, playerId: PlayerId): Hero | undefined {
-  return state.heroes?.[playerId];
+  // Instance-keyed roster: find the player's hero by owner. (One per player today;
+  // the find is order-stable on insertion order, deterministic.)
+  return Object.values(state.heroes ?? {}).find((hero) => hero.owner === playerId);
 }
 
 /** Does this fleet currently carry a living hero unit? (drives the fleet aura). */
