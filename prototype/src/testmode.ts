@@ -46,13 +46,24 @@ const SPEEDS = [1, 2, 6, 20]; // selectable game-speed multipliers
 const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈' };
 const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер' };
 
+// Scenario-1 force config: the spacecraft each side's fleets are built from.
+const SHIP_UNITS = ['cruiser', 'scout', 'siege'] as const;
+type ShipUnit = (typeof SHIP_UNITS)[number];
+type Force = Record<ShipUnit, number>;
+const SHIP_RU: Record<ShipUnit, string> = { cruiser: 'Крейсер', scout: 'Скаут', siege: 'Осада' };
+const SHIP_ICON: Record<ShipUnit, string> = { cruiser: '▲', scout: '◌', siege: '✦' };
+const forceTotal = (f: Force): number => SHIP_UNITS.reduce((a, u) => a + f[u], 0);
+
 export function initTestMode(hooks: TestModeHooks): void {
   const found = document.getElementById('testmode');
   if (!found) return;
   const el: HTMLElement = found; // non-null for the closures below
 
   let mult = 2; // chosen speed multiplier
-  let view: 'menu' | 'ground' = 'menu';
+  let view: 'menu' | 'force' | 'ground' = 'menu';
+  // Scenario-1 force config: composition per side (applied to that side's fleets).
+  const forceA: Force = { cruiser: 3, scout: 0, siege: 0 };
+  const forceD: Force = { cruiser: 3, scout: 0, siege: 0 };
   // Scenario-2 lab: an editable template per side.
   const tplA: FormationTemplate = { name: 'Атака', slots: [...DEFAULT_TEMPLATES[1]!.slots] };
   const tplD: FormationTemplate = { name: 'Оборона', slots: [...DEFAULT_TEMPLATES[0]!.slots] };
@@ -68,7 +79,7 @@ export function initTestMode(hooks: TestModeHooks): void {
   };
 
   function render(): void {
-    el.innerHTML = view === 'menu' ? menuHtml() : groundHtml();
+    el.innerHTML = view === 'menu' ? menuHtml() : view === 'force' ? forceHtml() : groundHtml();
   }
 
   function menuHtml(): string {
@@ -84,6 +95,28 @@ export function initTestMode(hooks: TestModeHooks): void {
       <button class="tm-scn" data-tm="scn1"><b>1 · Коллизия флотов и планет</b><span>Встречные флоты ловят друг друга в полёте; рядом — перехват флота на ближней орбите пролетающим врагом.</span></button>
       <button class="tm-scn" data-tm="scn2"><b>2 · Наземное сражение</b><span>Собери шаблон дивизии для каждой стороны и проверь новый резолвер наземного боя.</span></button>
       <button class="tm-back" data-tm="back">← Назад</button>
+    </div>`;
+  }
+
+  function forceSideHtml(side: 'a' | 'd', title: string, f: Force): string {
+    const rows = SHIP_UNITS.map(
+      (u) =>
+        `<div class="tm-frow"><span class="tm-fic">${SHIP_ICON[u]}</span><span class="tm-fnm">${SHIP_RU[u]}</span>` +
+        `<button class="tm-step" data-tm="dec" data-side="${side}" data-u="${u}">−</button>` +
+        `<span class="tm-fn">${f[u]}</span>` +
+        `<button class="tm-step" data-tm="inc" data-side="${side}" data-u="${u}">+</button></div>`,
+    ).join('');
+    return `<div class="tm-side"><div class="tm-side-h">${title}</div>${rows}<div class="tm-stats">Всего кораблей: ${forceTotal(f)}</div></div>`;
+  }
+
+  function forceHtml(): string {
+    const can = forceTotal(forceA) > 0 && forceTotal(forceD) > 0;
+    return `<div class="tmbox">
+      <div class="tm-title"><span class="dia"></span><b>СЦЕНАРИЙ 1 · НАСТРОЙКА СИЛ</b></div>
+      <p class="tm-sub">Задай состав флота для каждой стороны — он применяется и к встречным флотам, и к перехвату на орбите. Затем «Запустить» — сценарий стартует со сброшенного таймера, на паузе.</p>
+      <div class="tm-sides">${forceSideHtml('a', 'Azure · вы (синие)', forceA)}${forceSideHtml('d', 'Crimson · враг (красные)', forceD)}</div>
+      <button class="tm-fight" data-tm="launch1" ${can ? '' : 'disabled'}>▶ Запустить сценарий</button>
+      <button class="tm-back" data-tm="tomenu">← К сценариям</button>
     </div>`;
   }
 
@@ -152,8 +185,16 @@ export function initTestMode(hooks: TestModeHooks): void {
       show(false);
       hooks.back();
     } else if (act === 'scn1') {
+      view = 'force';
+      render();
+    } else if (act === 'inc' || act === 'dec') {
+      const f = t.dataset.side === 'a' ? forceA : forceD;
+      const u = t.dataset.u as ShipUnit;
+      f[u] = Math.max(0, Math.min(9, f[u] + (act === 'inc' ? 1 : -1)));
+      render();
+    } else if (act === 'launch1') {
       show(false);
-      hooks.startScenario(buildCollisionScenario(), mult);
+      hooks.startScenario(buildCollisionScenario(forceA, forceD), mult);
     } else if (act === 'scn2') {
       view = 'ground';
       groundResult = '';
@@ -182,11 +223,12 @@ export function openTestMode(): void {
 }
 
 // --- scenario 1: fleet / planet collision ------------------------------------
-// Two equal hostile fleets on neighbouring planets fly head-on (the engine's
-// lane-intercept catches them mid-flight). Far away, a second pair tests the
-// node catch across orbit levels: a friendly fleet sits on a planet's NEAR orbit
-// while a hostile fleet passes THROUGH that planet.
-function buildCollisionScenario(): GameState {
+// Two hostile fleets on neighbouring planets fly head-on (the engine's lane-
+// intercept catches them mid-flight). Far away, a second pair tests the node catch
+// across orbit levels: a friendly fleet sits on a planet's NEAR orbit while a
+// hostile fleet passes THROUGH that planet. `forceA`/`forceD` are the per-side ship
+// compositions (Azure = p1, Crimson = p2), applied to both of that side's fleets.
+function buildCollisionScenario(forceA: Force, forceD: Force): GameState {
   const byId = new Map<string, MapNode>(MAP.map((n) => [n.id, n]));
   const planets = MAP.filter((n) => n.sector === 'planet');
   const dist = (a: string, b: string): number => {
@@ -239,24 +281,25 @@ function buildCollisionScenario(): GameState {
   // newGame seeds everyone at PEACE; the test needs them shooting, so declare war —
   // combat's isHostile only fires on an explicit `war` stance.
   setStance(st, 'p1', 'p2', 'war');
-  const cruisers = (n: number): UnitStack[] => [{ unit: 'cruiser', count: n }];
-  const mk = (id: string, owner: string, location: string, n: number, orbit?: 'near' | 'far'): Fleet => ({
+  const units = (f: Force): UnitStack[] =>
+    SHIP_UNITS.filter((u) => f[u] > 0).map((u) => ({ unit: u, count: f[u] }));
+  const mk = (id: string, owner: string, location: string, f: Force, orbit?: 'near' | 'far'): Fleet => ({
     id,
     owner,
     location,
     movement: null,
-    units: cruisers(n),
+    units: units(f),
     landing: [],
     traits: [],
     ...(orbit ? { orbit } : {}),
   });
   st.fleets = {
-    't-a1': mk('t-a1', 'p1', a1, 3),
-    't-a2': mk('t-a2', 'p2', a2, 3),
+    't-a1': mk('t-a1', 'p1', a1, forceA),
+    't-a2': mk('t-a2', 'p2', a2, forceD),
   };
   if (q) {
-    st.fleets['t-c'] = mk('t-c', 'p1', q, 2, 'near'); // sits on NEAR orbit
-    st.fleets['t-d'] = mk('t-d', 'p2', n1, 2);
+    st.fleets['t-c'] = mk('t-c', 'p1', q, forceA, 'near'); // sits on NEAR orbit
+    st.fleets['t-d'] = mk('t-d', 'p2', n1, forceD);
   }
   // Issue the marching orders so they execute the moment the dev unpauses.
   st = order(st, moveFleet('p1', 't-a1', a2), st.time).state;

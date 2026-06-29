@@ -602,6 +602,14 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #testmode .tm-result .win{color:var(--grn);}
 #testmode .tm-result .draw{color:var(--amber);}
 #testmode .tm-result .tm-surv{color:var(--dim);font-size:11px;margin-top:4px;}
+#testmode .tm-frow{display:flex;align-items:center;gap:8px;margin:7px 0;}
+#testmode .tm-fic{width:18px;text-align:center;color:var(--cyan);font-size:14px;}
+#testmode .tm-fnm{flex:1;color:var(--ink);font-size:12px;}
+#testmode .tm-step{width:28px;height:28px;flex:none;border:1px solid var(--line-hi);border-radius:6px;background:transparent;
+  color:var(--cyan);font:700 15px ui-monospace,monospace;cursor:pointer;}
+#testmode .tm-step:hover{border-color:var(--cyan);background:rgba(53,214,230,.12);}
+#testmode .tm-fn{min-width:22px;text-align:center;color:#eafffb;font:700 13px ui-monospace,monospace;font-variant-numeric:tabular-nums;}
+#testmode .tm-fight:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
 @media (max-width:520px){#testmode .tm-sides{grid-template-columns:1fr;}}
 /* === /DEV TEST MODE === */
 `;
