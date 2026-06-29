@@ -41,6 +41,9 @@ import {
   FORMATION_UNITS,
   FORMATION_SLOTS,
   formationStats,
+  divisionsOf,
+  templatesOf,
+  mobilizeDivision,
   type FormationTemplate,
   type FormationUnit,
   type SetupConfig,
@@ -890,6 +893,34 @@ function artilleryRangeOf(f: Fleet | undefined): number {
     }
   }
   return r;
+}
+
+/** The "Дивизии" block for an owned planet: garrisoned divisions + a mobilise row for
+ *  the player's 3 locked templates (cost + affordability). */
+function divisionsHtml(planetId: string): string {
+  const here = Object.values(divisionsOf(s)).filter((d) => d.owner === ME && d.location === planetId);
+  let h = `<div class="sec">Дивизии</div>`;
+  if (here.length) {
+    for (const d of here) {
+      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join(' ') || '—';
+      const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
+      h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(d.name)}</b><span class="dim">${comp} · ❤${hp}</span></div>`;
+    }
+  } else {
+    h += `<div class="row dim">Нет дивизий — мобилизуй по шаблону ниже.</div>`;
+  }
+  const tpls = templatesOf(s, ME);
+  const res = s.players[ME]?.resources ?? {};
+  h += `<div class="sec">Мобилизовать дивизию</div>`;
+  for (let i = 0; i < tpls.length; i++) {
+    const t = tpls[i]!;
+    const f = formationStats(t);
+    const cost = Object.entries(f.cost).map(([r, a]) => `${a}${r[0]}`).join(' ') || '—';
+    const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
+    h += btn('mobilize', String(i), `${esc(t.name)} (${f.count}) · ${cost}`, afford && f.count > 0);
+  }
+  h += `<div class="hint">Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.</div>`;
+  return h;
 }
 
 const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
@@ -3074,6 +3105,7 @@ function panelHtml(): string {
   if (planetTab === 'ground') {
     cols.push(`<div class="sec">Ground units</div>` + unitRows(ground));
     if (mine) {
+      cols.push(divisionsHtml(p.id));
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
       cols.push(
         `<div class="sec">Ground conveyor</div>` +
@@ -4000,6 +4032,8 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
+  } else if (act === 'mobilize') {
+    playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
   } else if (act === 'orbit') {
     playerOrder(orbitFleet(ME, selFleet!, arg as 'near' | 'far'));
   } else if (act === 'bombard') {
