@@ -4664,12 +4664,20 @@ setupDivEl.addEventListener('click', (ev) => {
 // land in a later phase). Reuses the division designer's tab/slot/stats chrome.
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, abilities: [...h.abilities] }));
 let setupHeroIdx = 0; // which hero is open in the designer
-let setupHeroSlot = 0; // the slot ("bay") the next inserted module drops into
+let heldModule: string | null = null; // the module on the "cursor" (grab → place, Minecraft-style)
+const heldGhostEl = $('heldghost');
 
-/** First empty slot of the open hero, or 0 if full. */
-function firstEmptyHeroSlot(): number {
-  const e = setupHeroes[setupHeroIdx]?.abilities.indexOf(null);
-  return e !== undefined && e >= 0 ? e : 0;
+/** Put a module on the cursor (or clear with null); reflect it in the floating ghost. */
+function setHeld(id: string | null): void {
+  heldModule = id;
+  const a = id ? HERO_ABILITIES[id] : undefined;
+  heldGhostEl.textContent = a ? a.icon : '';
+  heldGhostEl.style.display = a ? 'block' : 'none';
+}
+/** Move the floating ghost to the pointer (called on grab + pointermove). */
+function moveGhost(x: number, y: number): void {
+  heldGhostEl.style.left = `${x}px`;
+  heldGhostEl.style.top = `${y}px`;
 }
 
 function renderHeroes(): void {
@@ -4677,71 +4685,81 @@ function renderHeroes(): void {
     .map((h, i) => `<button data-hero="${i}" class="${i === setupHeroIdx ? 'on' : ''}">${esc(h.name)}</button>`)
     .join('');
   const hero = setupHeroes[setupHeroIdx]!;
-  // Slot "bays" — where modules are inserted; the focused bay is the drop target.
+  const holding = heldModule != null;
+  // Equip "bays" — the drop targets (highlighted while a module is held).
   const bays = hero.abilities
     .map((id, i) => {
       const ab = id ? HERO_ABILITIES[id] : undefined;
-      const cls = `${ab ? '' : 'empty'} ${i === setupHeroSlot ? 'focused' : ''}`;
-      return `<div class="tslot ${cls}" data-aslot="${i}"><span class="ic">${ab ? ab.icon : '＋'}</span><span class="nm">${esc(ab ? ab.name : 'пусто')}</span></div>`;
+      return `<div class="tslot ${ab ? '' : 'empty'} ${holding ? 'drop' : ''}" data-aslot="${i}"><span class="ic">${ab ? ab.icon : '＋'}</span><span class="nm">${esc(ab ? ab.name : 'пусто')}</span></div>`;
     })
     .join('');
-  // Module palette — tap to insert into the focused bay (or remove if already equipped).
-  const equipped = new Set(hero.abilities.filter(Boolean) as string[]);
-  const palette = HERO_ABILITY_IDS.map((id) => {
-    const a = HERO_ABILITIES[id]!;
-    const on = equipped.has(id);
-    return (
-      `<div class="habil ${on ? 'on' : ''} ${a.live ? '' : 'planned'}" data-abil="${id}">` +
-      `<span class="ic">${a.icon}</span>` +
-      `<div class="ht"><b>${esc(a.name)}</b> <span class="hcd">КД ${a.cooldownHours}ч${a.live ? '' : ' · скоро'}</span>` +
-      `<span class="hd">${esc(a.desc)}</span></div>` +
-      `${on ? '<span class="hcheck">✓</span>' : ''}</div>`
-    );
-  }).join('');
   const info = heroLoadoutInfo(hero);
+  const syn = info.abilities.length
+    ? info.abilities
+        .map((a) => `<span class="syn">${a.icon} ${esc(a.name)} — ${esc(a.desc)}${a.live ? '' : ' <em>(скоро)</em>'}</span>`)
+        .join('')
+    : `<span class="syn none">◇ Слоты пусты — возьми модуль из инвентаря ниже.</span>`;
+  // Module "inventory" grid — tap a cell to grab it onto the cursor, then tap a hero slot.
+  const equipped = new Set(hero.abilities.filter(Boolean) as string[]);
+  const inv = HERO_ABILITY_IDS.map((id) => {
+    const a = HERO_ABILITIES[id]!;
+    const cls = `${equipped.has(id) ? 'equip' : ''} ${heldModule === id ? 'held' : ''} ${a.live ? '' : 'planned'}`;
+    return `<div class="mcell ${cls}" data-abil="${id}"><span class="ic">${a.icon}</span><span class="nm">${esc(a.name)}</span>${equipped.has(id) ? '<span class="badge">✓</span>' : ''}</div>`;
+  }).join('');
+  const heldA = heldModule ? HERO_ABILITIES[heldModule] : undefined;
+  const heldBar = heldA
+    ? `<div class="mheld active" data-drop="1">В руке: ${heldA.icon} <b>${esc(heldA.name)}</b> — тапни слот героя · <em>(тап сюда — убрать)</em></div>`
+    : `<div class="mheld">Возьми модуль из инвентаря и тапни слот героя. Тап по занятому слоту — снять модуль.</div>`;
   setupHeroEl.innerHTML =
-    `<p class="ssub">Выбери до 3 героев и вставь им модули. У каждого ${HERO_SLOTS} слота + базовая аура (+5% атака/оборона флоту героя). Тапни слот, затем модуль ниже — он встанет в слот; тап по вставленному модулю — убрать. В матче модули меняются в столице.</p>` +
+    `<p class="ssub">Выбери до 3 героев. У каждого ${HERO_SLOTS} слота под модули + базовая аура (+5% бой флоту героя). Бери модуль из инвентаря и вставляй в слот, как предмет в инвентаре. В матче модули меняются в столице.</p>` +
     `<div class="tpl-tabs">${tabs}</div>` +
     `<div class="tpl-slots heroslots">${bays}</div>` +
-    `<div class="tpl-stats"><div class="row"><span>★ Модули ${info.count}/${HERO_SLOTS}</span><span>✦ Аура +5%</span></div></div>` +
-    `<div class="hpal-h">Модули</div><div class="habils">${palette}</div>`;
+    `<div class="tpl-stats"><div class="row"><span>★ Модули ${info.count}/${HERO_SLOTS}</span><span>✦ Аура +5%</span></div>${syn}</div>` +
+    heldBar +
+    `<div class="hpal-h">Инвентарь модулей</div><div class="minv">${inv}</div>`;
 }
 
-/** Insert / remove a module. Tapping an equipped module removes it; otherwise it drops
- *  into the focused bay (or the first empty one), then focus advances to the next gap. */
-function toggleHeroAbility(id: string): void {
+/** Tap a hero slot: place the held module (swapping out any current one onto the
+ *  cursor), or — empty-handed — pick the slot's module up. No duplicate module per hero. */
+function tapHeroSlot(i: number): void {
   const hero = setupHeroes[setupHeroIdx];
   if (!hero) return;
-  const at = hero.abilities.indexOf(id);
-  if (at >= 0) {
-    hero.abilities[at] = null; // toggle off
-    setupHeroSlot = at;
-  } else {
-    let slot = setupHeroSlot;
-    if (hero.abilities[slot] != null) {
-      const empty = hero.abilities.indexOf(null);
-      slot = empty >= 0 ? empty : setupHeroSlot; // full bay → first gap, else replace focused
+  if (heldModule == null) {
+    const cur = hero.abilities[i];
+    if (cur != null) {
+      hero.abilities[i] = null;
+      setHeld(cur);
     }
-    hero.abilities[slot] = id;
-    const next = hero.abilities.indexOf(null);
-    setupHeroSlot = next >= 0 ? next : slot;
+  } else if (!hero.abilities.some((a, j) => j !== i && a === heldModule)) {
+    const prev = hero.abilities[i] ?? null;
+    hero.abilities[i] = heldModule;
+    setHeld(prev); // swap: now holding what the slot had (null = hand emptied)
   }
   renderHeroes();
 }
 
 setupHeroEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-aslot],[data-hero],[data-abil]') as HTMLElement | null;
+  const t = (ev.target as Element).closest('[data-aslot],[data-hero],[data-abil],[data-drop]') as HTMLElement | null;
   if (!t) return;
   if (t.dataset.hero !== undefined) {
     setupHeroIdx = Number(t.dataset.hero);
-    setupHeroSlot = firstEmptyHeroSlot();
+    renderHeroes();
+  } else if (t.dataset.drop !== undefined) {
+    setHeld(null); // drop the held module back to the inventory
     renderHeroes();
   } else if (t.dataset.aslot !== undefined) {
-    setupHeroSlot = Number(t.dataset.aslot); // focus this bay as the drop target
-    renderHeroes();
+    tapHeroSlot(Number(t.dataset.aslot));
   } else if (t.dataset.abil !== undefined) {
-    toggleHeroAbility(t.dataset.abil);
+    setHeld(heldModule === t.dataset.abil ? null : t.dataset.abil); // grab a copy (tap again = drop)
+    moveGhost(ev.clientX, ev.clientY);
+    renderHeroes();
   }
+});
+
+// The held module's ghost trails the pointer while carried (desktop hover; on touch it
+// sits where you grabbed it). Bound to the setup overlay — never to `document`.
+setupEl.addEventListener('pointermove', (ev) => {
+  if (heldModule != null) moveGhost(ev.clientX, ev.clientY);
 });
 
 // Setup tab switch (Старт ↔ Дивизии ↔ Герои).
@@ -4753,6 +4771,7 @@ document.querySelector('#setup .stabs')?.addEventListener('click', (ev) => {
   $('setup-start').style.display = tab === 'start' ? '' : 'none';
   setupDivEl.style.display = tab === 'div' ? '' : 'none';
   setupHeroEl.style.display = tab === 'hero' ? '' : 'none';
+  if (tab !== 'hero') setHeld(null); // never carry a held module off the Герои tab
   if (tab === 'div') renderTemplates();
   if (tab === 'hero') renderHeroes();
 });
@@ -4835,6 +4854,7 @@ function openSetup(): void {
   $('setup-start').style.display = '';
   setupDivEl.style.display = 'none';
   setupHeroEl.style.display = 'none';
+  setHeld(null);
   renderSetup();
 }
 

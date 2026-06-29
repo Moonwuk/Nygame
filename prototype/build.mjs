@@ -593,22 +593,28 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .tpl-stats .syn{display:block;color:var(--cyan);font-size:11px;margin-top:4px;line-height:1.5;}
 #setup .tpl-stats .syn.none{color:var(--dim);}
 #setup .tpl-cost{color:var(--dim);font-size:11px;margin-top:6px;}
-/* hero fitting: 2 slot "bays" + a module palette you tap to insert */
+/* hero fitting — Minecraft-inventory style: equip "bays" + a module inventory grid you
+   grab from (tap to pick onto the cursor, tap a bay to place; a ghost trails the pointer) */
 #setup-hero .heroslots{grid-template-columns:repeat(2,1fr);}
-#setup-hero .tslot.focused{border-style:solid;border-color:var(--cyan);box-shadow:0 0 12px rgba(53,214,230,.3);}
+#setup-hero .tslot.drop{border-style:solid;border-color:var(--amber);box-shadow:0 0 12px rgba(255,180,58,.35);}
 #setup-hero .hpal-h{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--grn-dim);margin:12px 0 7px;}
-#setup-hero .habils{display:flex;flex-direction:column;gap:6px;}
-#setup-hero .habil{display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border:1px solid var(--line-hi);
-  border-radius:9px;background:rgba(255,255,255,.02);cursor:pointer;}
-#setup-hero .habil:active{background:rgba(53,214,230,.08);}
-#setup-hero .habil .ic{font-size:18px;line-height:1.3;color:var(--cyan);width:20px;text-align:center;flex:none;}
-#setup-hero .habil .ht{flex:1;min-width:0;}
-#setup-hero .habil .ht b{color:#eafffb;font-size:13px;}
-#setup-hero .habil .hcd{font-size:10px;color:var(--dim);letter-spacing:.5px;}
-#setup-hero .habil .hd{display:block;color:var(--dim);font-size:11px;line-height:1.4;margin-top:2px;}
-#setup-hero .habil.on{border-color:var(--cyan);background:rgba(53,214,230,.12);}
-#setup-hero .habil.planned{opacity:.6;}
-#setup-hero .habil .hcheck{color:var(--cyan);font:700 14px ui-monospace,monospace;flex:none;}
+#setup-hero .mheld{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 4px;padding:9px 11px;
+  border:1px dashed var(--line-hi);border-radius:8px;color:var(--dim);font-size:12px;line-height:1.4;min-height:40px;}
+#setup-hero .mheld.active{border-style:solid;border-color:var(--amber);color:var(--amber);cursor:pointer;background:rgba(255,180,58,.06);}
+#setup-hero .mheld b{color:#eafffb;}
+#setup-hero .minv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+#setup-hero .mcell{position:relative;padding:11px 4px;border:1px solid var(--line-hi);border-radius:9px;
+  background:rgba(255,255,255,.02);text-align:center;cursor:pointer;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:4px;min-height:64px;}
+#setup-hero .mcell:active{background:rgba(53,214,230,.08);}
+#setup-hero .mcell .ic{font-size:21px;line-height:1;color:var(--cyan);}
+#setup-hero .mcell .nm{font:10px ui-monospace,monospace;color:var(--ink);}
+#setup-hero .mcell.equip{border-color:var(--cyan);background:rgba(53,214,230,.1);}
+#setup-hero .mcell.held{border-color:var(--amber);box-shadow:0 0 12px rgba(255,180,58,.45);}
+#setup-hero .mcell.planned{opacity:.55;}
+#setup-hero .mcell .badge{position:absolute;top:3px;right:6px;font:700 10px ui-monospace,monospace;color:var(--cyan);}
+#heldghost{position:fixed;z-index:80;pointer-events:none;display:none;transform:translate(-50%,-50%);
+  font-size:26px;filter:drop-shadow(0 0 7px rgba(53,214,230,.9));}
 
 /* === DEV TEST MODE — self-contained; delete this whole block to cut the styles === */
 #connect .tm-open{flex:none;width:100%;margin-top:10px;border-style:dashed;border-color:var(--line-hi);color:var(--cyan-dim);}
@@ -816,6 +822,8 @@ const html = `<!doctype html>
     <button id="setupcancel" class="scancel">Back</button>
   </div>
 </div>
+<!-- hero fitting: the module "on the cursor" — follows the pointer (heroes setup tab) -->
+<div id="heldghost"></div>
 <!-- DEV TEST MODE — content rendered by testmode.ts; delete this one line to cut the markup -->
 <div id="testmode"></div>
 <script>${js}</script>
