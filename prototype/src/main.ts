@@ -186,7 +186,15 @@ interface ActiveBuild {
 
 /** Escape untrusted strings before inserting into innerHTML (XSS prevention). */
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // Covers text and both attribute-quote styles. The file currently uses only
+  // double-quoted attributes (so escaping " already prevents breakout), but escaping
+  // ' too keeps esc() complete if a single-quoted attribute is ever added. (CWE-79)
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
