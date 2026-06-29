@@ -44,12 +44,18 @@ import {
   divisionsOf,
   templatesOf,
   mobilizeDivision,
+  loadDivision,
+  unloadDivision,
+  setDivisionOfficer,
+  divisionCargo,
+  fleetCargoFree,
   type FormationTemplate,
   type FormationUnit,
   type SetupConfig,
   type SeatConfig,
   type StepOut,
 } from './game';
+import { OFFICERS } from './groundcombat';
 import {
   buildingLevel,
   buildingMaxLevel,
@@ -907,7 +913,16 @@ function divisionsHtml(planetId: string): string {
     for (const d of here) {
       const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join(' ') || '—';
       const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
-      h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(d.name)}</b><span class="dim">${comp} · ❤${hp}</span></div>`;
+      const off = d.officer ? OFFICERS[d.officer]?.name : '';
+      h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(d.name)}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
+      // Officer attach / detach (a hero-like leader; bonuses tuned in groundcombat).
+      h += `<div class="row">`;
+      for (const key of Object.keys(OFFICERS)) {
+        const on = d.officer === key;
+        h += btn('officer', `${d.id}|${key}`, `${on ? '● ' : ''}${esc(OFFICERS[key]!.name)}`, !on);
+      }
+      if (d.officer) h += btn('officer', `${d.id}|`, 'Снять', true);
+      h += `</div>`;
     }
   } else {
     h += `<div class="row dim">Нет дивизий — мобилизуй по шаблону ниже.</div>`;
@@ -924,6 +939,36 @@ function divisionsHtml(planetId: string): string {
   }
   h += `<div class="hint">Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.</div>`;
   return h;
+}
+
+/** Division ⇄ hold transport for a docked fleet `f` over world `here`: load the
+ *  player's garrisoning divisions (if they fit the free hold) and unload the ones it
+ *  carries (onto an enemy world = a landing). Empty string when there's nothing to do. */
+function fleetDivisionsHtml(f: Fleet, here: Planet): string {
+  const all = Object.values(divisionsOf(s));
+  const carried = all.filter((d) => d.carriedBy === f.id);
+  const loadable = all.filter((d) => d.owner === ME && d.carriedBy == null && d.location === here.id);
+  if (!carried.length && !loadable.length) return '';
+  const free = fleetCargoFree(s, f);
+  let g = `<div class="sec">Дивизии ⇄ трюм (своб. ${free})</div>`;
+  if (loadable.length) {
+    g += `<div class="row">`;
+    for (const d of loadable) {
+      const c = divisionCargo(d);
+      g += btn('divload', d.id, `▲ ${esc(d.name)} (${c})`, c <= free);
+    }
+    g += `</div>`;
+  }
+  if (carried.length) {
+    g += `<div class="row">`;
+    for (const d of carried) {
+      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join('') || '—';
+      g += btn('divunload', d.id, `▼ ${esc(d.name)} ${comp}`, true);
+    }
+    g += `</div>`;
+  }
+  g += `<div class="hint">Загрузка — дивизия должна влезть в трюм; выгрузка высаживает её на этот мир (на чужом — захват, если не обороняется).</div>`;
+  return g;
 }
 
 const ORBIT_R: Record<'near' | 'far', number> = { near: 30, far: 50 };
@@ -3042,6 +3087,8 @@ function panelHtml(): string {
             ga += `<div class="row dim">no ground army here</div>`;
           cols.push(ga);
         }
+        const dh = fleetDivisionsHtml(f, here!); // load/unload divisions (landing on a hostile world)
+        if (dh) cols.push(dh);
         h += pcols(cols);
       }
       h += `<div class="hint">Press <b>Move</b> (command bar), then tap a destination — the fleet routes there and stops. <b>Merge…</b> tap another fleet to combine; <b>Split</b> peels ships into a new fleet.</div>`;
@@ -4049,6 +4096,15 @@ side.addEventListener('click', (ev) => {
     playerOrder(loadArmy(ME, selFleet!, arg, 1));
   } else if (act === 'unload') {
     playerOrder(unloadArmy(ME, selFleet!, arg, 1));
+  } else if (act === 'divload') {
+    playerOrder(loadDivision(ME, arg, selFleet!));
+  } else if (act === 'divunload') {
+    playerOrder(unloadDivision(ME, arg));
+  } else if (act === 'officer') {
+    const sep = arg.indexOf('|');
+    const divId = arg.slice(0, sep);
+    const key = arg.slice(sep + 1);
+    playerOrder(setDivisionOfficer(ME, divId, key || null));
   }
   lastPanelHtml = '';
   renderPanel();

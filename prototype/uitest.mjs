@@ -59,6 +59,7 @@ const getEl = (id) => {
 
 globalThis.document = {
   getElementById: getEl,
+  querySelector: () => mkEl('q'), // tab/overlay wiring uses it; a stub element is enough
   querySelectorAll: () => [],
   // The prototype bakes offscreen canvases (glow sprites, the static map layer) via
   // document.createElement('canvas') at module load — give the stub a real element
