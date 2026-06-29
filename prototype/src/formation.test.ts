@@ -15,7 +15,7 @@ describe('formationStats — division template = Σ slots × composition synergy
   it('sums the slots and excludes empty ones', () => {
     const f = formationStats(tpl(['infantry', null, null, null, null, null]));
     expect(f.count).toBe(1);
-    expect(f.byType).toEqual({ infantry: 1, tank: 0, bomber: 0 });
+    expect(f.byType).toEqual({ infantry: 1, tank: 0, bomber: 0, aa: 0 });
     expect(f.attack).toBe(8); // single infantry, no synergy
     expect(f.defense).toBe(16);
     expect(f.hp).toBe(24);

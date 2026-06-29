@@ -28,13 +28,14 @@ export type GroundRoster = Record<string, GroundProfile>;
  *  forward (AA vs bombers, tanks vs infantry). */
 export const COMBAT_WIDTH = 12;
 
-/** The default roster — a rock-paper-scissors triangle: tanks crush infantry, bombers
- *  crush tanks, infantry counter bombers (our stand-in "AA"). Defence ≥ attack (a
- *  defender's edge). Pure content — tune freely; the resolver reads these. */
+/** The default roster — a counter web over 4 types: tanks crush infantry & AA (ground),
+ *  bombers crush tanks, AA shreds bombers, infantry are the cheap generalist. Defence ≥
+ *  attack (a defender's edge). Pure content — tune freely; the resolver reads these. */
 export const GROUND_ROSTER: GroundRoster = {
-  infantry: { hp: 24, atk: { infantry: 6, tank: 3, bomber: 10 }, def: { infantry: 8, tank: 4, bomber: 12 } },
-  tank: { hp: 46, atk: { infantry: 14, tank: 7, bomber: 3 }, def: { infantry: 16, tank: 8, bomber: 4 } },
-  bomber: { hp: 18, atk: { infantry: 6, tank: 16, bomber: 5 }, def: { infantry: 5, tank: 12, bomber: 4 } },
+  infantry: { hp: 24, atk: { infantry: 6, tank: 3, bomber: 6, aa: 7 }, def: { infantry: 8, tank: 4, bomber: 8, aa: 9 } },
+  tank: { hp: 46, atk: { infantry: 14, tank: 8, bomber: 2, aa: 12 }, def: { infantry: 16, tank: 9, bomber: 3, aa: 14 } },
+  bomber: { hp: 18, atk: { infantry: 8, tank: 16, bomber: 4, aa: 6 }, def: { infantry: 9, tank: 18, bomber: 5, aa: 7 } },
+  aa: { hp: 20, atk: { infantry: 4, tank: 2, bomber: 18, aa: 5 }, def: { infantry: 5, tank: 3, bomber: 20, aa: 6 } },
 };
 
 /** An officer attached to a division — a hero-like leader granting flexible, TUNABLE

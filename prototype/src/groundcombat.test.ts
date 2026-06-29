@@ -76,11 +76,23 @@ describe('ground combat — matrix damage weighted by target composition', () =>
     expect(out.infantry).toBeCloseTo(exp); // not all 10 infantry fire — 3 are bumped to reserve
   });
 
-  it('resolves the rock-paper-scissors triangle: tank > infantry > bomber > tank', () => {
-    const six = (u: 'infantry' | 'tank' | 'bomber') => makeSide(GROUND_ROSTER, { [u]: 6 });
-    expect(resolveGround(GROUND_ROSTER, six('tank'), six('infantry')).winner).toBe('attacker'); // tanks beat infantry
-    expect(resolveGround(GROUND_ROSTER, six('bomber'), six('tank')).winner).toBe('attacker'); // bombers beat tanks
-    expect(resolveGround(GROUND_ROSTER, six('infantry'), six('bomber')).winner).toBe('attacker'); // infantry beat bombers
+  it('AA hard-counters bombers and out-ranks ground types vs air', () => {
+    const bombers = makeSide(GROUND_ROSTER, { bomber: 1 });
+    const aaDmg = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 1 }), bombers, 'atk').bomber!;
+    const tankDmg = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { tank: 1 }), bombers, 'atk').bomber!;
+    expect(aaDmg).toBeGreaterThan(tankDmg * 3); // AA dwarfs a tank against air
+    // In a mixed AA+tank army vs bombers, only the AA fire (most effective).
+    const mix = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 12, tank: 12 }), makeSide(GROUND_ROSTER, { bomber: 12 }), 'atk').bomber!;
+    const aaOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 12 }), makeSide(GROUND_ROSTER, { bomber: 12 }), 'atk').bomber!;
+    expect(mix).toBeCloseTo(aaOnly);
+  });
+
+  it('resolves the counter web: tank > infantry, bomber > tank, AA > bomber, tank > AA', () => {
+    const six = (u: 'infantry' | 'tank' | 'bomber' | 'aa') => makeSide(GROUND_ROSTER, { [u]: 6 });
+    expect(resolveGround(GROUND_ROSTER, six('tank'), six('infantry')).winner).toBe('attacker'); // tanks crush infantry
+    expect(resolveGround(GROUND_ROSTER, six('bomber'), six('tank')).winner).toBe('attacker'); // bombers kill tanks
+    expect(resolveGround(GROUND_ROSTER, six('aa'), six('bomber')).winner).toBe('attacker'); // AA shreds bombers
+    expect(resolveGround(GROUND_ROSTER, six('tank'), six('aa')).winner).toBe('attacker'); // tanks overrun AA on the ground
   });
 
   it('kills whole units as the HP pool drops, and ends with a winner', () => {

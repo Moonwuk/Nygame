@@ -138,6 +138,18 @@ export const data: GameData = parseGameData({
       buildTimeHours: 3,
       upkeep: { credits: 5 },
     },
+    // ПВО — anti-air specialist: shreds bombers, weak on the ground. (Flat stats here
+    // are the designer's rough preview; the per-type matrix in groundcombat is combat law.)
+    aa: {
+      faction: 'blue',
+      stats: { attack: 6, defense: 9, speed: 44, hp: 20, cargoSize: 2 },
+      domain: 'ground',
+      traits: ['ground'],
+      signature: 2,
+      cost: { metal: 80, credits: 40 },
+      buildTimeHours: 3,
+      upkeep: { credits: 4 },
+    },
     // The player's projection hero — cruiser-tier guns but TRIPLE the hull, and the
     // +5% attack/defense aura it grants its fleet (heroModule). Seeded, not built.
     hero: {
@@ -797,7 +809,7 @@ export interface SetupConfig {
 // menu and frozen for the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
-export const FORMATION_UNITS = ['infantry', 'tank', 'bomber'] as const;
+export const FORMATION_UNITS = ['infantry', 'tank', 'bomber', 'aa'] as const;
 export type FormationUnit = (typeof FORMATION_UNITS)[number];
 /** Slots per template, and templates per player. */
 export const FORMATION_SLOTS = 6;
@@ -838,7 +850,7 @@ export interface FormationStats {
  *  (combined-arms / entrenched / armour / air-support). Pure + deterministic; used by
  *  the menu preview and (later) by mobilisation. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
-  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0, bomber: 0 };
+  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0, bomber: 0, aa: 0 };
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -853,7 +865,7 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
-  const count = byType.infantry + byType.tank + byType.bomber;
+  const count = byType.infantry + byType.tank + byType.bomber + byType.aa;
   // Composition synergies — additive multipliers on attack / defense.
   let atkMul = 1;
   let defMul = 1;
@@ -881,6 +893,14 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
       key: 'air',
       name: 'Авиаподдержка',
       desc: '+10% атака и удар по структурам — есть бомбардировщик',
+    });
+  }
+  if (byType.aa >= 1) {
+    defMul += 0.1;
+    synergies.push({
+      key: 'airdef',
+      name: 'ПВО-зонтик',
+      desc: '+10% оборона и защита от авиации — есть ПВО',
     });
   }
   return {

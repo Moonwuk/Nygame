@@ -4380,8 +4380,8 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 let setupTplIdx = 0; // which of the 3 templates is open in the designer
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер' };
+const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈', aa: '◎' };
+const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер', aa: 'ПВО' };
 
 function renderTemplates(): void {
   const tabs = setupTemplates
