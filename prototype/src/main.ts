@@ -57,6 +57,14 @@ import {
 } from './game';
 import { OFFICERS } from './groundcombat';
 import {
+  DEFAULT_HEROES,
+  HERO_ABILITIES,
+  HERO_ABILITY_IDS,
+  HERO_SLOTS,
+  heroLoadoutInfo,
+  type HeroLoadout,
+} from './heroes';
+import {
   buildingLevel,
   buildingMaxLevel,
   estimateTravelHours,
@@ -4588,6 +4596,7 @@ const setupSlotsEl = $('setupslots');
 const setupHintEl = $('setuphint');
 const setupGoEl = $('setupgo') as HTMLButtonElement;
 const setupDivEl = $('setup-div');
+const setupHeroEl = $('setup-hero');
 
 // --- division designer (main-menu "Дивизии" tab) ----------------------------
 // The player's 3 templates, composed before the match and LOCKED once it starts.
@@ -4649,7 +4658,70 @@ setupDivEl.addEventListener('click', (ev) => {
     cycleSlot(Number(t.dataset.slot));
   }
 });
-// Setup tab switch (Старт ↔ Дивизии).
+// --- hero designer (main-menu "Герои" tab) ----------------------------------
+// The player's hero roster: up to 3 loadouts, each with HERO_SLOTS ability "modules"
+// + the implicit base aura. Composed before the match (in-match capital/respawn/refit
+// land in a later phase). Reuses the division designer's tab/slot/stats chrome.
+const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, abilities: [...h.abilities] }));
+let setupHeroIdx = 0; // which hero is open in the designer
+
+function renderHeroes(): void {
+  const tabs = setupHeroes
+    .map((h, i) => `<button data-hero="${i}" class="${i === setupHeroIdx ? 'on' : ''}">${esc(h.name)}</button>`)
+    .join('');
+  const hero = setupHeroes[setupHeroIdx]!;
+  const slots = hero.abilities
+    .map((id, i) => {
+      const ab = id ? HERO_ABILITIES[id] : undefined;
+      const ic = ab ? ab.icon : '＋';
+      const nm = ab ? ab.name : 'пусто';
+      return `<div class="tslot ${ab ? '' : 'empty'}" data-aslot="${i}"><span class="ic">${ic}</span><span class="nm">${esc(nm)}</span></div>`;
+    })
+    .join('');
+  const info = heroLoadoutInfo(hero);
+  const list = info.abilities.length
+    ? info.abilities
+        .map((a) => `<span class="syn">${a.icon} ${esc(a.name)} — ${esc(a.desc)}${a.live ? '' : ' <em>(скоро)</em>'}</span>`)
+        .join('')
+    : `<span class="syn none">◇ Нет способностей — выбери модули в слотах.</span>`;
+  setupHeroEl.innerHTML =
+    `<p class="ssub">Выбери до 3 героев. У каждого ${HERO_SLOTS} слота под способности-«модули» + базовая аура (+5% атака/оборона флоту героя). В матче модули можно сменить в столице. Тапни слот, чтобы выбрать способность.</p>` +
+    `<div class="tpl-tabs">${tabs}</div>` +
+    `<div class="tpl-slots">${slots}</div>` +
+    `<div class="tpl-stats"><div class="row"><span>★ Способности ${info.count}/${HERO_SLOTS}</span><span>✦ Аура +5%</span></div>${list}</div>`;
+}
+
+/** Cycle a hero slot through: пусто → …pool…, skipping an ability already in another
+ *  slot of the same hero (no point taking the same module twice). */
+function cycleHeroSlot(i: number): void {
+  const hero = setupHeroes[setupHeroIdx];
+  if (!hero) return;
+  const order: (string | null)[] = [null, ...HERO_ABILITY_IDS];
+  const used = new Set(hero.abilities.filter((x, j) => j !== i && x));
+  let idx = (order.indexOf(hero.abilities[i] ?? null) + 1) % order.length;
+  for (let guard = 0; guard < order.length; guard++) {
+    const cand = order[idx] ?? null;
+    if (cand === null || !used.has(cand)) {
+      hero.abilities[i] = cand;
+      break;
+    }
+    idx = (idx + 1) % order.length;
+  }
+  renderHeroes();
+}
+
+setupHeroEl.addEventListener('click', (ev) => {
+  const t = (ev.target as Element).closest('[data-aslot],[data-hero]') as HTMLElement | null;
+  if (!t) return;
+  if (t.dataset.hero !== undefined) {
+    setupHeroIdx = Number(t.dataset.hero);
+    renderHeroes();
+  } else if (t.dataset.aslot !== undefined) {
+    cycleHeroSlot(Number(t.dataset.aslot));
+  }
+});
+
+// Setup tab switch (Старт ↔ Дивизии ↔ Герои).
 document.querySelector('#setup .stabs')?.addEventListener('click', (ev) => {
   const t = (ev.target as Element).closest('[data-stab]') as HTMLElement | null;
   if (!t) return;
@@ -4657,7 +4729,9 @@ document.querySelector('#setup .stabs')?.addEventListener('click', (ev) => {
   document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === tab));
   $('setup-start').style.display = tab === 'start' ? '' : 'none';
   setupDivEl.style.display = tab === 'div' ? '' : 'none';
+  setupHeroEl.style.display = tab === 'hero' ? '' : 'none';
   if (tab === 'div') renderTemplates();
+  if (tab === 'hero') renderHeroes();
 });
 
 function renderSetupMap(): void {
@@ -4737,6 +4811,7 @@ function openSetup(): void {
   document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === 'start'));
   $('setup-start').style.display = '';
   setupDivEl.style.display = 'none';
+  setupHeroEl.style.display = 'none';
   renderSetup();
 }
 
@@ -4754,8 +4829,12 @@ function buildSetupConfig(): SetupConfig {
     const m = SEAT_META[i]!;
     seats.push({ id: m.id, name: m.name, faction: m.faction, start, ai: true });
   }
-  // Carry the player's locked division templates into the match (deep-cloned).
-  return { seats, templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })) };
+  // Carry the player's division templates + hero roster into the match (deep-cloned).
+  return {
+    seats,
+    templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
+    heroes: setupHeroes.map((h) => ({ name: h.name, abilities: [...h.abilities] })),
+  };
 }
 
 // Install a ready GameState as the live match: reset all interaction state, queues,

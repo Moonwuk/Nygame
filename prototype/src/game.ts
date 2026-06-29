@@ -56,6 +56,7 @@ import {
   type DamageTable,
   type Officer,
 } from './groundcombat';
+import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
@@ -821,6 +822,9 @@ export interface SetupConfig {
   /** The player's 3 division templates, designed in the main menu and LOCKED for the
    *  session (mobilised in-match via `formation.mobilize`). Absent → DEFAULT_TEMPLATES. */
   templates?: FormationTemplate[];
+  /** The player's hero roster (up to 3 loadouts), composed in the main menu. Absent →
+   *  DEFAULT_HEROES. In-match instances / capital / respawn land in a later phase. */
+  heroes?: HeroLoadout[];
 }
 
 // --- ground formations (HOI4-style division templates) -----------------------
@@ -1008,11 +1012,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     for (let j = i + 1; j < ids.length; j++) diplomacy[pairKey(ids[i]!, ids[j]!)] = 'peace';
   // The player's locked division templates ride into the match; the AI uses the defaults.
   const templates: Record<string, FormationTemplate[]> = {};
+  const heroRoster: Record<string, HeroLoadout[]> = {};
   for (const seat of setup.seats) {
     templates[seat.id] = !seat.ai && setup.templates ? setup.templates : DEFAULT_TEMPLATES;
+    heroRoster[seat.id] = !seat.ai && setup.heroes ? setup.heroes : DEFAULT_HEROES;
   }
-  // `divisions` / `divisionSeq` / `templates` / `groundBattles` are prototype-only state
-  // (preserved by deepClone); cast past GameState's shape.
+  // `divisions` / `divisionSeq` / `templates` / `groundBattles` / `heroRoster` are
+  // prototype-only state (preserved by deepClone); cast past GameState's shape.
   return {
     ...base,
     players,
@@ -1024,6 +1030,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     divisionSeq: 0,
     templates,
     groundBattles: {},
+    heroRoster,
   } as GameState;
 }
 
@@ -1130,6 +1137,7 @@ type DivState = GameState & {
   divisionSeq?: number;
   templates?: Record<string, FormationTemplate[]>;
   groundBattles?: Record<string, number>;
+  heroRoster?: Record<string, HeroLoadout[]>;
 };
 export function divisionsOf(state: GameState): Record<string, Division> {
   const s = state as DivState;
@@ -1143,6 +1151,10 @@ function groundBattlesOf(state: GameState): Record<string, number> {
 }
 export function templatesOf(state: GameState, playerId: string): FormationTemplate[] {
   return (state as DivState).templates?.[playerId] ?? DEFAULT_TEMPLATES;
+}
+/** A player's hero roster (the loadouts composed in the menu), or the defaults. */
+export function heroRosterOf(state: GameState, playerId: string): HeroLoadout[] {
+  return (state as DivState).heroRoster?.[playerId] ?? DEFAULT_HEROES;
 }
 
 /** Base passive restoration: +1 HP per unit per day on a friendly planet (hospitals /

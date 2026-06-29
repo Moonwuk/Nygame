@@ -785,7 +785,7 @@ const html = `<!doctype html>
 <div id="setup">
   <div class="sbox">
     <div class="stitle"><span class="dia"></span><b>SKIRMISH SETUP</b></div>
-    <div class="stabs"><button data-stab="start" class="on">Старт</button><button data-stab="div">Дивизии</button></div>
+    <div class="stabs"><button data-stab="start" class="on">Старт</button><button data-stab="div">Дивизии</button><button data-stab="hero">Герои</button></div>
     <div id="setup-start" class="spane">
       <p class="ssub">Pick your homeworld on the map, choose how many rivals join, then launch. Empty
         slots are taken by the AI — switch a slot OFF to command a smaller sector, or switch
@@ -795,6 +795,7 @@ const html = `<!doctype html>
       <div id="setupslots" class="sslots"></div>
     </div>
     <div id="setup-div" class="spane" style="display:none"></div>
+    <div id="setup-hero" class="spane" style="display:none"></div>
     <button id="setupgo" class="sgo" disabled>LAUNCH</button>
     <button id="setupcancel" class="scancel">Back</button>
   </div>
