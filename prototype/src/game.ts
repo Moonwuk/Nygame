@@ -41,6 +41,8 @@ import {
   type DomainEvent,
   type Battle,
 } from '../../packages/shared-core/src/index';
+import { canAfford, payCost } from '../../packages/shared-core/src/util/treasury';
+import { GROUND_ROSTER, makeSide, OFFICERS, type GroundStack } from './groundcombat';
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
@@ -985,7 +987,14 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
   const ids = setup.seats.map((seat) => seat.id);
   for (let i = 0; i < ids.length; i++)
     for (let j = i + 1; j < ids.length; j++) diplomacy[pairKey(ids[i]!, ids[j]!)] = 'peace';
-  return { ...base, players, planets, fleets, heroes, diplomacy };
+  // The player's locked division templates ride into the match; the AI uses the defaults.
+  const templates: Record<string, FormationTemplate[]> = {};
+  for (const seat of setup.seats) {
+    templates[seat.id] = !seat.ai && setup.templates ? setup.templates : DEFAULT_TEMPLATES;
+  }
+  // `divisions` / `divisionSeq` / `templates` are prototype-only state (preserved by
+  // deepClone); cast past GameState's shape.
+  return { ...base, players, planets, fleets, heroes, diplomacy, divisions: {}, divisionSeq: 0, templates } as GameState;
 }
 
 /** Net per-hour income for a player: production from owned, un-bombarded worlds
@@ -1060,6 +1069,129 @@ export const diplomacyModule: GameModule = {
   },
 };
 
+// --- ground divisions: mobilisation + daily restoration ----------------------
+// A division is a cohesive ground formation built from a LOCKED template. It lives in
+// `state.divisions` (a prototype-only field, preserved through deepClone), garrisons a
+// world, and passively heals there. Combat (resolveGround) + transport land next.
+
+/** A mobilised division in play. */
+export interface Division {
+  id: string;
+  owner: string;
+  name: string;
+  template: number;
+  /** Template counts per type — the regrow target (units rebuild toward this). */
+  max: Partial<Record<FormationUnit, number>>;
+  units: GroundStack[];
+  /** Optional attached officer (OFFICERS key) — its bonuses apply in battle / toughness. */
+  officer?: string;
+  /** Planet id it garrisons. (Transport will carry it as 1 slot — later.) */
+  location: string;
+}
+
+/** Prototype state extended with the division registry + per-player locked templates.
+ *  These are non-`GameState` fields, but deepClone preserves them (own-key copy). */
+type DivState = GameState & {
+  divisions?: Record<string, Division>;
+  divisionSeq?: number;
+  templates?: Record<string, FormationTemplate[]>;
+};
+export function divisionsOf(state: GameState): Record<string, Division> {
+  const s = state as DivState;
+  return (s.divisions ??= {});
+}
+export function templatesOf(state: GameState, playerId: string): FormationTemplate[] {
+  return (state as DivState).templates?.[playerId] ?? DEFAULT_TEMPLATES;
+}
+
+/** Base passive restoration: +1 HP per unit per day on a friendly planet (hospitals /
+ *  hero / officer bonuses raise it — later). */
+export const REGEN_PER_UNIT_PER_DAY = 1;
+
+/** Per-unit max HP for a division's type, including any attached officer's toughness. */
+function unitMaxHp(div: Division, type: FormationUnit): number {
+  const base = GROUND_ROSTER[type]?.hp ?? 1;
+  const bonus = div.officer ? (OFFICERS[div.officer]?.hp ?? 0) : 0;
+  return base * (1 + bonus);
+}
+
+/** Heal + regrow a division toward its template `max` over `days` (per type, capped at
+ *  full strength). A fully-dead TYPE regrows; the division as a whole is removed only
+ *  when wiped in battle (handled there) — regen never resurrects a 0-unit division. */
+export function regenDivision(div: Division, days: number): void {
+  if (days <= 0) return;
+  const byType: Record<string, GroundStack> = {};
+  for (const s of div.units) byType[s.type] = s;
+  const next: GroundStack[] = [];
+  for (const type of Object.keys(div.max) as FormationUnit[]) {
+    const maxCount = div.max[type] ?? 0;
+    if (maxCount <= 0) continue;
+    const hpEach = unitMaxHp(div, type);
+    const maxHp = maxCount * hpEach;
+    const cur = byType[type]?.hp ?? 0;
+    const healed = Math.min(maxHp, cur + REGEN_PER_UNIT_PER_DAY * maxCount * days);
+    const count = healed <= 0 ? 0 : Math.ceil(healed / hpEach);
+    if (count > 0) next.push({ type, count, hp: healed, hpEach });
+  }
+  div.units = next;
+}
+
+export const divisionModule: GameModule = {
+  id: 'division',
+  version: '0.1.0',
+  setup(api) {
+    // Mobilise a division by template on an owned world: pay the summed slot cost, the
+    // formation garrisons the world at full strength. (Build time / transport — later.)
+    api.onAction('division.mobilize', (action, h) => {
+      const p = action.payload as { planetId?: string; template?: number };
+      if (typeof p?.planetId !== 'string' || typeof p?.template !== 'number') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const planet = h.state.planets[p.planetId];
+      if (!planet) return h.reject('E_NO_PLANET');
+      if (planet.owner !== action.playerId) return h.reject('E_FORBIDDEN');
+      const tpl = templatesOf(h.state, action.playerId)[p.template];
+      if (!tpl) return h.reject('E_NO_TEMPLATE');
+      const stats = formationStats(tpl);
+      if (stats.count <= 0) return h.reject('E_EMPTY_TEMPLATE');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      if (!canAfford(player.resources, stats.cost)) return h.reject('E_NO_FUNDS');
+      payCost(player.resources, stats.cost);
+      const divs = divisionsOf(h.state);
+      const ds = h.state as DivState;
+      const seq = (ds.divisionSeq ?? 0) + 1;
+      ds.divisionSeq = seq;
+      const id = `div:${action.playerId}:${seq}`;
+      divs[id] = {
+        id,
+        owner: action.playerId,
+        name: tpl.name,
+        template: p.template,
+        max: { ...stats.byType },
+        units: makeSide(GROUND_ROSTER, stats.byType),
+        location: p.planetId,
+      };
+      h.emit('division.mobilized', { id, owner: action.playerId, planetId: p.planetId, template: p.template });
+    });
+
+    // Daily restoration: +1 HP/unit/day, only on a friendly planet (not in transit/hold).
+    api.on('time.advanced', (event, h) => {
+      const { from, to } = event.payload as { from: number; to: number };
+      const span = to - from;
+      if (span <= 0) return;
+      const days = (span / DAY) * (h.ctx.config?.timeScale ?? 1);
+      if (days <= 0) return;
+      for (const div of Object.values(divisionsOf(h.state))) {
+        const planet = h.state.planets[div.location];
+        if (!planet || planet.owner !== div.owner) continue; // own planet only
+        if (!div.units.some((s) => s.count > 0)) continue; // wiped → gone, never resurrected
+        regenDivision(div, days);
+      }
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -1074,6 +1206,7 @@ export const MODULES: GameModule[] = [
   victoryModule, // terminal match state from authoritative state (domination / elimination / score / timeout)
   fleetLaunchModule,
   diplomacyModule, // peace-by-default + declare-war action (combat reads state.diplomacy)
+  divisionModule, // ground divisions: mobilise from a template + daily restoration
 ];
 
 export const kernel = createKernel(MODULES);
@@ -1167,6 +1300,9 @@ export const engageFleet = (playerId: string, fleetId: string, targetId: string)
 /** Declare war on (or otherwise re-stance) another commander. */
 export const declareWar = (playerId: string, target: string, stance: DiplomaticStance = 'war') =>
   act(playerId, 'diplomacy.declare', { target, stance });
+/** Mobilise division template `template` (0-based) on your world `planetId`. */
+export const mobilizeDivision = (playerId: string, planetId: string, template: number) =>
+  act(playerId, 'division.mobilize', { planetId, template });
 
 /** Can `mover`'s fleets enter/traverse a province owned by `owner`? Neutral, your own,
  *  and players you're at war / pact / alliance with are passable; a player you're at
