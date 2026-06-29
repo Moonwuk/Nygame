@@ -353,6 +353,18 @@ export interface Hero {
   cooldowns: Record<string, number>;
   /** False while the hero is dead and awaiting respawn; absent/true ⇒ alive. */
   alive?: boolean;
+  /** Rarity tier (e.g. `common` | `rare` | `legendary` | `main`). Drives the client
+   *  roster's module-slot count; the core carries it but does not enforce slots. */
+  grade?: string;
+  /** Equipped ability "modules", one per grade slot (`null` = empty). Carried with the
+   *  hero; per-module gating/effects are a later brick. */
+  abilities?: (string | null)[];
+  /** Respawn anchor — the owner's capital. A slain hero re-forms here if still held;
+   *  absent ⇒ the core falls back to the hero's last node, then any owned world. */
+  home?: PlanetId;
+  /** The fleet this hero commands (its ship) while deployed; cleared on death. Lets a
+   *  death be attributed to the right hero when several share an owner. */
+  fleetId?: FleetId;
 }
 
 /** A temporary lane a hero opened: a real, routable graph edge between two nodes for

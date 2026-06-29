@@ -214,31 +214,48 @@ export const heroModule: GameModule = {
     });
 
     // The hero went down (its ship was destroyed) → start the respawn timer once.
-    // `unit.died` carries the owner (the fleet may already be gone by drain time).
+    // `unit.died` carries the dead stack's `fleetId` and `owner` (the fleet may already
+    // be gone by drain time). Attribute the death to the hero commanding THAT ship, so
+    // it's right when several heroes share an owner; fall back to the owner's hero when
+    // the ship link isn't recorded (older saves / a hero set up without a fleetId).
     api.on('unit.died', (event, h) => {
-      const { unit, owner } = (event.payload ?? {}) as { unit?: string; owner?: string };
-      if (unit !== HERO_UNIT || typeof owner !== 'string') return;
-      const hero = heroOf(h.state, owner);
+      const { unit, fleetId, owner } = (event.payload ?? {}) as {
+        unit?: string;
+        fleetId?: string;
+        owner?: string;
+      };
+      if (unit !== HERO_UNIT) return;
+      const hero =
+        (typeof fleetId === 'string'
+          ? Object.values(h.state.heroes ?? {}).find((x) => x.fleetId === fleetId)
+          : undefined) ?? (typeof owner === 'string' ? heroOf(h.state, owner) : undefined);
       if (!hero || hero.alive === false) return; // no hero entity, or already respawning
       hero.alive = false;
+      delete hero.fleetId; // its ship is gone
       const respawnAt = after(h, HERO_RESPAWN_HOURS);
       hero.cooldowns = hero.cooldowns ?? {};
       hero.cooldowns.respawn = respawnAt;
-      h.schedule(respawnAt, 'hero.respawn', { owner });
-      h.emit('hero.died', { owner, at: h.ctx.now });
+      h.schedule(respawnAt, 'hero.respawn', { heroId: hero.id });
+      h.emit('hero.died', { owner: hero.owner, heroId: hero.id, at: h.ctx.now });
     });
 
-    // Respawn: the hero re-forms as a fresh one-ship fleet at its home world (or any
-    // world the player still holds). With no territory left it stays dead.
+    // Respawn: the hero re-forms as a fresh one-ship fleet at its capital (`home`) if
+    // still held, else its last node, else any world the player holds. Homeless ⇒ stays
+    // dead (likely being eliminated).
     api.on('hero.respawn', (event, h) => {
-      const { owner } = (event.payload ?? {}) as { owner?: string };
-      if (typeof owner !== 'string') return;
-      const hero = heroOf(h.state, owner);
+      const { heroId } = (event.payload ?? {}) as { heroId?: string };
+      if (typeof heroId !== 'string') return;
+      const hero = h.state.heroes?.[heroId];
       if (!hero || hero.alive) return;
-      const home = h.state.planets[hero.location]?.owner === owner ? hero.location : undefined;
+      const owner = hero.owner;
+      const owned = (id: PlanetId | undefined): id is PlanetId =>
+        id !== undefined && h.state.planets[id]?.owner === owner;
       const at =
-        home ?? Object.keys(h.state.planets).sort().find((id) => h.state.planets[id]?.owner === owner);
-      if (at === undefined) return; // homeless → remains dead (likely being eliminated)
+        [hero.home, hero.location].find(owned) ??
+        Object.keys(h.state.planets)
+          .sort()
+          .find((id) => h.state.planets[id]?.owner === owner);
+      if (at === undefined) return;
       const seq = (h.state.heroSeq ?? 0) + 1;
       h.state.heroSeq = seq;
       const fleetId = `hero:${owner}:${seq}`;
@@ -254,7 +271,8 @@ export const heroModule: GameModule = {
       h.state.fleets[fleetId] = newFleet;
       hero.alive = true;
       hero.location = at;
-      h.emit('hero.respawned', { owner, fleetId, at });
+      hero.fleetId = fleetId;
+      h.emit('hero.respawned', { owner, heroId, fleetId, at });
     });
   },
 };

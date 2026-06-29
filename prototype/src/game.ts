@@ -1001,9 +1001,24 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       ],
       [['marine', 3]],
     );
-    // The first hero is a projection of the commander, named by their nick.
+    // The deployed hero is a projection of the commander, named by their nick: the MAIN
+    // (grade-`main`) roster hero, flagship of the home fleet. It respawns at the capital
+    // (`home`), which defaults to the homeworld and is re-designatable in-match.
+    const roster = !seat.ai && setup.heroes ? setup.heroes : DEFAULT_HEROES;
+    const mainHero = roster.find((x) => x.grade === 'main') ?? roster[0];
     const heroId = `hero:${seat.id}`;
-    heroes[heroId] = { id: heroId, owner: seat.id, name: seat.name, location: seat.start, cooldowns: {}, alive: true };
+    heroes[heroId] = {
+      id: heroId,
+      owner: seat.id,
+      name: seat.name,
+      location: seat.start,
+      cooldowns: {},
+      alive: true,
+      grade: mainHero?.grade ?? 'main',
+      abilities: mainHero ? [...mainHero.abilities] : [],
+      home: seat.start,
+      fleetId: `${seat.id}-1`,
+    };
   }
   // Everyone starts at PEACE (not the core's war default): no marching through another
   // commander's space and no combat until war is declared (diplomacy.declare).
@@ -1585,6 +1600,10 @@ export const capitalModule: GameModule = {
       if (planet.owner !== action.playerId) return h.reject('E_FORBIDDEN');
       if (!isInhabited(planet)) return h.reject('E_NOT_INHABITED'); // a capital must be a real world
       capitalsOf(h.state)[action.playerId] = p.planetId;
+      // The capital is the hero respawn anchor: repoint this player's heroes' `home`.
+      for (const hero of Object.values(h.state.heroes ?? {})) {
+        if (hero.owner === action.playerId) hero.home = p.planetId;
+      }
       h.emit('capital.designated', { owner: action.playerId, planetId: p.planetId });
     });
   },

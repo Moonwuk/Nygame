@@ -19,6 +19,18 @@ describe('capital — designatable home, defaults to the homeworld', () => {
     expect(capitalOf(r.state, 'p1')).toBe(w.id);
   });
 
+  it('repoints the owner heroes home at the new capital (hero respawn anchor)', () => {
+    const s = newGame();
+    const home0 = capitalOf(s, 'p1');
+    const hero0 = Object.values(s.heroes ?? {}).find((h) => h.owner === 'p1');
+    expect(hero0?.home).toBe(home0); // seeded at the homeworld
+    const w = Object.values(s.planets).find((p) => p.kind === 'planet' && p.owner === null)!;
+    w.owner = 'p1';
+    const r = order(s, designateCapital('p1', w.id), 0);
+    const hero = Object.values(r.state.heroes ?? {}).find((h) => h.owner === 'p1');
+    expect(hero?.home).toBe(w.id); // follows the capital
+  });
+
   it('rejects a foreign world, a non-inhabited world, or a missing one', () => {
     const s = newGame();
     expect(order(s, designateCapital('p1', ENEMY), 0).error).toBe('E_FORBIDDEN'); // p2's world

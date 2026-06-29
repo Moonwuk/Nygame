@@ -317,6 +317,24 @@ describe('hero — fleet combat aura (+5%)', () => {
 });
 
 describe('hero — death and respawn', () => {
+  // A one-shot enemy: defense 150 return-fire flattens the hero's 120 hp in round 1.
+  const killerData: GameData = parseGameData({
+    version: '0.1.0',
+    resources: ['metal'],
+    units: {
+      hero: { faction: 'x', stats: { attack: 0, defense: 0, speed: 5, hp: 120 }, line: 'front', traits: ['hero'] },
+      killer: { faction: 'x', stats: { attack: 150, defense: 150, speed: 5, hp: 300 }, line: 'front' },
+    },
+    factions: {},
+    buildings: {},
+    events: {},
+    sectorKinds: { planet: { capturable: true, buildable: true, orbit: true } },
+    planetTypes: { terran: { scoreValue: 0 } },
+  });
+  const kctx = (now: number): Context => ({ now, data: killerData });
+  const kernel = createKernel([heroModule, combatModule, arriveModule]);
+  const heroUnit = (f: Fleet) => f.units.some((u) => u.unit === 'hero' && u.count > 0);
+
   function arena(): GameState {
     const s = createInitialState({ seed: 'respawn', version: { data: '0.1.0', manifest: '1' } });
     return {
@@ -331,46 +349,57 @@ describe('hero — death and respawn', () => {
         F: { id: 'F', owner: 'p1', location: 'P', movement: null, traits: [], units: [{ unit: 'hero', count: 1 }] },
         D: { id: 'D', owner: 'p2', location: 'P', movement: null, traits: [], units: [{ unit: 'killer', count: 1 }] },
       },
-      heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', name: 'Ada', location: 'HOME', cooldowns: {}, alive: true } },
+      heroes: {
+        'hero:p1': { id: 'hero:p1', owner: 'p1', name: 'Ada', location: 'HOME', home: 'HOME', fleetId: 'F', cooldowns: {}, alive: true },
+      },
     };
   }
 
   it('kills the hero, schedules a respawn, then re-forms it at home', () => {
-    // A one-shot enemy: defense 150 return-fire flattens the hero's 120 hp in round 1.
-    const killerData: GameData = parseGameData({
-      version: '0.1.0',
-      resources: ['metal'],
-      units: {
-        hero: { faction: 'x', stats: { attack: 0, defense: 0, speed: 5, hp: 120 }, line: 'front', traits: ['hero'] },
-        killer: { faction: 'x', stats: { attack: 150, defense: 150, speed: 5, hp: 300 }, line: 'front' },
-      },
-      factions: {},
-      buildings: {},
-      events: {},
-      sectorKinds: { planet: { capturable: true, buildable: true, orbit: true } },
-      planetTypes: { terran: { scoreValue: 0 } },
-    });
-    const kctx = (now: number): Context => ({ now, data: killerData });
-    const kernel = createKernel([heroModule, combatModule, arriveModule]);
-
     const started = okApply(kernel.applyAction(arena(), act('arrive', 'p1', { fleetId: 'F' }), kctx(0)));
     const dead = okAdvance(kernel.advanceTo(started.state, kctx(2 * HOUR)));
 
-    // The hero died: entity flagged dead, a respawn is scheduled, no hero unit remains.
+    // The hero died: entity flagged dead, its ship link cleared, a respawn scheduled, no hero unit remains.
     expect(heroOf(dead.state, 'p1')?.alive).toBe(false);
+    expect(heroOf(dead.state, 'p1')?.fleetId).toBeUndefined();
     expect(dead.state.scheduled.some((e) => e.type === 'hero.respawn')).toBe(true);
-    expect(
-      Object.values(dead.state.fleets).some((f) => f.units.some((u) => u.unit === 'hero')),
-    ).toBe(false);
+    expect(Object.values(dead.state.fleets).some(heroUnit)).toBe(false);
     expect(dead.events.map((e) => e.type)).toContain('hero.died');
 
-    // After the 24h cooldown the hero re-forms as a fresh fleet at HOME.
+    // After the 24h cooldown the hero re-forms as a fresh fleet at HOME, re-linked to it.
     const reborn = okAdvance(kernel.advanceTo(dead.state, kctx(30 * HOUR)));
-    expect(heroOf(reborn.state, 'p1')?.alive).toBe(true);
-    const heroFleet = Object.values(reborn.state.fleets).find(
-      (f) => f.owner === 'p1' && f.units.some((u) => u.unit === 'hero' && u.count > 0),
-    );
+    const hero = heroOf(reborn.state, 'p1');
+    expect(hero?.alive).toBe(true);
+    const heroFleet = Object.values(reborn.state.fleets).find((f) => f.owner === 'p1' && heroUnit(f));
     expect(heroFleet?.location).toBe('HOME');
+    expect(hero?.fleetId).toBe(heroFleet?.id); // re-linked to its new ship
     expect(reborn.events.map((e) => e.type)).toContain('hero.respawned');
+  });
+
+  it('respawns at the capital (home) even when another owned world sorts first', () => {
+    const s = createInitialState({ seed: 'cap-respawn', version: { data: '0.1.0', manifest: '1' } });
+    const st: GameState = {
+      ...s,
+      players: { p1: player('p1'), p2: player('p2') },
+      planets: {
+        P: planet('P', null, 0, 0, [], 'planet'), // battlefield (unowned)
+        AAA: planet('AAA', 'p1', 50, 0, [], 'planet'), // owned, sorts first alphabetically
+        ZED: planet('ZED', 'p1', 60, 0, [], 'planet'), // owned, the designated capital
+      },
+      fleets: {
+        F: { id: 'F', owner: 'p1', location: 'P', movement: null, traits: [], units: [{ unit: 'hero', count: 1 }] },
+        D: { id: 'D', owner: 'p2', location: 'P', movement: null, traits: [], units: [{ unit: 'killer', count: 1 }] },
+      },
+      heroes: {
+        'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'P', home: 'ZED', fleetId: 'F', cooldowns: {}, alive: true },
+      },
+    };
+    const started = okApply(kernel.applyAction(st, act('arrive', 'p1', { fleetId: 'F' }), kctx(0)));
+    const dead = okAdvance(kernel.advanceTo(started.state, kctx(2 * HOUR)));
+    const reborn = okAdvance(kernel.advanceTo(dead.state, kctx(30 * HOUR)));
+    // home ('ZED') wins over the alphabetically-first owned world ('AAA').
+    const heroFleet = Object.values(reborn.state.fleets).find((f) => f.owner === 'p1' && heroUnit(f));
+    expect(heroFleet?.location).toBe('ZED');
+    expect(heroOf(reborn.state, 'p1')?.location).toBe('ZED');
   });
 });
