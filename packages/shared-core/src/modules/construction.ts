@@ -420,5 +420,37 @@ export const constructionModule: GameModule = {
       }
       damageBuildings(h, planet, p.power, p.owner ?? planet.owner);
     });
+
+    // Hospital healing: regenerate garrison HP each tick proportional to the
+    // planet's total `healRate` from standing buildings.
+    api.on('time.advanced', (event, h) => {
+      const { from, to } = event.payload as { from: number; to: number };
+      const span = to - from;
+      if (span <= 0) return;
+      const scale = timeScaleOf(h.ctx);
+      const hours = (span / MS_PER_HOUR) * scale;
+      const data = h.ctx.data;
+
+      for (const planet of Object.values(h.state.planets)) {
+        if (!planet || planet.owner === null || planet.garrison.length === 0) continue;
+        let totalHealRate = 0;
+        for (const b of planet.buildings) {
+          if (b.hp <= 0) continue; // destroyed building contributes nothing
+          const def = data.buildings[b.type];
+          if (def) totalHealRate += buildingLevel(def, b.level).healRate;
+        }
+        if (totalHealRate <= 0) continue;
+        for (const stack of planet.garrison) {
+          const unitDef = data.units[stack.unit];
+          if (!unitDef) continue;
+          const fullHp = stack.count * unitDef.stats.hp;
+          const currentHp = stack.hp ?? fullHp;
+          if (currentHp >= fullHp) continue;
+          const healed = totalHealRate * hours * fullHp;
+          const newHp = Math.min(fullHp, currentHp + healed);
+          stack.hp = newHp >= fullHp ? undefined : newHp;
+        }
+      }
+    });
   },
 };

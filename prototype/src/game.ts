@@ -159,6 +159,13 @@ export const data: GameData = parseGameData({
         { cost: { metal: 340, credits: 160 }, buildTimeHours: 8, hp: 85, defenseBonus: 0.6 },
       ],
     },
+    hospital: {
+      name: 'Field Hospital',
+      cost: { metal: 160, credits: 60 },
+      buildTimeHours: 8,
+      hp: 20,
+      healRate: 0.15,
+    },
   },
   events: {},
   sectors: {
