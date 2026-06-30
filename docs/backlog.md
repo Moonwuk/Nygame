@@ -190,12 +190,13 @@
 > выпуск десанта — авто, когда носитель в радиусе цели (опираемся на существующий
 > `fleetLaunch`/rally-концепт). Носитель = ключевой стратегический юнит.
 >
-> **⚠ Сверить с `squadrons-roadmap.md`** (влит из `designer-role-discussion`): там
-> детальный план эскадрилий/авианосцев, но **модель расходится** с этим блоком —
-> отдельный ангар `carrierCapacity` (vs наш общий трюм `cargoSize`) и `strikeRange`+
-> патруль+топливо (vs наш «выпуск-в-радиусе»). **Свести в ОДНУ модель** перед сборкой
-> SHIP-7..11. Парные доки: `missiles-roadmap.md`, `shields-roadmap.md`,
-> `command-chains-roadmap.md`, `mechanics-roadmap.md` (индекс).
+> **✔ Сведено с `squadrons-roadmap.md`** (детальный план эскадрилий/авианосцев). Модель
+> едина: **(1) общий трюм** (`cargoCapacity`/`cargoSize`, полиморфный груз: дивизия |
+> эскадрилья | десант) — **без** отдельного `carrierCapacity`-ангара; **(2) вылет юнитом**
+> — эскадрилья выходит из трюма отдельным короткодальним флотом и дерётся обычным
+> `movement`/`combat` (ПВО `aaDamage` бьёт штатно), **не** проекция-удар. Десантная
+> эскадрилья (SHIP-7) = частный тип `squadron`: вылет → конверсия в дивизию. Парные доки:
+> `missiles-roadmap.md`, `shields-roadmap.md`, `command-chains-roadmap.md`, `mechanics-roadmap.md`.
 
 - **SHIP-1** ✅ `[proto]` Модель: `prototype/src/ships.ts` — корпуса (`SHIP_HULLS`: cruiser 3 ·
   siege 2 · scout 1 · dropship 2), модули (`SHIP_MODULES`: батарея/броня/щит/двигатель/
