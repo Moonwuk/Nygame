@@ -334,7 +334,7 @@ export const data: GameData = parseGameData({
  *   core       — terrain key in `data.sectors` (speed/HP bonuses) this type maps to
  *   capturable — can be owned/taken (empty space can't — only traversed)
  *   buildable  — structures can be raised here
- *   orbit      — has the near/far orbital layer (cities, fortresses)
+ *   orbit      — has the orbital layer; fleets can station in orbit (cities, fortresses)
  *   color      — map accent for the type
  */
 export interface SectorType {
@@ -1733,7 +1733,8 @@ export const moveFleetEdge = (
 ) => act(playerId, 'fleet.move', { fleetId, toEdge: edge });
 export const stopFleet = (playerId: string, fleetId: string) =>
   act(playerId, 'fleet.stop', { fleetId });
-export const orbitFleet = (playerId: string, fleetId: string, orbit: 'near' | 'far') =>
+// A single orbit (GDD §7.4): the only value is 'near' — "enter orbit".
+export const orbitFleet = (playerId: string, fleetId: string, orbit: 'near' = 'near') =>
   act(playerId, 'fleet.orbit', { fleetId, orbit });
 export const assaultFleet = (playerId: string, fleetId: string) =>
   act(playerId, 'fleet.assault', { fleetId });

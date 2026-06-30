@@ -41,7 +41,7 @@ function fleet(
   owner: string,
   location: string | null,
   list: Array<[string, number]>,
-  opts: { orbit?: 'near' | 'far'; bombarding?: boolean } = {},
+  opts: { orbit?: 'near'; bombarding?: boolean } = {},
 ): Fleet {
   return {
     id,
@@ -98,16 +98,6 @@ function bombard(fleetId: string, on: boolean, playerId = 'p1'): Action {
     issuedAt: 0,
   };
 }
-function orbitAction(fleetId: string, o: 'near' | 'far', playerId = 'p1'): Action {
-  return {
-    id: `s:${playerId}:2`,
-    type: 'fleet.orbit',
-    playerId,
-    payload: { fleetId, orbit: o },
-    issuedAt: 0,
-  };
-}
-
 const arrivalModule: GameModule = {
   id: 'test-arrival',
   version: '1.0.0',
@@ -142,10 +132,10 @@ describe('combat — fleet.bombard action', () => {
     expect(r.state.fleets.F?.bombarding).toBe(false);
   });
 
-  it('rejects bombardment from the far orbit', () => {
+  it('rejects bombardment when the fleet is not stationed in orbit', () => {
     const kernel = createKernel([combatModule]);
     const st = baseState(
-      [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'far' })],
+      [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: undefined })],
       [planet('P', 'p2')],
     );
     expect(rej(kernel.applyAction(st, bombard('F', true), ctx(0)))).toBe('E_WRONG_ORBIT');
@@ -209,14 +199,6 @@ describe('combat — fleet.bombard action', () => {
     expect(rej(kernel.applyAction(st, bad, ctx(0)))).toBe('E_BAD_PAYLOAD');
   });
 
-  it('moving to far orbit auto-disables bombardment', () => {
-    const kernel = createKernel([combatModule]);
-    const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near', bombarding: true });
-    const st = baseState([f], [planet('P', 'p2')]);
-    const r = okApply(kernel.applyAction(st, orbitAction('F', 'far'), ctx(0)));
-    expect(r.state.fleets.F?.bombarding).toBe(false);
-    expect(r.state.fleets.F?.orbit).toBe('far');
-  });
 });
 
 describe('combat — orbital AA (time.advanced)', () => {
@@ -294,30 +276,6 @@ describe('combat — stalemate safety valve', () => {
     expect((resolved?.payload as { winner: string | null }).winner).toBeNull();
     // After the stalemate resolves, the attacker re-engages (both survived) so a
     // new battle starts — we only assert the stalemate resolution event fired.
-  });
-});
-
-describe('combat — fleet.orbit action validations', () => {
-  it('rejects with E_BAD_PAYLOAD for invalid orbit value', () => {
-    const kernel = createKernel([combatModule]);
-    const st = baseState(
-      [fleet('F', 'p1', 'P', [['fighter', 1]], { orbit: 'far' })],
-      [planet('P', 'p2')],
-    );
-    const bad: Action = {
-      id: 's:p1:1',
-      type: 'fleet.orbit',
-      playerId: 'p1',
-      payload: { fleetId: 'F', orbit: 'low' },
-      issuedAt: 0,
-    };
-    expect(rej(kernel.applyAction(st, bad, ctx(0)))).toBe('E_BAD_PAYLOAD');
-  });
-
-  it('rejects with E_NO_FLEET for a non-existent fleet', () => {
-    const kernel = createKernel([combatModule]);
-    const st = baseState([], [planet('P', 'p2')]);
-    expect(rej(kernel.applyAction(st, orbitAction('ZZZ', 'near'), ctx(0)))).toBe('E_NO_FLEET');
   });
 });
 

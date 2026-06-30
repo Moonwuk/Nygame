@@ -65,7 +65,7 @@ function fleet(
   owner: string,
   location: string | null,
   units: Array<[string, number]>,
-  opts: { orbit?: 'near' | 'far'; bombarding?: boolean; battleId?: string } = {},
+  opts: { orbit?: 'near'; bombarding?: boolean; battleId?: string } = {},
 ): Fleet {
   return {
     id,
@@ -135,13 +135,13 @@ describe('orbital — bombardment toggle (fleet.bombard)', () => {
     expect(r.events.map((e) => e.type)).toContain('fleet.bombard');
   });
 
-  it('rejects bombarding from the far orbit, your own world, or with no ships', () => {
+  it('rejects bombarding when not in orbit, your own world, or with no ships', () => {
     const kernel = createKernel([combatModule]);
-    const far = stateWith({
+    const notInOrbit = stateWith({
       planets: [planet('P', 'p2')],
-      fleets: [fleet('F', 'p1', 'P', [['cruiser', 1]], { orbit: 'far' })],
+      fleets: [fleet('F', 'p1', 'P', [['cruiser', 1]], { orbit: undefined })],
     });
-    expect(errCode(kernel.applyAction(far, bombard('F', true), ctx))).toBe('E_WRONG_ORBIT');
+    expect(errCode(kernel.applyAction(notInOrbit, bombard('F', true), ctx))).toBe('E_WRONG_ORBIT');
     const own = stateWith({
       planets: [planet('P', 'p1')],
       fleets: [fleet('F', 'p1', 'P', [['cruiser', 1]], { orbit: 'near' })],
@@ -228,16 +228,6 @@ describe('orbital — anti-air (orbital AA)', () => {
     const r = okAdvance(kernel.advanceTo(st, at(2 * HOUR))); // 28 × 2 = 56 ≥ 40
     expect(r.state.fleets.E).toBeUndefined();
     expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
-  });
-
-  it('does not reach a fleet on the far orbit', () => {
-    const kernel = createKernel([combatModule]);
-    const st = stateWith({
-      planets: [planet('P', 'p1', { garrison: [['aa', 2]] })],
-      fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'far' })],
-    });
-    const r = okAdvance(kernel.advanceTo(st, at(2 * HOUR)));
-    expect(r.state.fleets.E?.units[0]?.count).toBe(1); // untouched
   });
 
   it('holds its fire while a ground assault keeps it busy', () => {

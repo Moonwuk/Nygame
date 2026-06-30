@@ -18,7 +18,7 @@ function fleet(
   id: string,
   owner: string,
   location: string,
-  orbit?: 'near' | 'far',
+  orbit?: 'near',
   bombarding?: boolean,
 ): Fleet {
   return {
@@ -58,8 +58,8 @@ describe('isBombarded', () => {
     expect(isBombarded(st, 'P')).toBe(false);
   });
 
-  it('returns false when bombarding fleet is in far orbit', () => {
-    const st = stateWith([planet('P', 'p1')], [fleet('F', 'p2', 'P', 'far', true)]);
+  it('returns false when the bombarding fleet is in transit (not in orbit)', () => {
+    const st = stateWith([planet('P', 'p1')], [fleet('F', 'p2', 'P', undefined, true)]);
     expect(isBombarded(st, 'P')).toBe(false);
   });
 
@@ -85,8 +85,8 @@ describe('isBombarded', () => {
     const st = stateWith(
       [planet('P', 'p1')],
       [
-        fleet('F1', 'p2', 'P', 'far', true), // wrong orbit
-        fleet('F2', 'p2', 'P', 'near', true), // hostile near-orbit bombardment
+        fleet('F1', 'p2', 'P', undefined, true), // in transit — not in orbit
+        fleet('F2', 'p2', 'P', 'near', true), // hostile, stationed in orbit, bombarding
       ],
     );
     expect(isBombarded(st, 'P')).toBe(true);

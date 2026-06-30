@@ -13,7 +13,7 @@ function visibleBase(state: GameState, player: string, data: GameData): GameStat
   return base as GameState;
 }
 
-function orbit(player: string, seq: number, to: 'near' | 'far'): Action {
+function orbit(player: string, seq: number, to: 'near'): Action {
   return {
     id: `soak:${player}:${seq}`,
     type: 'fleet.orbit',
@@ -71,7 +71,7 @@ function runClient(
 describe('soak: concurrent clients converge on their authoritative view', () => {
   it('serializes N×K concurrent actions and each client reconstructs its own visible state', async () => {
     const players = ['green', 'red', 'blue', 'gold'];
-    const K = 6; // even ⇒ each client's last action (index K-1, odd) sets orbit 'near'
+    const K = 6; // K "enter orbit" actions per client (a single orbit; all end 'near')
     const total = players.length * K;
     const data = loadShippedData();
     const room = createDevMatch(data, { players, now: () => 1000, time: 0 });
@@ -81,7 +81,7 @@ describe('soak: concurrent clients converge on their authoritative view', () => 
       const finals = await Promise.all(
         players.map((player) => {
           const actions: Action[] = [];
-          for (let k = 0; k < K; k++) actions.push(orbit(player, k, k % 2 === 0 ? 'far' : 'near'));
+          for (let k = 0; k < K; k++) actions.push(orbit(player, k, 'near'));
           return runClient(url, player, actions, total);
         }),
       );

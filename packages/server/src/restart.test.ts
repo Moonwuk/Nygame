@@ -11,7 +11,7 @@ function nextMessage(ws: WebSocket): Promise<ServerMessage> {
   return once(ws, 'message').then(([data]) => JSON.parse(String(data)) as ServerMessage);
 }
 
-function orbit(playerId: string, fleetId: string, to: 'near' | 'far', seq: number): Action {
+function orbit(playerId: string, fleetId: string, to: 'near', seq: number): Action {
   return {
     id: `restart:${playerId}:${seq}`,
     type: 'fleet.orbit',

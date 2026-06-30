@@ -130,7 +130,7 @@ function fleet(id: string, owner: string, location: string, units: Array<[string
     location,
     movement: null,
     units: units.map(([unit, count]) => ({ unit, count })),
-    orbit: 'far',
+    // freshly placed → not yet in orbit (a single orbit; entered via fleet.orbit / arrival)
     traits: [],
   };
 }

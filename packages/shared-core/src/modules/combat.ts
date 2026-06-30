@@ -249,8 +249,8 @@ function startBattle(h: HandlerContext, battle: Battle): void {
  * Auto-resolves a fleet-vs-fleet collision at node `at`: a hostile enemy fleet
  * sharing the node always triggers an orbital battle (even mid-journey — it pins
  * the fleet and cancels the rest of its move). Taking the planet itself is a
- * separate, deliberate act from the near orbit (`fleet.assault`), so simply
- * arriving never captures — the fleet holds the far orbit (GDD §7.4).
+ * separate, deliberate act from orbit (`fleet.assault`), so simply arriving
+ * never captures — the fleet just holds the orbit (a single orbit, GDD §7.4).
  */
 function engageFleets(h: HandlerContext, fleetId: string, at: string): void {
   const fleet = h.state.fleets[fleetId];
@@ -557,8 +557,7 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
 
   if (battle.phase === 'orbital') {
     // Whichever fleet SURVIVED holds the node — not just the attacker. The victor
-    // returns to the far (safe) orbit (you can't bombard from far, so clear that
-    // too; the fleet.orbit action enforces the same invariant) and must auto-engage
+    // stays in orbit and stops bombarding (re-issue to resume), and must auto-engage
     // any other hostile fleet idling at the node — one that couldn't engage earlier
     // because every fleet there already had a battleId (findEnemyFleetAt skips
     // battleId fleets). Previously only the attacker-victor re-engaged, so a
@@ -572,7 +571,7 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
     if (victorId !== null) {
       const f = h.state.fleets[victorId];
       if (f) {
-        f.orbit = 'far';
+        f.orbit = 'near';
         f.bombarding = false;
         // Chain into any other defender only when the victor holds a NODE; a lane
         // intercept leaves it parked on the edge (location null) — never teleport it.
@@ -892,8 +891,8 @@ export const combatModule: GameModule = {
       const { fleetId, at } = event.payload as { fleetId: string; at: string };
       const fleet = h.state.fleets[fleetId];
       if (fleet && !fleet.battleId) {
-        fleet.orbit = 'far'; // arrive into the safe far orbit; assault is deliberate
-        fleet.bombarding = false; // can't bombard from far (keep the invariant)
+        fleet.orbit = 'near'; // a single orbit (GDD §7.4): arriving = stationed in orbit
+        fleet.bombarding = false; // not bombarding until the player orders it
       }
       engageFleets(h, fleetId, at);
     });
@@ -953,22 +952,22 @@ export const combatModule: GameModule = {
       });
     });
 
-    // Shift between the far orbit (safe standoff) and the near orbit (lets the
-    // fleet bombard / land, but exposes it to the planet's orbital AA).
+    // Bring an idle fleet into the planet's orbit. There is a SINGLE orbit (GDD §7.4) —
+    // `'near'` is the only value; arrival enters it automatically, so this is mostly the
+    // explicit "enter orbit" path. A fleet in orbit can bombard / land and is exposed to
+    // the planet's AA. (The old far/near switch was collapsed to one orbit.)
     api.onAction('fleet.orbit', (action, h) => {
       const { fleetId, orbit } = action.payload as { fleetId?: string; orbit?: string };
-      if (typeof fleetId !== 'string' || (orbit !== 'near' && orbit !== 'far')) {
+      if (typeof fleetId !== 'string' || orbit !== 'near') {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = requireOwnedIdleFleet(h, fleetId, action.playerId);
-      fleet.orbit = orbit;
-      if (orbit === 'far') {
-        fleet.bombarding = false; // can't bombard from the far orbit
-      }
-      h.emit('fleet.orbit', { fleetId, orbit, owner: action.playerId });
+      fleet.orbit = 'near';
+      h.emit('fleet.orbit', { fleetId, orbit: 'near', owner: action.playerId });
     });
 
-    // Land the carried army on the contested world below (near orbit only).
+    // Land the carried army on the contested world below. A single orbit (GDD §7.4):
+    // the fleet must be stationed in that orbit (not in transit / on a lane).
     api.onAction('fleet.assault', (action, h) => {
       const { fleetId } = action.payload as { fleetId?: string };
       if (typeof fleetId !== 'string') {
@@ -976,7 +975,7 @@ export const combatModule: GameModule = {
       }
       const fleet = requireOwnedIdleFleet(h, fleetId, action.playerId);
       if (fleet.orbit !== 'near') {
-        return h.reject('E_WRONG_ORBIT'); // descend to the near orbit first
+        return h.reject('E_WRONG_ORBIT'); // must be stationed in orbit, not in transit
       }
       const code = assaultPlanet(h, fleet);
       if (code) {

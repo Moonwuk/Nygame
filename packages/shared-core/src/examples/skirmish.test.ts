@@ -189,13 +189,6 @@ const move = (fleetId: string, to: string, playerId: string): Action => ({
   payload: { fleetId, to },
   issuedAt: 0,
 });
-const orbitTo = (fleetId: string, o: 'near' | 'far', playerId: string): Action => ({
-  id: `s:${playerId}:2`,
-  type: 'fleet.orbit',
-  playerId,
-  payload: { fleetId, orbit: o },
-  issuedAt: 0,
-});
 const assault = (fleetId: string, playerId: string): Action => ({
   id: `s:${playerId}:3`,
   type: 'fleet.assault',
@@ -285,7 +278,6 @@ function runSkirmish(): { timeline: string[]; frames: Frame[]; final: GameState 
     );
     if (enemyHere) return; // let the auto orbital battle settle first
     if (here.owner !== 'p1') {
-      if (blue.orbit !== 'near') tryOrder(orbitTo('BLUE', 'near', 'p1'), hour);
       tryOrder(assault('BLUE', 'p1'), hour);
       return;
     }

@@ -208,7 +208,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       movement: null,
       units: fl.units.map((u) => ({ unit: u.unit, count: u.count })),
       landing: fl.landing.map((u) => ({ unit: u.unit, count: u.count })),
-      orbit: 'far',
+      orbit: 'near',
       traits: [],
     };
   }

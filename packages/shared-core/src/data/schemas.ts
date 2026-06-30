@@ -267,7 +267,7 @@ export const SectorKindDefSchema = z.object({
   capturable: z.boolean().default(true),
   /** Can structures be raised here? */
   buildable: z.boolean().default(true),
-  /** Does it have the near/far orbital layer (cities, fortresses)? */
+  /** Does it have the orbital layer — can fleets station in orbit (cities, fortresses)? */
   orbit: z.boolean().default(true),
   /** Province-centric build roster: the building ids raisable on this province type.
    *  Absent/undefined = ANY building (the permissive default, so kind-less / roster-less

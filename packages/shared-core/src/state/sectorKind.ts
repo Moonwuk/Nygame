@@ -44,7 +44,7 @@ export function isBuildable(data: GameData, planet: Pick<Planet, 'kind'>): boole
   return sectorKindDef(data, planet).buildable;
 }
 
-/** Does this sector have the near/far orbital layer? */
+/** Does this sector have the orbital layer (fleets can station in orbit)? */
 export function hasOrbit(data: GameData, planet: Pick<Planet, 'kind'>): boolean {
   return sectorKindDef(data, planet).orbit;
 }

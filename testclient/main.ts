@@ -152,8 +152,7 @@ function renderActions(): void {
         ? `<select data-move="${esc(f.id)}">${opts}</select><button data-act="move" data-fleet="${esc(f.id)}">Move</button>`
         : '';
       return `<div class="fa"><b>${esc(f.id)}</b>
-        <button data-act="orbit" data-fleet="${esc(f.id)}" data-arg="near">Orbit Near</button>
-        <button data-act="orbit" data-fleet="${esc(f.id)}" data-arg="far">Orbit Far</button>
+        <button data-act="orbit" data-fleet="${esc(f.id)}" data-arg="near">Enter orbit</button>
         ${moveCtl}
         <button data-act="stop" data-fleet="${esc(f.id)}">Stop</button></div>`;
     })

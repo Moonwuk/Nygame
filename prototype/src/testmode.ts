@@ -12,8 +12,8 @@
  *
  *  Scenarios:
  *    1. Fleet/planet collision — two equal hostile fleets fly head-on (lane
- *       intercept) and, elsewhere, one passes a planet where an enemy sits on
- *       NEAR orbit (node catch across orbit levels).
+ *       intercept) and, elsewhere, one passes a planet where an enemy sits in
+ *       orbit (node catch against a stationed fleet).
  *    2. Ground battle lab — design a division template for each side, then run
  *       the new ground resolver and read the outcome.
  */
@@ -224,10 +224,10 @@ export function openTestMode(): void {
 
 // --- scenario 1: fleet / planet collision ------------------------------------
 // Two hostile fleets on neighbouring planets fly head-on (the engine's lane-
-// intercept catches them mid-flight). Far away, a second pair tests the node catch
-// across orbit levels: a friendly fleet sits on a planet's NEAR orbit while a
-// hostile fleet passes THROUGH that planet. `forceA`/`forceD` are the per-side ship
-// compositions (Azure = p1, Crimson = p2), applied to both of that side's fleets.
+// intercept catches them mid-flight). Far away, a second pair tests the node catch:
+// a friendly fleet sits in a planet's orbit while a hostile fleet passes THROUGH
+// that planet. `forceA`/`forceD` are the per-side ship compositions (Azure = p1,
+// Crimson = p2), applied to both of that side's fleets.
 function buildCollisionScenario(forceA: Force, forceD: Force): GameState {
   const byId = new Map<string, MapNode>(MAP.map((n) => [n.id, n]));
   const planets = MAP.filter((n) => n.sector === 'planet');
@@ -283,7 +283,7 @@ function buildCollisionScenario(forceA: Force, forceD: Force): GameState {
   setStance(st, 'p1', 'p2', 'war');
   const units = (f: Force): UnitStack[] =>
     SHIP_UNITS.filter((u) => f[u] > 0).map((u) => ({ unit: u, count: f[u] }));
-  const mk = (id: string, owner: string, location: string, f: Force, orbit?: 'near' | 'far'): Fleet => ({
+  const mk = (id: string, owner: string, location: string, f: Force, orbit?: 'near'): Fleet => ({
     id,
     owner,
     location,
@@ -298,7 +298,7 @@ function buildCollisionScenario(forceA: Force, forceD: Force): GameState {
     't-a2': mk('t-a2', 'p2', a2, forceD),
   };
   if (q) {
-    st.fleets['t-c'] = mk('t-c', 'p1', q, forceA, 'near'); // sits on NEAR orbit
+    st.fleets['t-c'] = mk('t-c', 'p1', q, forceA, 'near'); // sits in orbit
     st.fleets['t-d'] = mk('t-d', 'p2', n1, forceD);
   }
   // Issue the marching orders so they execute the moment the dev unpauses.

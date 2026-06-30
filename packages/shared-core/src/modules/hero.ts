@@ -266,7 +266,7 @@ export const heroModule: GameModule = {
         movement: null,
         units: [{ unit: HERO_UNIT, count: 1 }],
         traits: [],
-        orbit: 'far',
+        orbit: 'near',
       };
       h.state.fleets[fleetId] = newFleet;
       hero.alive = true;

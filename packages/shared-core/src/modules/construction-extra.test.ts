@@ -73,7 +73,7 @@ function fleet(
   id: string,
   owner: string,
   location: string,
-  opts: { orbit?: 'near' | 'far'; bombarding?: boolean } = {},
+  opts: { orbit?: 'near'; bombarding?: boolean } = {},
 ): Fleet {
   return {
     id,

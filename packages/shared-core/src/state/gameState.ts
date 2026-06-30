@@ -171,12 +171,13 @@ export interface Fleet {
   /** Ground army carried as cargo (the landing force of a ground assault),
    *  bounded by the ships' transport capacity — see the `army` module. */
   landing?: UnitStack[];
-  /** Which orbit the fleet holds while stationed at a planet (GDD §7.4):
-   *  `far` is a safe standoff (set on arrival); `near` lets it bombard / land
-   *  but exposes it to the planet's orbital AA. Undefined while in transit. */
-  orbit?: 'near' | 'far';
-  /** Whether the fleet is actively bombarding the planet below (near orbit,
-   *  hostile). Damages structures and freezes the owner's production. */
+  /** Set (`'near'`) while the fleet is stationed in orbit at a planet; undefined while
+   *  in transit. There is a SINGLE orbit (GDD §7.4): a stationed fleet can bombard /
+   *  land and is exposed to the planet's orbital AA — no separate "far" safe standoff.
+   *  (The value stays `'near'` for back-compat; the old near/far split was collapsed.) */
+  orbit?: 'near';
+  /** Whether the fleet is actively bombarding the planet below (in orbit over a
+   *  hostile world). Damages structures and freezes the owner's production. */
   bombarding?: boolean;
   traits: TraitId[];
   /** Id of the battle this fleet is engaged in; absent/null when free to move. */
