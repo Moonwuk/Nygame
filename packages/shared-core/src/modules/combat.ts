@@ -516,15 +516,18 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
         ? battle.defender.owner
         : null;
 
-  // The battle is over for both sides: survivors return "at rest", so clear the
-  // transient combat HP pool (a UnitStack with `hp` undefined = full health out of
-  // combat, gameState.ts §30-32). Done BEFORE the ground-capture deposit and the
-  // fleet release below, so a freshly-deposited garrison and any released fleet are
-  // normalized too. Without this, stale `hp` (set by applyDamage on every damaged
-  // survivor and never reset) makes findHealthyStack skip those stacks forever —
-  // breaking army.load/unload — and feeds them into their next battle at the wrong
-  // (partial) health. Dead sides already filtered to empty, so this is a no-op there.
+  // The battle is over. GROUND survivors (a planet garrison or a fleet's landing
+  // troops) return "at rest": clear their transient combat HP pool (a UnitStack with
+  // `hp` undefined = full health out of combat, gameState.ts §30-32). This must stay
+  // for ground because `findHealthyStack` only matches `hp === undefined`, so stale
+  // partial `hp` would make army.load/unload skip those stacks forever.
+  //
+  // SHIPS (a fleet's `units`) deliberately KEEP their `hp`: hull damage is persistent
+  // now — a battered fleet limps (route.ts speed drag) and only mends at a friendly
+  // repair base (construction.ts). `applyDamage` reads `stack.hp ?? full`, so a
+  // damaged ship simply re-enters its next battle at its current hull.
   for (const ref of [battle.attacker.ref, battle.defender.ref]) {
+    if (ref.kind === 'fleet') continue; // ships carry hull damage out of combat
     const survivors = sideUnits(h.state, ref);
     if (survivors) {
       for (const stack of survivors) delete stack.hp;

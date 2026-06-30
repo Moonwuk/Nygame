@@ -601,8 +601,8 @@ describe('combat — lane intercept (crossing ON a lane, GDD §7.4)', () => {
   });
 });
 
-describe('combat — survivors rest at full health after a battle (bug fix)', () => {
-  it('clears the combat HP pool on a fleet that survives, so it does not carry a stale pool', () => {
+describe('combat — ships keep hull damage; ground rests at full (persistent hull)', () => {
+  it('leaves a surviving fleet at its battle-end hull, so damage carries forward', () => {
     const kernel = createKernel([combatModule, arrivalModule]);
     // A (aggressor, attack 30) beats D (guardian) but takes return-fire (guardian defense 20).
     const st = baseState(
@@ -613,12 +613,15 @@ describe('combat — survivors rest at full health after a battle (bug fix)', ()
     // Mid-battle the survivor carries a partial HP pool...
     const mid = okAdvance(kernel.advanceTo(started.state, ctx(HOUR)));
     expect(stackOf(mid.state.fleets.A, 'aggressor')?.hp).toBe(80);
-    // ...but once the battle resolves it is reset to "at rest" (hp undefined = full health).
+    // ...and once the battle resolves the SHIP keeps its reduced hull — no auto-heal,
+    // so a battered fleet limps off and only mends at a repair base (construction.ts).
     const r = okAdvance(kernel.advanceTo(started.state, ctx(6 * HOUR)));
     expect(r.state.fleets.A?.battleId).toBe(null);
     expect(r.state.fleets.D).toBeUndefined(); // loser destroyed
     expect(stackOf(r.state.fleets.A, 'aggressor')?.count).toBe(1);
-    expect(stackOf(r.state.fleets.A, 'aggressor')?.hp).toBeUndefined();
+    const hp = stackOf(r.state.fleets.A, 'aggressor')?.hp;
+    expect(hp).toBeDefined();
+    expect(hp!).toBeLessThan(100); // hull damage persists out of combat (was reset to full before)
   });
 
   it('deposits a won ground assault as a full-health garrison (clears the landing battle HP)', () => {

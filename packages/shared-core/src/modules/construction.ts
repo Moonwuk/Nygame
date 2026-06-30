@@ -449,6 +449,45 @@ export const constructionModule: GameModule = {
           stack.hp = newHp >= fullHp ? undefined : newHp;
         }
       }
+
+      // Ship hull repair + shield recharge (ships keep hull damage out of combat now).
+      // "Shields" = the hull band ABOVE 30%: it recharges between fights (any fleet
+      // not currently in a battle), anywhere. "Hull" = the band AT/BELOW 30%: a breach
+      // that only mends while the fleet is stationed over a FRIENDLY world with a
+      // repair building (healRate, e.g. a hospital), and which also drags the fleet's
+      // speed (route.ts fleetBaseSpeed) until it is repaired.
+      const HULL_LINE = 0.3;
+      const SHIELD_REGEN = 0.06; // shield-band fraction restored per game-hour
+      const BASE_HULL_REPAIR = 0.04; // hull fraction/hour docked at any friendly world
+      for (const fleet of Object.values(h.state.fleets)) {
+        if (!fleet || fleet.battleId) continue; // a fleet in combat doesn't regen
+        let baseRate = 0;
+        const planet = fleet.location ? h.state.planets[fleet.location] : undefined;
+        if (planet && !fleet.movement && planet.owner === fleet.owner) {
+          // any friendly world docks for basic hull repairs; a hospital / repair
+          // yard (healRate) speeds it up — mirrors the friendly-soil division regen.
+          baseRate = BASE_HULL_REPAIR;
+          for (const b of planet.buildings) {
+            if (b.hp <= 0) continue;
+            const def = data.buildings[b.type];
+            if (def) baseRate += buildingLevel(def, b.level).healRate;
+          }
+        }
+        for (const stack of fleet.units) {
+          if (stack.hp === undefined) continue; // full hull
+          const unitDef = data.units[stack.unit];
+          if (!unitDef) continue;
+          const fullHp = stack.count * unitDef.stats.hp;
+          if (fullHp <= 0 || stack.hp >= fullHp) {
+            stack.hp = undefined;
+            continue;
+          }
+          let cur = stack.hp;
+          if (cur > HULL_LINE * fullHp) cur = Math.min(fullHp, cur + SHIELD_REGEN * hours * fullHp); // shields
+          if (baseRate > 0) cur = Math.min(fullHp, cur + baseRate * hours * fullHp); // hull, at a base
+          stack.hp = cur >= fullHp ? undefined : cur;
+        }
+      }
     });
   },
 };

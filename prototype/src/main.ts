@@ -3189,10 +3189,23 @@ function panelHtml(): string {
       const nShips = sumUnits(f.units);
       const nTr = sumUnits(f.landing ?? []);
       const inOrbit = f.orbit === 'near';
+      // Hull integrity across the squadron (persistent between fights now): a stack's
+      // current hp ?? full. Below 30% the fleet limps (route.ts) until it repairs.
+      let curHull = 0,
+        maxHull = 0;
+      for (const st of f.units) {
+        const u = data.units[st.unit];
+        if (!u) continue;
+        const m = st.count * u.stats.hp;
+        maxHull += m;
+        curHull += st.hp ?? m;
+      }
+      const hullPct = maxHull > 0 ? Math.round((curHull / maxHull) * 100) : 100;
+      const hullTag = hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}корпус ${hullPct}%` : '';
       let h = cardHeader(
         ownerColor(f.owner),
         'FLEET',
-        `${nShips} ships · ${nTr} troops${inOrbit ? ' · in orbit' : ''}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
+        `${nShips} ships · ${nTr} troops${hullTag}${inOrbit ? ' · in orbit' : ''}${f.bombarding ? ' · ⊗ bombarding' : ''}`,
       );
       // Aggregate combat weight, summed across the squadron's ships (it moves at its
       // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
