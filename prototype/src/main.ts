@@ -52,6 +52,7 @@ import {
   isInhabited,
   divisionCargo,
   fleetCargoFree,
+  clampPowerWeights,
   type FormationTemplate,
   type FormationUnit,
   type SetupConfig,
@@ -2297,6 +2298,9 @@ function buildStaticLayer(): void {
     const c = world(n);
     seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: p.owner ?? null, kind: n.sector });
   }
+  // Keep the power diagram valid: clamp the weight spread so a heavier neighbour can
+  // never swallow a close smaller node's cell (which left it with no province border).
+  clampPowerWeights(seeds);
   // Clip cells to the MAP boundary (province bounding box + padding), not the
   // viewport — otherwise the outermost provinces stretch to the screen edge. This
   // gives the map a defined edge that pans/zooms with the camera.
