@@ -421,8 +421,6 @@ let reconnecting = false;
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
-let hoverFleet: string | null = null; // fleet id under the pointer (desktop only)
-let hoverPlanet: string | null = null; // planet id under the pointer (desktop only)
 let hoverObj: string | null = null; // side-panel object under the pointer (data-desc key)
 let planetTab: PlanetTab = 'buildings';
 const buildQueues: Record<string, PlanetBuildQueue> = {};
@@ -448,7 +446,6 @@ let lastCmdHtml = '';
 let lastSplitHtml = '';
 let lastHudHtml = '';
 let lastClockText = '';
-let lastHoverHtml = '';
 let lastObjDescHtml = '';
 let lastLogHtml = '';
 let lastAlertText = '';
@@ -471,7 +468,6 @@ const bannerEl = $('banner');
 let lastBannerHtml = ''; // dirty-check so the banner's restart button isn't recreated each frame
 const restartBtn = $('restart'); // speedbar restart (shown in the no-bots solo sandbox)
 const restartSep = $('restart-sep');
-const hovercard = $('hovercard');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
@@ -4067,71 +4063,6 @@ function renderObjDesc(): void {
   pane.innerHTML = html;
 }
 
-function hoverCardHtml(): string {
-  if (hoverFleet) {
-    const f = s.fleets[hoverFleet];
-    if (!f) return '';
-    const owner = s.players[f.owner]?.name ?? f.owner;
-    const col = ownerColor(f.owner);
-    const ships = sumUnits(f.units);
-    const troops = f.landing ? sumUnits(f.landing) : 0;
-    const status = f.battleId ? 'In battle' : f.movement ? 'In transit' : 'Docked';
-    const dest = f.movement ? (f.movement.destination ?? f.movement.to) : f.location ?? '—';
-    const unitRows = f.units
-      .filter((u) => u.count > 0)
-      .map((u) => `<div class="hc-row"><span class="hc-key">${esc(u.unit)}</span><span class="hc-val">${u.count}</span></div>`)
-      .join('');
-    return `<div class="hc-title" style="color:${col}">FLEET</div>
-<div class="hc-row"><span class="hc-key">Owner</span><span class="hc-val">${esc(owner)}</span></div>
-<div class="hc-row"><span class="hc-key">Status</span><span class="hc-val">${status}</span></div>
-<div class="hc-row"><span class="hc-key">${f.movement ? 'Destination' : 'Location'}</span><span class="hc-val">${esc(dest)}</span></div>
-<div class="hc-row"><span class="hc-key">Ships</span><span class="hc-val">${ships}</span></div>
-${troops > 0 ? `<div class="hc-row"><span class="hc-key">Troops</span><span class="hc-val">${troops}</span></div>` : ''}
-${unitRows ? `<div class="hc-sub">Composition</div>${unitRows}` : ''}`;
-  }
-  if (hoverPlanet) {
-    const p = s.planets[hoverPlanet];
-    if (!p) return '';
-    const n = MAP.find((m) => m.id === hoverPlanet);
-    const owner = p.owner ? (s.players[p.owner]?.name ?? p.owner) : 'Neutral';
-    const col = ownerColor(p.owner);
-    const stype = SECTOR_TYPES[n?.sector ?? '']?.name ?? n?.sector ?? '—';
-    const ptype = p.planetType ? (data.planetTypes[p.planetType]?.name ?? p.planetType) : '—';
-    const garrison = (p.garrison ?? []).reduce((a, u) => a + u.count, 0);
-    const buildings = p.buildings.map((b) => {
-      const def = data.buildings[b.type];
-      return `<div class="hc-row"><span class="hc-key">${esc(def?.name ?? b.type)} Lv${b.level}</span><span class="hc-val">${b.hp}/${hpOfLevel(b.type, b.level)} HP</span></div>`;
-    }).join('');
-    const res = Object.entries(p.resources ?? {})
-      .filter(([, v]) => (v as number) > 0)
-      .map(([k, v]) => `<div class="hc-row"><span class="hc-key">${esc(k)}</span><span class="hc-val">${Math.round(v as number)}</span></div>`)
-      .join('');
-    const radBonus = p.planetType ? (data.planetTypes[p.planetType]?.productionBonus ?? 0) : 0;
-    return `<div class="hc-title" style="color:${col}">${esc(hoverPlanet)}</div>
-<div class="hc-row"><span class="hc-key">Owner</span><span class="hc-val">${esc(owner)}</span></div>
-<div class="hc-row"><span class="hc-key">Sector</span><span class="hc-val">${esc(stype)}</span></div>
-<div class="hc-row"><span class="hc-key">Planet type</span><span class="hc-val">${esc(ptype)}</span></div>
-${radBonus ? `<div class="hc-row"><span class="hc-key">Prod. bonus</span><span class="hc-val">${radBonus >= 0 ? '+' : ''}${Math.round(radBonus * 100)}%</span></div>` : ''}
-${garrison > 0 ? `<div class="hc-row"><span class="hc-key">Garrison</span><span class="hc-val">${garrison} troops</span></div>` : ''}
-${res ? `<div class="hc-sub">Stockpile</div>${res}` : ''}
-${buildings ? `<div class="hc-sub">Infrastructure</div>${buildings}` : ''}`;
-  }
-  return '';
-}
-
-function renderHoverCard() {
-  if (MOBILE) { hovercard.classList.remove('show'); return; }
-  const html = hoverCardHtml();
-  if (html === lastHoverHtml) return;
-  lastHoverHtml = html;
-  if (!html) {
-    hovercard.classList.remove('show');
-  } else {
-    hovercard.innerHTML = html;
-    hovercard.classList.add('show');
-  }
-}
-
 function renderPanel() {
   // While arming a merge target, collapse the panel so the map (and the fleet to
   // merge with) is fully tappable — important on phones where the sheet covers it.
@@ -4648,34 +4579,9 @@ canvas.addEventListener(
   { passive: false },
 );
 canvas.addEventListener('dblclick', () => defaultView());
-// track the pointer for the "Move" preview line and hover tooltip (desktop only)
+// track the pointer for the "Move" preview line (desktop only)
 canvas.addEventListener('pointermove', (ev) => {
   aimPointer = ptXY(ev);
-  if (MOBILE) return;
-  const { x: mx, y: my } = aimPointer;
-  let newHoverFleet: string | null = null;
-  let newHoverPlanet: string | null = null;
-  for (const f of Object.values(s.fleets)) {
-    const a = fleetAnchor(f);
-    if (a && Math.hypot(mx - a.x, my - a.y) < 18) {
-      newHoverFleet = f.id;
-      break;
-    }
-  }
-  if (!newHoverFleet) {
-    for (const n of MAP) {
-      const c = world(n);
-      if (Math.hypot(mx - c.x, my - c.y) < 24) {
-        newHoverPlanet = n.id;
-        break;
-      }
-    }
-  }
-  if (newHoverFleet !== hoverFleet || newHoverPlanet !== hoverPlanet) {
-    hoverFleet = newHoverFleet;
-    hoverPlanet = newHoverPlanet;
-    lastHoverHtml = '';
-  }
 });
 
 // --- top bar / speed ---------------------------------------------------------
@@ -5745,7 +5651,6 @@ function frame(nowReal: number) {
   if (vision) updateMemory(vision.identify); // variant B: remember what we see
   render(nowReal);
   renderPanel();
-  renderHoverCard();
   renderCmdBar();
   renderSplitDialog();
   renderLobby();

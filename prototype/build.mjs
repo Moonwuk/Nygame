@@ -387,16 +387,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #splitdlg .sactions .cbtn:disabled{opacity:.35;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
 #splitdlg .sactions .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
 
-#hovercard{position:fixed;top:70px;right:14px;width:220px;z-index:22;pointer-events:none;
-  padding:12px 14px;background:rgba(3,12,16,.88);border:1px solid var(--line-hi);border-radius:3px;
-  box-shadow:0 0 18px rgba(40,200,210,.12);font-size:11px;line-height:1.55;display:none;}
-#hovercard.show{display:block;}
-#hovercard .hc-title{color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1.5px;margin-bottom:7px;border-bottom:1px solid var(--line);padding-bottom:5px;}
-#hovercard .hc-row{display:flex;justify-content:space-between;gap:8px;margin:2px 0;}
-#hovercard .hc-key{color:var(--dim);letter-spacing:.5px;}
-#hovercard .hc-val{color:var(--ink);font-weight:700;text-align:right;}
-#hovercard .hc-sub{color:var(--cyan-dim);font-size:10px;margin-top:5px;}
-@media (max-width:720px){#hovercard{display:none!important;}}
 /* event log lives in a tap-to-open window (rail ≡), not a permanent panel */
 #logwin{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:16px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
@@ -876,7 +866,6 @@ const html = `<!doctype html>
   <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button>
   <span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" style="display:none">⟳</button>
 </div>
-<div id="hovercard"></div>
 <div id="cmdbar"></div>
 <div id="codex"></div>
 <div id="playercard"></div>
