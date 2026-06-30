@@ -3410,6 +3410,18 @@ nickInput.value = localStorage.getItem('void.nick') ?? '';
 $('csolo').addEventListener('click', () => {
   userClosed = true; // intentional leave → don't auto-reconnect
   NET = false;
+  // Reset to a fresh solo game (no p2 opponent — former enemy planets become neutral
+  // garrisons). Also clear UI state so stale selection/move targets don't leak in.
+  s = newGame(true);
+  selFleet = null;
+  selPlanet = null;
+  selFleets = new Set();
+  aiming = false;
+  merging = false;
+  pendingMerges = [];
+  splitState = null;
+  banner = null;
+  bgContent = ''; // force static province layer to rebuild with new ownership
   showConnect(false);
 });
 

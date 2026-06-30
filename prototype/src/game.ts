@@ -595,7 +595,7 @@ export const fleetLaunchModule: GameModule = {
 
 // --- assembling the match ----------------------------------------------------
 
-export function newGame(): GameState {
+export function newGame(solo = false): GameState {
   const base = createInitialState({
     seed: 'prototype-1',
     version: { data: '0.1.0', manifest: '1' },
@@ -604,7 +604,8 @@ export function newGame(): GameState {
   for (const n of MAP) {
     planets[n.id] = {
       id: n.id,
-      owner: n.owner,
+      // In solo mode p2-owned sectors become neutral garrisons for the player to conquer.
+      owner: solo && n.owner === 'p2' ? null : n.owner,
       position: { x: n.x, y: n.y },
       links: n.links,
       terrain: SECTOR_TYPES[n.sector]?.core ?? 'empty_space',
@@ -625,7 +626,7 @@ export function newGame(): GameState {
   }
   const players: Record<string, Player> = {
     p1: player('p1', 'Azure Compact', 'blue', { credits: 260, metal: 320 }),
-    p2: player('p2', 'Crimson Hegemony', 'red', { credits: 240, metal: 300 }),
+    ...(solo ? {} : { p2: player('p2', 'Crimson Hegemony', 'red', { credits: 240, metal: 300 }) }),
   };
   const fleets: Record<string, Fleet> = {
     'blue-1': fleet(
@@ -639,14 +640,14 @@ export function newGame(): GameState {
       ],
       [['marine', 3]],
     ),
-    'red-1': fleet('red-1', 'p2', 'CRIMSON', [['hero', 1], ['cruiser', 2]], [['marine', 3]]),
+    ...(solo ? {} : { 'red-1': fleet('red-1', 'p2', 'CRIMSON', [['hero', 1], ['cruiser', 2]], [['marine', 3]]) }),
   };
   // Each player's first hero is a projection of themselves, named by their nick
   // (a sensible default here; the net server overrides with the login nick). It
   // rides in the home fleet and respawns at the home world.
   const heroes: Record<string, Hero> = {
     p1: { owner: 'p1', name: players.p1!.name, location: 'HOME', cooldowns: {}, alive: true },
-    p2: { owner: 'p2', name: players.p2!.name, location: 'CRIMSON', cooldowns: {}, alive: true },
+    ...(solo ? {} : { p2: { owner: 'p2', name: players.p2!.name, location: 'CRIMSON', cooldowns: {}, alive: true } }),
   };
   return { ...base, players, planets, fleets, heroes };
 }
