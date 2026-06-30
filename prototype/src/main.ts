@@ -852,6 +852,10 @@ function timeLeft(at: number): string {
   const hours = Math.max(0, (at - s.time) / HOUR);
   return hours >= 1 ? `${hours.toFixed(1)}h` : `${Math.ceil(hours * 60)}m`;
 }
+/** Format a travel-time-remaining in hours as `1.4h` / `35m`. */
+function fmtEta(totalH: number): string {
+  return totalH >= 1 ? `${totalH.toFixed(1)}h` : `${Math.ceil(totalH * 60)}m`;
+}
 function progressPct(active: ActiveBuild): number {
   const duration = buildDurationHours(active.payload) * HOUR;
   if (duration <= 0) {
@@ -3022,7 +3026,7 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   const queued = queueOf(planetId)[lane];
   let html = `<div class="conveyor">`;
   if (active) {
-    // The live % / remaining-time are patched in each frame by updateConveyors() and
+    // The live % / remaining-time are patched in each frame by updatePanelLive() and
     // deliberately kept OUT of the panel's HTML signature — otherwise the panel (and its
     // build buttons) would be rebuilt 60×/s, and a click whose down/up straddle a rebuild
     // is dropped (the bug where rapid build orders only queued one ship in real time).
@@ -3137,14 +3141,13 @@ function panelHtml(): string {
       }
 
       if (f.movement) {
-        // total travel-time estimate to the final destination (next-hop ETA from
-        // the authoritative schedule + the remaining route at base speed).
+        // total travel-time estimate to the final destination (next-hop ETA from the
+        // authoritative schedule + the remaining route at base speed). The ETA ticks
+        // every frame, so it's a placeholder here (stable signature → no rebuild) and
+        // patched in place by updatePanelLive() — keeps the panel's buttons put.
         const dest = f.movement.destination ?? f.movement.to;
-        const nextH = Math.max(0, (f.movement.arrivesAt - s.time) / HOUR);
         const restH = dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
-        const totalH = nextH + restH;
-        const eta = totalH >= 1 ? `${totalH.toFixed(1)}h` : `${Math.ceil(totalH * 60)}m`;
-        h += `<div class="row">↗ en route to <b>${esc(dest)}</b> · arrives in <b>${eta}</b></div>`;
+        h += `<div class="row">↗ en route to <b>${esc(dest)}</b> · arrives in <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b></div>`;
       } else if (f.edge) {
         const pct = Math.round(f.edge.t * 100);
         h += `<div class="row">⟜ holding on the <b>${esc(f.edge.from)}–${esc(f.edge.to)}</b> lane · ${pct}% across</div>`;
@@ -3157,7 +3160,7 @@ function panelHtml(): string {
         h += `<div class="hint">${
           f.battleId
             ? engaged?.nextRoundAt !== undefined
-              ? `Engaged — next damage round in ${timeLeft(engaged.nextRoundAt)}.`
+              ? `Engaged — next damage round in <span class="pn-timer" data-at="${engaged.nextRoundAt}">…</span>.`
               : 'Engaged — orbital battle in progress.'
             : f.edge
               ? 'Parked on a lane — press Move to march on (it routes from here).'
@@ -4010,12 +4013,14 @@ function renderPanel() {
     lastObjDescHtml = '';
   }
   renderObjDesc();
-  updateConveyors(); // patch live build progress without rebuilding the panel
+  updatePanelLive(); // patch live countdowns in place — never rebuild the panel for them
 }
 
-/** Patch the build conveyor's progress bar + remaining time in place each frame, so
- *  the panel's HTML (and its buttons) can stay put between structural changes. */
-function updateConveyors(): void {
+/** Patch the panel's per-frame text (build progress, travel ETA, battle round) in
+ *  place each frame. These tick every frame, so they're kept OUT of the panel's HTML
+ *  signature — the panel (and its buttons) only rebuilds on real structural changes,
+ *  so a click whose down/up straddle a frame is never dropped. */
+function updatePanelLive(): void {
   const root = side.querySelector('.pscroll');
   if (!root) return;
   for (const el of Array.from(root.querySelectorAll('.conv-fill')) as HTMLElement[]) {
@@ -4025,6 +4030,13 @@ function updateConveyors(): void {
     el.style.width = `${pct.toFixed(0)}%`;
   }
   for (const el of Array.from(root.querySelectorAll('.conv-time')) as HTMLElement[]) {
+    el.textContent = timeLeft(Number(el.dataset.at));
+  }
+  for (const el of Array.from(root.querySelectorAll('.pn-eta')) as HTMLElement[]) {
+    const totalH = Math.max(0, (Number(el.dataset.arrive) - s.time) / HOUR) + Number(el.dataset.rest);
+    el.textContent = fmtEta(totalH);
+  }
+  for (const el of Array.from(root.querySelectorAll('.pn-timer')) as HTMLElement[]) {
     el.textContent = timeLeft(Number(el.dataset.at));
   }
 }
