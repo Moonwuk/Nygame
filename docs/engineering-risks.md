@@ -92,3 +92,132 @@ For React Native, keep `shared-core` preview work off the UI thread where possib
 **Risk:** prototype UX can accidentally hard-code mechanics that should stay data-driven.
 
 **Decision:** prototype-only helpers are allowed (`fleet.launch` currently lives there), but anything used by server/client gameplay should graduate into `shared-core` as a module with tests. UI affordances such as selection groups must submit player intent only, not mutate state directly.
+
+## 11. Action latency and optimistic UI
+
+**Risk:** every player action round-trips to the server before visual feedback. On a mobile
+4G connection (RTT 100–300 ms) moving a fleet or starting construction feels sluggish and
+unresponsive — a hard UX problem for a genre where instant feedback is the norm.
+
+**Decision:** the client applies actions *optimistically* using the same `shared-core`
+reducer it already embeds, then reconciles against the server's authoritative ack:
+
+1. On action submit the client runs `applyAction(localState, action, {now})` immediately and
+   renders the result. The action is queued as *pending*.
+2. The server processes the same action and broadcasts a snapshot delta.
+3. On ack the client drops the optimistic state and adopts the server's version. Because the
+   core is deterministic and the client's `localState` was already the latest server snapshot,
+   the results will be identical in the common case — no visible flicker.
+4. On reject (server returns `ok: false`) the client rolls back to the pre-action state and
+   shows an error note.
+
+**Guardrails:**
+- Only one action per player may be optimistically in-flight at a time; subsequent actions
+  queue behind the pending ack to avoid compounding divergence.
+- The client never optimistically advances the world clock; time advancement is
+  server-authoritative (the client interpolates visually but does not accrue resources).
+- If the server ack does not arrive within a timeout the pending action is retried with the
+  original action ID (idempotency — see risk #3); the UI shows a "sending…" indicator.
+
+## 12. Offline and degraded-connection mode
+
+**Risk:** no server connection = blank screen on mobile. Players drop into subways and
+tunnels constantly; an app that shows nothing during a 2-minute gap is unacceptable for a
+Bytro-style genre where the whole draw is the persistent world.
+
+**Decision:** two-tier fallback:
+
+**Tier 1 — cached read-only view (offline).**
+The client persists the last received `visibleState` snapshot to local storage
+(AsyncStorage on React Native / IndexedDB on web) keyed by `matchId`. On launch or
+reconnect failure the client loads the cache and renders the map with a "last updated N
+minutes ago" banner. All build queues, fleet positions and battle countdowns are visible;
+actions are disabled and queued locally (submitted once the socket reconnects, relying on
+idempotency).
+
+**Tier 2 — local clock interpolation (brief drop).**
+For gaps under ~60 seconds the client keeps the local world clock running at the last
+known `speed` and animates fleet movement by dead-reckoning against the scheduled arrival
+timestamps already in the cached state. No economy is accrued locally — only visual
+position. On reconnect the server snapshot replaces the interpolated positions.
+
+**Guardrails:**
+- Cached state must be the per-player *visible projection*, not the raw `GameState`
+  (which leaks fog-of-war; see risk #5).
+- Locally-queued actions are replayed in order on reconnect; actions that have become
+  invalid (fleet already arrived, resources drained) are surfaced as errors, not silently
+  dropped.
+
+## 13. 24/7 server room cost and scaling
+
+**Risk:** unlike turn-based games, every active match holds an in-process room with live
+state indefinitely. At scale this means CPU and memory proportional to *total active
+matches*, not *concurrent players* — a fundamentally different cost curve that gets
+expensive fast.
+
+**Decision:** match rooms are *demand-driven*, not always-on:
+
+**Room hibernation.** When no player is connected and no scheduled event is due within
+`HIBERNATE_WINDOW` (e.g. 10 minutes), the server persists the `GameState` snapshot to the
+DB and closes the in-process room. The room entry in the registry becomes a lightweight
+record that stores only `nextEventAt`.
+
+**Demand wake.** Two paths wake a hibernated room:
+1. A player connects → server loads the snapshot, runs `advanceTo(now)` to catch up all
+   due events, then opens the WebSocket session.
+2. A scheduled event becomes due → a cron/delayed-job fires at `nextEventAt`, loads the
+   room, advances to that time, persists, and re-sleeps if still empty.
+
+**Cost profile.** The cron granularity (e.g. hourly) sets the minimum CPU overhead. A
+match with no players active and only hourly economy ticks costs one DB read + one
+`advanceTo` call per hour — effectively zero steady-state CPU between events.
+
+**Guardrails:**
+- `advanceTo` must be O(events in span), not O(wall-clock span), so catch-up after a
+  multi-day sleep is fast (already true by design — risk #1).
+- Long-abandoned matches (no action for N days) are archived: state frozen, room never
+  woken except for explicit player resumption.
+- `nextEventAt` must be kept in the DB alongside the snapshot so the scheduler does not
+  need to load and parse the full `GameState` to know when to wake.
+
+## 14. Server restart and match persistence
+
+**Risk:** the dev server currently holds all match state in memory. A restart (crash,
+deploy, OOM kill) loses every active match. In production this is a critical reliability
+failure — players lose hours of real-time progress.
+
+**Decision:** persist `GameState` as JSONB after every mutation; recover by reload +
+catch-up on restart.
+
+**Write path (per action):**
+1. Load state from DB (or warm room cache).
+2. `advanceTo(authoritativeNow)`.
+3. Validate and `applyAction`.
+4. Persist updated `GameState` + action receipt atomically in one DB transaction.
+5. Broadcast diffs to connected peers.
+
+Step 4 happens before step 5: the source of truth is the DB, not the WebSocket broadcast.
+
+**Write path (scheduled events):**
+Scheduled events fire inside `advanceTo`. The resulting state is persisted exactly once
+after `advanceTo` completes, not after each individual event, to keep DB writes bounded.
+
+**Recovery on restart:**
+1. Load all non-archived match snapshots from DB.
+2. For each, reconstruct a `MatchRoom` with `initiallyStarted: true` and the stored state.
+3. Call `advanceTo(now)` once per room to process any events that fired during the
+   downtime window.
+4. Resume normal operation — connected clients receive a full snapshot on reconnect.
+
+Because `GameState` encodes the full `scheduled[]` timeline and the `rng` seed, a
+reloaded room is deterministically identical to the in-memory room that was lost.
+
+**Guardrails:**
+- The `ReceiptStore` (idempotency receipts) must also be persisted or the restart window
+  creates a dedup gap. A Redis-backed `ReceiptStore` (already the planned seam in
+  `MatchRoom`) naturally survives process restarts.
+- DB write latency is on the critical path of every action. Use a write-optimised store
+  (Postgres with JSONB + a covering index on `matchId`) and keep snapshot size bounded by
+  archiving stale matches.
+- Snapshot size grows with match age (more scheduled events, more fog memory). Add a
+  compaction pass that prunes already-fired events and expired fog entries on each persist.

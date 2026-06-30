@@ -166,5 +166,14 @@
       }
     ],
     "traits": []
+  },
+  "hospital": {
+    "name": "Field Hospital",
+    "cost": { "metal": 160, "credits": 60 },
+    "buildTimeHours": 8,
+    "hp": 20,
+    "healRate": 0.15,
+    "scoreValue": 8,
+    "traits": []
   }
 }

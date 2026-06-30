@@ -130,6 +130,9 @@ export const BuildingLevelSchema = z.object({
   /** Radar reach (Euclidean distance, map units) at this level — lets a radar array widen its
    *  detection radius as it is upgraded. */
   radarRange: z.number().nonnegative().default(0),
+  /** Fraction of a garrison stack's max-HP pool restored per game hour (0.1 = 10%/h).
+   *  Stacks heal continuously while the planet is owned; destroyed buildings don't heal. */
+  healRate: z.number().nonnegative().default(0),
 });
 
 export const BuildingDefSchema = z.object({
@@ -153,6 +156,8 @@ export const BuildingDefSchema = z.object({
   /** Radar reach (Euclidean distance, map units) the building projects from the world it sits on
    *  (0 = none). Drives signature detection in `visibleState`. */
   radarRange: z.number().nonnegative().default(0),
+  /** Fraction of garrison max-HP restored per game hour (see BuildingLevelSchema). */
+  healRate: z.number().nonnegative().default(0),
 });
 
 /**
@@ -309,8 +314,8 @@ export type GameData = z.infer<typeof GameDataSchema>;
  *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
 export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
   if (level <= 1) {
-    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange } = def;
-    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange };
+    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate };
   }
   return def.upgrades[level - 2] ?? buildingLevel(def, 1);
 }

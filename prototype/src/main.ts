@@ -2233,7 +2233,7 @@ function buildStaticLayer(): void {
   // Rebuild only when the content/size changes, or when the camera has SETTLED at a
   // new spot. During an active pan/zoom we skip the O(n²) re-tessellation entirely
   // and let blitStaticLayer follow the camera with the last bake (transformed).
-  const content = `${VW}x${VH}:${DPR.toFixed(2)}|${ownersSig()}`;
+  const content = `${VW}x${VH}:${DPR.toFixed(2)}|${ME}|${ownersSig()}`;
   const sizeOk = bg.width === Math.round(VW * DPR);
   const camSame = cam.x === bgCam.x && cam.y === bgCam.y && cam.scale === bgCam.scale;
   // Re-bake whenever the camera moved. The bake is viewport-sized, so following a pan
