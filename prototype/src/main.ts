@@ -2914,44 +2914,95 @@ function render(now: number) {
       }
     }
 
-    // fleet model = a squadron of 1 / 2 / 3 triangles by ship count
-    const squad = Math.min(3, Math.max(1, ships));
-    const formation: ReadonlyArray<readonly [number, number]> =
-      squad === 1
-        ? [[0, 0]]
-        : squad === 2
-          ? [
-              [-4, 1],
-              [4, 1],
-            ]
-          : [
-              [0, -3.5],
-              [-5, 5],
-              [5, 5],
-            ];
+    // Upright squadron emblem (axis-aligned so the cargo reads cleanly):
+    //  · ships = up-triangles glued in a row, one per ship (capped) sharing a flat
+    //    base — "как клеются треугольники друг другу, от количества";
+    //  · a small diamond rides above the row to mark the squadron — "эскадрильи ромбиком";
+    //  · cargo glues under that flat base as little cubes (see below).
+    const BW = 6,
+      TH = 7; // ship-triangle base width / height
+    const nTri = Math.min(5, Math.max(1, ships));
+    const triW = nTri * BW;
+    const yBase = A.y + 1; // shared flat baseline of the ship row
+    const apexY = yBase - TH;
     cx.save();
-    cx.translate(A.x, A.y);
-    cx.rotate(A.ang + Math.PI / 2);
     cx.shadowColor = col;
-    cx.shadowBlur = 8 + 7 * engine;
-    cx.fillStyle = rgba(col, 0.14 + 0.12 * engine);
+    cx.shadowBlur = 6 + 6 * engine;
+    cx.fillStyle = rgba(col, 0.16 + 0.12 * engine);
     cx.strokeStyle = col;
-    cx.lineWidth = 1.5;
-    for (const [ox, oy] of formation) {
+    cx.lineWidth = 1.4;
+    for (let i = 0; i < nTri; i++) {
+      const x0 = A.x - triW / 2 + i * BW;
       cx.beginPath();
-      cx.moveTo(ox, oy - 5);
-      cx.lineTo(ox + 3.6, oy + 4);
-      cx.lineTo(ox - 3.6, oy + 4);
+      cx.moveTo(x0 + BW / 2, apexY); // apex up
+      cx.lineTo(x0 + BW, yBase); // flat base, right corner
+      cx.lineTo(x0, yBase); // flat base, left corner
       cx.closePath();
       cx.fill();
       cx.stroke();
     }
-    const lead = formation[0]!;
-    cx.fillStyle = rgba('#ffffff', 0.4 + 0.35 * engine);
+    // squadron marker — a small diamond riding above the formation ("ромбик")
+    const dcy = apexY - 6,
+      dr = 3 + 0.6 * engine;
     cx.beginPath();
-    cx.arc(lead[0], lead[1], 1 + 0.8 * engine, 0, TAU);
+    cx.moveTo(A.x, dcy - dr);
+    cx.lineTo(A.x + dr, dcy);
+    cx.lineTo(A.x, dcy + dr);
+    cx.lineTo(A.x - dr, dcy);
+    cx.closePath();
+    cx.fillStyle = rgba(col, 0.9);
     cx.fill();
+    cx.stroke();
     cx.restore();
+
+    // cargo cubes glued UNDER the flat base — one per troop "от количества". Loaded
+    // troops are solid cubes; a load still under way (~1h) is an empty cube that fills
+    // from the bottom up as the hour elapses.
+    const loads = pendingLoads.filter((p) => p.fleetId === f.id); // empty for enemy/idle fleets
+    const totalPips = troops + loads.length;
+    if (totalPips > 0) {
+      const SQ = 4,
+        GAP = 2,
+        MAX = 8; // cap the cubes; rare overflow gets a "+N" tail
+      const n = Math.min(totalPips, MAX);
+      const over = totalPips - n;
+      const rowW = n * (SQ + GAP) - GAP + (over > 0 ? 13 : 0);
+      let sx = A.x - rowW / 2;
+      const cy = yBase + 1.5; // glued just under the flat base
+      cx.save();
+      cx.shadowColor = col;
+      cx.shadowBlur = 3;
+      cx.lineWidth = 1;
+      for (let i = 0; i < n; i++) {
+        if (i < troops) {
+          // already in the hold → solid cube
+          cx.fillStyle = rgba(col, 0.85);
+          cx.fillRect(sx, cy, SQ, SQ);
+          cx.strokeStyle = rgba(col, 0.95);
+          cx.strokeRect(sx + 0.5, cy + 0.5, SQ - 1, SQ - 1);
+        } else {
+          // loading → empty cube that fills from the bottom by progress (0→1 over ~1h)
+          const p = loads[i - troops];
+          const prog = p ? clamp((s.time - p.startAt) / (p.doneAt - p.startAt), 0, 1) : 0;
+          cx.strokeStyle = rgba(col, 0.85);
+          cx.strokeRect(sx + 0.5, cy + 0.5, SQ - 1, SQ - 1);
+          if (prog > 0) {
+            const fh = (SQ - 1) * prog;
+            cx.fillStyle = rgba(col, 0.8);
+            cx.fillRect(sx + 0.5, cy + 0.5 + (SQ - 1 - fh), SQ - 1, fh);
+          }
+        }
+        sx += SQ + GAP;
+      }
+      cx.restore();
+      if (over > 0) {
+        cx.fillStyle = rgba(col, 0.92);
+        cx.font = '700 8px ui-monospace,Menlo,monospace';
+        cx.textAlign = 'left';
+        cx.fillText(`+${over}`, sx, cy + SQ);
+        cx.textAlign = 'center';
+      }
+    }
 
     if (selFleet === f.id || selFleets.has(f.id)) {
       targetBrackets(A.x, A.y, 12, now);
@@ -2980,59 +3031,10 @@ function render(now: number) {
       }
     }
 
-    // fleet readout: ship count as a number below the chevron.
+    // ship count, small, under the whole emblem (exact size for fleets past 5 ships).
     cx.fillStyle = rgba(col, 0.95);
-    cx.font = '700 10px ui-monospace,Menlo,monospace';
-    cx.fillText(String(ships), A.x, A.y + 20);
-
-    // cargo-hold load ("загрузка трюма") ABOVE the chevron, as little owner-coloured
-    // squares — one crisp container per loaded troop. Loads still in progress (~1h
-    // each) are hollow cells that fill from the bottom up as the hour elapses.
-    const loads = pendingLoads.filter((p) => p.fleetId === f.id); // empty for enemy/idle fleets
-    const totalPips = troops + loads.length;
-    if (totalPips > 0) {
-      const SQ = 4,
-        GAP = 2.5,
-        MAX = 8; // cap the pips; rare overflow gets a "+N" tail
-      const n = Math.min(totalPips, MAX);
-      const over = totalPips - n;
-      const rowW = n * (SQ + GAP) - GAP + (over > 0 ? 13 : 0);
-      let sx = A.x - rowW / 2;
-      const sy = A.y - 17; // above the chevron triangles ("за треугольники")
-      cx.save();
-      cx.shadowColor = col;
-      cx.shadowBlur = 4;
-      cx.lineWidth = 1;
-      for (let i = 0; i < n; i++) {
-        if (i < troops) {
-          // already in the hold → solid container
-          cx.fillStyle = rgba(col, 0.85);
-          cx.fillRect(sx, sy, SQ, SQ);
-          cx.strokeStyle = rgba(col, 0.95);
-          cx.strokeRect(sx + 0.5, sy + 0.5, SQ - 1, SQ - 1);
-        } else {
-          // loading → outline that fills from the bottom by progress (0→1 over ~1h)
-          const p = loads[i - troops];
-          const prog = p ? clamp((s.time - p.startAt) / (p.doneAt - p.startAt), 0, 1) : 0;
-          cx.strokeStyle = rgba(col, 0.85);
-          cx.strokeRect(sx + 0.5, sy + 0.5, SQ - 1, SQ - 1);
-          if (prog > 0) {
-            const fh = (SQ - 1) * prog;
-            cx.fillStyle = rgba(col, 0.8);
-            cx.fillRect(sx + 0.5, sy + 0.5 + (SQ - 1 - fh), SQ - 1, fh);
-          }
-        }
-        sx += SQ + GAP;
-      }
-      cx.restore();
-      if (over > 0) {
-        cx.font = '700 8px ui-monospace,Menlo,monospace';
-        cx.fillStyle = rgba(col, 0.92);
-        cx.textAlign = 'left';
-        cx.fillText(`+${over}`, sx, sy + SQ);
-        cx.textAlign = 'center';
-      }
-    }
+    cx.font = '700 9px ui-monospace,Menlo,monospace';
+    cx.fillText(String(ships), A.x, A.y + 18);
   }
 
   drawRadarContacts(now); // swept enemy signatures — last-known ghosts until repainted
