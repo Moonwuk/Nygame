@@ -10,7 +10,6 @@ import {
   factionModule,
   heroModule,
   marketModule,
-  reanimationModule,
   movementModule,
   parseGameData,
   planetTypeModule,
@@ -68,7 +67,6 @@ export const DEV_MODULES: GameModule[] = [
   movementModule,
   heroModule, // per-player hero: redeploy, temp public lanes, planet annihilation
   combatModule,
-  reanimationModule, // necromancer signature: raise the fallen on `unit.died`
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)
@@ -138,7 +136,7 @@ function fleet(id: string, owner: string, location: string, units: Array<[string
   };
 }
 
-const DEV_FACTIONS = ['vanguard', 'swarm', 'necromancer'];
+const DEV_FACTIONS = ['vanguard', 'swarm'];
 
 /** N homeworlds joined through a neutral junction, one idle fleet each (default
  *  two players: green/red). Homeworlds are spread evenly around the nexus. */

@@ -103,7 +103,7 @@ function isHostile(h: HandlerContext, a: string, b: string): boolean {
  * Applies `totalDamage` to a unit list, filling the receiving lines in tier
  * order. Tracks each stack's remaining HP pool so partial damage persists
  * across rounds; whole ships/troops are lost as the pool drops, each loss
- * announced via `unit.died` (the bus hook reanimation-style modules listen on).
+ * announced via `unit.died` (a bus event reactive modules can listen on).
  * Returns the surviving stacks.
  */
 function applyDamage(
@@ -186,7 +186,7 @@ function applyDamageToSide(
       ? { at: location, planetId: ref.planetId }
       : { at: location, fleetId: ref.fleetId };
   // Tag the casualty's owner NOW: a wiped fleet is deleted before the `unit.died`
-  // event drains, so listeners (heroes / score / reanimate) can't re-find it.
+  // event drains, so listeners (heroes / score) can't re-find it.
   const owner =
     ref.kind === 'garrison'
       ? h.state.planets[ref.planetId]?.owner

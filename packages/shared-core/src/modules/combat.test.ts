@@ -367,18 +367,18 @@ describe('combat — hooks & graceful degradation', () => {
     expect((round?.payload as { dmgToDefender: number }).dmgToDefender).toBe(20); // 10 × 2
   });
 
-  it('publishes unit.died that a necromancer-style module can react to', () => {
-    const necromancer: GameModule = {
-      id: 'necromancer',
+  it('publishes unit.died that a reactive module can respond to', () => {
+    const salvager: GameModule = {
+      id: 'salvager',
       version: '1.0.0',
       setup(api) {
         api.on('unit.died', (event, h) => {
           const { count } = event.payload as { count: number };
-          h.state.planets.P?.garrison.push({ unit: 'reanimated_drone', count });
+          h.state.planets.P?.garrison.push({ unit: 'salvage', count });
         });
       },
     };
-    const kernel = createKernel([combatModule, necromancer, arrivalModule]);
+    const kernel = createKernel([combatModule, salvager, arrivalModule]);
     const st = baseState(
       [fleet('A', 'p1', 'P', [['fighter', 3]]), fleet('D', 'p2', 'P', [['fighter', 1]])],
       [planet('P', 'p2')],
@@ -386,12 +386,10 @@ describe('combat — hooks & graceful degradation', () => {
     const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
     const r = okAdvance(kernel.advanceTo(started.state, ctx(2 * HOUR)));
 
-    // Combat ran to completion AND the dead unit was reanimated onto the planet.
+    // Combat ran to completion AND the reactive module spawned from the dead unit.
     expect(r.events.some((e) => e.type === 'battle.resolved')).toBe(true);
-    const reanimated = (r.state.planets.P?.garrison ?? []).find(
-      (s) => s.unit === 'reanimated_drone',
-    );
-    expect(reanimated?.count).toBe(1);
+    const salvaged = (r.state.planets.P?.garrison ?? []).find((s) => s.unit === 'salvage');
+    expect(salvaged?.count).toBe(1);
   });
 });
 

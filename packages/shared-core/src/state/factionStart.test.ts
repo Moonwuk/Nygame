@@ -39,8 +39,8 @@ describe('factionStart — match-start assembly by faction (B3 / CR-1.3)', () =>
     expect(factionStart(data, 'swarm').resources.metal).toBe(200);
   });
 
-  it('all three factions bring a non-empty starting fleet', () => {
-    for (const id of ['vanguard', 'swarm', 'necromancer']) {
+  it('both factions bring a non-empty starting fleet', () => {
+    for (const id of ['vanguard', 'swarm']) {
       expect(factionStart(data, id).fleet.length).toBeGreaterThan(0);
     }
   });

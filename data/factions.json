@@ -32,23 +32,5 @@
       "homeBuildings": ["biomass_pit", "power_plant"]
     },
     "passives": { "productionBonus": 0.15 }
-  },
-  "necromancer": {
-    "name": "Void Necromancers",
-    "description": "Cult fleets that raise the fallen from the wreckage of battle and drive them on with dark resolve.",
-    "traits": [],
-    "abilities": ["raise_fallen"],
-    "uniqueUnits": ["reanimated_drone"],
-    "startingLoadout": {
-      "resources": { "credits": 250, "metal": 250, "energy": 80 },
-      "fleet": [
-        { "unit": "cruiser", "count": 1 },
-        { "unit": "reanimated_drone", "count": 2 },
-        { "unit": "scout_drone", "count": 1 }
-      ],
-      "garrison": [{ "unit": "militia", "count": 2 }],
-      "homeBuildings": ["mine_t1", "power_plant"]
-    },
-    "passives": { "fleetSpeedBonus": 0.1, "combatDamageBonus": 0.05 }
   }
 }

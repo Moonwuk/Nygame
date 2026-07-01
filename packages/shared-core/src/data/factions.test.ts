@@ -15,8 +15,8 @@ describe('faction data (B1 / CR-1.1)', () => {
   const resourceIds = new Set(readJson('resources.json') as unknown as string[]);
   const ids = Object.keys(factions);
 
-  it('ships exactly the three factions', () => {
-    expect(ids.sort()).toEqual(['necromancer', 'swarm', 'vanguard']);
+  it('ships exactly the two factions', () => {
+    expect(ids.sort()).toEqual(['swarm', 'vanguard']);
   });
 
   it('each faction validates and carries a loadout, unique units and passives', () => {
@@ -83,10 +83,8 @@ describe('faction data (B1 / CR-1.1)', () => {
   it('the factions are genuinely distinct (own passive + own unique unit)', () => {
     const v = FactionDefSchema.parse(factions.vanguard);
     const s = FactionDefSchema.parse(factions.swarm);
-    const n = FactionDefSchema.parse(factions.necromancer);
     expect(v.passives.combatDamageBonus).toBeGreaterThan(0);
     expect(s.passives.productionBonus).toBeGreaterThan(0);
-    expect(n.passives.fleetSpeedBonus).toBeGreaterThan(0);
-    expect(new Set([v.uniqueUnits[0], s.uniqueUnits[0], n.uniqueUnits[0]]).size).toBe(3);
+    expect(new Set([v.uniqueUnits[0], s.uniqueUnits[0]]).size).toBe(2);
   });
 });

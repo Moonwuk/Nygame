@@ -506,14 +506,14 @@ home?, fleetId?}` — `grade` (редкость, число слотов в кл
 - **resources:** `credits` (деньги), `metal`, `food`, `energy`, `microelectronics` —
   внутриматчевый набор из 5. Торгуются на сессионной бирже (модуль `market`).
 - **units** (схема `UnitDef`): `domain('space'|'ground')`, `stats{attack, defense,
-speed, hp, range, cargoCapacity, cargoSize, aaDamage}` (+ любые доп. числа),
+speed, hp, shield, range, cargoCapacity, cargoSize, aaDamage}` (+ любые доп. числа),
   `line, traits, abilities, cost, buildTimeHours, upkeep`, `signature, radarRange`
   (армия очков не даёт — см. victory). Есть: `scout_drone,
 cruiser, siege_lance(artillery,range), dropship(cargoCapacity 12), militia,
-drop_infantry, tank(cargoSize 3), orbital_aa(aaDamage), infected_cruiser,
-reanimated_drone`.
+drop_infantry, tank(cargoSize 3), orbital_aa(aaDamage), infected_cruiser`.
+  Щиты (аблятивные) у боевых кораблей: cruiser 15, dropship 12, hero 40, infected_cruiser 8.
 - **buildings** (`BuildingDef`): `cost, buildTimeHours, produces, hp,
-defenseBonus, upgrades[{…}], traits, scoreValue, radarRange`. Есть: `mine_t1, mine_t2,
+defenseBonus, upgrades[{…}], traits, scoreValue, radarRange, healRate, shipRepair`. Есть: `mine_t1, mine_t2,
 shipyard, biomass_pit, barracks, spaceport, radar, fort, metal_station, power_plant, fabricator`
   (форт — 3 уровня: HP 35→50→65, defenseBonus 0.35→0.50→0.65; **радар — 3 уровня**: `radarRange`
   300→500→700 (расстояние), HP 18→26→34). `radarRange` теперь **уровневый** (`BuildingLevelSchema`),
@@ -531,8 +531,8 @@ shipyard, biomass_pit, barracks, spaceport, radar, fort, metal_station, power_pl
 - **sectors:** `empty_space(+скорость), asteroid_field(−скорость/+живучесть/score 5),
 nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
 volcanic 20, gas_giant 10, barren 5).
-- **factions:** `vanguard, swarm, necromancer` (пока флейвор/трейты).
-- **events:** `reanimate_on_kill, infect_planet, void_anomaly` (правила
+- **factions:** `vanguard, swarm` (пока флейвор/трейты).
+- **events:** `infect_planet, void_anomaly` (правила
   trigger→effect; движок трейтов пока не построен).
 - **technologies:** сессионное дерево (`industrial_automation`,
   `orbital_logistics`, `siege_doctrine`, `fortified_infrastructure`,

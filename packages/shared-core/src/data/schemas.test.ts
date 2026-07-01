@@ -45,7 +45,7 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.units.scout_drone?.stats.cargoCapacity).toBe(0); // default, carries nothing
     expect(data.units.orbital_aa?.stats.aaDamage).toBe(14); // anti-ship orbital AA
     expect(data.units.cruiser?.stats.aaDamage).toBe(0); // default, no AA
-    expect(data.events.reanimate_on_kill?.trigger).toBe('unit_dies_in_battle');
+    expect(data.events.infect_planet?.trigger).toBe('planet_captured');
     expect(data.sectors.asteroid_field?.speedBonus).toBeCloseTo(-0.25);
     expect(data.sectors.asteroid_field?.hpBonus).toBeCloseTo(0.1);
     // planet types: production multiplier + ground-defense edge (data-driven).
@@ -136,8 +136,8 @@ describe('game data schema (docs/architecture.md §2)', () => {
     const data = parseGameData(loadShippedBundle());
     // scout_drone declares no traits in JSON → schema default [].
     expect(data.units.scout_drone?.traits).toEqual([]);
-    // void_anomaly omits no chance, but reanimate uses a custom chance.
-    expect(data.events.reanimate_on_kill?.chance).toBeCloseTo(0.3);
+    // a custom `chance` is preserved, not defaulted to 1.
+    expect(data.events.void_anomaly?.chance).toBeCloseTo(0.5);
   });
 
   it('allows extra numeric unit stats (data-driven, open stat set)', () => {

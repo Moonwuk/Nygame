@@ -96,16 +96,16 @@ const combatModule: GameModule = {
     });
   },
 };
-const necromancerModule: GameModule = {
-  id: 'necromancer',
+const reinforceModule: GameModule = {
+  id: 'reinforce',
   version: '1.0.0',
   setup(api) {
     api.on('unit.died', (event, h) => {
       const { planetId } = event.payload as { planetId: string };
       const planet = h.state.planets[planetId];
       if (!planet) return;
-      planet.garrison.push({ unit: 'reanimated_drone', count: 1 });
-      h.emit('unit.reanimated', { planetId });
+      planet.garrison.push({ unit: 'reserve', count: 1 });
+      h.emit('unit.reinforced', { planetId });
     });
   },
 };
@@ -234,18 +234,18 @@ describe('kernel — hooks (value pipelines with base defaults)', () => {
 
 describe('kernel — events & graceful degradation (docs/modulesystem.md)', () => {
   it('a listener reacts to an emitted event', () => {
-    const kernel = createKernel([combatModule, necromancerModule]);
+    const kernel = createKernel([combatModule, reinforceModule]);
     const state = withPlanet(baseState(), makePlanet('kepler_7', 'p2'));
     const res = expectOk(
       kernel.applyAction(state, action('combat.resolve', { planetId: 'kepler_7' }), ctx()),
     );
 
-    expect(res.state.planets.kepler_7?.garrison).toEqual([{ unit: 'reanimated_drone', count: 1 }]);
-    expect(res.events.map((e) => e.type)).toEqual(['unit.died', 'unit.reanimated']);
+    expect(res.state.planets.kepler_7?.garrison).toEqual([{ unit: 'reserve', count: 1 }]);
+    expect(res.events.map((e) => e.type)).toEqual(['unit.died', 'unit.reinforced']);
   });
 
   it('the same action works with the listener absent — event simply fades', () => {
-    const kernel = createKernel([combatModule]); // no necromancer
+    const kernel = createKernel([combatModule]); // no reinforce
     const state = withPlanet(baseState(), makePlanet('kepler_7', 'p2'));
     const res = expectOk(
       kernel.applyAction(state, action('combat.resolve', { planetId: 'kepler_7' }), ctx()),

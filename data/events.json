@@ -1,10 +1,4 @@
 {
-  "reanimate_on_kill": {
-    "trigger": "unit_dies_in_battle",
-    "effect": "spawn_unit",
-    "params": { "unit": "reanimated_drone" },
-    "chance": 0.3
-  },
   "infect_planet": {
     "trigger": "planet_captured",
     "effect": "add_trait",

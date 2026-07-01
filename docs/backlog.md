@@ -51,14 +51,14 @@
 
 - **B1** ✅ Расширить `FactionDef`: стартовый лоадаут (`startingLoadout`: ресурсы/флот/
   гарнизон/постройки) + `uniqueUnits` + `passives` (prod/speed/combat, зеркало tech-effects)
-  в схеме; `data/factions.json` наполнен 3 фракциями (vanguard/swarm/necromancer), все ссылки
-  на юниты/постройки валидны. Тест `factions.test.ts` (4 кейса) + bundle-валидация.
+  в схеме; `data/factions.json` наполнен 2 фракциями (vanguard/swarm), все ссылки
+  на юниты/постройки валидны. Тест `factions.test.ts` + bundle-валидация. _(necromancer вырезан — B4.)_
 - **B2** ✅ `factionModule`: пассивы фракции через хуки `economy.production`/`fleet.speed`/
   `combat.damage` (зеркало tech-effects); мягкая деградация без модуля. 5 тестов.
 - **B3** ✅ `factionStart(data, faction)` — чистая детерминированная сборка старта из
   `startingLoadout` (казна/флот/гарнизон/постройки, hp из данных); 4 теста.
-- **B4** ✅ `reanimationModule`: некромант (`raise_fallen`) на `unit.died` поднимает долю
-  павших в живом флоте как `reanimated_drone` (детерминированно, бой сходится); 3 теста.
+- **B4** ❌ **вырезано:** `reanimationModule` (некромант `raise_fallen` поднимал павших как
+  `reanimated_drone`) удалён вместе с фракцией necromancer — модуль, юнит, событие и тесты сняты.
 
 ## Блок C · Ядро: древо технологий `[core]` `[data]`
 

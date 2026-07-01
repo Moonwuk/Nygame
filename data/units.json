@@ -94,16 +94,6 @@
     "cost": { "food": 200, "energy": 50 },
     "upkeep": { "food": 6 }
   },
-  "reanimated_drone": {
-    "faction": "necromancer",
-    "stats": { "attack": 5, "defense": 3, "speed": 5, "hp": 12 },
-    "line": "mid",
-    "traits": ["reanimate_on_kill"],
-    "abilities": [],
-    "signature": 2,
-    "cost": { "energy": 30 },
-    "upkeep": { "energy": 2 }
-  },
   "hero": {
     "faction": "vanguard",
     "stats": { "attack": 12, "defense": 12, "speed": 6, "hp": 120, "shield": 40 },

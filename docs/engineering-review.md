@@ -267,8 +267,7 @@ Void Dominion — асинхронная стратегия на 20–100 дне
   factions.json   — расширить: startUnits, startBuildings, passiveHooks
   events.json     — расширить: больше trigger→effect правил
 
-Тесты: фракция Swarm захватывает планету → infect_planet срабатывает;
-       Necromancer убивает юнит → reanimate_on_kill с chance 0.3
+Тесты: фракция Swarm захватывает планету → infect_planet срабатывает.
 ```
 
 Почему первым: открывает весь уникальный контент. Без трейтов фракции — просто скин.

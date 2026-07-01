@@ -179,7 +179,6 @@ export { stationModule } from './modules/station';
 export { technologyModule, technologyLock } from './modules/technology';
 export { scientistModule } from './modules/scientist';
 export { factionModule } from './modules/faction';
-export { reanimationModule } from './modules/reanimation';
 export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
