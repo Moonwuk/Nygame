@@ -4712,17 +4712,20 @@ function renderTech(): void {
   const me = s.players[ME];
   const techs = data.technologies;
   const done = new Set(me?.technologies?.completed ?? []);
-  const active = me?.technologies?.active;
+  // Research now runs in CONCURRENT slots (core: technologies.active is a list), so
+  // normalise to an array and show a progress banner per active slot.
+  const activeRaw = me?.technologies?.active;
+  const activeList = Array.isArray(activeRaw) ? activeRaw : activeRaw ? [activeRaw] : [];
   const res = (me?.resources ?? {}) as Record<string, number>;
   const started = s.startedAt ?? 0;
   let html = '';
-  if (active) {
-    const def = techs[active.technology];
-    const total = active.completesAt - active.startedAt;
-    const prog = total > 0 ? clamp((s.time - active.startedAt) / total, 0, 1) : 1;
-    const etaH = Math.max(0, Math.ceil((active.completesAt - s.time) / HOUR));
+  for (const a of activeList) {
+    const def = techs[a.technology];
+    const total = a.completesAt - a.startedAt;
+    const prog = total > 0 ? clamp((s.time - a.startedAt) / total, 0, 1) : 1;
+    const etaH = Math.max(0, Math.ceil((a.completesAt - s.time) / HOUR));
     html +=
-      `<div class="tw-active"><div class="tw-an">⚛ Исследуется: ${esc(def?.name ?? active.technology)}</div>` +
+      `<div class="tw-active"><div class="tw-an">⚛ Исследуется: ${esc(def?.name ?? a.technology)}</div>` +
       `<div class="tw-bar"><div class="tw-fill" style="width:${Math.round(prog * 100)}%"></div></div>` +
       `<div class="tw-eta">≈ ${etaH} ч осталось</div></div>`;
   }
@@ -4734,7 +4737,7 @@ function renderTech(): void {
     html += `<div class="tw-branch">${br.label}</div>`;
     for (const id of ids) {
       const t = techs[id]!;
-      const isActive = active?.technology === id;
+      const isActive = activeList.some((a) => a.technology === id);
       const prereqMissing = (t.prerequisites ?? []).filter((p) => !done.has(p));
       const dayGate = t.dayGate ?? 0;
       const gatedByDay = dayGate > 0 && s.time - started < dayGate * DAY;
@@ -4753,7 +4756,9 @@ function renderTech(): void {
         cls = 'locked';
         action = `<span class="tw-badge wait">🔒 с дня ${dayGate}</span>`;
       } else {
-        const dis = !!active || !affordable;
+        // Concurrent slots: don't block on "something is researching" — the core
+        // rejects (with a note) if every research slot is already full.
+        const dis = !affordable;
         action = `<button class="tw-go" data-tech="${id}"${dis ? ' disabled' : ''}>Исследовать</button>`;
       }
       html +=
