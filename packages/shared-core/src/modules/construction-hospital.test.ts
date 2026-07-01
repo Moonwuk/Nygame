@@ -121,6 +121,24 @@ describe('hospital heal mechanic', () => {
     const stack = state.planets.home?.garrison[0];
     expect(stack!.hp).toBeUndefined();
   });
+
+  it('does NOT heal the garrison mid ground assault (mirrors the ship battleId guard)', () => {
+    const s = makeState();
+    // A live ground assault is underway on this very world.
+    s.battles = {
+      b1: {
+        id: 'b1',
+        location: 'home',
+        phase: 'ground',
+        attacker: { ref: { kind: 'landing', fleetId: 'F' }, owner: 'p2' },
+        defender: { ref: { kind: 'garrison', planetId: 'home' }, owner: 'p1' },
+        round: 1,
+      },
+    };
+    const state = okAdvance(kernel.advanceTo(s, ctx(4 * HOUR)));
+    const stack = state.planets.home?.garrison[0];
+    expect(stack!.hp).toBeCloseTo(40); // unchanged — no regen while contested
+  });
 });
 
 // --- ship hull repair + shield recharge --------------------------------------

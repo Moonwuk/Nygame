@@ -232,6 +232,15 @@ describe('combat — orbital AA (time.advanced)', () => {
     expect((ev?.payload as { power: number }).power).toBe(10);
   });
 
+  it('does NOT bombard once at peace (stance gate, not just an owner mismatch)', () => {
+    const kernel = createKernel([combatModule]);
+    // A fleet mid-bombardment (flag set) over p2's world, but the pair is now at peace.
+    const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near', bombarding: true });
+    const st: GameState = { ...baseState([f], [planet('P', 'p2')]), diplomacy: { 'p1|p2': 'peace' } };
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+    expect(r.events.some((e) => e.type === 'planet.bombarded')).toBe(false);
+  });
+
   it('AA scales with time span', () => {
     const kernel = createKernel([combatModule]);
     const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near' });

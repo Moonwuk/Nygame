@@ -1,3 +1,4 @@
+import { getStance } from './diplomacy';
 import type { GameState, PlanetId } from './gameState';
 
 /**
@@ -5,6 +6,10 @@ import type { GameState, PlanetId } from './gameState';
  * Callers that check bombardment for multiple planets (economy, construction)
  * call this once and then use `Set.has` — O(1) per planet instead of the
  * previous O(fleets) per planet.
+ *
+ * A fleet only bombards a HOSTILE owned world: an at-`war` stance (the same gate
+ * combat's `isHostile` / the AA loop use). An owner mismatch alone is not enough
+ * — a fleet parked over a neutral or an at-peace/allied world freezes nothing.
  */
 export function bombardedPlanets(state: GameState): Set<PlanetId> {
   const set = new Set<PlanetId>();
@@ -15,7 +20,7 @@ export function bombardedPlanets(state: GameState): Set<PlanetId> {
       fleet.orbit === 'near'
     ) {
       const planet = state.planets[fleet.location];
-      if (planet && fleet.owner !== planet.owner) {
+      if (planet && planet.owner !== null && getStance(state, fleet.owner, planet.owner) === 'war') {
         set.add(fleet.location);
       }
     }

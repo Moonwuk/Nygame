@@ -675,7 +675,8 @@ function runOrbital(h: HandlerContext, hours: number): void {
         if (
           f.bombarding &&
           f.orbit === 'near' &&
-          f.owner !== planet.owner
+          planet.owner !== null &&
+          isHostile(h, f.owner, planet.owner)
         ) {
           const power = bombardPower(f, data) * hours;
           if (power > 0) {

@@ -429,8 +429,17 @@ export const constructionModule: GameModule = {
       const hours = (span / MS_PER_HOUR) * scale;
       const data = h.ctx.data;
 
+      // Planets hosting a live ground assault — their garrisons don't regen
+      // mid-battle (mirrors the ship `battleId` guard in the fleet loop below;
+      // a planet carries no in-battle flag, so derive it from `state.battles`).
+      const groundBattleLocations = new Set<string>();
+      for (const b of Object.values(h.state.battles)) {
+        if (b.phase === 'ground') groundBattleLocations.add(b.location);
+      }
+
       for (const planet of Object.values(h.state.planets)) {
         if (!planet || planet.owner === null || planet.garrison.length === 0) continue;
+        if (groundBattleLocations.has(planet.id)) continue;
         let totalHealRate = 0;
         for (const b of planet.buildings) {
           if (b.hp <= 0) continue; // destroyed building contributes nothing

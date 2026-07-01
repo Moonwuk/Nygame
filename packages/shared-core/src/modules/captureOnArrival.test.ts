@@ -66,13 +66,19 @@ const okAdvance = (r: AdvanceResult): AdvanceResult & { ok: true } => {
   return r;
 };
 
-/** A→B are 30 apart and lane-connected; scout speed 10 → 3h. Move F then advance. */
-function arriveAt(b: Planet, extraFleets: Fleet[] = []): { state: GameState; events: { type: string }[] } {
+/** A→B are 30 apart and lane-connected; scout speed 10 → 3h. Move F then advance.
+ *  Optional `diplomacy` seeds pairwise stances (default FFA = war). */
+function arriveAt(
+  b: Planet,
+  extraFleets: Fleet[] = [],
+  diplomacy?: Record<string, 'war' | 'peace' | 'pact' | 'alliance'>,
+): { state: GameState; events: { type: string }[] } {
   const a = planet('A', 'p1', 0, { kind: 'planet' });
   a.links = ['B'];
   b.links = ['A'];
   const kernel = createKernel([movementModule, captureOnArrivalModule]);
-  const state = baseState([a, b], [fleet('F', 'p1', 'A'), ...extraFleets]);
+  let state = baseState([a, b], [fleet('F', 'p1', 'A'), ...extraFleets]);
+  if (diplomacy) state = { ...state, diplomacy };
   const dep = okApply(kernel.applyAction(state, move('F', 'B'), ctx(0)));
   const arr = okAdvance(kernel.advanceTo(dep.state, ctx(3 * HOUR)));
   return { state: arr.state, events: arr.events };
@@ -103,5 +109,18 @@ describe('captureOnArrival module (map-roadmap.md M2.2)', () => {
   it('captures a sector with no kind (graceful default = capturable)', () => {
     const { state } = arriveAt(planet('B', null, 30)); // no kind → permissive default
     expect(state.planets.B!.owner).toBe('p1');
+  });
+
+  it('captures an at-WAR enemy undefended world (default FFA stance is war)', () => {
+    const { state } = arriveAt(planet('B', 'p2', 30, { kind: 'planet' }));
+    expect(state.planets.B!.owner).toBe('p1');
+  });
+
+  it('does NOT walk into an allied / at-peace undefended world (needs a declared war)', () => {
+    const { state, events } = arriveAt(planet('B', 'p2', 30, { kind: 'planet' }), [], {
+      'p1|p2': 'alliance',
+    });
+    expect(state.planets.B!.owner).toBe('p2'); // stays the ally's
+    expect(events.some((e) => e.type === 'planet.captured')).toBe(false);
   });
 });

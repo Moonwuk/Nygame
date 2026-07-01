@@ -1,4 +1,5 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
+import { getStance } from '../state/diplomacy';
 import { isCapturable } from '../state/sectorKind';
 
 /**
@@ -11,7 +12,10 @@ import { isCapturable } from '../state/sectorKind';
  * Skipped (these need a real assault — the combat module — or can't be owned):
  *   - defended: the sector has a live garrison;
  *   - contested: an enemy fleet with units is also present;
- *   - not capturable: empty space (sector kind `capturable: false`).
+ *   - not capturable: empty space (sector kind `capturable: false`);
+ *   - owned by a non-hostile player: an ally's / at-peace world can't be seized
+ *     for free — that needs a declared war first (same `war`-only gate combat's
+ *     `isHostile` uses). Only a NEUTRAL (unowned) or an at-WAR world walks in.
  *
  * Ordered AFTER combat in the module list, so a contested arrival starts its
  * battle first and the guards below then decline to capture.
@@ -23,6 +27,7 @@ function tryCapture(h: HandlerContext, payload: unknown): void {
   const planet = h.state.planets[at];
   if (!fleet || !planet || planet.owner === fleet.owner) return;
   if (!isCapturable(h.ctx.data, planet)) return;
+  if (planet.owner !== null && getStance(h.state, fleet.owner, planet.owner) !== 'war') return;
   if (planet.garrison.some((s) => s.count > 0)) return;
   const contested = Object.values(h.state.fleets).some(
     (g) => g.owner !== fleet.owner && g.location === at && g.units.some((u) => u.count > 0),
