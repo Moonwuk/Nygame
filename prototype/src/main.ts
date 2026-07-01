@@ -342,7 +342,7 @@ const ORBIT_COLOR = '#7df0d0'; // the single orbit ring (GDD §7.4 — no near/f
 // --- state -------------------------------------------------------------------
 
 let s: GameState = newGame();
-let speed = 1; // game-hours per real second (0 = paused); calm ×1 baseline, set per match
+let speed = 1 / 3600; // game-hours per real second (0 = paused); ×1 = wall-clock, overwritten at launch
 let banner: string | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
@@ -4775,10 +4775,11 @@ for (const b of Array.from(document.querySelectorAll('[data-speed]'))) {
 }
 
 // Map a setup time-flow multiplier (×1/×2/×5/×10) onto the speedbar and start running at
-// it. The multiplier IS the play speed in game-hours per real second (×1 = a calm 1 h/s,
-// ×5 = 5 h/s, …); fast-forward (▶▶) runs at 3× the chosen play. The play/fast buttons carry
-// the live values so pause→resume returns to the chosen pace, not the default.
-const PLAY_BASE = 1; // game-hours per real second at ×1 (the calm baseline pace)
+// it. ×1 is true wall-clock — 1 game-hour per real hour — matching the real-time MMO
+// design; each higher multiplier accelerates from there (×5 = 5 game-hours per real hour,
+// …), and fast-forward (▶▶) runs at 3× the chosen play. The play/fast buttons carry the
+// live values so pause→resume returns to the chosen pace, not the default.
+const PLAY_BASE = 1 / 3600; // game-hours per real second; 1/3600 ⇒ 1 game-hour per real hour (×1 = wall-clock)
 function applyTimeSpeed(mult: number): void {
   const play = PLAY_BASE * mult;
   const playBtn = $('spd-play');
