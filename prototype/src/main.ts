@@ -4661,6 +4661,18 @@ bannerEl.addEventListener('click', (ev) => {
   if ((ev.target as Element).closest('[data-restart]')) openSetup();
 });
 
+// Speedbar "⌂ В меню": leave the current match back to the hub from anywhere in-game.
+// In net mode this is an intentional disconnect (userClosed → no auto-reconnect). The
+// sim keeps ticking underneath as the menu's live backdrop, same as the other overlays.
+$('tomenu').addEventListener('click', () => {
+  if (NET) {
+    userClosed = true;
+    NET = false;
+    if (netSock) netSock.close();
+  }
+  openHub();
+});
+
 // Event-log window: the rail's ≡ opens it; ✕ or the backdrop closes it. The feed
 // (#log) updates in place each frame whether the window is open or not.
 const logWin = document.getElementById('logwin');
