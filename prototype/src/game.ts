@@ -357,6 +357,10 @@ export const data: GameData = parseGameData({
     planet: { name: 'Planet', scoreValue: 50, capturable: true, buildable: true, orbit: true },
     asteroid: { name: 'Asteroid Field', capturable: true, buildable: true, orbit: false },
     nebula: { name: 'Nebula', capturable: true, buildable: true, orbit: true },
+    // Listed only to pin orbit:false — a wreck field is salvageable but not a colony (no
+    // orbital layer, so not taxed as an inhabited world), matching SECTOR_TYPES. Without
+    // this it fell through to the permissive default (orbit:true) and was wrongly taxed.
+    graveyard: { name: 'Derelict Graveyard', capturable: true, buildable: true, orbit: false },
     empty: { name: 'Empty Space', capturable: false, buildable: false, orbit: false },
     debris_field: { name: 'Debris Field', capturable: false, buildable: false, orbit: false },
     // a destroyed planet — re-claimable + metal-rich, but worth only the flat 10; the
