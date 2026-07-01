@@ -232,6 +232,15 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
     player.resources = {};
     delete player.technologies;
   }
+  // Scoreboard: each player's live planet/fleet/unit totals aggregate territory
+  // the viewer can't see, so an enemy's `scores` line is fog-sensitive intel
+  // (its `total`/`fleets` tick reveals a build-up or a capture behind the fog).
+  // Keep only the viewer's own line — the client renders just `scores[ME]`.
+  // `status`/`winner` stay: the match's end result is public to everyone.
+  if (view.match?.scores) {
+    const own = view.match.scores[viewerId];
+    view.match.scores = own ? { [viewerId]: own } : {};
+  }
   // Heroes are private: a viewer sees only their own (position + cooldowns). Temp
   // lanes stay — they are public map topology (real `links`), visible to everyone.
   if (view.heroes) {

@@ -111,6 +111,20 @@ describe('visibleState (fog of war as a security boundary)', () => {
     expect(view.players.p2?.name).toBe('p2'); // identity kept (scoreboard)
   });
 
+  it('fogs the scoreboard: viewer keeps only their own score line, enemy totals hidden', () => {
+    const state = scenario();
+    state.match.scores = {
+      p1: { controlledPlanets: 1, fleets: 1, units: 1, total: 60 },
+      p2: { controlledPlanets: 4, fleets: 3, units: 9, total: 240 }, // fogged intel
+    };
+    const view = visibleState(state, 'p1', data);
+    expect(view.match.scores.p1).toEqual({ controlledPlanets: 1, fleets: 1, units: 1, total: 60 });
+    expect(view.match.scores.p2).toBeUndefined(); // enemy's planet/fleet/unit tally not leaked
+    // status/winner stay public; the source state is untouched (purity)
+    expect(view.match.status).toBe('ongoing');
+    expect(state.match.scores.p2?.total).toBe(240);
+  });
+
   it('keeps the viewer own pending schedule, drops enemy timers (no future-intent leak)', () => {
     const state = scenario();
     // own construction (A is p1's) survives; an enemy build (C is p2's) and an
