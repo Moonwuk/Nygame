@@ -1,6 +1,7 @@
-import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { PlayerId } from '@void/shared-core';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { MatchRoom } from './matchRoom';
 import { InMemoryMatchRegistry, type MatchRegistry } from './matchRegistry';
@@ -23,6 +24,13 @@ export interface MultiplayerServerOptions {
    *  `?player=`), the seat is resolved/assigned here so a returning nick gets its
    *  own side back. Absent ⇒ only the direct `?player=` handshake works. */
   accountStore?: AccountStore;
+  /** Structured logging: pass `true` (or a pino config) to have Fastify emit JSON logs
+   *  for boot/shutdown and requests. Default `false` (quiet — the default for tests). */
+  logger?: boolean | object;
+  /** Readiness probe for `GET /ready` (SV-0.1): return false while a hard dependency (the
+   *  durable store) is unreachable, so a load balancer stops routing new traffic without
+   *  failing liveness. Absent ⇒ always ready. `/ready` also reports 503 while draining. */
+  ready?: () => boolean | Promise<boolean>;
 }
 
 export interface MultiplayerServerHandle {
@@ -62,34 +70,42 @@ export function createMultiplayerServer(
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32_768 });
 
   const indexHtml = options.indexHtml;
-  const httpServer = createServer((request, response) => {
-    const path = (request.url ?? '/').split('?')[0] ?? '/';
-    if (path === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          ok: true,
-          matches: registry.ids().map((id) => ({ id, seq: registry.get(id)?.sequence ?? 0 })),
-        }),
-      );
-      return;
-    }
-    if (indexHtml !== undefined && (path === '/' || path === '/index.html')) {
-      // The single-file client changes every rebuild; never let a browser serve a
-      // stale cached copy (else client fixes silently don't reach the player).
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store, must-revalidate',
-      });
-      response.end(indexHtml);
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'text/plain' });
-    response.end('not found');
+  const ready = options.ready;
+  let draining = false; // flips at close() so /ready reports 503 during graceful drain
+
+  // SV-0.1: Fastify owns HTTP routing (health/ready now, match create/join later) and
+  // brings structured pino logging; the WebSocket upgrade is still handled on the raw
+  // underlying server (`app.server`) via the `ws` noServer instance, byte-identically.
+  // `disableRequestLogging`: the HTTP surface is tiny (health/ready now, create/join
+  // later) while the real traffic is WebSocket — per-request logs would just be a flood
+  // of health-poll noise. Boot/shutdown + explicit logs stay; add per-route logging where
+  // it earns its keep.
+  const app = Fastify({ logger: options.logger ?? false, disableRequestLogging: true });
+
+  // Liveness: cheap, unauthenticated, and DELIBERATELY contentless — it must not leak
+  // match ids/seqs (audit F-13, which the old node:http `/health` did). Readiness is a
+  // SEPARATE signal: NOT-ready while a hard dependency is down or the server is draining,
+  // so a load balancer stops sending new traffic before shutdown without failing liveness.
+  app.get('/health', async () => ({ ok: true }));
+  app.get('/ready', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const ok = !draining && (ready ? await ready() : true);
+    void reply.code(ok ? 200 : 503);
+    return { ready: ok };
   });
+  if (indexHtml !== undefined) {
+    // The single-file client changes every rebuild; never let a browser serve a stale
+    // cached copy (else client fixes silently don't reach the player).
+    const serveIndex = async (_request: FastifyRequest, reply: FastifyReply): Promise<string> => {
+      void reply.header('content-type', 'text/html; charset=utf-8');
+      void reply.header('cache-control', 'no-store, must-revalidate');
+      return indexHtml;
+    };
+    app.get('/', serveIndex);
+    app.get('/index.html', serveIndex);
+  }
 
   const accountStore = options.accountStore;
-  httpServer.on('upgrade', (request, socket, head) => {
+  app.server.on('upgrade', (request, socket, head) => {
     // Async because nick-login resolves a seat through the (possibly DB-backed)
     // account store before we accept the upgrade.
     void (async () => {
@@ -212,23 +228,22 @@ export function createMultiplayerServer(
   heartbeat.unref(); // never keep the process alive just for the heartbeat
 
   return {
-    httpServer,
-    listen: () =>
-      new Promise((resolve, reject) => {
-        httpServer.once('error', reject);
-        httpServer.listen(port, host, () => {
-          httpServer.off('error', reject);
-          const address = httpServer.address();
-          const boundPort = typeof address === 'object' && address !== null ? address.port : port;
-          // Hosting exactly one match ⇒ return its full URL (backward-compatible: callers
-          // connect straight to it). Multiple ⇒ return the base prefix; the client appends
-          // `/<matchId>`.
-          const ids = registry.ids();
-          const suffix = ids.length === 1 ? `${pathPrefix}/${ids[0]}` : pathPrefix;
-          resolve(`ws://${host}:${boundPort}${suffix}`);
-        });
-      }),
+    httpServer: app.server,
+    listen: async () => {
+      await app.listen({ host, port });
+      const address = app.server.address();
+      const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+      // Hosting exactly one match ⇒ return its full URL (backward-compatible: callers
+      // connect straight to it). Multiple ⇒ return the base prefix; the client appends
+      // `/<matchId>`.
+      const ids = registry.ids();
+      const suffix = ids.length === 1 ? `${pathPrefix}/${ids[0]}` : pathPrefix;
+      app.log.info({ host, port: boundPort, matches: ids.length }, 'server listening');
+      return `ws://${host}:${boundPort}${suffix}`;
+    },
     close: async () => {
+      draining = true; // /ready now reports 503 so a load balancer drains us first
+      app.log.info('server draining');
       clearInterval(heartbeat);
       // Graceful drain: ask every client to close (1001 "going away"), then
       // terminate any straggler after a short grace so close() always resolves.
@@ -240,15 +255,10 @@ export function createMultiplayerServer(
       // Persist + tear down every live match (lazy registry); a no-op for an eager one,
       // whose rooms the caller stops via its own shutdown handler.
       await registry.shutdown?.();
-      await new Promise<void>((resolve, reject) => {
-        wss.close(() => {
-          httpServer.close((error) => {
-            clearTimeout(grace);
-            if (error) reject(error);
-            else resolve();
-          });
-        });
-      });
+      // Stop accepting WS upgrades, then let Fastify close the HTTP server + its plugins.
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await app.close();
+      clearTimeout(grace);
     },
   };
 }

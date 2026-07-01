@@ -26,6 +26,10 @@ export class MemoryMatchStore implements MatchStore {
     }
     return Promise.resolve();
   }
+
+  ping(): Promise<boolean> {
+    return Promise.resolve(true); // no external dependency to be down
+  }
 }
 
 /** In-memory seat map — `room → nick → side`. */

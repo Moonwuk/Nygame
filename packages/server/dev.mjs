@@ -16,10 +16,10 @@ await build({
   format: 'esm',
   platform: 'node',
   target: 'node22',
-  // `ws` and `pg` ship native/optional bits and dynamic requires; leave them for
-  // Node to resolve at runtime. Everything else (incl. the @void/shared-core TS
-  // source) is bundled. `pg` only actually loads when DATABASE_URL is set.
-  external: ['ws', 'pg'],
+  // `ws`, `pg` and `fastify` ship native/optional bits and dynamic requires (fastify's
+  // avvio/find-my-way/pino); leave them for Node to resolve at runtime. Everything else
+  // (incl. the @void/shared-core TS source) is bundled. `pg` only loads with DATABASE_URL.
+  external: ['ws', 'pg', 'fastify'],
 });
 
 await import(pathToFileURL(outfile).href);

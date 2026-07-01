@@ -68,7 +68,15 @@ driver = startClockDriver(room, {
     ),
 });
 
-const server = createMultiplayerServer({ room, host, port });
+const server = createMultiplayerServer({
+  room,
+  host,
+  port,
+  logger: true, // structured pino logs for boot/shutdown (dev harness → prod entrypoint)
+  // /ready is red while the durable store is unreachable, so a load balancer stops
+  // routing new traffic without failing liveness (/health).
+  ready: () => stores.store.ping?.() ?? Promise.resolve(true),
+});
 
 const wsUrl = await server.listen();
 const httpUrl = wsUrl.replace(/^ws/, 'http').replace(/\/matches\/.*$/, '');

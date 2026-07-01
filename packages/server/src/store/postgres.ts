@@ -59,6 +59,15 @@ interface MatchRow {
 export class PostgresMatchStore implements MatchStore {
   constructor(private readonly pool: Pool) {}
 
+  async ping(): Promise<boolean> {
+    try {
+      await this.pool.query('SELECT 1');
+      return true;
+    } catch {
+      return false; // pool exhausted / DB unreachable → not ready
+    }
+  }
+
   async load(matchId: string): Promise<MatchSnapshot | null> {
     const r = await this.pool.query<MatchRow>(
       `SELECT id, data_version, seq, status, state FROM matches WHERE id = $1`,
