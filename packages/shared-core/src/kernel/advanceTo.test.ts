@@ -226,12 +226,49 @@ describe('advanceTo — real-time timeline (docs/architecture.md §4.1)', () => 
     expect(r.state.scheduled).toHaveLength(0); // both consumed, world not stuck
   });
 
-  it('caps a runaway schedule (E_ADVANCE_OVERFLOW)', () => {
+  it('yields a bounded partial advance on a same-instant runaway instead of wedging', () => {
     const kernel = createKernel([infiniteModule]);
     const state = stateWith({ scheduled: [sched(0, 50, 'inf')] });
     const r = kernel.advanceTo(state, ctx(100));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('E_ADVANCE_OVERFLOW');
+    // No longer aborts: it commits the bounded work and flags it partial. The
+    // same-instant runaway leaves the clock unmoved (at 50) with 'inf' still
+    // pending — the signal a caller uses to detect the stall and stop.
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.partial).toBe(true);
+      expect(r.state.time).toBe(50); // time did not progress → runaway
+      expect(r.state.scheduled.length).toBeGreaterThan(0);
+      // Re-running makes the same bounded progress again (never hangs, never wedges).
+      const again = kernel.advanceTo(r.state, ctx(100));
+      expect(again.ok).toBe(true);
+      if (again.ok) expect(again.state.time).toBe(50);
+    }
+  });
+
+  it('catches up a long legit chain across partial advances (time progresses each call)', () => {
+    // A recurring tick that reschedules itself 1ms later — a long but time-ADVANCING
+    // chain (unlike the same-instant runaway). It must fully catch up over several calls.
+    const recurring: GameModule = {
+      id: 'recurring',
+      version: '1.0.0',
+      setup(api) {
+        api.on('r', (_e, h) => h.schedule(h.state.time + 1, 'r'));
+      },
+    };
+    const kernel = createKernel([recurring]);
+    const target = 55_000; // > MAX_ADVANCE_STEPS worth of steps → forces ≥1 partial
+    let state = stateWith({ scheduled: [sched(0, 1, 'r')] });
+    let calls = 0;
+    for (;;) {
+      const r = kernel.advanceTo(state, ctx(target));
+      expect(r.ok).toBe(true);
+      if (!r.ok) break;
+      expect(r.state.time).toBeGreaterThan(state.time); // strict forward progress
+      state = r.state;
+      if (!r.partial) break;
+      if (++calls > 20) throw new Error('did not converge — no forward progress');
+    }
+    expect(state.time).toBe(target); // fully caught up, no work lost
   });
 
   it('rejects moving the clock backwards', () => {

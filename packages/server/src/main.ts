@@ -60,7 +60,14 @@ const room = createDevMatch(loadShippedData(), {
 // Make a fresh match durable from t0 (a no-op re-save on resume — optimistic by seq).
 persistSnapshot();
 // The 24/7 heartbeat: fire due scheduled events with no player action, persist each advance.
-driver = startClockDriver(room, { onTick: persistSnapshot });
+driver = startClockDriver(room, {
+  onTick: persistSnapshot,
+  onStall: () =>
+    process.stderr.write(
+      'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
+        'check for a module scheduling events at its own instant.\n',
+    ),
+});
 
 const server = createMultiplayerServer({ room, host, port });
 

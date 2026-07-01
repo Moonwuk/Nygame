@@ -79,7 +79,9 @@ const observe = (ev: RoomObservation): void => {
   // lobby Start releases the frozen clock — both move the next-event time.
   if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
   // Re-arm on EVERY room event: an action may (un)schedule events, a lobby Start releases
-  // the clock, and a join/leave starts/stops the live-player heartbeat below.
+  // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
+  // event also gives the stall guard a fresh chance (the situation may have changed).
+  wakeStalls = 0;
   armWakeup();
 };
 
@@ -210,7 +212,9 @@ const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift s
 // on-screen between actions. newGame() starts with NO scheduled events, so without this
 // the very first thing players see after Start is a frozen "Day 1 00:00".
 const HEARTBEAT_MS = 1_000;
+const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeStalls = 0;
 function armWakeup(): void {
   if (wakeTimer) {
     clearTimeout(wakeTimer);
@@ -224,8 +228,23 @@ function armWakeup(): void {
 }
 function onWake(): void {
   wakeTimer = null;
-  room.tick(); // fire whatever is now due (a no-op if a capped timer fired early)
+  const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
   scheduleSave(); // persist the advanced world
+  // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
+  // Back off after a few tries instead of busy-looping the wakeup at 0ms (the room has
+  // already surfaced an advance_overflow). A real player action re-arms via `observe`,
+  // which resets the counter and gives it a fresh chance.
+  if (!progressed && room.msUntilNextEvent() === 0) {
+    if (++wakeStalls >= WAKE_STALL_LIMIT) {
+      process.stderr.write(
+        'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
+          'check for a module scheduling events at its own instant.\n',
+      );
+      return; // idle — do not re-arm
+    }
+  } else {
+    wakeStalls = 0;
+  }
   armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
 }
 

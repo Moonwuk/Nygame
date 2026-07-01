@@ -118,7 +118,13 @@ export type RoomObservation =
       seq: number;
       code?: string;
     }
-  | { kind: 'end'; winner: PlayerId | null; reason?: string };
+  | { kind: 'end'; winner: PlayerId | null; reason?: string }
+  /** The world clock could not fully reach `now` in one `advance` call. `reason`
+   *  distinguishes an enormous-but-legitimate catch-up that was throttled to bound
+   *  work (`throttled` — it will finish on the next advance) from a same-instant
+   *  runaway where the clock stopped progressing (`stalled` — a content/module bug
+   *  that needs attention). Ops should alert on `stalled`. */
+  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' };
 
 export interface SubmitResult {
   ok: boolean;
@@ -132,6 +138,13 @@ const OPEN = 1;
  *  isn't draining — a fast sender outrunning a slow receiver). Deltas are KB-sized,
  *  so 1 MiB is hundreds of un-acked updates — a genuinely stuck client, not a blip. */
 const MAX_BUFFERED_BYTES = 1_048_576;
+
+/** Max partial-advance chunks one `advance` call will chain before returning. Each
+ *  chunk is up to the kernel's `MAX_ADVANCE_STEPS` of work, so this bounds the
+ *  synchronous work of a single catch-up (an enormous-but-legit backlog finishes
+ *  across several calls; a same-instant runaway is caught after one non-progressing
+ *  chunk). Keeps the event loop responsive instead of hanging on a huge advance. */
+const MAX_CATCHUP_CHUNKS = 10;
 
 function canSend(peer: RoomPeer): boolean {
   return peer.readyState === undefined || peer.readyState === OPEN;
@@ -511,13 +524,17 @@ export class MatchRoom {
    *  captures) with NO player action, so the world keeps running 24/7 while
    *  everyone is away. A wakeup driver calls this when `msUntilNextEvent` elapses.
    *  No-op while the clock is frozen (lobby) or when nothing is due yet. */
-  tick(): void {
-    if (this.waiting) return;
+  tick(): boolean {
+    if (this.waiting) return false;
+    const before = this.stateValue.time;
     const advanced = this.advance(this.clock());
     if (advanced.ok && advanced.events.length > 0) {
       this.broadcastState(advanced.events);
       this.observeEndIfNeeded();
     }
+    // Whether the world clock moved forward — a wakeup driver uses this to tell a
+    // legit (progressing) catch-up from a same-instant runaway (stalled) and back off.
+    return this.stateValue.time > before;
   }
 
   /** Wall-ms until the soonest scheduled event comes due — what an offline wakeup
@@ -556,10 +573,41 @@ export class MatchRoom {
 
   private advance(now: number): { ok: true; events: DomainEvent[] } | { ok: false; code: string } {
     if (now <= this.stateValue.time) return { ok: true, events: [] };
-    const result = this.kernel.advanceTo(this.stateValue, this.context(now));
-    if (!result.ok) return { ok: false, code: result.code };
-    this.stateValue = result.state;
-    return { ok: true, events: result.events };
+    const events: DomainEvent[] = [];
+    // The kernel bounds each `advanceTo` to a fixed amount of work and returns a
+    // `partial` advance rather than discarding it (which would wedge the room on
+    // every retry). Chain a bounded number of chunks so an enormous-but-legit
+    // catch-up finishes without hanging the event loop, and a same-instant runaway
+    // (clock stops progressing) is caught and surfaced instead of looping forever.
+    for (let chunk = 0; chunk < MAX_CATCHUP_CHUNKS; chunk++) {
+      const before = this.stateValue.time;
+      const result = this.kernel.advanceTo(this.stateValue, this.context(now));
+      if (!result.ok) return { ok: false, code: result.code };
+      this.stateValue = result.state;
+      events.push(...result.events);
+      if (!result.partial) return { ok: true, events }; // reached `now`
+      if (this.stateValue.time <= before) {
+        // Clock did not move despite work being done → a same-instant runaway
+        // (events rescheduling themselves at one instant). Stop and surface it;
+        // pressing on would only spin.
+        this.observe?.({
+          kind: 'advance_overflow',
+          reachedTime: this.stateValue.time,
+          targetTime: now,
+          reason: 'stalled',
+        });
+        return { ok: true, events };
+      }
+    }
+    // Made forward progress but ran out of chunks — a genuinely huge backlog. Yield
+    // now (the next advance/tick continues) rather than block longer.
+    this.observe?.({
+      kind: 'advance_overflow',
+      reachedTime: this.stateValue.time,
+      targetTime: now,
+      reason: 'throttled',
+    });
+    return { ok: true, events };
   }
 
   private context(now: number): Context {
