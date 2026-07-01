@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 586 зелёных** (4 skip, 65 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 587 зелёных** (4 skip, 65 файлов).
 
 ---
 
@@ -621,7 +621,7 @@ golden; модель времени `advanceTo`; экономика (казна 
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 586 тестов)
+pnpm run check       # lint + typecheck + test (гейт; 587 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```
