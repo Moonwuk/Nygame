@@ -12,6 +12,7 @@ describe('faction data (B1 / CR-1.1)', () => {
   const factions = readJson('factions.json');
   const unitIds = new Set(Object.keys(readJson('units.json')));
   const buildingIds = new Set(Object.keys(readJson('buildings.json')));
+  const resourceIds = new Set(readJson('resources.json') as unknown as string[]);
   const ids = Object.keys(factions);
 
   it('ships exactly the three factions', () => {
@@ -43,6 +44,40 @@ describe('faction data (B1 / CR-1.1)', () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it('every starting resource is a defined resource (no phantom currencies)', () => {
+    // Guards against a faction seeding an undefined resource (e.g. the old
+    // `biomass`/`dark_matter`): the schema's ResourceBag accepts any string key,
+    // so a typo passes validation but the faction can never spend/earn it.
+    const bad: string[] = [];
+    for (const id of ids) {
+      const f = FactionDefSchema.parse(factions[id]);
+      for (const key of Object.keys(f.startingLoadout.resources)) {
+        if (!resourceIds.has(key)) bad.push(`${id}: resource ${key}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('each faction can pay for its unique unit with resources it starts with or produces', () => {
+    // Coherence: the currencies a faction's unique unit costs must be reachable —
+    // present at start OR produced by a home building — else it can never build it.
+    const units = readJson('units.json') as Record<string, { cost?: Record<string, number> }>;
+    const buildings = readJson('buildings.json') as Record<string, { produces?: Record<string, number> }>;
+    const stranded: string[] = [];
+    for (const id of ids) {
+      const f = FactionDefSchema.parse(factions[id]);
+      const reachable = new Set(Object.keys(f.startingLoadout.resources));
+      for (const b of f.startingLoadout.homeBuildings) {
+        for (const r of Object.keys(buildings[b]?.produces ?? {})) reachable.add(r);
+      }
+      const cost = units[f.uniqueUnits[0] ?? '']?.cost ?? {};
+      for (const r of Object.keys(cost)) {
+        if (!reachable.has(r)) stranded.push(`${id}: unique unit needs ${r}`);
+      }
+    }
+    expect(stranded).toEqual([]);
   });
 
   it('the factions are genuinely distinct (own passive + own unique unit)', () => {

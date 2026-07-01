@@ -23,13 +23,13 @@
     "abilities": [],
     "uniqueUnits": ["infected_cruiser"],
     "startingLoadout": {
-      "resources": { "credits": 200, "metal": 200, "biomass": 120 },
+      "resources": { "credits": 200, "metal": 200, "food": 150, "energy": 60 },
       "fleet": [
         { "unit": "infected_cruiser", "count": 2 },
         { "unit": "scout_drone", "count": 1 }
       ],
       "garrison": [{ "unit": "militia", "count": 2 }],
-      "homeBuildings": ["biomass_pit"]
+      "homeBuildings": ["biomass_pit", "power_plant"]
     },
     "passives": { "productionBonus": 0.15 }
   },
@@ -40,14 +40,14 @@
     "abilities": ["raise_fallen"],
     "uniqueUnits": ["reanimated_drone"],
     "startingLoadout": {
-      "resources": { "credits": 250, "metal": 250, "dark_matter": 60 },
+      "resources": { "credits": 250, "metal": 250, "energy": 80 },
       "fleet": [
         { "unit": "cruiser", "count": 1 },
         { "unit": "reanimated_drone", "count": 2 },
         { "unit": "scout_drone", "count": 1 }
       ],
       "garrison": [{ "unit": "militia", "count": 2 }],
-      "homeBuildings": ["mine_t1"]
+      "homeBuildings": ["mine_t1", "power_plant"]
     },
     "passives": { "fleetSpeedBonus": 0.1, "combatDamageBonus": 0.05 }
   }
