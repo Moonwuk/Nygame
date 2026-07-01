@@ -2128,6 +2128,57 @@ export function squadronTake(fleet: Fleet): Array<{ unit: string; count: number 
     .map((st) => ({ unit: st.unit, count: st.count }));
 }
 
+// --- squadron fuel / rearm counter (squadrons-roadmap SQ-2.1) -----------------
+// A launched wing has a limited sortie budget: each strike burns one `fuel`, and when
+// it runs dry the wing drops onto a `rearmRounds` cooldown — "back on the carrier",
+// unavailable — before it refuels and can fly again. A pure, deterministic counter that
+// lives in state (like heroes.cooldowns), JSON-serializable. The patrol loop (SQ-4.1)
+// drives it; here it's just the state machine + its guards.
+
+/** A wing's sortie budget: `fuel` strikes left before rearm, `rearming` rounds left on
+ *  the rearm cooldown (0 = flight-ready). */
+export interface SortieState {
+  fuel: number;
+  rearming: number;
+}
+
+/** The wing's max sortie budget + rearm length, read from its squadron unit's stats
+ *  (schema defaults 0). Reads the FIRST squadron-trait stack of the fleet. */
+export function sortieSpec(fleet: Fleet): { maxFuel: number; rearmRounds: number } {
+  const st = fleet.units.find(
+    (s) => s.count > 0 && (data.units[s.unit]?.traits.includes('squadron') ?? false),
+  );
+  const u = st ? data.units[st.unit]?.stats : undefined;
+  return { maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)), rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)) };
+}
+
+/** A fresh, fully-fuelled wing. */
+export function freshSortie(maxFuel: number): SortieState {
+  return { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 };
+}
+
+/** Flight-ready = not mid-rearm and has fuel to burn. */
+export function canSortie(s: SortieState): boolean {
+  return s.rearming <= 0 && s.fuel > 0;
+}
+
+/** Burn one sortie. When the last of the fuel goes the wing drops onto a rearm cooldown
+ *  of `rearmRounds` (unavailable until it counts back down). A spend while not
+ *  flight-ready is a no-op — guard with canSortie first. */
+export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
+  if (!canSortie(s)) return s;
+  const fuel = s.fuel - 1;
+  return fuel <= 0 ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) } : { fuel, rearming: 0 };
+}
+
+/** Advance the rearm cooldown one round; when it elapses the wing refuels to max and is
+ *  flight-ready again. A wing that isn't rearming is unchanged. */
+export function tickRearm(s: SortieState, maxFuel: number): SortieState {
+  if (s.rearming <= 0) return s;
+  const rearming = s.rearming - 1;
+  return rearming <= 0 ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 } : { fuel: s.fuel, rearming };
+}
+
 /**
  * Actions to re-embark the liftable garrison of the fleet's CURRENT world back into its
  * cargo — the "auto-load after capture" step. After a defended assault the storming
