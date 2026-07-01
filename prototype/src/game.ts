@@ -1201,6 +1201,8 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     heroes,
     diplomacy,
     approval,
+    sessionMarket: [],
+    sessionMarketSeq: 0,
     divisions: {},
     divisionSeq: 0,
     templates,
@@ -1330,6 +1332,108 @@ export const botDiplomacyModule: GameModule = {
   },
 };
 
+// --- session market: a two-sided resource order book -------------------------
+// A public per-match book of lots. A SELL lot (ask) escrows goods and offers them
+// for credits; a BUY lot (bid) escrows credits and offers them for goods. `market.take`
+// fills a lot from the other side; `market.cancel` refunds the owner's escrow. Every
+// trade is a pure transfer — credits and goods are conserved, nothing minted. A bot
+// that embargoes you (soured favour, botEmbargoes) refuses to let you take its lots —
+// this is the diplomacy embargo tier finally biting.
+export const MARKET_GOODS = ['metal', 'food', 'energy', 'microelectronics']; // credits = currency
+export type MarketSide = 'sell' | 'buy';
+export interface MarketLot {
+  id: string;
+  side: MarketSide;
+  owner: string;
+  resource: string;
+  amount: number; // units remaining on offer (escrowed)
+  price: number; // credits per unit
+}
+
+/** The live order book (a prototype-only own-key field, preserved by deepClone). */
+export function marketLots(state: GameState): MarketLot[] {
+  const s = state as DivState;
+  return (s.sessionMarket ??= []);
+}
+/** Add `n` of `res` to a player's treasury (mirrors payCost's subtract form). */
+function creditTreasury(state: GameState, playerId: string, res: string, n: number): void {
+  const t = state.players[playerId]?.resources;
+  if (t) t[res] = (t[res] ?? 0) + n;
+}
+
+export const marketModule: GameModule = {
+  id: 'market',
+  version: '0.1.0',
+  setup(api) {
+    // Place a lot: a sell (ask) escrows goods; a buy (bid) escrows credits.
+    api.onAction('market.list', (action, h) => {
+      const p = action.payload as { side?: string; resource?: string; amount?: number; price?: number };
+      if (p?.side !== 'sell' && p?.side !== 'buy') return h.reject('E_BAD_PAYLOAD');
+      if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource)) return h.reject('E_BAD_RESOURCE');
+      const amount = Math.floor(p.amount ?? 0);
+      const price = p.price ?? 0;
+      if (!(amount > 0) || !(price >= 0)) return h.reject('E_BAD_PAYLOAD');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      const escrow = p.side === 'sell' ? { [p.resource]: amount } : { credits: amount * price };
+      if (!canAfford(player.resources, escrow)) return h.reject('E_NO_FUNDS');
+      payCost(player.resources, escrow);
+      const s = h.state as DivState;
+      const id = `mk:${action.playerId}:${(s.sessionMarketSeq = (s.sessionMarketSeq ?? 0) + 1)}`;
+      marketLots(h.state).push({ id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
+      h.emit('market.listed', { id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
+    });
+
+    // Fill (partially) a lot from the other side. Buying from a sell lot pays credits
+    // for the escrowed goods; selling into a buy lot gives goods for the escrowed credits.
+    api.onAction('market.take', (action, h) => {
+      const p = action.payload as { id?: string; amount?: number };
+      if (typeof p?.id !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const lots = marketLots(h.state);
+      const lot = lots.find((l) => l.id === p.id);
+      if (!lot) return h.reject('E_NO_LOT');
+      if (lot.owner === action.playerId) return h.reject('E_OWN_LOT');
+      if (botEmbargoes(h.state, lot.owner, action.playerId)) return h.reject('E_EMBARGO');
+      const taker = h.state.players[action.playerId];
+      if (!taker || !h.state.players[lot.owner]) return h.reject('E_NO_PLAYER');
+      const qty = Math.min(lot.amount, Math.floor(p.amount ?? lot.amount));
+      if (!(qty > 0)) return h.reject('E_BAD_PAYLOAD');
+      const credits = qty * lot.price;
+      if (lot.side === 'sell') {
+        if (!canAfford(taker.resources, { credits })) return h.reject('E_NO_FUNDS');
+        payCost(taker.resources, { credits }); // taker buys the goods
+        creditTreasury(h.state, action.playerId, lot.resource, qty);
+        creditTreasury(h.state, lot.owner, 'credits', credits);
+      } else {
+        if (!canAfford(taker.resources, { [lot.resource]: qty })) return h.reject('E_NO_FUNDS');
+        payCost(taker.resources, { [lot.resource]: qty }); // taker sells the goods
+        creditTreasury(h.state, action.playerId, 'credits', credits); // from the escrow
+        creditTreasury(h.state, lot.owner, lot.resource, qty);
+      }
+      lot.amount -= qty;
+      if (lot.amount <= 0) lots.splice(lots.indexOf(lot), 1);
+      h.emit('market.traded', {
+        id: lot.id, taker: action.playerId, owner: lot.owner, side: lot.side,
+        resource: lot.resource, amount: qty, price: lot.price,
+      });
+    });
+
+    // The owner reclaims a lot, refunding its remaining escrow.
+    api.onAction('market.cancel', (action, h) => {
+      const p = action.payload as { id?: string };
+      if (typeof p?.id !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const lots = marketLots(h.state);
+      const lot = lots.find((l) => l.id === p.id);
+      if (!lot) return h.reject('E_NO_LOT');
+      if (lot.owner !== action.playerId) return h.reject('E_FORBIDDEN');
+      if (lot.side === 'sell') creditTreasury(h.state, lot.owner, lot.resource, lot.amount);
+      else creditTreasury(h.state, lot.owner, 'credits', lot.amount * lot.price);
+      lots.splice(lots.indexOf(lot), 1);
+      h.emit('market.cancelled', { id: lot.id, owner: lot.owner });
+    });
+  },
+};
+
 // --- ground divisions: mobilisation + daily restoration ----------------------
 // A division is a cohesive ground formation built from a LOCKED template. It lives in
 // `state.divisions` (a prototype-only field, preserved through deepClone), garrisons a
@@ -1366,6 +1470,9 @@ type DivState = GameState & {
   capital?: Record<string, string>;
   /** Bot favour toward each other seat: approval[bot][player] on a 0..100 meter. */
   approval?: Record<string, Record<string, number>>;
+  /** Session market: a two-sided order book of open lots (sell/buy) + its id counter. */
+  sessionMarket?: MarketLot[];
+  sessionMarketSeq?: number;
 };
 export function divisionsOf(state: GameState): Record<string, Division> {
   const s = state as DivState;
@@ -1833,6 +1940,7 @@ export const MODULES: GameModule[] = [
   fleetLaunchModule,
   diplomacyModule, // peace-by-default + declare-war action (combat reads state.diplomacy)
   botDiplomacyModule, // bots: friendly-by-default favour meter → embargo/war only when provoked
+  marketModule, // session resource market: two-sided order book (sell/buy lots), embargo-gated
   divisionModule, // ground divisions: mobilise from a template + daily restoration
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
 ];
@@ -1934,6 +2042,16 @@ export const researchTech = (playerId: string, technology: string) =>
 /** Declare war on (or otherwise re-stance) another commander. */
 export const declareWar = (playerId: string, target: string, stance: DiplomaticStance = 'war') =>
   act(playerId, 'diplomacy.declare', { target, stance });
+/** Place a market lot: `sell` escrows `amount` of `resource` for `price` credits/unit;
+ *  `buy` escrows the credits and offers to buy that much of `resource`. */
+export const marketList = (playerId: string, side: MarketSide, resource: string, amount: number, price: number) =>
+  act(playerId, 'market.list', { side, resource, amount, price });
+/** Take (fill) up to `amount` from an open lot — buy from a sell lot / sell into a buy lot. */
+export const marketTake = (playerId: string, id: string, amount?: number) =>
+  act(playerId, 'market.take', amount === undefined ? { id } : { id, amount });
+/** Reclaim your own lot, refunding its remaining escrow. */
+export const marketCancel = (playerId: string, id: string) =>
+  act(playerId, 'market.cancel', { id });
 /** Mobilise division template `template` (0-based) on your world `planetId`. */
 export const mobilizeDivision = (playerId: string, planetId: string, template: number) =>
   act(playerId, 'division.mobilize', { planetId, template });
