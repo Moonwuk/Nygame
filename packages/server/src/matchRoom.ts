@@ -193,9 +193,13 @@ export class MatchRoom {
   private readonly observe?: (event: RoomObservation) => void;
   /** Durable write for strict commit-before-broadcast (see options.persist). */
   private readonly persist?: (snapshot: MatchSnapshot, receipt: StoredReceipt) => Promise<void>;
-  /** Serializes committed submits (one at a time) so an async persist can't let a
-   *  second action race the reducer. */
-  private commitChain: Promise<void> = Promise.resolve();
+  /** The actor mailbox (SV-0.2): serializes state-touching operations whose critical
+   *  section spans an `await` — a committed submit (its persist) and a lobby `start`
+   *  — so one runs fully before the next, and neither interleaves with the other's
+   *  broadcast. Synchronous ops (the no-persist `submitAction`, `tick`) can't interleave
+   *  anyway; `tick` uses the `committing` flag rather than the mailbox (skip ≡ defer for
+   *  a recomputable advance, and skip is cheaper). */
+  private mailbox: Promise<void> = Promise.resolve();
   /** True during a committed submit's critical section (incl. its persist await) so a
    *  concurrent `tick()` skips instead of mutating the world under the submit, and
    *  `msUntilNextEvent()` reports null so a wakeup driver idles (rather than firing skipped
@@ -458,7 +462,11 @@ export class MatchRoom {
       return;
     }
     if (message.type === 'start') {
-      this.start(playerId); // host-only; ignored otherwise
+      // Serialize the lobby release through the mailbox in committed mode, so its
+      // broadcast can't interleave with an in-flight action's persist await. (`start`
+      // itself is synchronous and host-only; ignored otherwise.)
+      if (this.persist) await this.enqueue(() => this.start(playerId));
+      else this.start(playerId);
       return;
     }
     if (message.type === 'ping.place') {
@@ -700,18 +708,29 @@ export class MatchRoom {
     };
   }
 
+  /** Append a task to the actor mailbox — it runs after any in-flight one, so their
+   *  critical sections (incl. awaits) never interleave. The stored link must NEVER be a
+   *  rejected promise: `.then` on a rejected upstream skips its callback, which would
+   *  silently stop EVERY future task on this room. Tasks own their error handling; this
+   *  is the backstop. */
+  private enqueue(task: () => void | Promise<void>): Promise<void> {
+    const run = this.mailbox.then(task);
+    this.mailbox = run.catch(() => undefined);
+    return run;
+  }
+
   /**
    * Strict commit-before-broadcast action path (options.persist). Serialized per room
-   * via `commitChain`, so the async persist await can never let a second action race
-   * the reducer. The tail (advance → apply → persist → commit → broadcast) runs with
-   * `committing` set so a concurrent `tick()` skips. An unexpected throw is contained
-   * (transient reject) and never wedges the queue.
+   * via the actor mailbox, so the async persist await can never let a second action (or
+   * a lobby start) race the reducer. The tail (advance → apply → persist → commit →
+   * broadcast) runs with `committing` set so a concurrent `tick()` skips. An unexpected
+   * throw is contained (transient reject) and never wedges the mailbox.
    */
   private submitActionCommitted(playerId: PlayerId, action: Action, peer?: RoomPeer): Promise<void> {
-    const run = this.commitChain.then(() =>
+    return this.enqueue(() =>
       this.doCommittedSubmit(playerId, action, peer).catch(() => {
         // Last-resort: report and swallow. The `send` itself must not throw (a dead
-        // socket would otherwise reject the chain), so guard it too.
+        // socket would otherwise reject the task), so guard it too.
         try {
           if (peer) this.sendTransientReject(peer, action.id, 'E_INTERNAL');
         } catch {
@@ -719,11 +738,6 @@ export class MatchRoom {
         }
       }),
     );
-    // The chain must NEVER hold a rejected promise: `.then` on a rejected upstream skips
-    // its callback, so a single rejection here would silently stop EVERY future action on
-    // this room. Keep the stored link resolved (belt-and-suspenders over the inner catch).
-    this.commitChain = run.catch(() => undefined);
-    return run;
   }
 
   private async doCommittedSubmit(

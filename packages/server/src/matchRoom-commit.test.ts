@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Action } from '@void/shared-core';
+import {
+  createInitialState,
+  createKernel,
+  parseGameData,
+  type Action,
+  type GameModule,
+  type Player,
+} from '@void/shared-core';
 import { createDevMatch, loadShippedData } from './scenario';
 import { MatchRoom, type RoomPeer } from './matchRoom';
 import type { MatchSnapshot, StoredReceipt } from './store';
@@ -203,5 +210,71 @@ describe('MatchRoom · strict commit-before-broadcast', () => {
     expect(res.ok).toBe(true);
     expect(room.state.fleets.green_1?.orbit).toBe('near'); // committed synchronously
     expect(room.sequence).toBe(1);
+  });
+});
+
+// SV-0.2 mailbox: a lobby `start` shares the actor mailbox with committed actions, so
+// its broadcast can't interleave with an in-flight action's persist await.
+const markerModule: GameModule = {
+  id: 'marker',
+  version: '1.0.0',
+  setup(api) {
+    api.onAction('marker.set', (a, h) => {
+      const p = h.state.players[a.playerId];
+      if (!p) return h.reject('E_FORBIDDEN');
+      p.resources.marker = (p.resources.marker ?? 0) + 1;
+      h.emit('marker.set', {});
+    });
+  },
+};
+function lobbyPlayer(id: string): Player {
+  return { id, name: id, faction: id, status: 'active', resources: {} };
+}
+function markerData() {
+  return parseGameData({
+    version: 'test',
+    resources: ['marker'],
+    units: {},
+    factions: {},
+    buildings: {},
+    events: {},
+    sectors: {},
+    planetTypes: {},
+  });
+}
+
+describe('MatchRoom · mailbox serializes lobby start', () => {
+  it('runs a lobby start only after an in-flight committed action commits', async () => {
+    let resolvePersist: (() => void) | null = null;
+    const persist = (): Promise<void> =>
+      new Promise<void>((res) => {
+        resolvePersist = () => res();
+      });
+    const base = createInitialState({ seed: 'lobby', version: { data: 'test', manifest: 'test' } });
+    const room = new MatchRoom({
+      id: 'lobby',
+      initialState: { ...base, players: { p1: lobbyPlayer('p1'), p2: lobbyPlayer('p2') } },
+      kernel: createKernel([markerModule]),
+      data: markerData(),
+      now: () => 1000,
+      manualStart: true, // clock frozen until the host presses Start
+      persist,
+    });
+    const p1 = new MemoryPeer();
+    room.addPeer('p1', p1); // first connection ⇒ host
+
+    // A committed action, held at its persist await.
+    const actAction: Action = { id: 'a1', type: 'marker.set', playerId: 'p1', payload: {}, issuedAt: 1 };
+    const actP = room.receive('p1', p1, JSON.stringify({ type: 'action', action: actAction }));
+    await flush();
+
+    // Host presses Start while the action is still awaiting its durable write.
+    const startP = room.receive('p1', p1, JSON.stringify({ type: 'start' }));
+    await flush();
+    expect(room.isStarted).toBe(false); // queued behind the held action — not run yet
+
+    resolvePersist!();
+    await Promise.all([actP, startP]);
+    expect(room.isStarted).toBe(true); // ran in mailbox order, after the action committed
   });
 });
