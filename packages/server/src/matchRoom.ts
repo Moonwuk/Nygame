@@ -197,9 +197,9 @@ export class MatchRoom {
    *  second action race the reducer. */
   private commitChain: Promise<void> = Promise.resolve();
   /** True during a committed submit's critical section (incl. its persist await) so a
-   *  concurrent `tick()` skips instead of mutating the world under the submit. Because
-   *  the submit's `advance()` runs to `now` synchronously before any await, the clock is
-   *  already current when a skipped tick fires — so the skip is not seen as a stall. */
+   *  concurrent `tick()` skips instead of mutating the world under the submit, and
+   *  `msUntilNextEvent()` reports null so a wakeup driver idles (rather than firing skipped
+   *  ticks that look overdue). The submit re-arms the driver when it commits. */
   private committing = false;
   private endObserved = false; // 'end' is reported once
   private readonly peers = new Map<PlayerId, Set<RoomPeer>>();
@@ -549,9 +549,10 @@ export class MatchRoom {
    *  everyone is away. A wakeup driver calls this when `msUntilNextEvent` elapses.
    *  No-op while the clock is frozen (lobby) or when nothing is due yet. */
   tick(): boolean {
-    // Skip while a committed submit holds the world: it already advanced to `now`
-    // synchronously before its persist await, so there is nothing due to fire and
-    // mutating `stateValue` here would race the submit's pending commit.
+    // Skip while a committed submit holds the world: its catch-up is computed but not yet
+    // committed to `stateValue` (commit-before-broadcast), so advancing here would race
+    // the submit's pending commit. `msUntilNextEvent` reports null while committing, so a
+    // driver idles rather than firing skipped ticks; the submit re-arms it on commit.
     if (this.waiting || this.committing) return false;
     const before = this.stateValue.time;
     const advanced = this.advance(this.clock());
@@ -570,7 +571,11 @@ export class MatchRoom {
    *  advances 1:1 with wall-time, so the game-ms gap to the event IS the wall-ms
    *  to sleep; clamped at 0 for an already-overdue event. */
   msUntilNextEvent(): number | null {
-    if (this.waiting) return null;
+    // While a committed submit owns the world, its catch-up isn't committed to
+    // `stateValue` yet, so the still-pending events read as overdue (ms 0). Report
+    // "nothing to wake for" so a driver idles instead of spinning on skipped ticks and
+    // tripping its stall guard — the submit re-arms the driver when it commits.
+    if (this.waiting || this.committing) return null;
     const scheduled = this.stateValue.scheduled;
     if (scheduled.length === 0) return null;
     let soonest = Infinity;
@@ -598,43 +603,47 @@ export class MatchRoom {
     };
   }
 
+  /** Advance `this.stateValue` to `now`, committing the catch-up in place. Thin wrapper
+   *  over the pure `computeAdvance` — used by the sync `submitAction` and `tick`. */
   private advance(now: number): { ok: true; events: DomainEvent[] } | { ok: false; code: string } {
-    if (now <= this.stateValue.time) return { ok: true, events: [] };
+    const r = this.computeAdvance(this.stateValue, now);
+    if (!r.ok) return { ok: false, code: r.code };
+    this.stateValue = r.state;
+    return { ok: true, events: r.events };
+  }
+
+  /**
+   * Pure world catch-up from `from` to `now` — returns the advanced state WITHOUT
+   * mutating `this.stateValue`, so the committed path can compute the advance, persist
+   * it, and only THEN expose it (a mid-persist read / new-peer welcome must not see a
+   * not-yet-durable world). The kernel bounds each `advanceTo` and returns a `partial`
+   * advance rather than discarding it; chain a bounded number of chunks so an
+   * enormous-but-legit backlog finishes without hanging the event loop, and a
+   * same-instant runaway (clock stops progressing) is surfaced instead of looping.
+   */
+  private computeAdvance(
+    from: GameState,
+    now: number,
+  ): { ok: true; state: GameState; events: DomainEvent[] } | { ok: false; code: string } {
+    if (now <= from.time) return { ok: true, state: from, events: [] };
+    let state = from;
     const events: DomainEvent[] = [];
-    // The kernel bounds each `advanceTo` to a fixed amount of work and returns a
-    // `partial` advance rather than discarding it (which would wedge the room on
-    // every retry). Chain a bounded number of chunks so an enormous-but-legit
-    // catch-up finishes without hanging the event loop, and a same-instant runaway
-    // (clock stops progressing) is caught and surfaced instead of looping forever.
     for (let chunk = 0; chunk < MAX_CATCHUP_CHUNKS; chunk++) {
-      const before = this.stateValue.time;
-      const result = this.kernel.advanceTo(this.stateValue, this.context(now));
+      const before = state.time;
+      const result = this.kernel.advanceTo(state, this.context(now));
       if (!result.ok) return { ok: false, code: result.code };
-      this.stateValue = result.state;
+      state = result.state;
       events.push(...result.events);
-      if (!result.partial) return { ok: true, events }; // reached `now`
-      if (this.stateValue.time <= before) {
-        // Clock did not move despite work being done → a same-instant runaway
-        // (events rescheduling themselves at one instant). Stop and surface it;
-        // pressing on would only spin.
-        this.observe?.({
-          kind: 'advance_overflow',
-          reachedTime: this.stateValue.time,
-          targetTime: now,
-          reason: 'stalled',
-        });
-        return { ok: true, events };
+      if (!result.partial) return { ok: true, state, events }; // reached `now`
+      if (state.time <= before) {
+        // Clock did not move despite work being done → a same-instant runaway. Stop.
+        this.observe?.({ kind: 'advance_overflow', reachedTime: state.time, targetTime: now, reason: 'stalled' });
+        return { ok: true, state, events };
       }
     }
-    // Made forward progress but ran out of chunks — a genuinely huge backlog. Yield
-    // now (the next advance/tick continues) rather than block longer.
-    this.observe?.({
-      kind: 'advance_overflow',
-      reachedTime: this.stateValue.time,
-      targetTime: now,
-      reason: 'throttled',
-    });
-    return { ok: true, events };
+    // Made forward progress but ran out of chunks — a genuinely huge backlog. Yield.
+    this.observe?.({ kind: 'advance_overflow', reachedTime: state.time, targetTime: now, reason: 'throttled' });
+    return { ok: true, state, events };
   }
 
   private context(now: number): Context {
@@ -701,10 +710,19 @@ export class MatchRoom {
   private submitActionCommitted(playerId: PlayerId, action: Action, peer?: RoomPeer): Promise<void> {
     const run = this.commitChain.then(() =>
       this.doCommittedSubmit(playerId, action, peer).catch(() => {
-        if (peer) this.sendTransientReject(peer, action.id, 'E_INTERNAL');
+        // Last-resort: report and swallow. The `send` itself must not throw (a dead
+        // socket would otherwise reject the chain), so guard it too.
+        try {
+          if (peer) this.sendTransientReject(peer, action.id, 'E_INTERNAL');
+        } catch {
+          /* peer gone */
+        }
       }),
     );
-    this.commitChain = run;
+    // The chain must NEVER hold a rejected promise: `.then` on a rejected upstream skips
+    // its callback, so a single rejection here would silently stop EVERY future action on
+    // this room. Keep the stored link resolved (belt-and-suspenders over the inner catch).
+    this.commitChain = run.catch(() => undefined);
     return run;
   }
 
@@ -742,24 +760,29 @@ export class MatchRoom {
         return;
       }
 
+      // Catch the world up PURELY — without touching `this.stateValue` — so an external
+      // read during the persist await (a new peer's `welcome`, a ping handler) never sees
+      // a not-yet-durable world. We commit the advance only after the write acks.
       const serverNow = this.clock();
-      const advanced = this.advance(serverNow); // world catch-up (recomputable) committed in memory
+      const advanced = this.computeAdvance(this.stateValue, serverNow);
       if (!advanced.ok) {
         await this.commitReject(playerId, action, advanced.code, peer);
         return;
       }
 
-      const context = this.context(Math.max(serverNow, this.stateValue.time));
-      const result = this.kernel.applyAction(this.stateValue, action, context);
+      const context = this.context(Math.max(serverNow, advanced.state.time));
+      const result = this.kernel.applyAction(advanced.state, action, context);
       const seq = this.seq + 1;
 
       if (!result.ok) {
-        // Reject-but-advanced: the advance already moved the world. Persist that advanced
-        // state + the failure receipt BEFORE broadcasting the advance events.
+        // Reject-but-advanced: persist the advanced state + failure receipt, and only on a
+        // durable ack commit the recomputable catch-up and broadcast its events (SRV-1). A
+        // failed write commits nothing → the retry re-derives and re-broadcasts the advance.
         const receipt: ActionReceipt = { actionId: action.id, playerId, seq, ok: false, code: result.code };
-        if (!(await this.persistGuarded(this.snapshot(this.stateValue, seq), receipt, action.id, peer))) {
+        if (!(await this.persistGuarded(this.snapshot(advanced.state, seq), receipt, action.id, peer))) {
           return;
         }
+        this.stateValue = advanced.state;
         this.seq = seq;
         this.storeReceipt(receipt, action.type);
         if (advanced.events.length > 0) this.broadcastState(advanced.events);
@@ -1024,6 +1047,13 @@ export class MatchRoom {
       peer.close?.(1013, 'backpressure');
       return;
     }
-    peer.send(serializeServerMessage(message));
+    // A socket that went OPEN→CLOSING after `canSend` (TOCTOU) throws synchronously from
+    // `ws.send`. Never let a dead peer throw into room logic — it would abort a broadcast
+    // loop or, on the committed path, escape into the commit queue. Drop the peer instead.
+    try {
+      peer.send(serializeServerMessage(message));
+    } catch {
+      peer.close?.();
+    }
   }
 }

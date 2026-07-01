@@ -124,6 +124,77 @@ describe('MatchRoom · strict commit-before-broadcast', () => {
     expect(room.sequence).toBe(1); // no new seq, no re-apply
   });
 
+  it('does not wedge the commit queue when reporting a failure throws (dead socket)', async () => {
+    let fail = true;
+    const persist = (): Promise<void> => (fail ? Promise.reject(new Error('down')) : Promise.resolve());
+    const room = createDevMatch(data, { now: () => 1000, time: 1000, persist });
+
+    // A peer whose send throws once armed — a socket that died mid-flight.
+    let dead = false;
+    const badPeer: RoomPeer = {
+      send: () => {
+        if (dead) throw new Error('socket dead');
+      },
+    };
+    room.addPeer('green', badPeer);
+    dead = true;
+
+    // Action 1: persist fails → the failure report hits the dead socket. Must not wedge.
+    await room.receive('green', badPeer, raw(orbit('green_1', 'near', 1)));
+
+    // The store recovers and a healthy peer connects: a later action must still land.
+    fail = false;
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer);
+    await room.receive('green', peer, raw(orbit('green_1', 'near', 2)));
+
+    expect(room.state.fleets.green_1?.orbit).toBe('near'); // queue alive
+    expect(room.sequence).toBe(1); // action 1 failed (no receipt), action 2 applied
+  });
+
+  it('never exposes the in-flight advanced world during the persist await', async () => {
+    // 1) Commit a move that schedules a future arrival.
+    let resolvePersist: (() => void) | null = null;
+    const persist = (): Promise<void> =>
+      new Promise<void>((res) => {
+        resolvePersist = () => res();
+      });
+    let clock = 1000;
+    const room = createDevMatch(data, { now: () => clock, time: 1000, persist });
+    const green = new MemoryPeer();
+    room.addPeer('green', green);
+
+    const moveAct: Action = {
+      id: 't:green:1',
+      type: 'fleet.move',
+      playerId: 'green',
+      payload: { fleetId: 'green_1', to: 'nexus' },
+      issuedAt: 0,
+    };
+    const movePromise = room.receive('green', green, raw(moveAct));
+    await flush();
+    resolvePersist!();
+    await movePromise;
+    expect(room.sequence).toBe(1);
+
+    // 2) Jump the clock far past the arrival and hold a second committed submit mid-persist.
+    clock = 10_000_000;
+    const p2 = room.receive('green', green, raw(orbit('green_1', 'near', 2)));
+    await flush(); // computeAdvance (arrival fires on a COPY) + applyAction, now awaiting persist
+
+    // The committed frontier is UNCHANGED: the arrival isn't durable yet, so it isn't exposed.
+    expect(room.state.fleets.green_1?.location).not.toBe('nexus');
+    expect(room.sequence).toBe(1);
+
+    resolvePersist!();
+    await p2;
+
+    // Only after the durable ack is the advanced world committed: seq moved and the
+    // clock caught up past the held frontier.
+    expect(room.sequence).toBe(2);
+    expect(room.state.time).toBeGreaterThan(1000);
+  });
+
   it('leaves the synchronous path untouched when no persist is configured', () => {
     // No persist ⇒ receive routes to the sync submitAction (the current behavior every
     // existing test relies on). submitAction stays fully synchronous.

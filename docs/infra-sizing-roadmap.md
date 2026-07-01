@@ -90,20 +90,30 @@
 драйвер, оба сервера). Ни один не требовал Fastify (SV-0.1) — швы были готовы.
 
 1. **Persist + rehydrate — ✅.** `MatchStore`/`ReceiptStore` (Memory по умолчанию,
-   Postgres по `DATABASE_URL`), снапшот после каждого коммита + rehydrate на старте
-   (`initialState`/`initialReceipts`/`initialSeq`). Прото-сервер — с PA-4.1; `main.ts` —
-   с F8 (`persistence.ts`). _Оговорка:_ сохранение — **после** commit/broadcast
-   (fire-and-forget), не строгий commit-до-broadcast risk14; RPO ≈ одно действие для
-   graceful-рестарта. Строгий commit-до-broadcast (await Postgres до рассылки дельты)
-   требует async-пути действия — F2/SV-1.1.
+   Postgres по `DATABASE_URL`), rehydrate на старте (`initialState`/`initialReceipts`/
+   `initialSeq`). Прото-сервер — с PA-4.1; `main.ts` — с F8 (`persistence.ts`).
 
-2. **Драйвер пробуждения по `msUntilNextEvent` — ✅.** `clockDriver.ts` (F8) и
+2. **Строгий commit-before-broadcast — ✅ (risk14).** Опция `MatchRoom.persist`: действие
+   игрока идёт по async-пути (`submitActionCommitted`), сериализованному per-room
+   (`commitChain`), который **ждёт** durable-запись нового снапшота+квитанции ДО коммита
+   состояния и рассылки дельты — пир никогда не видит непринятое стором состояние, краш
+   не теряет заакченное действие. Провал записи → ничего не коммитится, транзиентный
+   reject (без квитанции) → ретрай доезжает. Догон мира (`computeAdvance`) считается
+   **чисто**, не трогая `stateValue` до ack, поэтому чтение во время await (welcome
+   новому пиру) не видит недолговечный мир. Оба сервера включили. Синхронный
+   `submitAction` (тесты, tick/driver) не тронут — путь opt-in. Прошёл состязательный
+   ревью (3 линзы): исправлены найденные wedge-очереди-при-throw и утечка in-flight
+   состояния. _Оговорка:_ tick-путь (рекомпутируемый) persist'ит после broadcast — это
+   корректно (детерминированно пере-выводится на рестарте). Полная match-actor
+   сериализация ВСЕХ переходов (lobby-start и т.п. в общий mailbox) — SV-0.2.
+
+3. **Драйвер пробуждения по `msUntilNextEvent` — ✅.** `clockDriver.ts` (F8) и
    `netserver.ts` (PA-4.1) будят комнату к ближайшему событию и зовут `tick()`; cap на
    переполнение `setTimeout` (~24.8 сут → 1 ч в прото-сервере / `MAX_DELAY` в F8). НЕ
    грубый cron: при `timeScale>1` события наступают быстрее реального времени
    (`matchRoom.ts:528-529`).
 
-3. **Overflow-клин — ✅ исправлено (отказоустойчивость).** Раньше при переполнении
+4. **Overflow-клин — ✅ исправлено (отказоустойчивость).** Раньше при переполнении
    `MAX_ADVANCE_STEPS=100_000` (`kernel.ts:47`) `advanceTo` возвращал `{ok:false,
    E_ADVANCE_OVERFLOW}` и **выбрасывал** уже посчитанные 100k событий → комната навсегда
    застревала (каждый ретрай повторял тот же провал). Теперь:
