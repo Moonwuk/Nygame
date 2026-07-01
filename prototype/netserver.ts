@@ -31,7 +31,7 @@ import {
   type ReceiptStore,
   type RoomObservation,
 } from '../packages/server/src/index';
-import { newGame, kernel, data, aiOrders, HOUR } from './src/game';
+import { newGame, kernel, data, aiOrders, HOUR, serverQueueActions, orderPop, orderHold } from './src/game';
 const { Pool } = pgPkg;
 
 // --- M0 playtest log: append every room event (join/leave/lobby/action/end) to a
@@ -243,10 +243,26 @@ function runServerAI(): void {
   }
 }
 
+// CC-server: drive the authoritative per-fleet command-chains server-side, so a queued
+// chain (move → assault → load → wait → …) advances even with NOBODY connected — the
+// player "sleeps and it plays". The pure decision is `serverQueueActions` (tested); this
+// just issues its orders + pop/hold through the same authoritative room, mirroring
+// runServerAI. Runs on every wake (heartbeat while connected, event wakeup while offline).
+function runServerQueues(): void {
+  if (!room.isStarted) return;
+  const now = room.state.time;
+  for (const step of serverQueueActions(room.state, now)) {
+    for (const a of step.actions) room.submitAction(step.owner, a);
+    if (step.holdUntil !== undefined) room.submitAction(step.owner, orderHold(step.owner, step.fleetId, step.holdUntil));
+    if (step.pop) room.submitAction(step.owner, orderPop(step.owner, step.fleetId));
+  }
+}
+
 function onWake(): void {
   wakeTimer = null;
   room.tick(); // fire whatever is now due (a no-op if a capped timer fired early)
   runServerAI(); // drive any empty seat once the clock has moved
+  runServerQueues(); // CC-server: advance each fleet's authoritative order chain
   scheduleSave(); // persist the advanced world
   armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
 }

@@ -29,6 +29,8 @@ import {
   unloadArmy,
   mergeFleet,
   splitFleet,
+  orderEnqueue,
+  orderClear,
   engageFleet,
   researchTech,
   buildBuilding,
@@ -67,7 +69,14 @@ import {
   fleetIdle,
   loadHereActions,
   waitStatus,
+  squadronTake,
+  squadronStrikeRange,
+  sortieSpec,
+  freshSortie,
+  tickRearm,
+  scrambleOrder,
   type QStep,
+  type Patrol,
 } from './game';
 import { OFFICERS } from './groundcombat';
 import {
@@ -163,7 +172,7 @@ const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'
 // `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
 // buildable: it's a tech unlock (pending the in-session research tree). It still
 // comes pre-installed with a space fortress (installFortressAA).
-const BUILD_UNITS = ['marine', 'cruiser', 'scout', 'siege'];
+const BUILD_UNITS = ['marine', 'cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
@@ -179,6 +188,8 @@ const UNIT_ICON: Record<string, string> = {
   cruiser: '▲',
   scout: '◌',
   siege: '✦',
+  strike_carrier: '◈', // a flat-top capital hull — hangar bays for the wing
+  fighter_squadron: '△', // light strike wing (hollow, to read apart from the cruiser ▲)
   hero: '♔', // the player's projection — a crowned flagship
 };
 // A small glyph per province KIND, drawn above each province so its type reads at a
@@ -357,6 +368,12 @@ const fleetQueues = new Map<string, QStep[]>();
 // CC-2 standing order: fleets whose owner opted into AUTO-STORM — they descend and assault
 // a hostile world on arrival by themselves (the AI's autoEngage capture loop, opted-in).
 const autoAssault = new Set<string>();
+// CC-4 reactive auto-scramble: squadron fleets on "дежурный вылет" — they auto-sortie at
+// any identified, at-war contact that enters their strike radius (SQ-4.1 patrol core),
+// burning fuel and rearming on a game-hour cadence (SQ-2.1). Client-side plan, like the
+// order queue; single-player only (the server owns fleets in net play).
+const patrols = new Map<string, Patrol>();
+let lastPatrolTick = 0; // game-time (ms) the rearm cadence last advanced
 // A staged move that would cross territory of a player you're at PEACE with: held
 // until you confirm in the war-prompt (declaring war opens the route) or cancel.
 let warPrompt: {
@@ -1043,6 +1060,23 @@ function selectedFleetIds(): string[] {
  *  / standoff-fire mechanic applies)? */
 function fleetHasArtillery(f: Fleet | undefined): boolean {
   return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('artillery') ?? false));
+}
+
+/** Does this fleet carry a launchable strike wing (squadron-trait ships)? The carrier
+ *  can split them off as a fast, short-range fleet (squadrons-roadmap SQ-1.1). */
+function fleetHasSquadron(f: Fleet | undefined): boolean {
+  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('squadron') ?? false));
+}
+
+/** Can the fleet launch its squadrons right now? `fleet.split` refuses to take the whole
+ *  stack (E_SPLIT_ALL) and only works on a stationary fleet (E_IN_TRANSIT / E_IN_BATTLE),
+ *  so the launch is offered only when a non-squadron ship stays behind and the carrier is
+ *  parked and out of combat (squadrons-roadmap SQ-1.1). */
+function fleetCanLaunchSquadron(f: Fleet | undefined): boolean {
+  if (!fleetHasSquadron(f) || f!.movement || !f!.location || f!.battleId) return false;
+  const total = f!.units.reduce((n, u) => n + u.count, 0);
+  const wing = squadronTake(f!).reduce((n, u) => n + u.count, 0);
+  return wing > 0 && total > wing;
 }
 
 /** A fleet's standoff firing radius (map units) — the longest gun among its live
@@ -1884,13 +1918,24 @@ function checkFleetClashes() {
   }
 }
 
-/** Append a step to each selected fleet's order chain (client-side plan). */
+/** Append a step to each selected fleet's order chain. Single-player keeps a local client
+ *  plan (driveQueues issues it); NET sends order.enqueue so the chain is AUTHORITATIVE
+ *  server state (CC-server) — the server drives it, and it runs while you're offline. */
 function enqueueStep(fleetIds: string[], step: QStep): void {
   for (const id of fleetIds) {
+    if (NET) {
+      playerOrder(orderEnqueue(ME, id, step));
+      continue;
+    }
     const q = fleetQueues.get(id) ?? [];
     q.push(step);
     fleetQueues.set(id, q);
   }
+}
+/** A fleet's pending order chain, from whichever side owns it (server state in NET,
+ *  the local plan in single-player). Read-only view for the panel + node-tap guard. */
+function fleetQueueOf(fleetId: string): QStep[] {
+  return NET ? ((s as { orders?: Record<string, QStep[]> }).orders?.[fleetId] ?? []) : (fleetQueues.get(fleetId) ?? []);
 }
 
 // CC-1 driver: each frame, any of MY fleets that has a queue and is idle runs its head
@@ -1923,6 +1968,40 @@ function driveQueues(): void {
     for (const a of actions) playerOrder(a);
     steps.shift();
     if (steps.length === 0) fleetQueues.delete(fid);
+  }
+}
+
+// CC-4 reactive auto-scramble driver: each frame, a squadron fleet on "дежурный вылет"
+// that's idle auto-sorties at the nearest identified, at-war contact inside its strike
+// radius — burning one fuel (SQ-2.1) — and rearms one round per elapsed game-hour. The
+// pure decision is scrambleOrder (tested); this just reads the world (vision + diplomacy)
+// and issues the order. Same host-side shape as autoEngage/driveQueues; single-player only
+// (net play → the server owns fleets — promoting this server-side is the CC-server brick).
+function drivePatrols(): void {
+  if (patrols.size === 0) return;
+  const rounds = Math.max(0, Math.floor((s.time - lastPatrolTick) / HOUR));
+  if (rounds > 0) lastPatrolTick += rounds * HOUR;
+  for (const [fid, p] of [...patrols]) {
+    const f = s.fleets[fid];
+    if (!f || f.owner !== ME || !fleetHasSquadron(f)) {
+      patrols.delete(fid);
+      continue;
+    }
+    const spec = sortieSpec(f);
+    for (let i = 0; i < rounds && p.sortie.rearming > 0; i++) p.sortie = tickRearm(p.sortie, spec.maxFuel);
+    if (!fleetIdle(f)) continue; // busy (transit / battle) — let it resolve first
+    // Hostile, identified contacts parked on a node — the wing's legal targets.
+    const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
+    for (const g of Object.values(s.fleets)) {
+      if (g.owner === ME || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+      if (getStance(s, ME, g.owner) !== 'war') continue; // only declared enemies — never auto-war
+      if (!known(g.location)) continue; // identified only — "опознанная цель в зоне видимости"
+      const pos = s.planets[g.location]?.position;
+      if (pos) targets.push({ id: g.id, location: g.location, pos });
+    }
+    const { action, sortie } = scrambleOrder(ME, f, p, targets, spec.rearmRounds);
+    p.sortie = sortie;
+    if (action) playerOrder(action);
   }
 }
 
@@ -3379,6 +3458,29 @@ function panelHtml(): string {
         h += `<div class="hint">Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.</div>`;
       }
 
+      // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
+      // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
+      // refuses to take the whole stack), so an all-fighter fleet just flies itself.
+      if (f.owner === ME && fleetHasSquadron(f)) {
+        const wing = squadronTake(f).reduce((n, u) => n + u.count, 0);
+        h += `<div class="sec">Авиагруппа</div><div class="row">`;
+        h += btn('launchsquad', '', `🛩 Запустить эскадрилью (${wing})`, fleetCanLaunchSquadron(f));
+        h += `</div>`;
+        h += `<div class="hint">Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.</div>`;
+
+        // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing.
+        const scrambling = patrols.has(f.id);
+        const pt = patrols.get(f.id);
+        h += `<div class="row">`;
+        h += btn('qscramble', '', scrambling ? '🛩 дежурный вылет: ВКЛ' : '🛩 дежурный вылет: выкл', true);
+        h += `</div>`;
+        if (scrambling && pt) {
+          const status = pt.sortie.rearming > 0 ? `перезарядка ${pt.sortie.rearming}` : `топливо ${pt.sortie.fuel}`;
+          h += `<div class="row dim">радиус ${Math.round(pt.radius)} · ${status}</div>`;
+        }
+        h += `<div class="hint">Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.</div>`;
+      }
+
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
         const hero = Object.values(s.heroes ?? {}).find((x) => x.owner === f.owner);
@@ -3388,7 +3490,7 @@ function panelHtml(): string {
 
       // CC-1 order queue — chain steps the fleet runs hands-off when it falls idle.
       if (f.owner === ME) {
-        const q = fleetQueues.get(f.id) ?? [];
+        const q = fleetQueueOf(f.id); // server chain in NET, local plan in single-player
         h += `<div class="sec">Очередь приказов</div><div class="row">`;
         h += btn('qmode', '', queuing ? '● тапай миры' : '➕ строить', true);
         h += btn('qassault', '', '⚔ + штурм', true);
@@ -3731,7 +3833,17 @@ function unitDossier(id: string): Dossier | null {
     case 'orbital_aa':
       return {
         name: 'Orbital AA',
-        body: `Стационарная зенитная батарея — неподвижна, но выдаёт ${hl(st.aaDamage ?? 0)} урона по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой.`,
+        body: `Стационарная зенитная батарея — неподвижна, но выдаёт ${hl(st.aaDamage ?? 0)} урона по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий.`,
+      };
+    case 'strike_carrier':
+      return {
+        name: 'Strike Carrier',
+        body: `Медленный бронированный носитель (${hl(st.hp)} корпуса, трюм на ${hl(st.cargoCapacity ?? 0)}) — своих пушек почти нет, вся его сила в эскадрильях, что он несёт. Держите его позади и запускайте авиагруппу по цели кнопкой «🛩 Запустить эскадрилью».`,
+      };
+    case 'fighter_squadron':
+      return {
+        name: 'Fighter Squadron',
+        body: `Палубная эскадрилья: стремительная (ход ${hl(st.speed)}) и больно бьёт (${hl(st.attack)} атаки), но брони почти нет (${hl(st.hp)} корпуса). Отделяется от носителя в отдельный быстрый флот и наносит удар с дистанции ${hl(st.strikeRange ?? 0)}. Контрится орбитальным ПВО — не гоните её на прикрытую ПВО планету.`,
       };
     case 'hero':
       return {
@@ -4476,7 +4588,40 @@ side.addEventListener('click', (ev) => {
       else autoAssault.add(id);
     }
   } else if (act === 'qclear') {
-    for (const id of selectedFleetIds()) fleetQueues.delete(id);
+    for (const id of selectedFleetIds()) {
+      if (NET) playerOrder(orderClear(ME, id)); // drop the authoritative server chain
+      else fleetQueues.delete(id);
+    }
+  } else if (act === 'launchsquad') {
+    // Split the squadron stack off into its own fast strike fleet (SQ-1.1).
+    const f = selFleet ? s.fleets[selFleet] : undefined;
+    if (fleetCanLaunchSquadron(f)) {
+      playerOrder(splitFleet(ME, f!.id, squadronTake(f!)));
+      note('🛩 эскадрилья запущена — ведите её на цель');
+    }
+  } else if (act === 'qscramble') {
+    // CC-4: toggle "дежурный вылет" — stand (or stand down) a reactive auto-strike patrol
+    // on each selected squadron fleet, centred on its current node with its strike radius.
+    for (const id of selectedFleetIds()) {
+      const f = s.fleets[id];
+      if (!f || !fleetHasSquadron(f)) continue;
+      if (patrols.has(id)) {
+        patrols.delete(id);
+        continue;
+      }
+      const pos = f.location ? s.planets[f.location]?.position : undefined;
+      if (!pos) {
+        note('🛩 дежурный вылет — только со стоянки в узле');
+        continue;
+      }
+      if (patrols.size === 0) lastPatrolTick = s.time; // start the rearm cadence from now
+      patrols.set(id, {
+        center: { x: pos.x, y: pos.y },
+        radius: squadronStrikeRange(f),
+        sortie: freshSortie(sortieSpec(f).maxFuel),
+      });
+      note('🛩 дежурный вылет включён — эскадрилья бьёт врага в радиусе');
+    }
   } else if (act === 'load') {
     beginLoad(selFleet!, arg); // ~1h timed load (animated in the marker)
   } else if (act === 'unload') {
@@ -6059,6 +6204,7 @@ function frame(nowReal: number) {
     autoEngage();
     checkFleetClashes();
     driveQueues(); // CC-1: advance each fleet's queued order chain when it falls idle
+    drivePatrols(); // CC-4: squadrons on дежурный вылет auto-strike contacts in range
     runAI();
     pumpBuildQueues();
     closeIdleRallies(); // drop the 'rally' tag once a world's build pipeline empties

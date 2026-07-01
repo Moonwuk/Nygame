@@ -23,6 +23,14 @@ const data: GameData = parseGameData({
       line: 'front',
     },
     drone: { faction: 'x', stats: { attack: 2, defense: 1, speed: 5, hp: 5 }, line: 'front' },
+    // A launched carrier wing (squadrons-roadmap SQ-1.2) — a real space fleet with the
+    // `squadron` trait; orbital AA is its designed counter, same as any near-orbit hull.
+    strike_wing: {
+      faction: 'x',
+      stats: { attack: 14, defense: 3, speed: 14, hp: 10 },
+      traits: ['squadron'],
+      line: 'front',
+    },
   },
   factions: {},
   buildings: {},
@@ -209,6 +217,17 @@ describe('combat — orbital AA (time.advanced)', () => {
     // aa_gun has aaDamage: 30 per hour; fighter has 20 hp → killed in 1h.
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
     expect(r.state.fleets.F).toBeUndefined(); // destroyed by AA
+    expect(r.events.some((e) => e.type === 'fleet.destroyed')).toBe(true);
+  });
+
+  it('counters a launched squadron on the near orbit with AA (SQ-1.2)', () => {
+    const kernel = createKernel([combatModule]);
+    // A `squadron`-trait wing is just a fleet at the near orbit → AA hits it like any
+    // hull. 2× strike_wing (10 hp each) under aa_gun's 30/h is wiped inside 1h.
+    const f = fleet('W', 'p1', 'P', [['strike_wing', 2]], { orbit: 'near' });
+    const st = baseState([f], [planet('P', 'p2', [['aa_gun', 1]])]);
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+    expect(r.state.fleets.W).toBeUndefined(); // the wing is destroyed by orbital AA
     expect(r.events.some((e) => e.type === 'fleet.destroyed')).toBe(true);
   });
 

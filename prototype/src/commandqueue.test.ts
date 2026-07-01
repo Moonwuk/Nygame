@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { data, fleetIdle, loadHereActions, stepActions, waitStatus } from './game';
+import { data, fleetIdle, loadHereActions, squadronTake, stepActions, waitStatus } from './game';
 import type { Fleet, GameState } from '../../packages/shared-core/src/index';
 
 // The CC-1 queue helpers only read a fleet's movement / battleId / orbit, so a loose
@@ -87,6 +87,27 @@ describe('loadHereActions (auto-load after capture)', () => {
   it('loads nothing from a world you do not own', () => {
     const { state, fleet } = scene('red', [{ unit: ground, count: 2 }]);
     expect(loadHereActions(state, me, fleet)).toEqual([]);
+  });
+});
+
+describe('squadronTake (carrier air wing, SQ-1.1)', () => {
+  const uids = Object.keys(data.units);
+  const squad = uids.find((u) => data.units[u]!.traits.includes('squadron'))!;
+  const nonSquad = uids.find((u) => u !== squad && !data.units[u]!.traits.includes('squadron'))!;
+
+  it('picks only the live squadron-trait stacks (the launchable wing)', () => {
+    const f = fleet({ units: [{ unit: squad, count: 3 }, { unit: nonSquad, count: 2 }] });
+    expect(squadronTake(f)).toEqual([{ unit: squad, count: 3 }]);
+  });
+
+  it('ignores empty (count 0) squadron stacks', () => {
+    const f = fleet({ units: [{ unit: squad, count: 0 }, { unit: nonSquad, count: 1 }] });
+    expect(squadronTake(f)).toEqual([]);
+  });
+
+  it('returns nothing when the fleet carries no squadrons', () => {
+    const f = fleet({ units: [{ unit: nonSquad, count: 4 }] });
+    expect(squadronTake(f)).toEqual([]);
   });
 });
 

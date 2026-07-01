@@ -161,6 +161,27 @@ export const data: GameData = parseGameData({
       buildTimeHours: 4,
       upkeep: { credits: 3 },
     },
+    fighter_squadron: {
+      // Carrier-borne strike wing (squadrons-roadmap SQ-0.1): very fast + hard-hitting
+      // but paper-thin — launch it ahead to strike, orbital AA (orbital_aa) is its counter.
+      faction: 'blue',
+      stats: { attack: 14, defense: 3, speed: 92, hp: 10, strikeRange: 180, fuel: 3, rearmRounds: 2 },
+      traits: ['squadron'],
+      signature: 2,
+      cost: { metal: 90, credits: 40 },
+      buildTimeHours: 2,
+      upkeep: { credits: 4 },
+    },
+    strike_carrier: {
+      // A slow, tanky flat-top with few guns of its own — its punch is the squadrons it carries.
+      faction: 'blue',
+      stats: { attack: 4, defense: 10, speed: 40, hp: 70, cargoCapacity: 6 },
+      traits: ['carrier'],
+      signature: 6,
+      cost: { metal: 320, credits: 160 },
+      buildTimeHours: 6,
+      upkeep: { credits: 12 },
+    },
     marine: {
       faction: 'blue',
       stats: { attack: 12, defense: 12, speed: 52, hp: 24 },
@@ -1473,6 +1494,9 @@ type DivState = GameState & {
   /** Session market: a two-sided order book of open lots (sell/buy) + its id counter. */
   sessionMarket?: MarketLot[];
   sessionMarketSeq?: number;
+  /** CC-server: per-fleet command-chain, now AUTHORITATIVE STATE (was a client-only plan)
+   *  so the server drives it and it runs offline in multiplayer. fleetId → queued steps. */
+  orders?: Record<string, QStep[]>;
 };
 export function divisionsOf(state: GameState): Record<string, Division> {
   const s = state as DivState;
@@ -1924,6 +1948,82 @@ export const capitalModule: GameModule = {
   },
 };
 
+/** Validate an order-chain step arriving as an action payload (fail-secure, A05/A08). */
+function isQStep(x: unknown): x is QStep {
+  if (typeof x !== 'object' || x === null) return false;
+  const s = x as { kind?: unknown; to?: unknown; hours?: unknown };
+  switch (s.kind) {
+    case 'move':
+      return typeof s.to === 'string';
+    case 'orbit':
+    case 'assault':
+    case 'load':
+      return true;
+    case 'wait':
+      return typeof s.hours === 'number' && s.hours >= 0;
+    default:
+      return false;
+  }
+}
+
+// CC-server: the fleet order-chain (CC-1..CC-4) promoted from a CLIENT-ONLY plan to
+// AUTHORITATIVE, durable state so the server drives it — the chain runs offline in
+// multiplayer ("sleep and it plays"). This module only STORES the queue; a host driver
+// (netserver's runServerQueues, mirroring runServerAI) pops the head step for an idle fleet
+// and issues its actions through the same reducer. Fail-secure: any bad input → rejection,
+// and the queue stays JSON-serializable (persisted through deepClone, like `divisions`).
+export const orderQueueModule: GameModule = {
+  id: 'order-queue',
+  version: '0.1.0',
+  setup(api) {
+    // Resolve the payload's fleet to one this player owns, or an error code (fail-secure).
+    const ownedFleet = (h: HandlerContext, playerId: string, fleetId: unknown): Fleet | string => {
+      if (typeof fleetId !== 'string') return 'E_BAD_PAYLOAD';
+      const f = h.state.fleets[fleetId];
+      if (!f) return 'E_NO_FLEET';
+      if (f.owner !== playerId) return 'E_FORBIDDEN';
+      return f;
+    };
+    api.onAction('order.enqueue', (action, h) => {
+      const p = action.payload as { fleetId?: unknown; step?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      if (!isQStep(p.step)) return h.reject('E_BAD_PAYLOAD');
+      const orders = ((h.state as DivState).orders ??= {});
+      (orders[f.id] ??= []).push(p.step);
+    });
+    api.onAction('order.clear', (action, h) => {
+      const p = action.payload as { fleetId?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      const orders = (h.state as DivState).orders;
+      if (orders) delete orders[f.id];
+    });
+    api.onAction('order.pop', (action, h) => {
+      const p = action.payload as { fleetId?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      const orders = (h.state as DivState).orders;
+      const q = orders?.[f.id];
+      if (q && q.length) {
+        q.shift();
+        if (q.length === 0) delete orders![f.id];
+      }
+    });
+    api.onAction('order.hold', (action, h) => {
+      // Stamp the head 'wait' step's resume time — set once, when it reaches the head, so
+      // the delayed order counts down from that moment (mirrors the client's waitStatus).
+      const p = action.payload as { fleetId?: unknown; until?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      if (typeof p.until !== 'number') return h.reject('E_BAD_PAYLOAD');
+      const head = (h.state as DivState).orders?.[f.id]?.[0];
+      if (!head || head.kind !== 'wait') return h.reject('E_NO_WAIT');
+      head.until = p.until;
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -1943,6 +2043,7 @@ export const MODULES: GameModule[] = [
   marketModule, // session resource market: two-sided order book (sell/buy lots), embargo-gated
   divisionModule, // ground divisions: mobilise from a template + daily restoration
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
+  orderQueueModule, // CC-server: authoritative per-fleet command-chain (server-driven, offline-safe)
 ];
 
 export const kernel = createKernel(MODULES);
@@ -2099,6 +2200,157 @@ export function waitStatus(
   return { until, done: now >= until };
 }
 
+/** The squadron-trait ship stacks aboard a fleet — what a carrier launches as a strike
+ *  wing (squadrons-roadmap SQ-1.1: launch-as-unit). Pure. */
+export function squadronTake(fleet: Fleet): Array<{ unit: string; count: number }> {
+  return fleet.units
+    .filter((st) => st.count > 0 && (data.units[st.unit]?.traits.includes('squadron') ?? false))
+    .map((st) => ({ unit: st.unit, count: st.count }));
+}
+
+// --- squadron fuel / rearm counter (squadrons-roadmap SQ-2.1) -----------------
+// A launched wing has a limited sortie budget: each strike burns one `fuel`, and when
+// it runs dry the wing drops onto a `rearmRounds` cooldown — "back on the carrier",
+// unavailable — before it refuels and can fly again. A pure, deterministic counter that
+// lives in state (like heroes.cooldowns), JSON-serializable. The patrol loop (SQ-4.1)
+// drives it; here it's just the state machine + its guards.
+
+/** A wing's sortie budget: `fuel` strikes left before rearm, `rearming` rounds left on
+ *  the rearm cooldown (0 = flight-ready). */
+export interface SortieState {
+  fuel: number;
+  rearming: number;
+}
+
+/** The wing's max sortie budget + rearm length, read from its squadron unit's stats
+ *  (schema defaults 0). Reads the FIRST squadron-trait stack of the fleet. */
+export function sortieSpec(fleet: Fleet): { maxFuel: number; rearmRounds: number } {
+  const st = fleet.units.find(
+    (s) => s.count > 0 && (data.units[s.unit]?.traits.includes('squadron') ?? false),
+  );
+  const u = st ? data.units[st.unit]?.stats : undefined;
+  return { maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)), rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)) };
+}
+
+/** A fresh, fully-fuelled wing. */
+export function freshSortie(maxFuel: number): SortieState {
+  return { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 };
+}
+
+/** Flight-ready = not mid-rearm and has fuel to burn. */
+export function canSortie(s: SortieState): boolean {
+  return s.rearming <= 0 && s.fuel > 0;
+}
+
+/** Burn one sortie. When the last of the fuel goes the wing drops onto a rearm cooldown
+ *  of `rearmRounds` (unavailable until it counts back down). A spend while not
+ *  flight-ready is a no-op — guard with canSortie first. */
+export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
+  if (!canSortie(s)) return s;
+  const fuel = s.fuel - 1;
+  return fuel <= 0 ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) } : { fuel, rearming: 0 };
+}
+
+/** Advance the rearm cooldown one round; when it elapses the wing refuels to max and is
+ *  flight-ready again. A wing that isn't rearming is unchanged. */
+export function tickRearm(s: SortieState, maxFuel: number): SortieState {
+  if (s.rearming <= 0) return s;
+  const rearming = s.rearming - 1;
+  return rearming <= 0 ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 } : { fuel: s.fuel, rearming };
+}
+
+// --- squadron strike radius (squadrons-roadmap SQ-3.1) -----------------------
+// A launched wing reaches only nodes inside `strikeRange` (Euclidean map units) of its
+// launch / carrier node — the same distance model as radarRange. A carrier outside the
+// target's radius can't strike it. Pure.
+
+/** The wing's strike radius (map units) — the longest `strikeRange` among its live
+ *  squadron ships. 0 = carries no strike wing. */
+export function squadronStrikeRange(fleet: Fleet): number {
+  let r = 0;
+  for (const st of fleet.units) {
+    if (st.count > 0 && (data.units[st.unit]?.traits.includes('squadron') ?? false)) {
+      r = Math.max(r, data.units[st.unit]?.stats.strikeRange ?? 0);
+    }
+  }
+  return r;
+}
+
+/** Is `target` within `range` (Euclidean map units) of `from`? Boundary inclusive — a
+ *  target sitting exactly on the radius edge is reachable. */
+export function withinRange(
+  from: { x: number; y: number },
+  target: { x: number; y: number },
+  range: number,
+): boolean {
+  return Math.hypot(target.x - from.x, target.y - from.y) <= range;
+}
+
+/** Can the wing strike `targetPos` from its launch node at `fromPos`? Only a real strike
+ *  wing (range > 0) whose target lies inside the radius (SQ-3.1). */
+export function squadronReaches(
+  fleet: Fleet,
+  fromPos: { x: number; y: number },
+  targetPos: { x: number; y: number },
+): boolean {
+  const r = squadronStrikeRange(fleet);
+  return r > 0 && withinRange(fromPos, targetPos, r);
+}
+
+// --- squadron patrol (squadrons-roadmap SQ-4.1) ------------------------------
+// A wing left on patrol auto-strikes an enemy that enters its radius, burning a sortie
+// (SQ-2.1) each time; when it runs dry it rearms and then resumes — no live player in the
+// moment, fully deterministic. The pure decision core lives here; the frame-loop driver
+// (main.ts, mirrors autoEngage/driveQueues) issues the strike order, burns the sortie,
+// and ticks the rearm on a game-hour cadence.
+
+/** A standing patrol: guard `center` out to `radius` with the wing's sortie budget. */
+export interface Patrol {
+  center: { x: number; y: number };
+  radius: number;
+  sortie: SortieState;
+}
+
+/** The contact this patrol strikes this round: the lowest-id enemy inside the radius,
+ *  and only while the wing is flight-ready (fuel left, not rearming). Stable tie-break by
+ *  id — the same rule orbital AA / lane intercept use. Pure; null = hold fire. */
+export function patrolTarget(
+  patrol: Patrol,
+  enemies: Array<{ id: string; pos: { x: number; y: number } }>,
+): string | null {
+  if (!canSortie(patrol.sortie)) return null;
+  let best: string | null = null;
+  for (const e of enemies) {
+    if (withinRange(patrol.center, e.pos, patrol.radius) && (best === null || e.id < best)) {
+      best = e.id;
+    }
+  }
+  return best;
+}
+
+/** One reactive-scramble tick for a patrolling wing (CC-4 — "auto-sortie at an identified
+ *  target in vision + range"): pick the in-range contact (SQ-4.1) and launch at it — engage
+ *  if co-located, else fly to intercept its node — burning one fuel (SQ-2.1). `targets` are
+ *  the pre-filtered hostile, identified contacts that are sitting on a node. Returns the
+ *  order to issue (null = hold fire) plus the wing's new sortie state. Pure — the driver
+ *  gathers the world (vision + diplomacy) and issues the order. */
+export function scrambleOrder(
+  me: string,
+  fleet: Fleet,
+  patrol: Patrol,
+  targets: Array<{ id: string; location: string; pos: { x: number; y: number } }>,
+  rearmRounds: number,
+): { action: Action | null; sortie: SortieState } {
+  const pick = patrolTarget(patrol, targets);
+  if (pick === null) return { action: null, sortie: patrol.sortie };
+  const foe = targets.find((t) => t.id === pick)!;
+  const action =
+    fleet.location === foe.location
+      ? engageFleet(me, fleet.id, foe.id)
+      : moveFleet(me, fleet.id, foe.location);
+  return { action, sortie: spendSortie(patrol.sortie, rearmRounds) };
+}
+
 /**
  * Actions to re-embark the liftable garrison of the fleet's CURRENT world back into its
  * cargo — the "auto-load after capture" step. After a defended assault the storming
@@ -2122,6 +2374,50 @@ export function loadHereActions(state: GameState, me: string, fleet: Fleet): Act
     if (fit <= 0) continue; // no room left
     out.push(loadArmy(me, fleet.id, st.unit, fit));
     free -= fit * size;
+  }
+  return out;
+}
+
+// --- CC-server: authoritative order-chain — actions + the server-side driver core -------
+
+/** Append one step to a fleet's authoritative order chain (CC-server). */
+export const orderEnqueue = (playerId: string, fleetId: string, step: QStep) =>
+  act(playerId, 'order.enqueue', { fleetId, step });
+/** Drop a fleet's whole order chain. */
+export const orderClear = (playerId: string, fleetId: string) =>
+  act(playerId, 'order.clear', { fleetId });
+/** Drop the head step (the driver pops after issuing it / after a wait elapses). */
+export const orderPop = (playerId: string, fleetId: string) =>
+  act(playerId, 'order.pop', { fleetId });
+/** Stamp the head 'wait' step's resume time (set once when the step reaches the head). */
+export const orderHold = (playerId: string, fleetId: string, until: number) =>
+  act(playerId, 'order.hold', { fleetId, until });
+
+/** One tick of the SERVER-SIDE order-chain driver (CC-server): for every fleet whose
+ *  authoritative chain is at the head and the fleet is IDLE, the actions to issue plus how
+ *  to advance the queue. Pure — the host (netserver.runServerQueues) applies the actions
+ *  and issues the pop / hold through the same authoritative room, so the chain runs even
+ *  with nobody connected. Mirrors the client driveQueues() but reads `state.orders` and
+ *  reuses the identical tested step helpers (stepActions / loadHereActions / waitStatus). */
+export function serverQueueActions(
+  state: GameState,
+  now: number,
+): Array<{ fleetId: string; owner: string; actions: Action[]; pop: boolean; holdUntil?: number }> {
+  const orders = (state as DivState).orders ?? {};
+  const out: Array<{ fleetId: string; owner: string; actions: Action[]; pop: boolean; holdUntil?: number }> = [];
+  for (const [fid, steps] of Object.entries(orders)) {
+    const f = state.fleets[fid];
+    if (!f || steps.length === 0) continue; // stale entry — the host clears it
+    if (!fleetIdle(f)) continue; // in transit / battle → hold the chain
+    const step = steps[0]!;
+    if (step.kind === 'wait') {
+      const w = waitStatus(step, now, HOUR);
+      if (step.until === undefined) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: false, holdUntil: w.until });
+      else if (w.done) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: true });
+      continue; // still counting down → do nothing this tick
+    }
+    const actions = step.kind === 'load' ? loadHereActions(state, f.owner, f) : stepActions(f.owner, fid, step, f);
+    out.push({ fleetId: fid, owner: f.owner, actions, pop: true });
   }
   return out;
 }
