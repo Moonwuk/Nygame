@@ -23,6 +23,13 @@ export {
   type SelectionParked,
   type FleetSelectionModel,
   type SelectionResult,
+  createBattleModel,
+  resolveBattleAction,
+  type BattleSideView,
+  type BattleModel,
+  type BattleResult,
+  type BattleAction,
+  type BattleIntent,
 } from './matchHud';
 export {
   createWelcomeModel,

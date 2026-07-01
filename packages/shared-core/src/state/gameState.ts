@@ -206,6 +206,10 @@ export interface Fleet {
   /** World-time (ms) this fleet last took damage. Gates shield regen: shields stay
    *  down for a delay after the last hit (shields-roadmap SH-1.1). Absent = never hit. */
   lastDamagedAt?: number;
+  /** World-time (ms) until which this fleet's travel speed is boosted after a
+   *  `fleet.retreat` — the disengaging fleet flees faster while `now < it`. Absent =
+   *  no boost. Read by the `fleet.speed` hook. */
+  retreatHasteUntil?: number;
 }
 
 /**

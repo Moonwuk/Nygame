@@ -158,6 +158,9 @@ function barrageMode(fleetId: string, mode: string, playerId = 'p1'): Action {
     issuedAt: 0,
   };
 }
+function retreat(fleetId: string, playerId = 'p1'): Action {
+  return { id: `s:${playerId}:6`, type: 'fleet.retreat', playerId, payload: { fleetId }, issuedAt: 0 };
+}
 
 function okApply(r: ApplyResult) {
   if (!r.ok) throw new Error(`apply failed: ${r.code}`);
@@ -994,5 +997,104 @@ describe('combat — artillery fire modes (rules of engagement)', () => {
     expect(rej(kernel.applyAction(base(), barrageMode('ZZ', 'passive'), ctx(0)))).toBe('E_NO_FLEET');
     expect(rej(kernel.applyAction(base(), barrageMode('ART', 'passive', 'p2'), ctx(0)))).toBe('E_FORBIDDEN');
     expect(rej(kernel.applyAction(base(), barrageMode('PLAIN', 'passive'), ctx(0)))).toBe('E_NO_ARTILLERY');
+  });
+});
+
+describe('fleet retreat', () => {
+  const kernel = createKernel([combatModule, arrivalModule]);
+  // A (p1) arrives onto D (p2) at P → an orbital battle. Returns the state + battle id.
+  function engaged(aUnits: Array<[string, number]>) {
+    const st = baseState(
+      [fleet('A', 'p1', 'P', aUnits), fleet('D', 'p2', 'P', [['fighter', 3]])],
+      [planet('P', null)],
+    );
+    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    return { state: started.state, battleId: started.state.fleets.A?.battleId ?? undefined };
+  }
+
+  it('disengages: leaves the battle, dissolves it, frees the opponent', () => {
+    const { state, battleId } = engaged([['fighter', 2]]);
+    expect(battleId).toBeTruthy();
+    const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
+    expect(r.state.fleets.A?.battleId).toBe(null); // disengaged, still present
+    expect(r.state.battles[battleId!]).toBeUndefined(); // battle gone
+    expect(r.state.fleets.D?.battleId).toBe(null); // opponent freed to pursue
+    expect(r.events.map((e) => e.type)).toContain('fleet.retreated');
+  });
+
+  it('costs 40% of MAX hull and shield', () => {
+    const { state } = engaged([['aegis', 2]]); // 2×(hull 50 + shield 15) → max 100 hull, 30 shield
+    const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
+    const a = stackOf(r.state.fleets.A, 'aegis');
+    expect(a?.count).toBe(2);
+    expect(a?.hp).toBeCloseTo(60); // 100 − 0.4×100
+    expect(a?.shieldHp).toBeCloseTo(18); // 30 − 0.4×30
+  });
+
+  it('opens a temporary speed-boost window on the fleeing fleet', () => {
+    const { state } = engaged([['fighter', 2]]);
+    const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
+    expect(r.state.fleets.A?.retreatHasteUntil).toBeGreaterThan(0);
+  });
+
+  it('the boost actually speeds the next move (via the fleet.speed hook)', () => {
+    const kernelM = createKernel([combatModule, movementModule]);
+    const scene = (haste: boolean) => {
+      const P = planet('P', 'p1', 0, 0);
+      const Q = planet('Q', 'p1', 240, 0);
+      P.links = ['Q'];
+      Q.links = ['P'];
+      const f = fleet('F', 'p1', 'P', [['fighter', 1]]);
+      if (haste) f.retreatHasteUntil = 999 * HOUR;
+      return baseState([f], [P, Q]);
+    };
+    const hasted = okApply(kernelM.applyAction(scene(true), move('F', 'Q'), ctx(0)));
+    const normal = okApply(kernelM.applyAction(scene(false), move('F', 'Q'), ctx(0)));
+    const tH = hasted.state.fleets.F?.movement?.arrivesAt ?? 0;
+    const tN = normal.state.fleets.F?.movement?.arrivesAt ?? 0;
+    expect(tH).toBeGreaterThan(0);
+    expect(tN / tH).toBeCloseTo(1.5); // ×1.5 speed → travel time ÷1.5
+  });
+
+  it('a withdrawal can finish off an already-crippled fleet', () => {
+    const { state } = engaged([['fighter', 1]]);
+    const a = stackOf(state.fleets.A, 'fighter');
+    if (a) a.hp = 6; // fighter max hull 20; 6 < 0.4×20=8 → the toll wipes it
+    const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
+    expect(r.state.fleets.A).toBeUndefined(); // destroyed, no escape
+    expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
+  });
+
+  it('fail-secure: rejects a fleet not in a battle, a foreign fleet, and bad input', () => {
+    const { state } = engaged([['fighter', 2]]);
+    const withIdle = {
+      ...state,
+      fleets: { ...state.fleets, IDLE: fleet('IDLE', 'p1', 'P', [['fighter', 1]]) },
+    };
+    expect(rej(kernel.applyAction(withIdle, retreat('IDLE'), ctx(0)))).toBe('E_NOT_IN_BATTLE');
+    expect(rej(kernel.applyAction(state, retreat('A', 'p2'), ctx(0)))).toBe('E_FORBIDDEN');
+    expect(rej(kernel.applyAction(state, retreat('NOPE'), ctx(0)))).toBe('E_NO_FLEET');
+    expect(rej(kernel.applyAction(state, { ...retreat('A'), payload: {} }, ctx(0)))).toBe(
+      'E_BAD_PAYLOAD',
+    );
+  });
+
+  it('rejects retreat by the landing force (only the orbital ship can pull out)', () => {
+    const f = fleet('F', 'p1', 'P', [['fighter', 1]]);
+    f.battleId = 'b1';
+    const st = {
+      ...baseState([f], [planet('P', 'p2')]),
+      battles: {
+        b1: {
+          id: 'b1',
+          location: 'P',
+          phase: 'ground' as const,
+          attacker: { ref: { kind: 'landing' as const, fleetId: 'F' }, owner: 'p1' },
+          defender: { ref: { kind: 'garrison' as const, planetId: 'P' }, owner: 'p2' },
+          round: 0,
+        },
+      },
+    };
+    expect(rej(kernel.applyAction(st, retreat('F'), ctx(0)))).toBe('E_CANNOT_RETREAT');
   });
 });

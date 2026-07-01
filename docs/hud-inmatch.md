@@ -184,6 +184,11 @@ export function resolveHudAction(action: HudTap, model: HudModel): HudIntent | {
 - ✅ **`HUD-1a` (зоны A + D):** `createStatusBarModel` + `createSelectionModel`
   (`packages/client/src/matchHud.ts`, +тесты) — стат-бар и панель выделения флота на реальных данных
   (§3 «Реализовано»).
+- ✅ **Боевая зона (панель боя):** `createBattleModel` + `resolveBattleAction` (`matchHud.ts`, +тесты) —
+  открывается по тапу на бой (`state.battles[id]`): две стороны (состав + корпус/щит), фаза,
+  раунд, таймер `nextRoundAt`; единственное действие **«Отступить»** (`fleet.retreat`) — доступно, если
+  игрок владеет орбитальным флотом-стороной (`retreatFleetId`). Ядро: действие `fleet.retreat`
+  (−40% макс корпуса/щита + баф скорости), см. `state.md`.
 - ⏳ **Нужен код (кирпичи):**
   - `HUD-1b` объединённый `createHudModel`/`resolveHudAction` + зоны B (карта) / C (действия-намерения).
   - `HUD-2` производные для панели: `fleetPower` / `damageReduction` (сборка из статов+бонусов).

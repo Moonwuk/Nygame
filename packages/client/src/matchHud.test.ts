@@ -8,7 +8,12 @@ import {
   type GameState,
   type Hero,
 } from '@void/shared-core';
-import { createSelectionModel, createStatusBarModel } from './matchHud';
+import {
+  createBattleModel,
+  createSelectionModel,
+  createStatusBarModel,
+  resolveBattleAction,
+} from './matchHud';
 
 /** Minimal game-data slice the HUD reads: canonical resource order + unit defs
  *  (only `domain` and `stats.hp` are consulted). Cast keeps the fixture terse. */
@@ -403,5 +408,137 @@ describe('createSelectionModel', () => {
     s.fleets = { f1: fleet({ id: 'f1', owner: 'p1', units: [{ unit: 'frigate', count: 2 }] }) };
     const res = createSelectionModel(s, 'f1', 'p1', DATA);
     expect(JSON.parse(JSON.stringify(res))).toEqual(res);
+  });
+});
+
+describe('createBattleModel', () => {
+  function orbitalScene(): GameState {
+    const s = baseState();
+    s.fleets = {
+      f1: fleet({ id: 'f1', owner: 'p1', units: [{ unit: 'aegis', count: 3 }], battleId: 'b1' }),
+      f2: fleet({ id: 'f2', owner: 'p2', units: [{ unit: 'frigate', count: 2 }], battleId: 'b1' }),
+    };
+    s.battles = {
+      b1: {
+        id: 'b1',
+        location: 'Гелиос-III',
+        phase: 'orbital',
+        round: 2,
+        nextRoundAt: 5000,
+        attacker: { ref: { kind: 'fleet', fleetId: 'f1' }, owner: 'p1' },
+        defender: { ref: { kind: 'fleet', fleetId: 'f2' }, owner: 'p2' },
+      },
+    };
+    return s;
+  }
+
+  it('projects an orbital battle: both sides, forces, hull/shield, live round timer', () => {
+    const res = createBattleModel(orbitalScene(), 'b1', 'p1', DATA);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res).toMatchObject({ kind: 'battle', phase: 'orbital', round: 2, location: 'Гелиос-III' });
+    expect(res.nextRoundAt).toBe(5000);
+    // attacker = the viewer's shielded aegis wing
+    expect(res.attacker).toMatchObject({ owner: 'p1', ownerName: 'Носорог-1', kind: 'fleet', mine: true });
+    expect(res.attacker.units).toEqual([{ unit: 'aegis', count: 3, domain: 'space' }]);
+    expect(res.attacker.hull).toEqual({ current: 30, max: 30 }); // 3×10
+    expect(res.attacker.shield).toEqual({ current: 12, max: 12 }); // 3×4
+    // defender = enemy frigates (no shield capacity → no shield bar)
+    expect(res.defender).toMatchObject({ owner: 'p2', ownerName: 'Комета-2', mine: false });
+    expect(res.defender.hull).toEqual({ current: 20, max: 20 });
+    expect(res.defender.shield).toBeUndefined();
+    // the sole action targets the viewer's own orbital fleet
+    expect(res.retreatFleetId).toBe('f1');
+  });
+
+  it('offers retreat to whichever side the viewer owns (here the defender)', () => {
+    const res = createBattleModel(orbitalScene(), 'b1', 'p2', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.attacker.mine).toBe(false);
+    expect(res.defender.mine).toBe(true);
+    expect(res.retreatFleetId).toBe('f2');
+  });
+
+  it('a spectator (owns neither side) gets no retreat target', () => {
+    const res = createBattleModel(orbitalScene(), 'b1', 'p3', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.retreatFleetId).toBeUndefined();
+  });
+
+  it('projects a ground battle: landing force vs planet garrison (no retreat)', () => {
+    const s = baseState();
+    s.planets = {
+      P: {
+        id: 'P',
+        owner: 'p2',
+        position: { x: 0, y: 0 },
+        resources: {},
+        buildings: [],
+        garrison: [{ unit: 'marine', count: 3 }],
+        traits: [],
+      },
+    };
+    s.fleets = {
+      f1: fleet({ id: 'f1', owner: 'p1', landing: [{ unit: 'marine', count: 2 }], battleId: 'b1' }),
+    };
+    s.battles = {
+      b1: {
+        id: 'b1',
+        location: 'P',
+        phase: 'ground',
+        round: 1,
+        attacker: { ref: { kind: 'landing', fleetId: 'f1' }, owner: 'p1' },
+        defender: { ref: { kind: 'garrison', planetId: 'P' }, owner: 'p2' },
+      },
+    };
+    const res = createBattleModel(s, 'b1', 'p1', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.phase).toBe('ground');
+    expect(res.attacker).toMatchObject({ kind: 'landing', mine: true });
+    expect(res.attacker.units).toEqual([{ unit: 'marine', count: 2, domain: 'ground' }]);
+    expect(res.defender).toMatchObject({ kind: 'garrison', owner: 'p2' });
+    expect(res.defender.units).toEqual([{ unit: 'marine', count: 3, domain: 'ground' }]);
+    // a landing force / garrison can't pull out — only an orbital ship can
+    expect(res.retreatFleetId).toBeUndefined();
+  });
+
+  it('degrades gracefully without game data — no hull/shield, no stack domain', () => {
+    const res = createBattleModel(orbitalScene(), 'b1', 'p1');
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.attacker.hull).toBeUndefined();
+    expect(res.attacker.shield).toBeUndefined();
+    expect(res.attacker.units).toEqual([{ unit: 'aegis', count: 3 }]);
+  });
+
+  it('fail-secure: a missing / fogged battle yields a stable code', () => {
+    expect(createBattleModel(orbitalScene(), 'ghost', 'p1', DATA)).toEqual({
+      ok: false,
+      code: 'E_NO_BATTLE',
+    });
+  });
+
+  it('produces a JSON-serialisable model', () => {
+    const res = createBattleModel(orbitalScene(), 'b1', 'p1', DATA);
+    expect(JSON.parse(JSON.stringify(res))).toEqual(res);
+  });
+});
+
+describe('resolveBattleAction', () => {
+  const model = { kind: 'battle', retreatFleetId: 'f1' } as Parameters<typeof resolveBattleAction>[1];
+
+  it('maps a retreat tap to a fleet.retreat intent', () => {
+    expect(resolveBattleAction({ kind: 'retreat' }, model)).toEqual({
+      ok: true,
+      type: 'fleet.retreat',
+      fleetId: 'f1',
+    });
+  });
+
+  it('fail-secure: no retreatable fleet → stable code', () => {
+    const noFleet = { kind: 'battle' } as Parameters<typeof resolveBattleAction>[1];
+    expect(resolveBattleAction({ kind: 'retreat' }, noFleet)).toEqual({
+      ok: false,
+      code: 'E_CANNOT_RETREAT',
+    });
   });
 });

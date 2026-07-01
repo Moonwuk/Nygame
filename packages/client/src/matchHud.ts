@@ -22,10 +22,13 @@
  */
 import { MS_PER_DAY } from '@void/shared-core';
 import type {
+  BattleId,
+  CombatantRef,
   Fleet,
   FleetId,
   GameData,
   GameState,
+  PlanetId,
   PlayerId,
   ResourceId,
   UnitStack,
@@ -206,10 +209,10 @@ function toStacks(stacks: UnitStack[], data?: Pick<GameData, 'units'>): Selectio
   });
 }
 
-function fleetHull(fleet: Fleet, data: Pick<GameData, 'units'>): { current: number; max: number } {
+function hullOf(stacks: UnitStack[], data: Pick<GameData, 'units'>): { current: number; max: number } {
   let current = 0;
   let max = 0;
-  for (const s of fleet.units) {
+  for (const s of stacks) {
     const perShip = data.units[s.unit]?.stats.hp ?? 0;
     const stackMax = s.count * perShip;
     max += stackMax;
@@ -219,14 +222,14 @@ function fleetHull(fleet: Fleet, data: Pick<GameData, 'units'>): { current: numb
   return { current, max };
 }
 
-/** Aggregate ablative shield, or undefined when the fleet has no shield capacity. */
-function fleetShield(
-  fleet: Fleet,
+/** Aggregate ablative shield, or undefined when the stacks have no shield capacity. */
+function shieldOf(
+  stacks: UnitStack[],
   data: Pick<GameData, 'units'>,
 ): { current: number; max: number } | undefined {
   let current = 0;
   let max = 0;
-  for (const s of fleet.units) {
+  for (const s of stacks) {
     const perShip = data.units[s.unit]?.stats.shield ?? 0;
     const stackMax = s.count * perShip;
     max += stackMax;
@@ -301,10 +304,141 @@ export function createSelectionModel(
   const commander = fleetCommander(state, fleet, viewerId);
   if (commander) model.commander = commander;
   if (data) {
-    model.hull = fleetHull(fleet, data);
-    const shield = fleetShield(fleet, data);
+    model.hull = hullOf(fleet.units, data);
+    const shield = shieldOf(fleet.units, data);
     if (shield) model.shield = shield;
   }
 
   return { ok: true, ...model };
+}
+
+/* ─────────────────────── Combat zone — battle panel ──────────────────────── */
+
+/** One side of a battle (attacker or defender) as the panel shows it. */
+export interface BattleSideView {
+  owner: PlayerId | null;
+  /** Owner's `player.name`, or the raw id / '—' for a neutral side. */
+  ownerName: string;
+  /** Owner's `faction` content id ('' when neutral/unknown). */
+  ownerFaction: string;
+  /** What is fighting: an orbital `fleet`, a fleet's `landing` troops, or a planet `garrison`. */
+  kind: 'fleet' | 'landing' | 'garrison';
+  /** Composition of this side's forces. */
+  units: SelectionStack[];
+  /** Aggregate hull / shield (when `data` is supplied; shield omitted with no capacity). */
+  hull?: { current: number; max: number };
+  shield?: { current: number; max: number };
+  /** This side belongs to the viewing player. */
+  mine: boolean;
+}
+
+/** Render-ready description of an active battle — the "combat zone" panel. */
+export interface BattleModel {
+  kind: 'battle';
+  id: BattleId;
+  /** Contested world / node. */
+  location: PlanetId;
+  /** `orbital` (fleet vs fleet) or `ground` (landing vs garrison). */
+  phase: 'orbital' | 'ground';
+  /** Rounds resolved so far. */
+  round: number;
+  /** Server time (ms) the next hourly round fires — the live countdown. */
+  nextRoundAt?: number;
+  attacker: BattleSideView;
+  defender: BattleSideView;
+  /** The viewer's own orbital fleet in this battle, if any — the sole action
+   *  (`fleet.retreat`) targets it. Absent = the viewer has nothing here that can pull out. */
+  retreatFleetId?: FleetId;
+}
+
+/** Battle projection outcome: the model, or a stable error code. */
+export type BattleResult = ({ ok: true } & BattleModel) | { ok: false; code: string };
+
+function sideView(
+  state: GameState,
+  side: { ref: CombatantRef; owner: PlayerId | null },
+  viewerId: PlayerId,
+  data?: Pick<GameData, 'units'>,
+): BattleSideView {
+  const ref = side.ref;
+  const stacks: UnitStack[] =
+    ref.kind === 'garrison'
+      ? (state.planets[ref.planetId]?.garrison ?? [])
+      : ref.kind === 'landing'
+        ? (state.fleets[ref.fleetId]?.landing ?? [])
+        : (state.fleets[ref.fleetId]?.units ?? []);
+  const owner = side.owner;
+  const ownerPlayer = owner != null ? state.players[owner] : undefined;
+  const view: BattleSideView = {
+    owner,
+    ownerName: ownerPlayer?.name ?? owner ?? '—',
+    ownerFaction: ownerPlayer?.faction ?? '',
+    kind: ref.kind,
+    units: toStacks(stacks, data),
+    mine: owner != null && owner === viewerId,
+  };
+  if (data) {
+    view.hull = hullOf(stacks, data);
+    const shield = shieldOf(stacks, data);
+    if (shield) view.shield = shield;
+  }
+  return view;
+}
+
+/** Project the combat panel for `battleId`, as seen by `viewerId`. Fail-secure: a
+ *  battle absent from `state.battles` (resolved, or fogged) yields `E_NO_BATTLE`.
+ *  Fog-safe by construction — the battle is only present when its world is visible. */
+export function createBattleModel(
+  state: GameState,
+  battleId: BattleId,
+  viewerId: PlayerId,
+  data?: Pick<GameData, 'units'>,
+): BattleResult {
+  const battle = state.battles[battleId];
+  if (!battle) {
+    return { ok: false, code: 'E_NO_BATTLE' };
+  }
+  const attacker = sideView(state, battle.attacker, viewerId, data);
+  const defender = sideView(state, battle.defender, viewerId, data);
+
+  const model: BattleModel = {
+    kind: 'battle',
+    id: battle.id,
+    location: battle.location,
+    phase: battle.phase,
+    round: battle.round,
+    attacker,
+    defender,
+  };
+  if (battle.nextRoundAt != null) model.nextRoundAt = battle.nextRoundAt;
+
+  // Only an orbital ship-side the viewer owns can retreat (not a garrison/landing).
+  for (const side of [battle.attacker, battle.defender]) {
+    if (side.ref.kind === 'fleet' && side.owner === viewerId) {
+      model.retreatFleetId = side.ref.fleetId;
+      break;
+    }
+  }
+
+  return { ok: true, ...model };
+}
+
+/** The panel's only action. */
+export type BattleAction = { kind: 'retreat' };
+
+/** Server intent from a panel action, or a stable reject code (fail-secure). */
+export type BattleIntent =
+  | { ok: true; type: 'fleet.retreat'; fleetId: FleetId }
+  | { ok: false; code: string };
+
+/** Map the panel's retreat tap to a `fleet.retreat` intent. Rejects when the viewer
+ *  has no retreatable fleet in the battle (`retreatFleetId` absent). */
+export function resolveBattleAction(action: BattleAction, model: BattleModel): BattleIntent {
+  if (action.kind !== 'retreat') {
+    return { ok: false, code: 'E_UNKNOWN_ACTION' };
+  }
+  if (!model.retreatFleetId) {
+    return { ok: false, code: 'E_CANNOT_RETREAT' };
+  }
+  return { ok: true, type: 'fleet.retreat', fleetId: model.retreatFleetId };
 }

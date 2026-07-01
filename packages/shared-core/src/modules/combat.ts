@@ -206,6 +206,46 @@ function applyDamageToSide(
   setSideUnits(h.state, ref, applyDamage(h, units, dmg, data, source));
 }
 
+// --- retreat -----------------------------------------------------------------
+
+/** The price of disengaging: each stack sheds `RETREAT_TOLL` of its MAX hull and
+ *  MAX shield (not current) — pulling out of a fight is never free. */
+const RETREAT_TOLL = 0.4;
+/** How much faster a just-retreated fleet travels while fleeing… */
+const RETREAT_HASTE_MULT = 1.5;
+/** …and for how long (world-time) the boost lasts. */
+const RETREAT_HASTE_MS = 3 * MS_PER_HOUR;
+
+/** Apply the retreat toll to a fleet's ships in place: −40% MAX hull and −40% MAX
+ *  shield per stack. Ships die if the hull hit drops the pool below their count
+ *  (retreating while already battered can cost hulls); wiped stacks are dropped. */
+function applyRetreatToll(fleet: Fleet, data: GameData): void {
+  const survivors: UnitStack[] = [];
+  for (const stack of fleet.units) {
+    const def = data.units[stack.unit];
+    if (!def) {
+      survivors.push(stack);
+      continue;
+    }
+    const perHull = def.stats.hp > 0 ? def.stats.hp : 1;
+    const maxHull = stack.count * perHull;
+    const newHull = Math.max(0, (stack.hp ?? maxHull) - RETREAT_TOLL * maxHull);
+    const newCount = newHull <= 0 ? 0 : Math.ceil(newHull / perHull);
+    if (newCount <= 0) continue; // this stack didn't survive the withdrawal
+
+    const perShield = def.stats.shield ?? 0;
+    if (perShield > 0) {
+      const maxShield = stack.count * perShield;
+      const newShield = Math.max(0, (stack.shieldHp ?? maxShield) - RETREAT_TOLL * maxShield);
+      stack.shieldHp = Math.min(newShield, newCount * perShield); // cap at surviving capacity
+    }
+    stack.count = newCount;
+    stack.hp = newHull;
+    survivors.push(stack);
+  }
+  fleet.units = survivors;
+}
+
 // --- battle lifecycle --------------------------------------------------------
 
 function scheduleTick(h: HandlerContext, battleId: string): void {
@@ -1116,6 +1156,62 @@ export const combatModule: GameModule = {
       }
       fleet.barrageMode = mode;
       h.emit('fleet.barrageMode', { fleetId, mode, owner: action.playerId });
+    });
+
+    // A just-retreated fleet flees faster until its haste window lapses.
+    api.hook<number>('fleet.speed', (speed, args, h) => {
+      const fleetId = (args as { fleetId?: string }).fleetId;
+      const fleet = fleetId ? h.state.fleets[fleetId] : undefined;
+      return fleet?.retreatHasteUntil != null && h.ctx.now < fleet.retreatHasteUntil
+        ? speed * RETREAT_HASTE_MULT
+        : speed;
+    });
+
+    // Disengage from an ongoing battle. Only an orbital ship-side can pull out (a
+    // landing force mid-assault can't). Toll: −40% MAX hull & shield; reward: a
+    // temporary speed boost to flee. The 1-v-1 battle dissolves and the opponent is
+    // freed to give chase. Retreating while already crippled can cost ships or the fleet.
+    api.onAction('fleet.retreat', (action, h) => {
+      const { fleetId } = action.payload as { fleetId?: string };
+      if (typeof fleetId !== 'string') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const fleet = ownFleet(h.state, fleetId); // own-key — rejects an injected `__proto__`
+      if (!fleet) {
+        return h.reject('E_NO_FLEET');
+      }
+      if (fleet.owner !== action.playerId) {
+        return h.reject('E_FORBIDDEN');
+      }
+      const battleId = fleet.battleId;
+      const battle = battleId != null ? h.state.battles[battleId] : undefined;
+      if (battleId == null || !battle) {
+        return h.reject('E_NOT_IN_BATTLE');
+      }
+      const isThisFleet = (ref: CombatantRef): boolean =>
+        ref.kind === 'fleet' && ref.fleetId === fleetId;
+      if (!isThisFleet(battle.attacker.ref) && !isThisFleet(battle.defender.ref)) {
+        return h.reject('E_CANNOT_RETREAT'); // the landing force, not the orbital fleet
+      }
+
+      applyRetreatToll(fleet, h.ctx.data);
+      fleet.battleId = null;
+
+      // Free the opponent's side (a fleet can pursue; a garrison ref is a no-op),
+      // then dissolve the now-one-sided battle.
+      const other = isThisFleet(battle.attacker.ref) ? battle.defender.ref : battle.attacker.ref;
+      releaseOrDestroyFleet(h, other);
+      delete h.state.battles[battleId];
+
+      if (fleet.units.length === 0) {
+        // The withdrawal finished off an already-crippled fleet — no escape.
+        h.emit('fleet.destroyed', { fleetId, owner: fleet.owner });
+        delete h.state.fleets[fleetId];
+        h.emit('fleet.retreated', { fleetId, owner: action.playerId, battleId, escaped: false });
+        return;
+      }
+      fleet.retreatHasteUntil = h.ctx.now + RETREAT_HASTE_MS;
+      h.emit('fleet.retreated', { fleetId, owner: action.playerId, battleId, escaped: true });
     });
 
     api.on('combat.tick', (event, h) => {
