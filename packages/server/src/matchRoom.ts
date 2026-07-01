@@ -364,6 +364,14 @@ export class MatchRoom {
     return this.started;
   }
 
+  /** Number of connected sockets across all seats — 0 means the match is unwatched
+   *  and a lifecycle registry may hibernate it (persist + evict). */
+  get peerCount(): number {
+    let n = 0;
+    for (const set of this.peers.values()) n += set.size;
+    return n;
+  }
+
   hasPlayer(playerId: PlayerId): boolean {
     return this.stateValue.players[playerId] !== undefined;
   }

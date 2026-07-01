@@ -8,10 +8,36 @@ import {
   type GameModule,
   type Player,
 } from '@void/shared-core';
-import { MatchRoom } from './matchRoom';
-import { InMemoryMatchRegistry } from './matchRegistry';
+import { MatchRoom, type RoomPeer } from './matchRoom';
+import { InMemoryMatchRegistry, LazyMatchRegistry } from './matchRegistry';
 import { createMultiplayerServer } from './wsServer';
 import type { ServerMessage } from './protocol';
+
+/** A deterministic stand-in for the idle timer: captures the scheduled callback so a
+ *  test can fire the hibernation window on demand. */
+function idleHarness() {
+  let captured: { fn: () => void; ms: number } | null = null;
+  return {
+    schedule: (fn: () => void, ms: number) => {
+      captured = { fn, ms };
+      return { fn };
+    },
+    cancel: () => {
+      captured = null;
+    },
+    get pending() {
+      return captured;
+    },
+    fire() {
+      const c = captured;
+      captured = null;
+      c?.fn();
+    },
+  };
+}
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+const fakePeer = (): RoomPeer => ({ send() {} });
 
 // SV-0.2: one server process hosting N isolated match-actors, routed by match id.
 
@@ -131,6 +157,216 @@ describe('createMultiplayerServer · multi-match registry', () => {
       expect(opened).toBe(false);
       expect(String(err)).toContain('404');
       ws.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('LazyMatchRegistry · load on demand + idle hibernation', () => {
+  it('loads a match once on demand and caches it live', async () => {
+    let loads = 0;
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async (id) => {
+        loads += 1;
+        return id === 'm' ? { room, dispose: () => {} } : null;
+      },
+    });
+    expect(registry.get('m')).toBeUndefined(); // nothing live yet
+    expect(await registry.resolve('m')).toBe(room);
+    expect(registry.get('m')).toBe(room);
+    expect(await registry.resolve('m')).toBe(room);
+    expect(loads).toBe(1); // cached, not reloaded
+    expect(await registry.resolve('missing')).toBeUndefined();
+  });
+
+  it('de-dupes concurrent loads of the same match', async () => {
+    let loads = 0;
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async () => {
+        loads += 1;
+        await Promise.resolve();
+        return { room, dispose: () => {} };
+      },
+    });
+    const [a, b] = await Promise.all([registry.resolve('m'), registry.resolve('m')]);
+    expect(a).toBe(room);
+    expect(b).toBe(room);
+    expect(loads).toBe(1); // one in-flight load served both callers
+  });
+
+  it('hibernates an unwatched match after the idle window, then reloads it', async () => {
+    const idle = idleHarness();
+    let loads = 0;
+    let disposed = 0;
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async () => {
+        loads += 1;
+        return { room, dispose: () => void (disposed += 1) };
+      },
+      idleMs: 1000,
+      schedule: idle.schedule,
+      cancel: idle.cancel,
+    });
+    await registry.resolve('m');
+
+    const peer = fakePeer();
+    room.addPeer('p1', peer);
+    registry.retain('m');
+    expect(idle.pending).toBeNull(); // watched → no countdown
+
+    room.removePeer('p1', peer);
+    registry.release('m');
+    expect(idle.pending?.ms).toBe(1000); // unwatched → hibernation armed
+
+    idle.fire();
+    await flush();
+    expect(disposed).toBe(1);
+    expect(registry.get('m')).toBeUndefined(); // evicted from live memory
+
+    expect(await registry.resolve('m')).toBe(room); // a reconnection reloads it
+    expect(loads).toBe(2);
+  });
+
+  it('a reconnect during hibernation waits for the persist before reloading', async () => {
+    const idle = idleHarness();
+    let loads = 0;
+    let resolveDispose: (() => void) | null = null;
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async () => {
+        loads += 1;
+        return {
+          room,
+          dispose: () =>
+            new Promise<void>((res) => {
+              resolveDispose = () => res();
+            }),
+        };
+      },
+      schedule: idle.schedule,
+      cancel: idle.cancel,
+    });
+    await registry.resolve('m');
+    const peer = fakePeer();
+    room.addPeer('p1', peer);
+    registry.retain('m');
+    room.removePeer('p1', peer);
+    registry.release('m');
+
+    idle.fire(); // hibernation begins; its dispose (persist) is held open
+    await flush();
+    expect(resolveDispose).not.toBeNull();
+
+    // A reconnection lands mid-hibernation — it must block until the persist finishes.
+    let done = false;
+    const reconnect = registry.resolve('m').then(() => {
+      done = true;
+    });
+    await flush();
+    expect(done).toBe(false); // waiting on the in-flight dispose
+    expect(loads).toBe(1); // not reloaded yet
+
+    resolveDispose!(); // the persist completes
+    await reconnect;
+    expect(done).toBe(true);
+    expect(loads).toBe(2); // only now does it reload — from the freshly-persisted snapshot
+  });
+
+  it('cancels hibernation when a socket reconnects within the window', async () => {
+    const idle = idleHarness();
+    let disposed = 0;
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async () => ({ room, dispose: () => void (disposed += 1) }),
+      schedule: idle.schedule,
+      cancel: idle.cancel,
+    });
+    await registry.resolve('m');
+
+    const p1 = fakePeer();
+    room.addPeer('p1', p1);
+    registry.retain('m');
+    room.removePeer('p1', p1);
+    registry.release('m'); // armed
+
+    const p2 = fakePeer();
+    room.addPeer('p2', p2);
+    registry.retain('m'); // reconnect before it fires
+    expect(idle.pending).toBeNull(); // disarmed
+    expect(disposed).toBe(0);
+  });
+
+  it('does not hibernate while another socket is still connected', async () => {
+    const idle = idleHarness();
+    const room = makeRoom('m');
+    const registry = new LazyMatchRegistry({
+      load: async () => ({ room, dispose: () => {} }),
+      schedule: idle.schedule,
+      cancel: idle.cancel,
+    });
+    await registry.resolve('m');
+
+    const p1 = fakePeer();
+    const p2 = fakePeer();
+    room.addPeer('p1', p1);
+    registry.retain('m');
+    room.addPeer('p2', p2);
+    registry.retain('m');
+    room.removePeer('p1', p1);
+    registry.release('m'); // one socket still connected
+    expect(idle.pending).toBeNull(); // peerCount > 0 → no countdown
+  });
+
+  it('shutdown persists + tears down every live match', async () => {
+    let disposed = 0;
+    const roomA = makeRoom('a');
+    const roomB = makeRoom('b');
+    const registry = new LazyMatchRegistry({
+      load: async (id) => ({ room: id === 'a' ? roomA : roomB, dispose: () => void (disposed += 1) }),
+    });
+    await registry.resolve('a');
+    await registry.resolve('b');
+    await registry.shutdown();
+    expect(disposed).toBe(2);
+    expect(registry.ids()).toEqual([]);
+  });
+
+  it('wsServer loads a match on connect and hibernates it after an idle disconnect', async () => {
+    const idle = idleHarness();
+    let loads = 0;
+    let disposed = 0;
+    const registry = new LazyMatchRegistry({
+      load: async (id) => {
+        loads += 1;
+        return { room: makeRoom(id), dispose: () => void (disposed += 1) };
+      },
+      idleMs: 1000,
+      schedule: idle.schedule,
+      cancel: idle.cancel,
+    });
+    const server = createMultiplayerServer({ registry });
+    const base = await server.listen(); // no live matches ⇒ base prefix
+    try {
+      const ws = new WebSocket(`${base}/m?player=p1`);
+      const welcome = nextMessage(ws);
+      await once(ws, 'open');
+      await welcome;
+      expect(loads).toBe(1); // resolved-on-connect
+
+      const closed = once(ws, 'close');
+      ws.close();
+      await closed;
+      await flush(); // let the server's 'close' handler run removePeer + release
+      expect(idle.pending?.ms).toBe(1000); // unwatched → hibernation armed
+
+      idle.fire();
+      await flush();
+      expect(disposed).toBe(1); // hibernated
+      expect(registry.get('m')).toBeUndefined();
     } finally {
       await server.close();
     }

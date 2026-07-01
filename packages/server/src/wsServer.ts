@@ -57,7 +57,8 @@ export function createMultiplayerServer(
   if (!options.room && !options.registry) {
     throw new Error('createMultiplayerServer: pass either `room` or `registry`');
   }
-  const registry = options.registry ?? new InMemoryMatchRegistry([options.room as MatchRoom]);
+  const registry: MatchRegistry =
+    options.registry ?? new InMemoryMatchRegistry([options.room as MatchRoom]);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32_768 });
 
   const indexHtml = options.indexHtml;
@@ -115,7 +116,11 @@ export function createMultiplayerServer(
           rejectUpgrade(socket, 404);
           return;
         }
-        const room = registry.get(matchId);
+        // Load-on-demand for a lazy registry (an evicted match reloads here); an eager
+        // registry has no `resolve`, so fall back to the in-memory `get`.
+        const room = registry.resolve
+          ? await registry.resolve(matchId)
+          : registry.get(matchId);
         if (!room) {
           rejectUpgrade(socket, 404);
           return;
@@ -166,6 +171,7 @@ export function createMultiplayerServer(
     alive.set(ws, true);
     ws.on('pong', () => alive.set(ws, true));
     room.addPeer(playerId, ws);
+    registry.retain?.(room.id); // keep the match resident while this socket is connected
     ws.on('message', (data) => {
       const now = Date.now();
       const c = inbound.get(ws) ?? { n: 0, since: now };
@@ -182,6 +188,7 @@ export function createMultiplayerServer(
     ws.on('close', () => {
       sockets.delete(ws);
       room.removePeer(playerId, ws);
+      registry.release?.(room.id); // may start the idle→hibernate countdown if unwatched
     });
   });
 
@@ -217,16 +224,19 @@ export function createMultiplayerServer(
           resolve(`ws://${host}:${boundPort}${suffix}`);
         });
       }),
-    close: () =>
-      new Promise((resolve, reject) => {
-        clearInterval(heartbeat);
-        // Graceful drain: ask every client to close (1001 "going away"), then
-        // terminate any straggler after a short grace so close() always resolves.
-        for (const ws of sockets) ws.close(1001, 'server shutting down');
-        const grace = setTimeout(() => {
-          for (const ws of sockets) ws.terminate();
-        }, 1000);
-        grace.unref();
+    close: async () => {
+      clearInterval(heartbeat);
+      // Graceful drain: ask every client to close (1001 "going away"), then
+      // terminate any straggler after a short grace so close() always resolves.
+      for (const ws of sockets) ws.close(1001, 'server shutting down');
+      const grace = setTimeout(() => {
+        for (const ws of sockets) ws.terminate();
+      }, 1000);
+      grace.unref();
+      // Persist + tear down every live match (lazy registry); a no-op for an eager one,
+      // whose rooms the caller stops via its own shutdown handler.
+      await registry.shutdown?.();
+      await new Promise<void>((resolve, reject) => {
         wss.close(() => {
           httpServer.close((error) => {
             clearTimeout(grace);
@@ -234,6 +244,7 @@ export function createMultiplayerServer(
             else resolve();
           });
         });
-      }),
+      });
+    },
   };
 }
