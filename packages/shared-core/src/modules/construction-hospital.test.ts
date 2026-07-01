@@ -2,7 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { createKernel } from '../kernel/kernel';
 import { constructionModule } from './construction';
 import { economyModule } from './economy';
-import { createInitialState, type Fleet, type GameState, type Planet, type Player } from '../state/gameState';
+import {
+  createInitialState,
+  type Fleet,
+  type GameState,
+  type Planet,
+  type Player,
+  type UnitStack,
+} from '../state/gameState';
 import { parseGameData, type GameData } from '../data/schemas';
 import type { AdvanceResult, Context } from '../action/types';
 
@@ -142,13 +149,14 @@ describe('hospital heal mechanic', () => {
 });
 
 // --- ship hull repair + shield recharge --------------------------------------
-// A cruiser: max hull 100. The 30% line splits "shields" (above) from "hull"
-// breach (at/below). Shields recharge anywhere between fights at 0.06×full/hour;
-// hull only mends over a friendly world with a hospital (healRate 0.15).
+// A cruiser: max hull 100 + ablative shield 30 (two separate pools). SHIELD (shieldHp)
+// recharges for free anywhere out of combat at 0.06×full/hour, after a post-damage
+// delay; HULL (hp) never free-regens — it mends only over a friendly world
+// (base 0.04 + a hospital's healRate 0.15).
 const shipData: GameData = parseGameData({
   version: '0.1.0',
   resources: ['metal'],
-  units: { cruiser: { faction: 'x', stats: { attack: 10, defense: 10, speed: 40, hp: 100 } } },
+  units: { cruiser: { faction: 'x', stats: { attack: 10, defense: 10, speed: 40, hp: 100, shield: 30 } } },
   factions: {},
   buildings: { hospital: { name: 'Hospital', hp: 20, healRate: 0.15 } },
   events: {},
@@ -176,30 +184,34 @@ function shipScene(fleet: Fleet, baseOwner: string | null = 'p1', hospital = tru
     fleets: { F: fleet },
   };
 }
-const cruiser = (hp: number, location: string, extra: Partial<Fleet> = {}): Fleet => ({
-  id: 'F',
-  owner: 'p1',
-  location,
-  movement: null,
-  units: [{ unit: 'cruiser', count: 1, hp }],
-  traits: [],
-  ...extra,
-});
+// hp `null` = full hull (pool undefined); shieldHp omitted = full shield.
+const cruiser = (
+  hp: number | null,
+  location: string,
+  extra: Partial<Fleet> = {},
+  shieldHp?: number,
+): Fleet => {
+  const stack: UnitStack = { unit: 'cruiser', count: 1 };
+  if (hp !== null) stack.hp = hp;
+  if (shieldHp !== undefined) stack.shieldHp = shieldHp;
+  return { id: 'F', owner: 'p1', location, movement: null, units: [stack], traits: [], ...extra };
+};
 
 describe('ship hull repair + shield recharge', () => {
-  it('recharges shields (hull above 30%) anywhere between fights', () => {
-    const s = shipScene(cruiser(60, 'deep')); // deep = neutral world → no base repair
+  it('regenerates the shield for free anywhere between fights', () => {
+    const s = shipScene(cruiser(null, 'deep', {}, 10)); // full hull, shield 10/30, neutral world
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
-    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(66); // 60 + 0.06×100
+    expect(state.fleets.F?.units[0]?.shieldHp).toBeCloseTo(11.8); // 10 + 0.06×30
+    expect(state.fleets.F?.units[0]?.hp).toBeUndefined(); // hull untouched — no free hull regen
   });
 
-  it('does NOT mend a hull breach (≤30%) away from a repair base', () => {
+  it('does NOT free-regen the hull away from a friendly port', () => {
     const s = shipScene(cruiser(20, 'deep'));
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
-    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(20); // breach persists, shields offline
+    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(20); // hull never mends for free
   });
 
-  it('mends the hull at any friendly world (base rate), faster with a hospital', () => {
+  it('mends the hull only at a friendly world (base rate), faster with a hospital', () => {
     // hospital world: base 0.04 + hospital 0.15 = 0.19/hour
     const withHospital = okAdvance(shipKernel.advanceTo(shipScene(cruiser(20, 'base')), shipCtx(HOUR)));
     expect(withHospital.fleets.F?.units[0]?.hp).toBeCloseTo(39); // 20 + 0.19×100
@@ -208,21 +220,34 @@ describe('ship hull repair + shield recharge', () => {
     expect(noHospital.fleets.F?.units[0]?.hp).toBeCloseTo(24); // 20 + 0.04×100
   });
 
-  it('stacks shields + hull repair at a friendly base', () => {
-    const s = shipScene(cruiser(60, 'base'));
+  it('regenerates shield and repairs hull as separate pools at a base', () => {
+    const s = shipScene(cruiser(60, 'base', {}, 10)); // hull 60, shield 10/30
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
-    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(85); // 60 +6 (shields) +19 (hull 0.04+0.15)
+    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(79); // hull: 60 + 0.19×100 (port only)
+    expect(state.fleets.F?.units[0]?.shieldHp).toBeCloseTo(11.8); // shield: 10 + 0.06×30 (free)
   });
 
-  it('does not repair a fleet that is in a battle', () => {
-    const s = shipScene(cruiser(60, 'base', { battleId: 'b1' }));
-    const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
-    expect(state.fleets.F?.units[0]?.hp).toBe(60); // frozen mid-fight
+  it('holds shield regen for a delay after taking damage', () => {
+    const scene = () => shipScene(cruiser(null, 'deep', { lastDamagedAt: 0 }, 10));
+    // Span [0, HOUR) lies inside the 1h post-damage delay → shield frozen.
+    const frozen = okAdvance(shipKernel.advanceTo(scene(), shipCtx(HOUR)));
+    expect(frozen.fleets.F?.units[0]?.shieldHp).toBeCloseTo(10); // no regen yet
+    // By 3h the delay has passed and shields have resumed.
+    const resumed = okAdvance(shipKernel.advanceTo(scene(), shipCtx(3 * HOUR)));
+    expect(resumed.fleets.F?.units[0]?.shieldHp).toBeGreaterThan(10);
   });
 
-  it('clears hp to undefined once fully repaired', () => {
-    const s = shipScene(cruiser(96, 'base')); // +6 shields +15 hull → capped at 100
+  it('regenerates nothing while in a battle', () => {
+    const s = shipScene(cruiser(60, 'base', { battleId: 'b1' }, 10));
+    const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
+    expect(state.fleets.F?.units[0]?.hp).toBe(60); // hull frozen
+    expect(state.fleets.F?.units[0]?.shieldHp).toBe(10); // shield frozen mid-fight
+  });
+
+  it('clears each pool to undefined once it is full', () => {
+    const s = shipScene(cruiser(96, 'base', {}, 29)); // hull 96 (+19→100), shield 29 (+1.8→30)
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
     expect(state.fleets.F?.units[0]?.hp).toBeUndefined();
+    expect(state.fleets.F?.units[0]?.shieldHp).toBeUndefined();
   });
 });

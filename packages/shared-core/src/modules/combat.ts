@@ -194,10 +194,14 @@ function applyDamageToSide(
   if (owner != null) {
     source.owner = owner;
   }
-  // Taking damage provokes a fleet's `return` ("ответный") artillery fire mode.
+  // Taking damage provokes a fleet's `return` ("ответный") artillery fire mode and
+  // stamps `lastDamagedAt` (shields hold their regen for a delay after being hit).
   if (ref.kind === 'fleet' && dmg > 0) {
     const f = h.state.fleets[ref.fleetId];
-    if (f) f.barrageProvoked = true;
+    if (f) {
+      f.barrageProvoked = true;
+      f.lastDamagedAt = h.ctx.now;
+    }
   }
   setSideUnits(h.state, ref, applyDamage(h, units, dmg, data, source));
 }

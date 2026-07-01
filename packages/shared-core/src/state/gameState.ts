@@ -203,6 +203,9 @@ export interface Fleet {
   /** Set true once this fleet has taken combat damage — the trigger for the
    *  `return` ("ответный") fire mode, which holds fire until first hit. */
   barrageProvoked?: boolean;
+  /** World-time (ms) this fleet last took damage. Gates shield regen: shields stay
+   *  down for a delay after the last hit (shields-roadmap SH-1.1). Absent = never hit. */
+  lastDamagedAt?: number;
 }
 
 /**
