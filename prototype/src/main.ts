@@ -4898,7 +4898,7 @@ for (const a of Array.from(document.querySelectorAll('.cfoot a'))) {
 $('hub-play').addEventListener('click', () => hubTab('games'));
 $('hub-solo').addEventListener('click', () => {
   showHub(false);
-  openSetup();
+  openSetup('hub');
 });
 $('hub-msg').addEventListener('click', () => {
   hubNote.textContent = 'Сообщения — скоро';
@@ -4916,6 +4916,11 @@ for (const t of Array.from(document.querySelectorAll('#hp-more .hub-tile[data-mo
     hubNote.textContent = `${(t as HTMLElement).dataset.more} — скоро`;
   });
 }
+
+// First-run gate: a returning commander (a saved callsign) skips the identity card
+// and boots straight into the hub — the raw "Новый командир / войти" screen is only
+// for a genuinely new device. "Сменить командира" in the hub goes back to identity.
+if ((localStorage.getItem('void.nick') ?? '').trim()) openHub();
 
 // --- single-player setup overlay --------------------------------------------
 // Pick your homeworld on a mini-map and choose how many AI rivals join, then
@@ -5283,7 +5288,11 @@ function renderSetup(): void {
     c.classList.toggle('on', Number((c as HTMLElement).dataset.spd) === setupSpeed);
 }
 
-function openSetup(): void {
+// Where the Setup screen's Back button returns to — the surface that opened it, so
+// arriving from the hub goes back to the hub, not the raw identity card.
+let setupReturn: 'welcome' | 'hub' = 'welcome';
+function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
+  setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
   setupSpeed = 1; // default to normal time flow each time the setup opens
@@ -5375,7 +5384,8 @@ setupSpeedEl.addEventListener('click', (ev) => {
 setupGoEl.addEventListener('click', () => startMatch(buildSetupConfig()));
 $('setupcancel').addEventListener('click', () => {
   setupEl.style.display = 'none';
-  showConnect(true);
+  if (setupReturn === 'hub') openHub();
+  else showConnect(true);
 });
 
 function connect(): void {
