@@ -1073,23 +1073,32 @@ export class MatchRoom {
     const now = this.clock();
     const lobby = this.lobbyField();
     for (const [playerId, playerPeers] of this.peers) {
-      const view = this.viewFor(playerId);
-      const baseline = this.lastVisible.get(playerId) ?? view.base;
-      const identify = identifiedNodes(this.stateValue, playerId, this.data);
-      const message: ServerMessage = {
-        type: 'delta',
-        matchId: this.id,
-        seq: this.seq,
-        serverTime: now,
-        delta: diffState(baseline, view.base),
-        events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
-        signatures: view.signatures,
-        remembered: view.remembered,
-        ...this.hashField(view.base),
-        ...lobby,
-      };
-      this.lastVisible.set(playerId, view.base);
-      for (const peer of playerPeers) this.send(peer, message);
+      // Broadcast is BEST-EFFORT and per-player isolated: computing one player's fogged
+      // view (viewFor/diffState/identifiedNodes) must never abort delivery to the others,
+      // and must never escape into the action path — a delivery slip can't undo an
+      // already-committed, already-persisted action (the client resyncs on reconnect). The
+      // durable commit is the source of truth; this is just how we tell peers about it.
+      try {
+        const view = this.viewFor(playerId);
+        const baseline = this.lastVisible.get(playerId) ?? view.base;
+        const identify = identifiedNodes(this.stateValue, playerId, this.data);
+        const message: ServerMessage = {
+          type: 'delta',
+          matchId: this.id,
+          seq: this.seq,
+          serverTime: now,
+          delta: diffState(baseline, view.base),
+          events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
+          signatures: view.signatures,
+          remembered: view.remembered,
+          ...this.hashField(view.base),
+          ...lobby,
+        };
+        this.lastVisible.set(playerId, view.base);
+        for (const peer of playerPeers) this.send(peer, message);
+      } catch {
+        /* skip this player's delta this round; a reconnect gets a fresh welcome */
+      }
     }
   }
 

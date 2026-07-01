@@ -82,6 +82,8 @@ export class InMemorySequenceGate implements SequenceGate {
     // Only undo if `clientSeq` is still the cursor — a serialized caller guarantees no
     // newer action advanced past it, so this restores the pre-reservation state exactly.
     if (this.cursors.get(k) !== clientSeq) return;
-    this.cursors.set(k, clientSeq - 1); // last() reads 0 for a cursor of 0 → next expects 1
+    // Unwinding to 0 is the fresh state — drop the entry (don't leave a dead 0 in the LRU).
+    if (clientSeq <= 1) this.cursors.delete(k);
+    else this.cursors.set(k, clientSeq - 1);
   }
 }
