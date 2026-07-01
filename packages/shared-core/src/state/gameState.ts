@@ -30,6 +30,10 @@ export interface UnitStack {
   /** Remaining HP pool of this stack during a battle (≤ count × def.hp).
    *  Undefined outside combat = full health. */
   hp?: number;
+  /** Remaining ablative shield pool of this stack (≤ count × def.shield). Absorbs
+   *  damage before `hp`; a ship still dies only when its HULL (`hp`) hits 0.
+   *  Undefined = full shield (shields-roadmap SH-0.1). */
+  shieldHp?: number;
 }
 
 /** A constructed building on a planet. Buildings are leveled (1..maxLevel) and

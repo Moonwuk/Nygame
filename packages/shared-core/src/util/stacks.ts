@@ -1,9 +1,10 @@
 import type { UnitStack } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 
-/** A healthy (non-combat) stack of `unit` in `stacks`, if any. */
+/** A healthy (non-combat) stack of `unit` in `stacks`, if any — full hull AND full
+ *  shield (both pools undefined), so a battle-damaged stack never silently merges. */
 export function findHealthyStack(stacks: UnitStack[], unit: string): UnitStack | undefined {
-  return stacks.find((s) => s.unit === unit && s.hp === undefined);
+  return stacks.find((s) => s.unit === unit && s.hp === undefined && s.shieldHp === undefined);
 }
 
 /** Adds `count` units to a stack array, merging into an existing healthy stack

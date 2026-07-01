@@ -20,6 +20,13 @@ const data: GameData = parseGameData({
   units: {
     fighter: { faction: 'x', stats: { attack: 10, defense: 0, speed: 10, hp: 20 }, line: 'front' },
     shield: { faction: 'x', stats: { attack: 0, defense: 0, speed: 5, hp: 50 }, line: 'front' },
+    // Shielded hull: 50 hull + 15 ablative shield. Inert (attack/defense 0) so a
+    // scenario deals it a known, un-returned amount of damage.
+    aegis: {
+      faction: 'x',
+      stats: { attack: 0, defense: 0, speed: 5, hp: 50, shield: 15 },
+      line: 'front',
+    },
     backliner: { faction: 'x', stats: { attack: 5, defense: 0, speed: 5, hp: 10 }, line: 'rear' },
     artil: {
       faction: 'x',
@@ -296,6 +303,43 @@ describe('combat — damage lines (GDD §7.2)', () => {
     expect(stackOf(d, 'fighter')?.hp).toBe(10); // front fighter took the hit
     expect(stackOf(d, 'artil')?.count).toBe(1); // artillery shielded
     expect(stackOf(d, 'artil')?.hp).toBeUndefined();
+  });
+});
+
+describe('shields (ablative)', () => {
+  const kernel = createKernel([combatModule, arrivalModule]);
+  // Fleet A (attacker) strikes with `attack`; fleet D (inert aegis) can't return fire,
+  // so D takes exactly the attackers' Σ count×attack. One round at HOUR.
+  function oneRound(attacker: Array<[string, number]>): GameState {
+    const st = baseState(
+      [fleet('A', 'p1', 'P', attacker), fleet('D', 'p2', 'P', [['aegis', 1]])],
+      [planet('P', null)],
+    );
+    const started = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    return okAdvance(kernel.advanceTo(started.state, ctx(HOUR))).state;
+  }
+
+  it('absorbs damage into the shield before the hull', () => {
+    const d = stackOf(oneRound([['fighter', 1]]).fleets.D, 'aegis'); // 10 dmg < 15 shield
+    expect(d?.shieldHp).toBe(5); // 15 − 10
+    expect(d?.hp).toBeUndefined(); // hull untouched = full
+    expect(d?.count).toBe(1);
+  });
+
+  it('spills the overflow past a depleted shield into the hull', () => {
+    const d = stackOf(oneRound([['fighter', 2]]).fleets.D, 'aegis'); // 20 dmg > 15 shield
+    expect(d?.shieldHp).toBe(0); // shield gone
+    expect(d?.hp).toBe(45); // 50 − (20 − 15)
+    expect(d?.count).toBe(1); // still alive — hull remains
+  });
+
+  it('kills a ship only when its HULL is exhausted, not its shield', () => {
+    // 60 dmg = 15 shield + 45 hull → 5 hull left, survives.
+    const lives = stackOf(oneRound([['fighter', 6]]).fleets.D, 'aegis');
+    expect(lives?.count).toBe(1);
+    expect(lives?.hp).toBe(5);
+    // 70 dmg = 15 shield + 50 hull (=65) → hull gone, destroyed (wiped fleet removed).
+    expect(stackOf(oneRound([['fighter', 7]]).fleets.D, 'aegis')).toBeUndefined();
   });
 });
 

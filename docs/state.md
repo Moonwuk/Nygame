@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 620 зелёных** (4 skip, 67 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 626 зелёных** (4 skip, 67 файлов).
 
 ---
 
@@ -102,10 +102,12 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   `fleet` | `landing` | `garrison`.
 - `scheduled: ScheduledEvent[]` `{id, at, type, payload, seq}`, счётчики
   `battleSeq`, `scheduleSeq`.
-- `UnitStack {unit, count, hp?}` (поле `hp` — пул HP стека). Для наземных стеков
-  `hp` живёт только во время боя (после — сброс в `undefined` = полное HP). Для
-  **корабельных** стеков (`fleet.units`) `hp` **сохраняется и вне боя** — урон
-  корпуса постоянный (чинится на базе, см. construction).
+- `UnitStack {unit, count, hp?, shieldHp?}` (`hp` — пул корпуса, `shieldHp` — пул
+  **аблятивного щита**, shields-roadmap SH-0.1). Для наземных стеков оба пула живут
+  только во время боя (после — сброс в `undefined` = полное HP/щит). Для
+  **корабельных** стеков (`fleet.units`) оба **сохраняются и вне боя** — урон
+  корпуса/щита постоянный (корпус чинится на базе, см. construction; реген щита —
+  будущий SH-1.1).
 - `heroes?: Record<id, Hero>` (`{owner, location, cooldowns}`), `tempLanes?: TempLane[]`
   (временные публичные трассы), `topology?` (версия графа для инвалидации `RouteCache`),
   `heroSeq?` (счётчик id лейнов) — модуль `hero`.
@@ -260,6 +262,12 @@ INSTEAD-of-фокус — opportunity-cost (лидер-«+слот» branchless)
   `MS_PER_HOUR / timeScale`; `battle.nextRoundAt` несёт время следующего раунда
   (таймер боя). Урон через хук **`combat.damage`** (args: battleId, phase, location,
   attacker, defender). Исход → `battle.resolved`.
+- **Аблятивный щит (shields SH-0.2):** `applyDamage` сначала снимает `shieldHp` стека,
+  остаток — в корпус (`hp`); корабль гибнет **по корпусу** (щит не убивает), павшие
+  корабли уносят щит (пул капается `newCount × shield`). Наземным `finishBattle` сбрасывает
+  оба пула, корабли — сохраняют. ⚠️ Реконсиляция: `construction` до сих пор регенит
+  «верхние 70% `hp`» как «щит» (одно-пуловый интерим, `SHIELD_REGEN`) — это надо перевести
+  на реальный `shieldHp` (SH-1.1), иначе настоящий щит не регенит, а верх корпуса — да.
 - Действие **`fleet.orbit {orbit:'near'}`** — «выйти на орбиту» (одна орбита,
   единственное значение — `'near'`; прибытие на объект ставит флот на неё само).
 - Действие **`fleet.assault`** — стоя **на орбите**: штурм гарнизона десантом

@@ -18,6 +18,7 @@ const DATA = {
     frigate: { domain: 'space', stats: { hp: 10 } },
     corvette: { domain: 'space', stats: { hp: 6 } },
     marine: { domain: 'ground', stats: { hp: 3 } },
+    aegis: { domain: 'space', stats: { hp: 10, shield: 4 } }, // shielded hull
   },
 } as unknown as Pick<GameData, 'resources' | 'units'>;
 
@@ -290,6 +291,33 @@ describe('createSelectionModel', () => {
     s.fleets = { f1: fleet({ id: 'f1', owner: 'p1', units: [] }) };
     const res = createSelectionModel(s, 'f1', 'p1', DATA);
     expect(res).toMatchObject({ ok: true, hull: { current: 0, max: 0 } });
+  });
+
+  it('emits a shield bar from real shield capacity, full when undamaged', () => {
+    const s = baseState();
+    s.fleets = { f1: fleet({ id: 'f1', owner: 'p1', units: [{ unit: 'aegis', count: 3 }] }) };
+    const res = createSelectionModel(s, 'f1', 'p1', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.shield).toEqual({ current: 12, max: 12 }); // 3 × 4, full
+    expect(res.hull).toEqual({ current: 30, max: 30 }); // 3 × 10
+  });
+
+  it('uses the per-stack shieldHp pool for current shield', () => {
+    const s = baseState();
+    s.fleets = {
+      f1: fleet({ id: 'f1', owner: 'p1', units: [{ unit: 'aegis', count: 3, shieldHp: 5 }] }),
+    };
+    const res = createSelectionModel(s, 'f1', 'p1', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.shield).toEqual({ current: 5, max: 12 }); // depleted shield, hull intact
+  });
+
+  it('omits the shield bar for a shieldless fleet', () => {
+    const s = baseState();
+    s.fleets = { f1: fleet({ id: 'f1', owner: 'p1', units: [{ unit: 'frigate', count: 2 }] }) };
+    const res = createSelectionModel(s, 'f1', 'p1', DATA);
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.shield).toBeUndefined(); // one HP bar, not an empty second
   });
 
   it('attaches the commanding hero (grade, name fallback to owner)', () => {

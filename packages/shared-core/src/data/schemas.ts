@@ -23,6 +23,10 @@ export const UnitStatsSchema = z
     speed: z.number(),
     /** Hit points per ship — aggregate fleet HP = Σ count × hp (GDD §7.1). */
     hp: z.number().nonnegative().default(1),
+    /** Ablative shield points per ship (shields-roadmap SH-0.1): damage hits the
+     *  shield pool before the hull; a ship dies when its HULL reaches 0. 0 = no
+     *  shield. (Out-of-combat regen is a later brick, SH-1.1.) */
+    shield: z.number().nonnegative().default(0),
     /** Standoff firing radius in MAP UNITS — the Euclidean reach of an
      *  `artillery` unit's ranged attack (combat `runArtillery`). 0 = melee only,
      *  no ranged attack. The longest gun in a fleet sets the fleet's reach. */

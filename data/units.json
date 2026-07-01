@@ -11,7 +11,7 @@
   },
   "cruiser": {
     "faction": "vanguard",
-    "stats": { "attack": 10, "defense": 8, "speed": 6, "hp": 40, "cargoCapacity": 2 },
+    "stats": { "attack": 10, "defense": 8, "speed": 6, "hp": 40, "shield": 15, "cargoCapacity": 2 },
     "line": "front",
     "traits": [],
     "abilities": [],

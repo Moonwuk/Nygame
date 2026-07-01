@@ -117,7 +117,7 @@ export interface FleetView {
   commander?: { name: string; level: number };     // герой на узле флота
   stacks: StackCard[];                             // fleet.units (+ landing)
   hull: { cur: number; max: number };
-  shield?: { cur: number; max: number };           // когда SH-роадмап в коде
+  shield?: { cur: number; max: number };           // ✅ реально (shields SH-0.1/0.2)
   power: number; damageReduction: number;          // производные
 }
 export interface StackCard { unit: string; count: number; condition: number /* 0..1 = hp-доля */ }
@@ -148,10 +148,12 @@ export function resolveHudAction(action: HudTap, model: HudModel): HudIntent | {
   даже на не-туманном состоянии); `inCombat`, `mine`, владелец.
 
 Обе фабрики **fail-secure** (`E_NO_PLAYER` / `E_NO_SELECTION`) и мягко деградируют без `data`
-(нет `hull`/`domain`). **Осознанно НЕ эмитим** (нет опоры в ядре — не выдумываем числа): `shield`,
-`power`, `damageReduction`, числовой уровень командира, кошелёк Суверенов, ранг-бар «66/826»,
-`ratePerDay`. Появятся в модели, когда механика ляжет в код (`shields`/`ship-modules`-роадмапы, HUD-2).
-Объединённый `createHudModel`/`resolveHudAction` (зоны B/C + мета) — следующий кирпич.
+(нет `hull`/`domain`). **`shield?: {current,max}`** — уже реальный (shields-roadmap SH-0.1/0.2:
+стат `shield` + пул `shieldHp`); опускается для беcщитового флота (одна полоска). **Осознанно НЕ
+эмитим** (нет опоры в ядре — не выдумываем числа): `power`, `damageReduction`, числовой уровень
+командира, кошелёк Суверенов, ранг-бар «66/826», `ratePerDay`. Появятся, когда механика ляжет в код
+(`ship-modules`-роадмап, HUD-2). Объединённый `createHudModel`/`resolveHudAction` (зоны B/C + мета) —
+следующий кирпич.
 
 ## 4. Мобильные ограничения / тема
 

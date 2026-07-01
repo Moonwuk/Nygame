@@ -134,6 +134,21 @@ function applyDamage(
         continue;
       }
       const perShip = def.stats.hp > 0 ? def.stats.hp : 1;
+
+      // Ablative shield absorbs first (shields-roadmap SH-0.2); only the overflow
+      // reaches the hull. A shield never kills — a ship dies only when its hull hits 0.
+      const shieldPerShip = def.stats.shield ?? 0;
+      if (shieldPerShip > 0) {
+        let shield = stack.shieldHp ?? stack.count * shieldPerShip;
+        const shieldAbsorbed = Math.min(remaining, shield);
+        shield -= shieldAbsorbed;
+        remaining -= shieldAbsorbed;
+        stack.shieldHp = shield;
+        if (remaining <= 0) {
+          continue; // shield soaked it all — hull untouched
+        }
+      }
+
       let pool = stack.hp ?? stack.count * perShip;
       const absorbed = Math.min(remaining, pool);
       pool -= absorbed;
@@ -146,6 +161,10 @@ function applyDamage(
       }
       stack.count = newCount;
       stack.hp = newCount > 0 ? pool : 0;
+      // Dead ships take their shields with them: cap the pool at surviving capacity.
+      if (shieldPerShip > 0) {
+        stack.shieldHp = newCount > 0 ? Math.min(stack.shieldHp ?? 0, newCount * shieldPerShip) : 0;
+      }
     }
   }
   return units.filter((s) => s.count > 0);
@@ -527,10 +546,13 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
   // repair base (construction.ts). `applyDamage` reads `stack.hp ?? full`, so a
   // damaged ship simply re-enters its next battle at its current hull.
   for (const ref of [battle.attacker.ref, battle.defender.ref]) {
-    if (ref.kind === 'fleet') continue; // ships carry hull damage out of combat
+    if (ref.kind === 'fleet') continue; // ships carry hull + shield damage out of combat
     const survivors = sideUnits(h.state, ref);
     if (survivors) {
-      for (const stack of survivors) delete stack.hp;
+      for (const stack of survivors) {
+        delete stack.hp;
+        delete stack.shieldHp; // ground returns at rest: full hull AND full shield
+      }
     }
   }
 

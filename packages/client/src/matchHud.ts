@@ -15,10 +15,10 @@
  * Grounded strictly in real state — every field traces to a `GameState`/`GameData`
  * field. Elements of the mockup with **no backing data yet** are deliberately
  * omitted rather than faked: a fleet has no display name (labelled by id/owner),
- * `faction` is a content id (not a corp/clan tag), the commanding `Hero` has a
- * `grade` tier but no numeric level, and **shields / a derived power rating /
- * damage-reduction do not exist in the core** (docs/shields-roadmap.md and
- * docs/hud-inmatch.md HUD-2 are still ⏳). They land here once the mechanic ships.
+ * `faction` is a content id (not a corp/clan tag), and the commanding `Hero` has a
+ * `grade` tier but no numeric level. The **shield** bar is now real (shields-roadmap
+ * SH-0.1/0.2 — `shieldHp` pool); a derived power rating / damage-reduction still
+ * don't exist in the core (docs/hud-inmatch.md HUD-2 ⏳) and land once they ship.
  */
 import { MS_PER_DAY } from '@void/shared-core';
 import type {
@@ -185,6 +185,11 @@ export interface FleetSelectionModel {
    *  (`current` uses the per-stack combat pool when present, else full). Omitted
    *  when `data` is not supplied — max HP cannot be derived without unit defs. */
   hull?: { current: number; max: number };
+  /** Aggregate ablative shield `{ current, max }`, derived as `Σ count × def.stats.shield`
+   *  (`current` uses the per-stack `shieldHp` pool when present, else full). Omitted
+   *  when `data` is absent OR the fleet has no shield capacity (max 0) — a shieldless
+   *  fleet shows one HP bar, not an empty second one. */
+  shield?: { current: number; max: number };
   /** Engaged in an active battle (`fleet.battleId` set). */
   inCombat: boolean;
 }
@@ -212,6 +217,23 @@ function fleetHull(fleet: Fleet, data: Pick<GameData, 'units'>): { current: numb
     current += s.hp ?? stackMax;
   }
   return { current, max };
+}
+
+/** Aggregate ablative shield, or undefined when the fleet has no shield capacity. */
+function fleetShield(
+  fleet: Fleet,
+  data: Pick<GameData, 'units'>,
+): { current: number; max: number } | undefined {
+  let current = 0;
+  let max = 0;
+  for (const s of fleet.units) {
+    const perShip = data.units[s.unit]?.stats.shield ?? 0;
+    const stackMax = s.count * perShip;
+    max += stackMax;
+    // `s.shieldHp` is the whole-stack shield pool; absent = full shield.
+    current += s.shieldHp ?? stackMax;
+  }
+  return max > 0 ? { current, max } : undefined;
 }
 
 /** The living hero commanding `fleet`, if any. Self-securing: only the viewer's own
@@ -278,7 +300,11 @@ export function createSelectionModel(
 
   const commander = fleetCommander(state, fleet, viewerId);
   if (commander) model.commander = commander;
-  if (data) model.hull = fleetHull(fleet, data);
+  if (data) {
+    model.hull = fleetHull(fleet, data);
+    const shield = fleetShield(fleet, data);
+    if (shield) model.shield = shield;
+  }
 
   return { ok: true, ...model };
 }
