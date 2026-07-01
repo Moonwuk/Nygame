@@ -613,8 +613,9 @@ function mergeStacks(base: UnitStack[], add: UnitStack[]): UnitStack[] {
 // fleet starved the economy. Now every inhabited world of yours levies a flat
 // civic tax; a Tax Office (one-time, no levels) boosts that world's whole credit
 // take. Hooks `economy.production`, so the core economy stays generic.
-export const TAX_PER_HOUR = 100; // base credits/h from each inhabited owned world (tune later)
+export const TAX_PER_HOUR = 100; // base credits/h from the FIRST inhabited owned world
 export const TAX_OFFICE_BONUS = 0.25; // Tax Office: +25% to that world's credit income
+export const TAX_DIMINISH = 0.06; // civic tax per world tapers as an empire grows
 
 /** An inhabited world — a normal colonisable planet/cloud with an orbital layer
  *  and the general build roster. Asteroid junctions (no orbit), dead worlds
@@ -623,19 +624,37 @@ export function isInhabited(planet: Planet): boolean {
   return hasOrbit(data, planet) && allowedBuildings(data, planet) === undefined;
 }
 
+/** Civic credits/hour from ONE inhabited world when its owner holds `n` of them.
+ *  Flat TAX_PER_HOUR for a lone world, diminishing as `n` climbs, so total civic
+ *  income `n × civicTax(n)` still rises with territory but SUB-linearly — curbing
+ *  the runaway snowball where every world paid a flat 100 forever (1→100, 5→~403,
+ *  10→~649, 20→~934, 42→~1214 vs the old 100/500/1000/2000/4200). Tune TAX_DIMINISH. */
+export function civicTax(n: number): number {
+  return TAX_PER_HOUR / (1 + TAX_DIMINISH * Math.max(0, n - 1));
+}
+
+/** Count of inhabited worlds a player owns — the `n` fed to {@link civicTax}. */
+export function inhabitedWorldCount(state: GameState, owner: string | null): number {
+  if (owner === null) return 0;
+  let n = 0;
+  for (const p of Object.values(state.planets)) if (p.owner === owner && isInhabited(p)) n += 1;
+  return n;
+}
+
 export const taxModule: GameModule = {
   id: 'tax',
   version: '0.1.0',
   setup(api) {
     // Runs in the `economy.production` pipeline AFTER planetType (see MODULES order),
-    // so the flat tax is exactly TAX_PER_HOUR (not scaled by world richness), while the
-    // Tax Office multiplies the world's whole credit take (refinery output + the tax).
+    // so the civic tax isn't scaled by world richness, while the Tax Office multiplies
+    // the world's whole credit take (refinery output + the tax). The per-world tax
+    // diminishes with the owner's empire size (civicTax) so income scales sub-linearly.
     api.hook<ResourceBag>('economy.production', (bag, args, h) => {
       const planetId = (args as { planetId?: string }).planetId;
       const planet = planetId ? h.state.planets[planetId] : undefined;
       if (!planet || !isInhabited(planet)) return bag;
       const out: Record<string, number> = { ...bag };
-      out.credits = (out.credits ?? 0) + TAX_PER_HOUR;
+      out.credits = (out.credits ?? 0) + civicTax(inhabitedWorldCount(h.state, planet.owner));
       if (planet.buildings.some((b) => b.type === 'tax_office')) {
         out.credits *= 1 + TAX_OFFICE_BONUS;
       }
@@ -1161,6 +1180,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
  *  minus unit/garrison upkeep (daily ÷ 24). Drives the HUD's `+/h` deltas. */
 export function netIncome(state: GameState, playerId: string): Record<string, number> {
   const out: Record<string, number> = {};
+  const inhabited = inhabitedWorldCount(state, playerId); // for the diminishing civic tax
   for (const p of Object.values(state.planets)) {
     if (p.owner !== playerId || isBombarded(state, p.id)) continue;
     const mult = 1 + (p.planetType ? (data.planetTypes[p.planetType]?.productionBonus ?? 0) : 0);
@@ -1178,7 +1198,7 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
       }
     }
     if (isInhabited(p)) {
-      credits += TAX_PER_HOUR;
+      credits += civicTax(inhabited);
       if (p.buildings.some((b) => b.type === 'tax_office')) credits *= 1 + TAX_OFFICE_BONUS;
     }
     if (credits !== 0) out.credits = (out.credits ?? 0) + credits;
@@ -1735,10 +1755,12 @@ export const MODULES: GameModule[] = [
 
 export const kernel = createKernel(MODULES);
 
-// Win at 600 of the board's ~1000 base points (also the core default now; set explicitly
-// so the prototype's win condition is self-documenting and tunable here — and read by the
-// HUD score readout). Exported as the single source of truth.
-export const SCORE_LIMIT = 600;
+// Win at 450 of the board's ~970 base points (12 planets×50 + 37 provinces×10). Set
+// below the ~60% domination line so a decisive-but-not-total lead — a fistful of planets
+// plus built-up infrastructure — can win the SCORE race first, making the score/building
+// system (scoreValue) meaningful instead of vestigial vs conquest. Tunable single source
+// of truth, also read by the HUD score readout.
+export const SCORE_LIMIT = 450;
 export function ctx(now: number): Context {
   return { now, data, config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } } };
 }
