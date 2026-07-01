@@ -11,7 +11,7 @@
   },
   "cruiser": {
     "faction": "vanguard",
-    "stats": { "attack": 10, "defense": 8, "speed": 6, "hp": 40, "cargoCapacity": 2 },
+    "stats": { "attack": 10, "defense": 8, "speed": 6, "hp": 40, "shield": 15, "cargoCapacity": 2 },
     "line": "front",
     "traits": [],
     "abilities": [],
@@ -32,7 +32,7 @@
   "dropship": {
     "faction": "vanguard",
     "domain": "space",
-    "stats": { "attack": 2, "defense": 6, "speed": 6, "hp": 50, "cargoCapacity": 12 },
+    "stats": { "attack": 2, "defense": 6, "speed": 6, "hp": 50, "shield": 12, "cargoCapacity": 12 },
     "line": "rear",
     "traits": [],
     "abilities": [],
@@ -86,7 +86,7 @@
   },
   "infected_cruiser": {
     "faction": "swarm",
-    "stats": { "attack": 12, "defense": 4, "speed": 6, "hp": 32 },
+    "stats": { "attack": 12, "defense": 4, "speed": 6, "hp": 32, "shield": 8 },
     "line": "front",
     "traits": ["infect_planet", "no_food_cost"],
     "abilities": ["spread_biomass"],
@@ -106,7 +106,7 @@
   },
   "hero": {
     "faction": "vanguard",
-    "stats": { "attack": 12, "defense": 12, "speed": 6, "hp": 120 },
+    "stats": { "attack": 12, "defense": 12, "speed": 6, "hp": 120, "shield": 40 },
     "line": "front",
     "traits": ["hero"],
     "abilities": [],

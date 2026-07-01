@@ -23,6 +23,10 @@ export const UnitStatsSchema = z
     speed: z.number(),
     /** Hit points per ship — aggregate fleet HP = Σ count × hp (GDD §7.1). */
     hp: z.number().nonnegative().default(1),
+    /** Ablative shield points per ship (shields-roadmap SH-0.1): damage hits the
+     *  shield pool before the hull; a ship dies when its HULL reaches 0. 0 = no
+     *  shield. (Out-of-combat regen is a later brick, SH-1.1.) */
+    shield: z.number().nonnegative().default(0),
     /** Standoff firing radius in MAP UNITS — the Euclidean reach of an
      *  `artillery` unit's ranged attack (combat `runArtillery`). 0 = melee only,
      *  no ranged attack. The longest gun in a fleet sets the fleet's reach. */
@@ -133,6 +137,9 @@ export const BuildingLevelSchema = z.object({
   /** Fraction of a garrison stack's max-HP pool restored per game hour (0.1 = 10%/h).
    *  Stacks heal continuously while the planet is owned; destroyed buildings don't heal. */
   healRate: z.number().nonnegative().default(0),
+  /** Fraction of a docked friendly fleet's HULL restored per game hour (0.1 = 10%/h) —
+   *  a shipyard / spaceport (shields-roadmap SH-2.1). 0 = this building can't mend hulls. */
+  shipRepair: z.number().nonnegative().default(0),
 });
 
 export const BuildingDefSchema = z.object({
@@ -158,6 +165,9 @@ export const BuildingDefSchema = z.object({
   radarRange: z.number().nonnegative().default(0),
   /** Fraction of garrison max-HP restored per game hour (see BuildingLevelSchema). */
   healRate: z.number().nonnegative().default(0),
+  /** Fraction of a docked friendly fleet's HULL restored per game hour — a
+   *  shipyard / spaceport (shields-roadmap SH-2.1). 0 = can't mend hulls. */
+  shipRepair: z.number().nonnegative().default(0),
 });
 
 /**
@@ -224,17 +234,54 @@ export const TechnologyEffectsSchema = z.object({
   combatDamageBonus: z.number().default(0),
 });
 
+/** The four tech-tree branches (UI tabs), shared by technologies, scientists and the
+ *  `has_scientist` gate. */
+const BranchSchema = z.enum(['ground', 'space', 'squadron', 'missile']);
+
+/** Shared "at least N" threshold for a condition (default 1 = mere existence). This
+ *  single `min` knob is the main data lever for tuning a gate without touching code. */
+const conditionMin = z.number().int().positive().default(1);
+
+/** One curated tech-unlock condition (a "ready-made block", not a constructor —
+ *  §7.5): evaluated deterministically from state, each an "at least `min`" count.
+ *  Balancing a tech = composing these in JSON (adjust `min`); a genuinely new KIND of
+ *  gate = a new variant here + one evaluator case in the technology module. ALL of a
+ *  tech's conditions must hold for it to unlock. */
+export const TechnologyConditionSchema = z.discriminatedUnion('type', [
+  /** Own at least `min` sectors (owned map nodes / planets). */
+  z.object({ type: z.literal('own_sectors'), min: conditionMin }),
+  /** Own at least `min` built copies of `building` across your worlds. */
+  z.object({ type: z.literal('has_building'), building: z.string(), min: conditionMin }),
+  /** Own at least `min` worlds of `planetType`. */
+  z.object({ type: z.literal('controls_planet_type'), planetType: z.string(), min: conditionMin }),
+  /** Field at least `min` of `unit` across fleets, their cargo, and garrisons. */
+  z.object({ type: z.literal('has_unit'), unit: z.string(), min: conditionMin }),
+  /** Have a chosen scientist (optionally of `branch`) at level ≥ `minLevel` — the
+   *  seam for branch-focus and late-game capstone content. `minLevel` is a meta level;
+   *  a capstone should anchor it to the account/scientist max once account-level lands
+   *  (docs-only today), not a guessed magic number. */
+  z.object({
+    type: z.literal('has_scientist'),
+    branch: BranchSchema.optional(),
+    minLevel: z.number().int().positive().default(1),
+  }),
+]);
+export type TechnologyCondition = z.infer<typeof TechnologyConditionSchema>;
+
 export const TechnologyDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   tier: z.number().int().positive().default(1),
   /** Tech-tree branch (UI tab). Defaults to 'space' so existing nodes that omit
    *  it stay valid (back-compat); squadron/missile branches may have no content yet. */
-  branch: z.enum(['ground', 'space', 'squadron', 'missile']).default('space'),
+  branch: BranchSchema.default('space'),
   /** Session day from which the node becomes researchable (0 = from match start).
    *  A "day" is game-time, timeScale-scaled — mirrors how `researchTimeHours`
    *  compresses (enforced in the technology module). */
   dayGate: z.number().int().nonnegative().default(0),
+  /** Extra unlock conditions beyond prerequisites/day-gate — a curated, data-driven
+   *  catalog (§7.5). ALL must hold. Default: none. */
+  conditions: z.array(TechnologyConditionSchema).default([]),
   cost: ResourceBagSchema.default({}),
   researchTimeHours: z.number().nonnegative().default(0),
   prerequisites: z.array(z.string()).default([]),
@@ -285,6 +332,24 @@ export const SectorKindDefSchema = z.object({
   appearance: SectorKindAppearanceSchema.default({ color: '#46606e', shape: 'city' }),
 });
 
+/** A research leader (scientist) — a per-player entity CHOSEN at match start and
+ *  snapshotted immutably (NOT a unit, NOT a hero). `branch` is its focus; `slotBonus`
+ *  is the "+slot" leader's extra research slots. Effects ride the `research.slots`
+ *  hook and the `has_scientist` unlock gate. */
+export const ScientistDefSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  /** The branch this leader focuses (gates `has_scientist { branch }` content). Omit
+   *  for a branchless generalist (e.g. the +slot leader): with no branch it satisfies
+   *  no branch-focus gate, which is what makes "+slot INSTEAD of a focus" a real
+   *  opportunity cost. */
+  branch: BranchSchema.optional(),
+  /** Extra concurrent research slots this leader grants (the "+slot" leader). Flows
+   *  through the `research.slots` hook, which the technology module clamps to the
+   *  design max of 3 — so only 0 or 1 is meaningful under the base rule. Default 0. */
+  slotBonus: z.number().int().nonnegative().default(0),
+});
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -296,6 +361,7 @@ export const GameDataSchema = z.object({
   sectorKinds: z.record(z.string(), SectorKindDefSchema).default({}),
   planetTypes: z.record(z.string(), PlanetTypeDefSchema).default({}),
   technologies: z.record(z.string(), TechnologyDefSchema).default({}),
+  scientists: z.record(z.string(), ScientistDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -315,14 +381,15 @@ export type PlanetTypeDef = z.infer<typeof PlanetTypeDefSchema>;
 export type TechnologyUnlocks = z.infer<typeof TechnologyUnlocksSchema>;
 export type TechnologyEffects = z.infer<typeof TechnologyEffectsSchema>;
 export type TechnologyDef = z.infer<typeof TechnologyDefSchema>;
+export type ScientistDef = z.infer<typeof ScientistDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;
  *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
 export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
   if (level <= 1) {
-    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate } = def;
-    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate };
+    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair };
   }
   return def.upgrades[level - 2] ?? buildingLevel(def, 1);
 }

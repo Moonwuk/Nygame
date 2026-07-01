@@ -37,7 +37,14 @@ function scenario(): GameState {
   const at = (x: number): Partial<Planet> => ({ position: { x, y: 0 } });
   return {
     ...base,
-    players: { p1: player('p1'), p2: { ...player('p2'), technologies: { completed: ['warp'] } } },
+    players: {
+      p1: player('p1'),
+      p2: {
+        ...player('p2'),
+        technologies: { completed: ['warp'] },
+        scientist: { id: 'void_admiral', level: 3 },
+      },
+    },
     planets: {
       A: planet('A', 'p1', ['B'], { ...at(0), buildings: [{ type: 'radar', level: 1, hp: 10 }] }),
       B: planet('B', null, ['A', 'C'], { ...at(100), garrison: [{ unit: 'cruiser', count: 1 }] }),
@@ -108,6 +115,7 @@ describe('visibleState (fog of war as a security boundary)', () => {
     expect(view.players.p1?.resources).toEqual({ metal: 99 }); // own treasury intact
     expect(view.players.p2?.resources).toEqual({}); // enemy treasury hidden
     expect(view.players.p2?.technologies).toBeUndefined();
+    expect(view.players.p2?.scientist).toBeUndefined(); // enemy research leader hidden
     expect(view.players.p2?.name).toBe('p2'); // identity kept (scoreboard)
   });
 

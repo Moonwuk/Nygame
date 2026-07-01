@@ -134,6 +134,8 @@ export {
   SectorKindDefSchema,
   PlanetTypeDefSchema,
   TechnologyDefSchema,
+  TechnologyConditionSchema,
+  ScientistDefSchema,
   TechnologyEffectsSchema,
   TechnologyUnlocksSchema,
   ResourceBagSchema,
@@ -152,6 +154,8 @@ export {
   type SectorKindAppearance,
   type PlanetTypeDef,
   type TechnologyDef,
+  type TechnologyCondition,
+  type ScientistDef,
   type TechnologyEffects,
   type TechnologyUnlocks,
   type UnitStats,
@@ -172,7 +176,8 @@ export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
 export { constructionModule } from './modules/construction';
 export { stationModule } from './modules/station';
-export { technologyModule } from './modules/technology';
+export { technologyModule, technologyLock } from './modules/technology';
+export { scientistModule } from './modules/scientist';
 export { factionModule } from './modules/faction';
 export { reanimationModule } from './modules/reanimation';
 export { armyModule } from './modules/army';

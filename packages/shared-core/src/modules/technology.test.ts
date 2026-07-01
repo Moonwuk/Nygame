@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { Action, AdvanceResult, ApplyResult, Context } from '../action/types';
 import { parseGameData, type GameData } from '../data/schemas';
 import { createKernel } from '../kernel/kernel';
+import type { GameModule } from '../kernel/module';
 import {
   createInitialState,
+  type ActiveResearch,
   type Fleet,
   type GameState,
   type Planet,
@@ -62,6 +64,55 @@ const data: GameData = parseGameData({
       researchTimeHours: 1,
       dayGate: 2,
     },
+    orbital_net: {
+      name: 'Orbital Net',
+      cost: { metal: 10 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'own_sectors', min: 2 }],
+    },
+    fusion: {
+      name: 'Fusion',
+      cost: { metal: 10 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'has_building', building: 'refinery' }],
+    },
+    terraforming: {
+      name: 'Terraforming',
+      cost: { metal: 10 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'controls_planet_type', planetType: 'gas_giant' }],
+    },
+    carriers: {
+      name: 'Carriers',
+      cost: { metal: 10 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'has_unit', unit: 'scout' }],
+    },
+    fusion_plus: {
+      name: 'Fusion+',
+      cost: { metal: 10 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'has_building', building: 'refinery', min: 2 }],
+    },
+    mining: { name: 'Mining', cost: { metal: 5 }, researchTimeHours: 1 },
+    smelting: { name: 'Smelting', cost: { metal: 5 }, researchTimeHours: 1 },
+    void_doctrine: {
+      name: 'Void Doctrine',
+      cost: { metal: 5 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'has_scientist', branch: 'space' }],
+    },
+    capstone_ship: {
+      name: 'Capstone Ship',
+      cost: { metal: 5 },
+      researchTimeHours: 1,
+      conditions: [{ type: 'has_scientist', branch: 'space', minLevel: 5 }],
+    },
+  },
+  scientists: {
+    void_sci: { name: 'Void Sci', branch: 'space' },
+    ground_sci: { name: 'Ground Sci', branch: 'ground' },
+    slot_sci: { name: 'Slot Sci', slotBonus: 1 },
   },
 });
 
@@ -178,7 +229,7 @@ describe('technology module — session research tree', () => {
     // From day 2 it researches; resources are spent only once it is available.
     const ok = okApply(kernel.applyAction(at(2 * DAY), research('blockade'), ctx(2 * DAY)));
     expect(ok.state.players.p1?.resources.metal).toBe(20);
-    expect(ok.state.players.p1?.technologies?.active?.technology).toBe('blockade');
+    expect(ok.state.players.p1?.technologies?.active?.[0]?.technology).toBe('blockade');
 
     // The gate counts the WORLD clock (state.time), exactly like the match-browser day
     // count — independent of the kernel ctx timeScale (the room runs the clock fast).
@@ -206,29 +257,170 @@ describe('technology module — session research tree', () => {
     ).toBe(true);
   });
 
+  it('conditions gate research on curated, data-driven predicates', () => {
+    const kernel = createKernel([technologyModule]);
+    const p1 = () => player('p1', { metal: 30 });
+    const lockedFor = (tech: string, opts: Parameters<typeof stateWith>[0]) =>
+      errCode(kernel.applyAction(stateWith(opts), research(tech), ctx(0)));
+    const openFor = (tech: string, opts: Parameters<typeof stateWith>[0]) =>
+      okApply(kernel.applyAction(stateWith(opts), research(tech), ctx(0))).ok;
+
+    // own_sectors ≥ 2: locked with one world, open with two.
+    expect(lockedFor('orbital_net', { players: [p1()], planets: [planet('A', 'p1')] })).toBe(
+      'E_CONDITIONS_UNMET',
+    );
+    expect(
+      openFor('orbital_net', { players: [p1()], planets: [planet('A', 'p1'), planet('B', 'p1')] }),
+    ).toBe(true);
+
+    // has_building: locked until an owned world has the refinery.
+    expect(lockedFor('fusion', { players: [p1()], planets: [planet('A', 'p1')] })).toBe(
+      'E_CONDITIONS_UNMET',
+    );
+    expect(
+      openFor('fusion', {
+        players: [p1()],
+        planets: [{ ...planet('A', 'p1'), buildings: [{ type: 'refinery', level: 1, hp: 10 }] }],
+      }),
+    ).toBe(true);
+
+    // controls_planet_type: needs an owned world of that type.
+    expect(lockedFor('terraforming', { players: [p1()], planets: [planet('A', 'p1')] })).toBe(
+      'E_CONDITIONS_UNMET',
+    );
+    expect(
+      openFor('terraforming', {
+        players: [p1()],
+        planets: [{ ...planet('A', 'p1'), planetType: 'gas_giant' }],
+      }),
+    ).toBe(true);
+
+    // has_unit: fleet, garrison, and cargo all count toward the total.
+    expect(lockedFor('carriers', { players: [p1()], planets: [planet('A', 'p1')] })).toBe(
+      'E_CONDITIONS_UNMET',
+    );
+    expect(openFor('carriers', { players: [p1()], fleets: [fleet('f1', 'p1', 'A')] })).toBe(true);
+    expect(
+      openFor('carriers', {
+        players: [p1()],
+        planets: [{ ...planet('A', 'p1'), garrison: [{ unit: 'scout', count: 1 }] }],
+      }),
+    ).toBe(true);
+    expect(
+      openFor('carriers', {
+        players: [p1()],
+        fleets: [{ ...fleet('f1', 'p1', 'A'), units: [], landing: [{ unit: 'scout', count: 1 }] }],
+      }),
+    ).toBe(true);
+
+    // count-based (min > 1): the data `min` is the balancing lever — two refineries
+    // open the "+" tier, one does not.
+    const refineries = (n: number) => ({
+      players: [p1()],
+      planets: [
+        {
+          ...planet('A', 'p1'),
+          buildings: Array.from({ length: n }, () => ({ type: 'refinery', level: 1, hp: 10 })),
+        },
+      ],
+    });
+    expect(lockedFor('fusion_plus', refineries(1))).toBe('E_CONDITIONS_UNMET');
+    expect(openFor('fusion_plus', refineries(2))).toBe(true);
+  });
+
+  it('has_scientist gates branch-focus and capstone content on the chosen leader', () => {
+    const kernel = createKernel([technologyModule]);
+    const withScientist = (sci?: { id: string; level: number }): GameState => {
+      const s = stateWith({ players: [player('p1', { metal: 30 })] });
+      if (sci) (s.players.p1 as Player).scientist = sci;
+      return s;
+    };
+
+    // No leader → space-focus content is locked; wrong branch stays locked.
+    expect(errCode(kernel.applyAction(withScientist(), research('void_doctrine'), ctx(0)))).toBe(
+      'E_CONDITIONS_UNMET',
+    );
+    expect(
+      errCode(
+        kernel.applyAction(
+          withScientist({ id: 'ground_sci', level: 9 }),
+          research('void_doctrine'),
+          ctx(0),
+        ),
+      ),
+    ).toBe('E_CONDITIONS_UNMET');
+
+    // A space leader unlocks the branch focus.
+    expect(
+      okApply(
+        kernel.applyAction(
+          withScientist({ id: 'void_sci', level: 1 }),
+          research('void_doctrine'),
+          ctx(0),
+        ),
+      ).ok,
+    ).toBe(true);
+
+    // Capstone needs the leader at level ≥ 5: locked at 4, open at 5.
+    expect(
+      errCode(
+        kernel.applyAction(
+          withScientist({ id: 'void_sci', level: 4 }),
+          research('capstone_ship'),
+          ctx(0),
+        ),
+      ),
+    ).toBe('E_CONDITIONS_UNMET');
+    expect(
+      okApply(
+        kernel.applyAction(
+          withScientist({ id: 'void_sci', level: 5 }),
+          research('capstone_ship'),
+          ctx(0),
+        ),
+      ).ok,
+    ).toBe(true);
+
+    // A branchless leader (the +slot generalist) satisfies no branch-focus gate —
+    // the opportunity cost of picking +slot instead of a focus.
+    expect(
+      errCode(
+        kernel.applyAction(
+          withScientist({ id: 'slot_sci', level: 9 }),
+          research('void_doctrine'),
+          ctx(0),
+        ),
+      ),
+    ).toBe('E_CONDITIONS_UNMET');
+    // An id absent from the catalog satisfies nothing.
+    expect(
+      errCode(
+        kernel.applyAction(withScientist({ id: 'ghost', level: 9 }), research('void_doctrine'), ctx(0)),
+      ),
+    ).toBe('E_CONDITIONS_UNMET');
+  });
+
   it('pays up front, records active research, then completes on the timeline', () => {
     const kernel = createKernel([technologyModule]);
     const st = stateWith({ players: [player('p1', { metal: 30 })] });
 
     const started = okApply(kernel.applyAction(st, research('industry'), ctx(0)));
     expect(started.state.players.p1?.resources.metal).toBe(20);
-    expect(started.state.players.p1?.technologies?.active).toEqual({
-      technology: 'industry',
-      startedAt: 0,
-      completesAt: HOUR,
-    });
+    expect(started.state.players.p1?.technologies?.active).toEqual([
+      { technology: 'industry', startedAt: 0, completesAt: HOUR },
+    ]);
     expect(started.state.players.p1?.technologies?.completed).toEqual([]);
 
     const early = okAdvance(kernel.advanceTo(started.state, ctx(HOUR - 1)));
     expect(early.state.players.p1?.technologies?.completed).toEqual([]);
 
     const done = okAdvance(kernel.advanceTo(early.state, ctx(HOUR)));
-    expect(done.state.players.p1?.technologies?.active).toBeUndefined();
+    expect(done.state.players.p1?.technologies?.active).toEqual([]);
     expect(done.state.players.p1?.technologies?.completed).toEqual(['industry']);
     expect(done.events.some((event) => event.type === 'technology.researched')).toBe(true);
   });
 
-  it('rejects missing prerequisites, duplicate research, busy labs and bad inputs', () => {
+  it('rejects missing prerequisites, duplicate research, full slots and bad inputs', () => {
     const kernel = createKernel([technologyModule]);
     const st = stateWith({ players: [player('p1', { metal: 30, credits: 30 })] });
 
@@ -240,15 +432,73 @@ describe('technology module — session research tree', () => {
       'E_BAD_PAYLOAD',
     );
 
-    const started = okApply(kernel.applyAction(st, research('logistics'), ctx(0)));
-    expect(errCode(kernel.applyAction(started.state, research('industry'), ctx(0)))).toBe(
-      'E_RESEARCH_BUSY',
+    // Two concurrent researches fill the 2 base slots; a third is rejected.
+    const one = okApply(kernel.applyAction(st, research('industry'), ctx(0)));
+    const two = okApply(kernel.applyAction(one.state, research('logistics'), ctx(0)));
+    expect(two.state.players.p1?.technologies?.active?.length).toBe(2);
+    expect(errCode(kernel.applyAction(two.state, research('mining'), ctx(0)))).toBe(
+      'E_RESEARCH_SLOTS_FULL',
     );
 
-    const done = okAdvance(kernel.advanceTo(started.state, ctx(2 * HOUR)));
-    expect(errCode(kernel.applyAction(done.state, research('logistics'), ctx(2 * HOUR)))).toBe(
+    // The same tech can't occupy two slots at once, nor be re-researched once done.
+    expect(errCode(kernel.applyAction(one.state, research('industry'), ctx(0)))).toBe(
       'E_ALREADY_RESEARCHED',
     );
+    const done = okAdvance(kernel.advanceTo(two.state, ctx(2 * HOUR)));
+    expect(errCode(kernel.applyAction(done.state, research('industry'), ctx(2 * HOUR)))).toBe(
+      'E_ALREADY_RESEARCHED',
+    );
+  });
+
+  it('research slots: 2 base, raised by the research.slots hook, capped at 3', () => {
+    const addSlots = (n: number): GameModule => ({
+      id: `test-slots-${n}`,
+      version: '1.0.0',
+      setup(api) {
+        api.hook<number>('research.slots', (base) => base + n);
+      },
+    });
+    const st = () => stateWith({ players: [player('p1', { metal: 40, credits: 40 })] });
+
+    // +1 → 3 slots: a third concurrent research now fits.
+    const k3 = createKernel([technologyModule, addSlots(1)]);
+    let s = okApply(k3.applyAction(st(), research('industry'), ctx(0))).state;
+    s = okApply(k3.applyAction(s, research('logistics'), ctx(0))).state;
+    s = okApply(k3.applyAction(s, research('mining'), ctx(0))).state;
+    expect(s.players.p1?.technologies?.active?.length).toBe(3);
+
+    // +5 is clamped to the design max of 3: a fourth is still rejected.
+    const kCap = createKernel([technologyModule, addSlots(5)]);
+    let c = okApply(kCap.applyAction(st(), research('industry'), ctx(0))).state;
+    c = okApply(kCap.applyAction(c, research('logistics'), ctx(0))).state;
+    c = okApply(kCap.applyAction(c, research('mining'), ctx(0))).state;
+    expect(errCode(kCap.applyAction(c, research('smelting'), ctx(0)))).toBe('E_RESEARCH_SLOTS_FULL');
+
+    // A misbehaving hook (returns NaN) falls back to the base 2 — never fail-open.
+    const kBad = createKernel([technologyModule, addSlots(NaN)]);
+    let d = okApply(kBad.applyAction(st(), research('industry'), ctx(0))).state;
+    d = okApply(kBad.applyAction(d, research('logistics'), ctx(0))).state;
+    expect(errCode(kBad.applyAction(d, research('mining'), ctx(0)))).toBe('E_RESEARCH_SLOTS_FULL');
+  });
+
+  it('migrates a legacy single-object active into the slot list', () => {
+    const kernel = createKernel([technologyModule]);
+    const legacy = stateWith({ players: [player('p1', { metal: 30, credits: 30 })] });
+    // A match persisted before slots existed stored `active` as a single object.
+    (legacy.players.p1 as Player).technologies = {
+      completed: [],
+      active: {
+        technology: 'industry',
+        startedAt: 0,
+        completesAt: HOUR,
+      } as unknown as ActiveResearch[],
+    };
+    // Research still works (no E_INTERNAL); the legacy entry becomes slot 1.
+    const r = okApply(kernel.applyAction(legacy, research('logistics'), ctx(0)));
+    expect(r.state.players.p1?.technologies?.active?.map((a) => a.technology).sort()).toEqual([
+      'industry',
+      'logistics',
+    ]);
   });
 
   it('gates data-declared unlocks when present and degrades open without the module', () => {

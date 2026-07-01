@@ -22,6 +22,7 @@ function shippedData(): GameData {
     sectorKinds: readJson('data/sectorKinds.json'),
     planetTypes: readJson('data/planetTypes.json'),
     technologies: readJson('data/technologies.json'),
+    scientists: readJson('data/scientists.json'),
   });
 }
 
@@ -121,6 +122,25 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     expect(() => buildStateFromMap(avaMap(), data, { slots: { slot_a: { playerId: 'p1' } } })).toThrow(
       /E_SLOT_UNASSIGNED/,
     );
+  });
+
+  it('seats a chosen scientist onto the slot player, snapshotting id + level', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        slot_a: { playerId: 'p1', scientist: 'void_admiral', scientistLevel: 3 },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    expect(state.players.p1!.scientist).toEqual({ id: 'void_admiral', level: 3 });
+    expect(state.players.p2!.scientist).toBeUndefined(); // no leader chosen
+  });
+
+  it('rejects a slot assigning an unknown scientist (fail-secure at boot)', () => {
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'p1', scientist: 'ghost' }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_UNKNOWN_SCIENTIST/);
   });
 
   it('accepts slot ids as sector/fleet owners (validation clean)', () => {

@@ -30,6 +30,10 @@ export interface UnitStack {
   /** Remaining HP pool of this stack during a battle (≤ count × def.hp).
    *  Undefined outside combat = full health. */
   hp?: number;
+  /** Remaining ablative shield pool of this stack (≤ count × def.shield). Absorbs
+   *  damage before `hp`; a ship still dies only when its HULL (`hp`) hits 0.
+   *  Undefined = full shield (shields-roadmap SH-0.1). */
+  shieldHp?: number;
 }
 
 /** A constructed building on a planet. Buildings are leveled (1..maxLevel) and
@@ -49,6 +53,11 @@ export interface Player {
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
   technologies?: PlayerTechnologyState;
+  /** Chosen research leader (scientist), snapshotted at match start and immutable
+   *  (GDD §2/§5.2): `id` into `data.scientists`, `level` from the account meta
+   *  (supplied at match creation). Drives the `research.slots` hook and
+   *  `has_scientist` unlock gates. Absent = no leader chosen. */
+  scientist?: { id: string; level: number };
 }
 
 export interface ActiveResearch {
@@ -59,7 +68,9 @@ export interface ActiveResearch {
 
 export interface PlayerTechnologyState {
   completed: TechnologyId[];
-  active?: ActiveResearch;
+  /** Research currently in progress — one entry per occupied slot (base 2,
+   *  raisable to a max of 3 via the `research.slots` hook). Absent/empty = idle labs. */
+  active?: ActiveResearch[];
 }
 
 /** Diplomatic stance between two players (symmetric). Richer than the combat
@@ -192,6 +203,9 @@ export interface Fleet {
   /** Set true once this fleet has taken combat damage — the trigger for the
    *  `return` ("ответный") fire mode, which holds fire until first hit. */
   barrageProvoked?: boolean;
+  /** World-time (ms) this fleet last took damage. Gates shield regen: shields stay
+   *  down for a delay after the last hit (shields-roadmap SH-1.1). Absent = never hit. */
+  lastDamagedAt?: number;
 }
 
 /**

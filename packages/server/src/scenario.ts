@@ -14,6 +14,7 @@ import {
   movementModule,
   parseGameData,
   planetTypeModule,
+  scientistModule,
   sectorModule,
   stationModule,
   technologyModule,
@@ -54,6 +55,7 @@ export function loadShippedData(): GameData {
     sectorKinds: readJson('sectorKinds.json'),
     planetTypes: readJson('planetTypes.json'),
     technologies: readJson('technologies.json'),
+    scientists: readJson('scientists.json'),
   });
 }
 
@@ -71,6 +73,7 @@ export const DEV_MODULES: GameModule[] = [
   constructionModule,
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)
   technologyModule,
+  scientistModule, // per-player research leader: +slot via research.slots + has_scientist gates
   factionModule, // always-on faction passives (production / speed / combat) via hooks
   marketModule, // session resource bourse: list / buy (15% burn) / cancel
   armyModule,

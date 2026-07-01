@@ -459,42 +459,57 @@ export const constructionModule: GameModule = {
         }
       }
 
-      // Ship hull repair + shield recharge (ships keep hull damage out of combat now).
-      // "Shields" = the hull band ABOVE 30%: it recharges between fights (any fleet
-      // not currently in a battle), anywhere. "Hull" = the band AT/BELOW 30%: a breach
-      // that only mends while the fleet is stationed over a FRIENDLY world with a
-      // repair building (healRate, e.g. a hospital), and which also drags the fleet's
-      // speed (route.ts fleetBaseSpeed) until it is repaired.
-      const HULL_LINE = 0.3;
-      const SHIELD_REGEN = 0.06; // shield-band fraction restored per game-hour
-      const BASE_HULL_REPAIR = 0.04; // hull fraction/hour docked at any friendly world
+      // Ship regen/repair — the two pools mend differently (shields-roadmap §1):
+      //   • SHIELD (`shieldHp`) recharges for free anywhere out of combat, once past a
+      //     short delay after the last hit (`lastDamagedAt`) — the async "hit-and-run"
+      //     loop; paused entirely while in a battle.
+      //   • HULL (`hp`) never regens for free: it repairs ONLY while the fleet is
+      //     stationed over a FRIENDLY world (base rate + a repair building's healRate),
+      //     and hull damage drags the fleet's speed (route.ts) until mended.
+      const SHIELD_REGEN = 0.06; // shield-pool fraction restored per game-hour
+      const SHIELD_REGEN_DELAY = MS_PER_HOUR; // shields stay down this long after a hit
       for (const fleet of Object.values(h.state.fleets)) {
-        if (!fleet || fleet.battleId) continue; // a fleet in combat doesn't regen
-        let baseRate = 0;
+        if (!fleet || fleet.battleId) continue; // a fleet in combat regenerates nothing
+
+        // Hull mends only while parked over a FRIENDLY world with a repair yard
+        // (shipyard/spaceport `shipRepair`, shields-roadmap SH-2.1) — no yard, no mend.
+        let hullRate = 0;
         const planet = fleet.location ? h.state.planets[fleet.location] : undefined;
         if (planet && !fleet.movement && planet.owner === fleet.owner) {
-          // any friendly world docks for basic hull repairs; a hospital / repair
-          // yard (healRate) speeds it up — mirrors the friendly-soil division regen.
-          baseRate = BASE_HULL_REPAIR;
           for (const b of planet.buildings) {
             if (b.hp <= 0) continue;
             const def = data.buildings[b.type];
-            if (def) baseRate += buildingLevel(def, b.level).healRate;
+            if (def) hullRate += buildingLevel(def, b.level).shipRepair;
           }
         }
+
+        // Shields regen only over the part of this span past the post-damage delay.
+        const shieldFrom = Math.max(from, (fleet.lastDamagedAt ?? -Infinity) + SHIELD_REGEN_DELAY);
+        const shieldHours = shieldFrom < to ? ((to - shieldFrom) / MS_PER_HOUR) * scale : 0;
+
         for (const stack of fleet.units) {
-          if (stack.hp === undefined) continue; // full hull
           const unitDef = data.units[stack.unit];
           if (!unitDef) continue;
-          const fullHp = stack.count * unitDef.stats.hp;
-          if (fullHp <= 0 || stack.hp >= fullHp) {
-            stack.hp = undefined;
-            continue;
+
+          // Hull (`hp`): friendly-port repair only, never a free regen.
+          if (stack.hp !== undefined) {
+            const fullHp = stack.count * unitDef.stats.hp;
+            if (fullHp <= 0 || stack.hp >= fullHp) stack.hp = undefined;
+            else if (hullRate > 0) {
+              const cur = Math.min(fullHp, stack.hp + hullRate * hours * fullHp);
+              stack.hp = cur >= fullHp ? undefined : cur;
+            }
           }
-          let cur = stack.hp;
-          if (cur > HULL_LINE * fullHp) cur = Math.min(fullHp, cur + SHIELD_REGEN * hours * fullHp); // shields
-          if (baseRate > 0) cur = Math.min(fullHp, cur + baseRate * hours * fullHp); // hull, at a base
-          stack.hp = cur >= fullHp ? undefined : cur;
+
+          // Shield (`shieldHp`): free out-of-combat regen once past the damage delay.
+          if (stack.shieldHp !== undefined) {
+            const fullShield = stack.count * unitDef.stats.shield;
+            if (fullShield <= 0 || stack.shieldHp >= fullShield) stack.shieldHp = undefined;
+            else if (shieldHours > 0) {
+              const cur = Math.min(fullShield, stack.shieldHp + SHIELD_REGEN * shieldHours * fullShield);
+              stack.shieldHp = cur >= fullShield ? undefined : cur;
+            }
+          }
         }
       }
     });

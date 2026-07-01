@@ -12,6 +12,19 @@ export {
 
 export { theme, type Theme } from './theme';
 export {
+  createStatusBarModel,
+  createSelectionModel,
+  type StatusResource,
+  type StatusBarModel,
+  type StatusBarResult,
+  type SelectionStack,
+  type SelectionCommander,
+  type SelectionTransit,
+  type SelectionParked,
+  type FleetSelectionModel,
+  type SelectionResult,
+} from './matchHud';
+export {
   createWelcomeModel,
   resolveWelcomeAction,
   nextCallsign,

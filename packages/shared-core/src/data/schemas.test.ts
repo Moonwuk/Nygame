@@ -25,6 +25,7 @@ function loadShippedBundle(): Record<string, unknown> {
     sectorKinds: readJson('sectorKinds.json'),
     planetTypes: readJson('planetTypes.json'),
     technologies: readJson('technologies.json'),
+    scientists: readJson('scientists.json'),
   };
 }
 

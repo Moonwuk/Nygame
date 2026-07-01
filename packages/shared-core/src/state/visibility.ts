@@ -226,11 +226,13 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const view = deepClone(state) as VisibleState;
   const { identify, radar } = coverageFor(state, viewerId, data);
 
-  // Other players' private data: keep identity, drop treasury and research.
+  // Other players' private data: keep identity, drop treasury and research (incl. the
+  // chosen research leader — its branch focus / +slot is strategic, not public).
   for (const player of Object.values(view.players)) {
     if (player.id === viewerId) continue;
     player.resources = {};
     delete player.technologies;
+    delete player.scientist;
   }
   // Scoreboard: each player's live planet/fleet/unit totals aggregate territory
   // the viewer can't see, so an enemy's `scores` line is fog-sensitive intel

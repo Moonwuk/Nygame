@@ -1,0 +1,27 @@
+{
+  "void_admiral": {
+    "name": "Void Admiral",
+    "description": "Space-branch research leader: space-focus and capstone techs gate on a chosen leader of this branch.",
+    "branch": "space"
+  },
+  "ground_marshal": {
+    "name": "Ground Marshal",
+    "description": "Ground-branch research leader: ground-focus and capstone techs gate on a chosen leader of this branch.",
+    "branch": "ground"
+  },
+  "wing_commander": {
+    "name": "Wing Commander",
+    "description": "Squadron-branch research leader: squadron-focus and capstone techs gate on a chosen leader of this branch.",
+    "branch": "squadron"
+  },
+  "missile_chief": {
+    "name": "Missile Chief",
+    "description": "Missile-branch research leader: missile-focus and capstone techs gate on a chosen leader of this branch.",
+    "branch": "missile"
+  },
+  "polymath": {
+    "name": "Polymath",
+    "description": "Generalist: grants one extra concurrent research slot instead of a branch focus.",
+    "slotBonus": 1
+  }
+}

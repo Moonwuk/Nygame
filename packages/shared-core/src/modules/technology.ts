@@ -1,9 +1,16 @@
 import type { Action } from '../action/types';
 import { hoursToMs } from '../action/types';
 import { MS_PER_DAY } from '../util/time';
-import type { GameData, ResourceBag, TechnologyDef } from '../data/schemas';
+import type { GameData, ResourceBag, TechnologyCondition, TechnologyDef } from '../data/schemas';
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { Player, PlayerTechnologyState } from '../state/gameState';
+import type {
+  ActiveResearch,
+  GameState,
+  Planet,
+  Player,
+  PlayerTechnologyState,
+  UnitStack,
+} from '../state/gameState';
 import { canAfford, payCost } from '../util/treasury';
 
 interface ResearchPayload {
@@ -39,11 +46,21 @@ interface DamageArgs {
   attacker?: string | null;
 }
 
+/** Concurrent research slots: 2 by the base rule, raised via the `research.slots`
+ *  hook (e.g. a "+1 slot" scientist) up to a design maximum of 3. */
+const BASE_RESEARCH_SLOTS = 2;
+const MAX_RESEARCH_SLOTS = 3;
+
 function technologyState(player: Player): PlayerTechnologyState {
-  if (!player.technologies) {
-    player.technologies = { completed: [] };
+  const tech = player.technologies ?? (player.technologies = { completed: [] });
+  // Migrate a pre-multi-slot single-object `active` (from a match persisted before
+  // slots existed) into the list, so the concurrent-research code never meets a
+  // non-array and throws E_INTERNAL.
+  const active = tech.active as ActiveResearch[] | ActiveResearch | undefined;
+  if (active !== undefined && !Array.isArray(active)) {
+    tech.active = [active];
   }
-  return player.technologies;
+  return tech;
 }
 
 function hasCompleted(player: Player | undefined, technology: string): boolean {
@@ -102,6 +119,100 @@ function scheduleCompletion(
   return completesAt;
 }
 
+/** Planets a player currently owns. */
+function ownedPlanets(state: GameState, playerId: string): Planet[] {
+  return Object.values(state.planets).filter((p) => p.owner === playerId);
+}
+
+/** Built copies of `building` across the player's worlds. */
+function countBuilding(state: GameState, playerId: string, building: string): number {
+  return ownedPlanets(state, playerId).reduce(
+    (n, p) => n + p.buildings.filter((b) => b.type === building).length,
+    0,
+  );
+}
+
+/** Worlds of `planetType` the player owns. */
+function countPlanetType(state: GameState, playerId: string, planetType: string): number {
+  return ownedPlanets(state, playerId).filter((p) => p.planetType === planetType).length;
+}
+
+/** Copies of `unit` the player fields across fleets, their cargo, and garrisons. */
+function countUnit(state: GameState, playerId: string, unit: string): number {
+  const inStacks = (stacks: UnitStack[] | undefined): number =>
+    (stacks ?? []).reduce((n, s) => n + (s.unit === unit ? s.count : 0), 0);
+  let total = 0;
+  for (const f of Object.values(state.fleets)) {
+    if (f.owner === playerId) total += inStacks(f.units) + inStacks(f.landing);
+  }
+  for (const p of ownedPlanets(state, playerId)) total += inStacks(p.garrison);
+  return total;
+}
+
+/** Evaluates one curated unlock condition deterministically from state — each is an
+ *  "at least `min`" count. Unknown types fail-secure (never satisfied); the `never`
+ *  guard makes adding a schema variant WITHOUT an evaluator case a COMPILE error, so
+ *  the catalog stays safe to extend. Composing existing ones to balance is pure data. */
+function conditionMet(
+  cond: TechnologyCondition,
+  state: GameState,
+  playerId: string,
+  data: GameData,
+): boolean {
+  switch (cond.type) {
+    case 'own_sectors':
+      return ownedPlanets(state, playerId).length >= cond.min;
+    case 'has_building':
+      return countBuilding(state, playerId, cond.building) >= cond.min;
+    case 'controls_planet_type':
+      return countPlanetType(state, playerId, cond.planetType) >= cond.min;
+    case 'has_unit':
+      return countUnit(state, playerId, cond.unit) >= cond.min;
+    case 'has_scientist': {
+      // Branch-focus / capstone gate: the player's chosen scientist meets the level
+      // and (if specified) the branch. Its branch comes from the per-match-frozen
+      // catalog, so the id lookup is snapshot-safe.
+      const chosen = state.players[playerId]?.scientist;
+      if (!chosen || chosen.level < cond.minLevel) return false;
+      const def = data.scientists[chosen.id];
+      if (!def) return false; // a chosen id absent from the catalog satisfies nothing
+      return cond.branch === undefined || def.branch === cond.branch;
+    }
+    default: {
+      const _exhaustive: never = cond;
+      void _exhaustive;
+      return false; // fail-secure for hand-built / unvalidated data
+    }
+  }
+}
+
+/** The data-driven availability gate of a tech, independent of cost / research-slot
+ *  state: prerequisites → day-gate → conditions. Returns the first unmet gate's stable
+ *  reject code, or null when the node is researchable. Pure — used by the reducer and
+ *  reusable for a read-only "what can I research (and why not)" query. */
+export function technologyLock(
+  def: TechnologyDef,
+  state: GameState,
+  playerId: string,
+  data: GameData,
+): string | null {
+  const completed = state.players[playerId]?.technologies?.completed ?? [];
+  for (const prerequisite of def.prerequisites) {
+    if (!completed.includes(prerequisite)) return 'E_PREREQUISITE';
+  }
+  // Day-gate: "Day N" is the match's world clock, counted exactly as the match browser
+  // shows it (matchRegistry: floor((state.time − startedAt) / MS_PER_DAY)), so the lock
+  // lines up with the displayed day. timeScale already lives in state.time (the room
+  // runs the world clock fast); startedAt defaults to 0 for the 0-based clock.
+  if ((def.dayGate ?? 0) > 0 && state.time - (state.startedAt ?? 0) < def.dayGate * MS_PER_DAY) {
+    return 'E_TOO_EARLY';
+  }
+  for (const condition of def.conditions ?? []) {
+    if (!conditionMet(condition, state, playerId, data)) return 'E_CONDITIONS_UNMET';
+  }
+  return null;
+}
+
 function startResearch(action: Action, h: HandlerContext): void {
   const payload = action.payload as Partial<ResearchPayload>;
   if (typeof payload?.technology !== 'string') {
@@ -116,26 +227,25 @@ function startResearch(action: Action, h: HandlerContext): void {
     return h.reject('E_UNKNOWN_TECHNOLOGY');
   }
   const tech = technologyState(player);
-  if (tech.completed.includes(payload.technology)) {
-    return h.reject('E_ALREADY_RESEARCHED');
+  const active = (tech.active ??= []);
+  if (
+    tech.completed.includes(payload.technology) ||
+    active.some((a) => a.technology === payload.technology)
+  ) {
+    return h.reject('E_ALREADY_RESEARCHED'); // already completed or in progress
   }
-  if (tech.active) {
-    return h.reject('E_RESEARCH_BUSY');
+  const raw = h.hook<number>('research.slots', BASE_RESEARCH_SLOTS, { playerId: action.playerId });
+  // Clamp to the design range [2, 3]; a misbehaving hook (non-finite / out of range)
+  // falls back to the base rather than fail-open to unlimited slots.
+  const slots = Number.isFinite(raw)
+    ? Math.min(MAX_RESEARCH_SLOTS, Math.max(BASE_RESEARCH_SLOTS, Math.floor(raw)))
+    : BASE_RESEARCH_SLOTS;
+  if (active.length >= slots) {
+    return h.reject('E_RESEARCH_SLOTS_FULL'); // every research slot is occupied
   }
-  for (const prerequisite of def.prerequisites) {
-    if (!tech.completed.includes(prerequisite)) {
-      return h.reject('E_PREREQUISITE');
-    }
-  }
-  // Day-gate: a node may stay locked until session day N. "Day N" is the match's
-  // world clock counted exactly as the match browser shows it — matchRegistry uses
-  // floor((state.time − startedAt) / MS_PER_DAY) — so the lock lines up with the
-  // displayed day on any config. timeScale already lives in state.time (the room
-  // runs the world clock fast), so there is no extra scaling here; startedAt
-  // defaults to 0 like the browser (correct for the 0-based world clock).
-  const dayGate = def.dayGate ?? 0;
-  if (dayGate > 0 && h.state.time - (h.state.startedAt ?? 0) < dayGate * MS_PER_DAY) {
-    return h.reject('E_TOO_EARLY');
+  const lock = technologyLock(def, h.state, action.playerId, h.ctx.data);
+  if (lock) {
+    return h.reject(lock);
   }
   if (!canAfford(player.resources, def.cost)) {
     return h.reject('E_INSUFFICIENT');
@@ -147,7 +257,7 @@ function startResearch(action: Action, h: HandlerContext): void {
     action.playerId,
     def.researchTimeHours,
   );
-  tech.active = { technology: payload.technology, startedAt: h.ctx.now, completesAt };
+  active.push({ technology: payload.technology, startedAt: h.ctx.now, completesAt });
   h.emit('technology.research.started', {
     playerId: action.playerId,
     technology: payload.technology,
@@ -175,14 +285,17 @@ export const technologyModule: GameModule = {
         return;
       }
       const tech = technologyState(player);
-      if (
-        !tech.active ||
-        tech.active.technology !== payload.technology ||
-        tech.active.completesAt !== payload.completesAt
-      ) {
+      const active = tech.active;
+      if (!active) {
         return;
       }
-      delete tech.active;
+      const idx = active.findIndex(
+        (a) => a.technology === payload.technology && a.completesAt === payload.completesAt,
+      );
+      if (idx < 0) {
+        return; // no matching slot (stale / duplicate completion) → no-op
+      }
+      active.splice(idx, 1);
       if (!tech.completed.includes(payload.technology)) {
         tech.completed.push(payload.technology);
       }

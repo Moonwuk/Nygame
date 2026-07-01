@@ -33,6 +33,19 @@
 - **Правило открытия:** техно доступно, когда **день ≥ `dayGate` И prereqs завершены И
   `conditions` выполнены**. Затем исследуешь (cost + время → завершение → эффекты).
 
+## Статус реализации (что уже в коде, PR #66)
+
+**✅ Зашиплено** (`technology`-модуль / `schemas.ts` / `index.ts`):
+- **TT-0.1 ветки** — `branch` (`ground`|`space`|`squadron`|`missile`, default `space`); 5 техно размечены (fort → `ground`, прочие → `space`).
+- **TT-0.2 день-гейт** — `dayGate`; проверка по мировому клоку: `state.time − (startedAt ?? 0) ≥ dayGate·MS_PER_DAY` — совпадает с «Day N» матч-браузера (`matchRegistry`); добавлен якорь `GameState.startedAt`.
+- **TT-0.3 условия** — курируемый каталог `TechnologyConditionSchema` (`z.discriminatedUnion`): `own_sectors`/`has_building`/`controls_planet_type`/`has_unit` (count-порог `min`, default 1) + `has_scientist {branch?, minLevel?}` (учёный) — **балансируется чистыми данными**. Новый тип = 1 вариант схемы + 1 `case` (пропуск `case` = ошибка компиляции через `never`-guard).
+- **TT-1.1 правило доступности** — чистая **`technologyLock(def, state, playerId, data)`** = prereqs → день-гейт → условия; отдаёт первый непройденный гейт стабильным кодом (`E_PREREQUISITE`/`E_TOO_EARLY`/`E_CONDITIONS_UNMET`) или `null`. Экспортирована для будущего UI/action-слоя («что доступно и почему нет»).
+- **TT-1.2** — уже работал (reuse отложенного завершения).
+- **TT-1.3 слоты** — `active` стал списком (запись на слот); **2 базовых → до 3** через хук `research.slots` (клампится к [2,3]); одинаковое техно не занимает два слота; миграция legacy single-object `active`.
+- **TT-4 учёный** — `ScientistDef`-каталог (`data/scientists.json`) + `Player.scientist {id, level}` (снапшот при сборке через слот-ассайнмент; `E_UNKNOWN_SCIENTIST` fail-secure на старте; приватен в тумане). **TT-4.3 +слот**: `scientist`-модуль → хук `research.slots`. **TT-4.1/4.2 фокус+капстоун**: data-driven условие `has_scientist {branch?, minLevel?}` (качественный доступ, **НЕ % скорости**); `+слот` — INSTEAD-of-фокус opportunity-cost (полимат — branchless).
+
+**⏳ Дальше (follow-up):** **контент под учёного** (focus/capstone-техи с `has_scientist` в `technologies.json`, капстоун-супер-юнит) · якорь `SCIENTIST_MAX_LEVEL` (с `account-level`) · TT-2.1 мета-гейтинг (ждёт `account-level`) · TT-3.1 UI-вкладки.
+
 ## Фаза 0 · Модель данных (расширение схемы) `[data][core]`
 
 ### TT-0.1 · Ветки `branch` `[data][core]` ✅ — S
@@ -125,7 +138,7 @@ opportunity-cost. **Явно: НЕ даёт % к ускорению исслед
 ## Открытые вопросы
 
 ```
-□ Каталог условий: какие типы шипим в MVP (prereq/own_sectors/built/controls_type/has_unit/day…).
+□ [ЗАШИПЛЕНО] Каталог условий MVP: own_sectors/has_building/controls_planet_type/has_unit, каждое с count-порогом `min` (default 1). Открыто: soft tech-OR гейт (hard-prereq уже покрыт `prerequisites[]`) и referential-integrity id-ов условий — follow-up.
 □ [РЕШЕНО] Слоты: 2 базовых (любая ветка) → до 3; +1 слот даёт учёный-«+слот» (Фаза 4), не % ускорения.
 □ [РЕШЕНО] Уровень учёного = мета (account-level, earnable F2P, снапшот при старте).
 □ [РЕШЕНО] Капстоун = чисто лейт-гейм (поздний день-гейт) + earnable F2P; конкретный супер-юнит/здание — контент.
