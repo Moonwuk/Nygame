@@ -4,6 +4,7 @@ import {
   ActionGate,
   createActionEnvelope,
 } from '@void/action-layer';
+import { isValidActionPayload } from '@void/shared-core';
 import { createDevMatch, loadShippedData } from './scenario';
 import type { RoomPeer } from './matchRoom';
 import type { ServerMessage } from './protocol';
@@ -203,6 +204,37 @@ describe('MatchRoom · action-layer gate (SV-1.1)', () => {
     await plain.receive('green', pPeer, wire(orbitEnvelope(1)), SESSION.sessionId);
     expect(pPeer.last()).toMatchObject({ type: 'error', code: 'E_BAD_MESSAGE' });
     expect(plain.sequence).toBe(0);
+  });
+
+  it('rejects a malformed action payload at the gate (SV-1.2) and applies a valid one', async () => {
+    const room = createDevMatch(data, {
+      gate: new ActionGate({ payloadValidator: isValidActionPayload }),
+      now: () => 1000,
+      time: 1000,
+    });
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer);
+
+    // Structurally a valid envelope, but the payload violates the fleet.orbit schema.
+    const bad = createActionEnvelope({
+      schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
+      matchId: 'dev',
+      playerId: 'green',
+      sessionId: SESSION.sessionId,
+      clientSeq: 1,
+      issuedAt: 1001,
+      type: 'fleet.orbit',
+      payload: { fleetId: 'green_1', orbit: 'sideways' }, // not 'near' | 'far'
+    });
+    await room.receive('green', peer, wire(bad), SESSION.sessionId);
+    expect(peer.last()).toMatchObject({ type: 'rejection', code: 'E_BAD_PAYLOAD' });
+    expect(room.sequence).toBe(0);
+    expect(room.state.fleets.green_1?.orbit).toBe('far'); // untouched
+
+    // The same clientSeq with a WELL-FORMED payload still lands (the bad one didn't burn it).
+    await room.receive('green', peer, wire(orbitEnvelope(1, 'near')), SESSION.sessionId);
+    expect(room.state.fleets.green_1?.orbit).toBe('near');
+    expect(room.sequence).toBe(1);
   });
 
   it('rate-limits before reserving a sequence, so a throttled action stays retriable', async () => {

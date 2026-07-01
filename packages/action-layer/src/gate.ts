@@ -5,7 +5,7 @@ import {
   type ActionEnvelope,
   type ActionSession,
 } from './envelope';
-import { ok, type ActionLayerFailure } from './errors';
+import { fail, ok, type ActionLayerFailure } from './errors';
 import {
   createActionReceipt,
   InMemoryActionReceiptStore,
@@ -18,6 +18,12 @@ export interface ActionGateOptions {
   receipts?: ActionReceiptStore;
   sequences?: SequenceGate;
   now?: () => number;
+  /** Per-action-type payload validator (SV-1.2), injected by the composition root (the
+   *  game-specific schemas live in shared-core, the gate stays game-agnostic). Returns
+   *  true if `payload` is well-formed for `type`; false rejects the action with a stable
+   *  `E_BAD_PAYLOAD` BEFORE the reducer. A validator that returns false for unknown types
+   *  makes only the intended actions submittable. Absent ⇒ payloads pass through as today. */
+  payloadValidator?: (type: string, payload: unknown) => boolean;
 }
 
 export interface AcceptedAction {
@@ -40,16 +46,27 @@ export class ActionGate {
   private readonly receipts: ActionReceiptStore;
   private readonly sequences: SequenceGate;
   private readonly now: () => number;
+  private readonly payloadValidator?: (type: string, payload: unknown) => boolean;
 
   constructor(options: ActionGateOptions = {}) {
     this.receipts = options.receipts ?? new InMemoryActionReceiptStore();
     this.sequences = options.sequences ?? new InMemorySequenceGate();
     this.now = options.now ?? (() => Date.now());
+    this.payloadValidator = options.payloadValidator;
   }
 
   admit(raw: unknown, session: ActionSession): ActionAdmission {
     const validated = validateActionEnvelope(raw);
     if (!validated.ok) return validated;
+
+    // Per-type payload schema (SV-1.2): reject a structurally-valid envelope whose action
+    // payload is malformed (or whose type is not client-submittable) before the reducer.
+    if (
+      this.payloadValidator &&
+      !this.payloadValidator(validated.value.action.type, validated.value.action.payload)
+    ) {
+      return fail('E_BAD_PAYLOAD');
+    }
 
     const authorized = authorizeActionEnvelope(validated.value, session);
     if (!authorized.ok) return authorized;

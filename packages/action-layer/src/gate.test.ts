@@ -82,6 +82,20 @@ describe('ActionGate', () => {
     });
   });
 
+  it('rejects a malformed payload at the gate when a validator is configured (SV-1.2)', () => {
+    // Only `{ to: string }` payloads are valid here; anything else is E_BAD_PAYLOAD.
+    const gate = new ActionGate({
+      payloadValidator: (_type, payload) =>
+        typeof (payload as { to?: unknown }).to === 'string',
+    });
+    const bad = gate.admit(envelope(1, { nope: true }), session);
+    expect(bad).toEqual({ ok: false, code: 'E_BAD_PAYLOAD' });
+
+    // A well-formed payload still admits, and the sequence wasn't consumed by the reject.
+    const good = gate.admit(envelope(1, { to: 'NEXUS' }), session);
+    expect(good).toMatchObject({ ok: true, value: { status: 'accepted' } });
+  });
+
   it('rejects replayed lower sequences even with a new action id', () => {
     const gate = new ActionGate();
     const first = gate.admit(envelope(1), session);
