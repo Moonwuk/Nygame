@@ -39,6 +39,30 @@ export interface UpdateInfo extends BuildInfo {
 const RELEASE_API = 'https://api.github.com/repos/moonwuk/nygame/releases/tags/alpha';
 const APK_ASSET = 'void-dominion-alpha.apk';
 
+/**
+ * The APK download must come from GitHub's own release-asset hosts over HTTPS. The version
+ * check reads a URL out of the release JSON and hands it to the system browser to install;
+ * this allowlist means a tampered/malformed release body can't redirect the install to an
+ * arbitrary origin. (The release JSON already arrives over a TLS-validated api.github.com
+ * connection — this is defense-in-depth on the one value we then act on.)
+ */
+export function isTrustedApkUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:') return false;
+  const h = u.hostname.toLowerCase();
+  return (
+    h === 'github.com' ||
+    h.endsWith('.github.com') ||
+    h === 'githubusercontent.com' ||
+    h.endsWith('.githubusercontent.com')
+  );
+}
+
 interface GlobalWithBuild {
   __BUILD__?: { versionCode?: unknown; sha?: unknown };
 }
@@ -79,7 +103,11 @@ export function parseRelease(release: unknown): UpdateInfo | null {
   );
   if (!apk) return null;
 
-  return { versionCode, sha, apkUrl: apk.browser_download_url as string, notes: body };
+  // Only trust an asset URL served from GitHub over HTTPS — never redirect an install elsewhere.
+  const apkUrl = apk.browser_download_url as string;
+  if (!isTrustedApkUrl(apkUrl)) return null;
+
+  return { versionCode, sha, apkUrl, notes: body };
 }
 
 /** True when `remote` is a strictly newer build than `local`. */

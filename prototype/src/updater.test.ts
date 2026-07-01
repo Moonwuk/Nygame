@@ -5,6 +5,7 @@ import {
   checkForUpdateDetailed,
   currentBuild,
   isNewer,
+  isTrustedApkUrl,
   parseRelease,
   type UpdateInfo,
 } from './updater';
@@ -73,6 +74,31 @@ describe('parseRelease', () => {
   it('returns null on a non-object', () => {
     expect(parseRelease(null)).toBeNull();
     expect(parseRelease('string')).toBeNull();
+  });
+  it('rejects an apk asset URL that is not an HTTPS GitHub origin', () => {
+    const evil = {
+      body: '<!-- void:versionCode=9 void:sha=abc -->',
+      assets: [{ name: 'void-dominion-alpha.apk', browser_download_url: 'https://evil.example/void-dominion-alpha.apk' }],
+    };
+    expect(parseRelease(evil)).toBeNull();
+    const cleartext = {
+      body: '<!-- void:versionCode=9 void:sha=abc -->',
+      assets: [{ name: 'void-dominion-alpha.apk', browser_download_url: 'http://github.com/x/void-dominion-alpha.apk' }],
+    };
+    expect(parseRelease(cleartext)).toBeNull();
+  });
+});
+
+describe('isTrustedApkUrl', () => {
+  it('accepts HTTPS GitHub release-asset hosts', () => {
+    expect(isTrustedApkUrl('https://github.com/o/r/releases/download/alpha/a.apk')).toBe(true);
+    expect(isTrustedApkUrl('https://objects.githubusercontent.com/x/a.apk')).toBe(true);
+  });
+  it('rejects non-HTTPS, non-GitHub, and malformed URLs', () => {
+    expect(isTrustedApkUrl('http://github.com/o/r/a.apk')).toBe(false); // cleartext
+    expect(isTrustedApkUrl('https://evil.example/a.apk')).toBe(false); // wrong host
+    expect(isTrustedApkUrl('https://github.com.evil.example/a.apk')).toBe(false); // suffix-spoof
+    expect(isTrustedApkUrl('not a url')).toBe(false);
   });
 });
 

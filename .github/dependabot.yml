@@ -1,0 +1,29 @@
+# Automated dependency-update PRs. The security pipeline (pnpm audit + OSV + Trivy) only
+# DETECTS vulnerable deps on push; Dependabot is what actually proposes the upgrades.
+# Three ecosystems, because the surfaces don't overlap:
+#   - npm at "/"       → the pnpm workspace (root + packages/*); Dependabot reads pnpm-lock.yaml
+#   - npm at "/mobile" → the standalone Capacitor project (its own package-lock.json), which
+#                        the workspace `pnpm audit` never walks — otherwise nothing watches it
+#   - github-actions   → keeps the SHA-pinned action versions in .github/workflows fresh
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

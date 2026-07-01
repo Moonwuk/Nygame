@@ -18,8 +18,9 @@ name: Security scan
 # expanded inline into a `run:` shell (template-injection).
 #
 # Actions are SHA-pinned (SD-6.1 / F-16) with a trailing `# vN` for readability.
-# Remaining TODO: digest-pin the scanner Docker images — most reuse the prior pinned
-# set (trivy/osv/syft/gitleaks); semgrep/trufflehog/zizmor still use :latest.
+# Scanner Docker images are pinned as well: the version-tagged set (trivy/osv/syft/
+# gitleaks) by tag, and semgrep/trufflehog/zizmor by @sha256 digest (pinned from their
+# :latest on 2026-07 — re-pin periodically to refresh their detection rules).
 
 on:
   push:
@@ -85,7 +86,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
             semgrep scan --config=p/typescript --config=p/javascript --config=p/security-audit \
             --sarif --output=semgrep.sarif --metrics=off
           rc=$?
@@ -195,7 +196,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          docker run --rm -v "$PWD:/src" -w /src trufflesecurity/trufflehog:latest \
+          docker run --rm -v "$PWD:/src" -w /src trufflesecurity/trufflehog@sha256:de8ef4e573653b30c002e3491bf0484d23e31b73fe5519db6b395408e6834d4f \
             git file:///src --json --no-update > trufflehog.json 2>/dev/null
           rc=$?
           set -e
@@ -224,7 +225,8 @@ jobs:
         run: |
           set +e
           docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:v1.9.1 \
-            --lockfile=pnpm-lock.yaml --format=sarif --output=osv.sarif
+            --lockfile=pnpm-lock.yaml --lockfile=mobile/package-lock.json \
+            --format=sarif --output=osv.sarif
           rc=$?
           set -e
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
@@ -364,7 +366,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          docker run --rm -e GH_TOKEN -v "$PWD:/src" -w /src ghcr.io/zizmorcore/zizmor:latest \
+          docker run --rm -e GH_TOKEN -v "$PWD:/src" -w /src ghcr.io/zizmorcore/zizmor@sha256:d1117e5dbd9ee4970644067b534ab6ab50371f3c6f7f4d05446eb603a6e78f48 \
             --format sarif . > zizmor.sarif
           rc=$?
           set -e

@@ -5,19 +5,15 @@
 // build, and we cannot run the Android SDK in dev, so each step checks before it edits
 // and tolerates whatever Capacitor's template already provides.
 //
-// It does four things:
-//   1. AndroidManifest.xml — add REQUEST_INSTALL_PACKAGES; ensure a FileProvider exists.
-//   2. res/xml/file_paths.xml — ensure an <external-files-path> the FileProvider can serve.
-//   3. MainActivity.java — replace with a version that intercepts the APK download (the
-//      updater navigates the WebView to the APK asset URL), hands it to DownloadManager,
-//      and fires the system installer via the FileProvider URI on completion.
-//   4. app/build.gradle — stamp versionCode/versionName (from env VOID_VC / VOID_VN) so
+// It does two things:
+//   1. MainActivity.java — replace with a version that exposes window.VoidNative.open(url),
+//      a tiny bridge handing the update APK's URL to the SYSTEM BROWSER (which downloads it
+//      and offers to install). No install permission / DownloadManager / FileProvider — that
+//      earlier in-app-install path proved unreliable across devices and was dropped, so the
+//      manifest no longer needs REQUEST_INSTALL_PACKAGES or a file-paths provider either.
+//   2. app/build.gradle — stamp versionCode/versionName (from env VOID_VC / VOID_VN) so
 //      Android treats each rolling build as a strictly newer update.
-//
-// The download notification stays visible, so if the auto-launched installer is blocked
-// on a device the player can still tap it to install — the graceful fallback.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -27,71 +23,10 @@ const appId = JSON.parse(read(here('./capacitor.config.json'))).appId;
 if (!appId) throw new Error('patch-updater: appId missing from capacitor.config.json');
 const pkgPath = appId.replace(/\./g, '/');
 
-const manifestPath = here('./android/app/src/main/AndroidManifest.xml');
-const filePathsPath = here('./android/app/src/main/res/xml/file_paths.xml');
 const mainActivityPath = here(`./android/app/src/main/java/${pkgPath}/MainActivity.java`);
 const buildGradlePath = here('./android/app/build.gradle');
 
-// --- 1. AndroidManifest.xml -------------------------------------------------
-{
-  let xml = read(manifestPath);
-  const before = xml;
-
-  // REQUEST_INSTALL_PACKAGES: lets the app launch the package installer for the new APK.
-  if (!xml.includes('android.permission.REQUEST_INSTALL_PACKAGES')) {
-    xml = xml.replace(
-      /(<application\b)/,
-      '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    $1',
-    );
-  }
-
-  // FileProvider: Capacitor's template normally ships one with this exact authority. Only
-  // add it when absent, so we never create a duplicate-authority manifest-merge failure.
-  if (!xml.includes('.fileprovider')) {
-    const provider =
-      '    <provider\n' +
-      '        android:name="androidx.core.content.FileProvider"\n' +
-      '        android:authorities="${applicationId}.fileprovider"\n' +
-      '        android:exported="false"\n' +
-      '        android:grantUriPermissions="true">\n' +
-      '        <meta-data\n' +
-      '            android:name="android.support.FILE_PROVIDER_PATHS"\n' +
-      '            android:resource="@xml/file_paths" />\n' +
-      '    </provider>\n';
-    xml = xml.replace(/(\s*)<\/application>/, `\n${provider}$1</application>`);
-  }
-
-  if (xml !== before) {
-    writeFileSync(manifestPath, xml);
-    console.log('patch-updater: manifest — added install permission / ensured FileProvider.');
-  } else {
-    console.log('patch-updater: manifest — permission + FileProvider already present.');
-  }
-}
-
-// --- 2. res/xml/file_paths.xml ----------------------------------------------
-{
-  const entry = '    <external-files-path name="void_updates" path="." />';
-  if (!existsSync(filePathsPath)) {
-    mkdirSync(dirname(filePathsPath), { recursive: true });
-    writeFileSync(
-      filePathsPath,
-      '<?xml version="1.0" encoding="utf-8"?>\n<paths>\n' + entry + '\n</paths>\n',
-    );
-    console.log('patch-updater: file_paths.xml — created with external-files-path.');
-  } else {
-    let xml = read(filePathsPath);
-    if (!xml.includes('external-files-path')) {
-      xml = xml.replace(/<\/paths>/, entry + '\n</paths>');
-      writeFileSync(filePathsPath, xml);
-      console.log('patch-updater: file_paths.xml — added external-files-path.');
-    } else {
-      console.log('patch-updater: file_paths.xml — external-files-path already present.');
-    }
-  }
-}
-
-// --- 3. MainActivity.java ---------------------------------------------------
+// --- 1. MainActivity.java ---------------------------------------------------
 {
   const java = `package ${appId};
 
@@ -148,7 +83,7 @@ public class MainActivity extends BridgeActivity {
   console.log('patch-updater: MainActivity.java — installed the VoidNative browser-open bridge.');
 }
 
-// --- 4. app/build.gradle (versionCode / versionName) ------------------------
+// --- 2. app/build.gradle (versionCode / versionName) ------------------------
 {
   const vc = process.env.VOID_VC;
   const vn = process.env.VOID_VN;

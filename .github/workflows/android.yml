@@ -68,7 +68,10 @@ jobs:
           cp ../prototype/dist/void-dominion.html www/index.html
           # Bake window.__BUILD__ into the packaged HTML so the APK knows its own version.
           node inject-build.mjs www/index.html "$VOID_VC" "$VOID_SHA"
-          npm install
+          # `npm ci` (not `npm install`) installs exactly the committed package-lock.json and
+          # fails on drift, so the sideloaded APK is built from the reviewed, locked dep set.
+          # Runs the postinstall tar-interop patch the same as install.
+          npm ci
 
       - name: Generate the Android project
         working-directory: mobile
@@ -81,8 +84,8 @@ jobs:
         run: |
           npx capacitor-assets generate --android
           node patch-android.mjs
-          # Wire the in-app updater (install permission + FileProvider + MainActivity hook)
-          # and stamp versionCode/versionName (VOID_VC / VOID_VN from the env above).
+          # Wire the in-app updater (MainActivity VoidNative.open bridge) and stamp
+          # versionCode/versionName (VOID_VC / VOID_VN from the env above).
           node patch-updater.mjs
 
       # Sign with a COMMITTED debug keystore (standard android/android credentials —
