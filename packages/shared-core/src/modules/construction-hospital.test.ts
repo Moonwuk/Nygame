@@ -151,14 +151,17 @@ describe('hospital heal mechanic', () => {
 // --- ship hull repair + shield recharge --------------------------------------
 // A cruiser: max hull 100 + ablative shield 30 (two separate pools). SHIELD (shieldHp)
 // recharges for free anywhere out of combat at 0.06×full/hour, after a post-damage
-// delay; HULL (hp) never free-regens — it mends only over a friendly world
-// (base 0.04 + a hospital's healRate 0.15).
+// delay; HULL (hp) never free-regens — it mends only over a friendly world with a
+// repair yard (shipyard shipRepair 0.1/h). A hospital heals troops, not hulls.
 const shipData: GameData = parseGameData({
   version: '0.1.0',
   resources: ['metal'],
   units: { cruiser: { faction: 'x', stats: { attack: 10, defense: 10, speed: 40, hp: 100, shield: 30 } } },
   factions: {},
-  buildings: { hospital: { name: 'Hospital', hp: 20, healRate: 0.15 } },
+  buildings: {
+    shipyard: { name: 'Orbital Shipyard', hp: 30, shipRepair: 0.1 },
+    hospital: { name: 'Field Hospital', hp: 20, healRate: 0.15 },
+  },
   events: {},
   sectorKinds: { planet: { capturable: true, buildable: true, orbit: true } },
   planetTypes: { terran: { productionBonus: 0, defenseBonus: 0 } },
@@ -166,21 +169,23 @@ const shipData: GameData = parseGameData({
 const shipCtx = (now: number): Context => ({ now, data: shipData });
 const shipKernel = createKernel([constructionModule]);
 
-function shipScene(fleet: Fleet, baseOwner: string | null = 'p1', hospital = true): GameState {
+// `base` hosts `baseBuildings` (a shipyard by default); `deep` is a bare neutral world.
+function shipScene(fleet: Fleet, baseOwner: string | null = 'p1', baseBuildings: string[] = ['shipyard']): GameState {
   const base = createInitialState({ seed: 'ship-repair', version: { data: '0.1.0', manifest: '1' } });
-  const mkPlanet = (id: string, owner: string | null, hasHospital: boolean): Planet => ({
+  const structHp: Record<string, number> = { shipyard: 30, hospital: 20 };
+  const mkPlanet = (id: string, owner: string | null, buildings: string[]): Planet => ({
     id,
     owner,
     position: { x: 0, y: 0 },
     resources: {},
-    buildings: hasHospital ? [{ type: 'hospital', level: 1, hp: 20 }] : [],
+    buildings: buildings.map((type) => ({ type, level: 1, hp: structHp[type] ?? 20 })),
     garrison: [],
     traits: [],
   });
   return {
     ...base,
     players: { p1: player('p1') },
-    planets: { base: mkPlanet('base', baseOwner, hospital), deep: mkPlanet('deep', null, false) },
+    planets: { base: mkPlanet('base', baseOwner, baseBuildings), deep: mkPlanet('deep', null, []) },
     fleets: { F: fleet },
   };
 }
@@ -211,19 +216,25 @@ describe('ship hull repair + shield recharge', () => {
     expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(20); // hull never mends for free
   });
 
-  it('mends the hull only at a friendly world (base rate), faster with a hospital', () => {
-    // hospital world: base 0.04 + hospital 0.15 = 0.19/hour
-    const withHospital = okAdvance(shipKernel.advanceTo(shipScene(cruiser(20, 'base')), shipCtx(HOUR)));
-    expect(withHospital.fleets.F?.units[0]?.hp).toBeCloseTo(39); // 20 + 0.19×100
-    // friendly world, no repair building: base rate only (0.04/hour)
-    const noHospital = okAdvance(shipKernel.advanceTo(shipScene(cruiser(20, 'base'), 'p1', false), shipCtx(HOUR)));
-    expect(noHospital.fleets.F?.units[0]?.hp).toBeCloseTo(24); // 20 + 0.04×100
+  it('mends the hull only over a friendly world with a repair yard', () => {
+    // shipyard world: 0.1/hour → +10 hull
+    const atYard = okAdvance(shipKernel.advanceTo(shipScene(cruiser(20, 'base')), shipCtx(HOUR)));
+    expect(atYard.fleets.F?.units[0]?.hp).toBeCloseTo(30); // 20 + 0.1×100
+    // friendly world, no repair yard: no hull repair at all
+    const noYard = okAdvance(shipKernel.advanceTo(shipScene(cruiser(20, 'base'), 'p1', []), shipCtx(HOUR)));
+    expect(noYard.fleets.F?.units[0]?.hp).toBeCloseTo(20);
   });
 
-  it('regenerates shield and repairs hull as separate pools at a base', () => {
-    const s = shipScene(cruiser(60, 'base', {}, 10)); // hull 60, shield 10/30
+  it('a hospital heals troops but does NOT mend hulls', () => {
+    const s = shipScene(cruiser(20, 'base'), 'p1', ['hospital']); // hospital only, no shipyard
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
-    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(79); // hull: 60 + 0.19×100 (port only)
+    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(20); // hull untouched — hospital ≠ repair yard
+  });
+
+  it('regenerates shield and repairs hull as separate pools at a yard', () => {
+    const s = shipScene(cruiser(60, 'base', {}, 10)); // hull 60, shield 10/30, shipyard world
+    const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
+    expect(state.fleets.F?.units[0]?.hp).toBeCloseTo(70); // hull: 60 + 0.1×100 (yard only)
     expect(state.fleets.F?.units[0]?.shieldHp).toBeCloseTo(11.8); // shield: 10 + 0.06×30 (free)
   });
 
@@ -245,7 +256,7 @@ describe('ship hull repair + shield recharge', () => {
   });
 
   it('clears each pool to undefined once it is full', () => {
-    const s = shipScene(cruiser(96, 'base', {}, 29)); // hull 96 (+19→100), shield 29 (+1.8→30)
+    const s = shipScene(cruiser(96, 'base', {}, 29)); // hull 96 (+10→100), shield 29 (+1.8→30)
     const state = okAdvance(shipKernel.advanceTo(s, shipCtx(HOUR)));
     expect(state.fleets.F?.units[0]?.hp).toBeUndefined();
     expect(state.fleets.F?.units[0]?.shieldHp).toBeUndefined();

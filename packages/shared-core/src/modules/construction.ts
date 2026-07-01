@@ -467,21 +467,19 @@ export const constructionModule: GameModule = {
       //     stationed over a FRIENDLY world (base rate + a repair building's healRate),
       //     and hull damage drags the fleet's speed (route.ts) until mended.
       const SHIELD_REGEN = 0.06; // shield-pool fraction restored per game-hour
-      const BASE_HULL_REPAIR = 0.04; // hull fraction/hour while docked at a friendly world
       const SHIELD_REGEN_DELAY = MS_PER_HOUR; // shields stay down this long after a hit
       for (const fleet of Object.values(h.state.fleets)) {
         if (!fleet || fleet.battleId) continue; // a fleet in combat regenerates nothing
 
+        // Hull mends only while parked over a FRIENDLY world with a repair yard
+        // (shipyard/spaceport `shipRepair`, shields-roadmap SH-2.1) — no yard, no mend.
         let hullRate = 0;
         const planet = fleet.location ? h.state.planets[fleet.location] : undefined;
         if (planet && !fleet.movement && planet.owner === fleet.owner) {
-          // any friendly world docks for basic hull repairs; a hospital / repair
-          // yard (healRate) speeds it up — mirrors the friendly-soil division regen.
-          hullRate = BASE_HULL_REPAIR;
           for (const b of planet.buildings) {
             if (b.hp <= 0) continue;
             const def = data.buildings[b.type];
-            if (def) hullRate += buildingLevel(def, b.level).healRate;
+            if (def) hullRate += buildingLevel(def, b.level).shipRepair;
           }
         }
 

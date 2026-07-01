@@ -23,6 +23,7 @@
     "buildTimeHours": 24,
     "produces": {},
     "hp": 30,
+    "shipRepair": 0.1,
     "scoreValue": 12,
     "traits": []
   },
@@ -48,6 +49,7 @@
     "cost": { "metal": 200, "credits": 80 },
     "buildTimeHours": 12,
     "hp": 25,
+    "shipRepair": 0.05,
     "scoreValue": 6,
     "traits": []
   },

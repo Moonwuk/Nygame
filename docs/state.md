@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 627 зелёных** (4 skip, 67 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 628 зелёных** (4 skip, 67 файлов).
 
 ---
 
@@ -339,9 +339,10 @@ E_NO_BUILDING, E_MAX_LEVEL, E_INSUFFICIENT, E_BOMBARDED, E_WRONG_SECTOR`.
   чинятся по-разному (shields SH-1.1): **щит** (`shieldHp`) регенит **бесплатно где угодно
   вне боя** (`SHIELD_REGEN` 6%/ч), после **задержки** от последнего урона (`lastDamagedAt` +
   `SHIELD_REGEN_DELAY`, реген только на части спана после окна); **корпус** (`hp`) **не** регенит
-  бесплатно — чинится только пока флот стоит над **своим** миром (`BASE_HULL_REPAIR` + `healRate`
-  ремонтного здания), и до ремонта **тянет скорость вниз** (`route.ts fleetBaseSpeed` — штраф <30%).
-  Флот в бою (`battleId`) не регенит ничего.
+  бесплатно — чинится только пока флот стоит над **своим** миром **с ремонтной верфью** (SH-2.1:
+  Σ `BuildingDef.shipRepair`; `shipyard` 0.1/ч, `spaceport` 0.05/ч; госпиталь корпус НЕ чинит), и до
+  ремонта **тянет скорость вниз** (`route.ts fleetBaseSpeed` — штраф <30%). Флот в бою (`battleId`) не
+  регенит ничего.
 - События: `construction.started, building.constructed/upgraded/destroyed,
 unit.built`.
 

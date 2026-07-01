@@ -137,6 +137,9 @@ export const BuildingLevelSchema = z.object({
   /** Fraction of a garrison stack's max-HP pool restored per game hour (0.1 = 10%/h).
    *  Stacks heal continuously while the planet is owned; destroyed buildings don't heal. */
   healRate: z.number().nonnegative().default(0),
+  /** Fraction of a docked friendly fleet's HULL restored per game hour (0.1 = 10%/h) —
+   *  a shipyard / spaceport (shields-roadmap SH-2.1). 0 = this building can't mend hulls. */
+  shipRepair: z.number().nonnegative().default(0),
 });
 
 export const BuildingDefSchema = z.object({
@@ -162,6 +165,9 @@ export const BuildingDefSchema = z.object({
   radarRange: z.number().nonnegative().default(0),
   /** Fraction of garrison max-HP restored per game hour (see BuildingLevelSchema). */
   healRate: z.number().nonnegative().default(0),
+  /** Fraction of a docked friendly fleet's HULL restored per game hour — a
+   *  shipyard / spaceport (shields-roadmap SH-2.1). 0 = can't mend hulls. */
+  shipRepair: z.number().nonnegative().default(0),
 });
 
 /**
@@ -382,8 +388,8 @@ export type GameData = z.infer<typeof GameDataSchema>;
  *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
 export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
   if (level <= 1) {
-    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate } = def;
-    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate };
+    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair };
   }
   return def.upgrades[level - 2] ?? buildingLevel(def, 1);
 }
