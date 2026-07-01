@@ -443,7 +443,7 @@ type KeyNode = Omit<MapNode, 'links'>;
 // grid look) wired to neighbours by a relative-neighbourhood graph. EXACTLY 12 are 'planet'
 // kind — 4 of them START candidates (one per corner region, where players & AI spawn) + 8
 // neutral worlds — and the other 37 are non-planet provinces, so the board totals ~970 base
-// points (12×50 + 37×10); a solo win needs 600. All planets start NEUTRAL; newGame() seeds
+// points (12×50 + 37×10); a solo win needs 450 (SCORE_LIMIT). All planets start NEUTRAL; newGame() seeds
 // owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
 // reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
 const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };

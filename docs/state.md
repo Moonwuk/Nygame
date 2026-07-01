@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 422 зелёных** (4 skip, 51 файл).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 586 зелёных** (4 skip, 65 файлов).
 
 ---
 
@@ -72,7 +72,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       economy, movement, sector, planetType, technology, combat, construction, captureOnArrival, station, army, victory, visibility, hero  (13 модулей, + *.test.ts)
+  modules/       army, captureOnArrival, combat, construction, economy, faction, hero, market, movement, planetType, reanimation, sector, station, technology, victory, visibility  (16 модулей, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -515,8 +515,9 @@ volcanic 20, gas_giant 10, barren 5).
 `pnpm run prototype` → esbuild собирает всё (ядро + zod + UI) в один
 self-contained `dist/void-dominion.html` (открывается с диска, без сервера).
 
-- **Реальное ядро** в браузере: `createKernel([sector, planet-type, economy, movement,
-combat, captureOnArrival, construction, army, victory, fleetLaunch])`, тик в реальном
+- **Реальное ядро** в браузере: `createKernel([sector, planetType, tax, economy, movement,
+hero, combat, captureOnArrival, construction, technology, army, victory, fleetLaunch,
+diplomacy, botDiplomacy, market, division, capital])` (18 модулей), тик в реальном
 времени (скорость ⏸/▶/⏩). Концовка матча — из авторитетного `state.match` (`victoryModule`),
 баннер победы/поражения/ничьи (а не хардкод по узлам).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
@@ -524,8 +525,8 @@ combat, captureOnArrival, construction, army, victory, fleetLaunch])`, тик в
 - **Карта (квадратная 7×7, генерится в `game.ts::buildField`):** 49 провинций — ровно **12
   «планет»** (по 50 очков) + 37 не-планет (по 10) = **~970** базовых очков на доске; 4 старт-
   кандидата по углам (инсет), нейтральные планеты по центру. Квадратный аспект — чтобы карта
-  читалась в портрете (заполняет ширину, панится по вертикали). Победа по очкам — **600**
-  (`ctx` config). Джиттер-решётка, RNG-линки и границы канваса выводятся из констант
+  читалась в портрете (заполняет ширину, панится по вертикали). Победа по очкам — **450**
+  (`SCORE_LIMIT`, прототип переопределяет дефолт ядра 600). Джиттер-решётка, RNG-линки и границы канваса выводятся из констант
   `FIELD`/`*_CELLS` — карта переформировывается правкой списков клеток.
 - **Прототип-модуль `fleet.launch {planetId}`** (`game.ts`, не в ядре) — поднимает
   флот из гарнизона (корабли→`units`, наземные→`landing`). Кандидат в ядро.
@@ -620,7 +621,7 @@ golden; модель времени `advanceTo`; экономика (казна 
 
 ```bash
 pnpm install
-pnpm run check       # lint + typecheck + test (гейт; 304 теста)
+pnpm run check       # lint + typecheck + test (гейт; 586 тестов)
 pnpm test            # vitest
 pnpm run prototype   # собрать prototype/dist/void-dominion.html
 ```
