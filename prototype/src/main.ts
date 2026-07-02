@@ -38,6 +38,7 @@ import {
   buildUnit,
   aiOrders,
   declareWar,
+  STANCE_RANK,
   marketLots,
   marketList,
   marketTake,
@@ -594,12 +595,14 @@ const NEBULAE = Array.from({ length: 5 }, (_, i) => {
 
 // The backdrop (deep-space + nebulae + radar grid + star ticks) is baked into the
 // cached static layer (see buildStaticLayer). This is the only live backdrop bit:
-// a slow radar sweep across the plotting table — pure command-console chrome.
-// Live sweep state (pivot + leading-edge angle), captured each frame so map blips
-// can light up as the arm crosses them (radar "ping" afterglow). sweepOn guards
+// a slow radar sweep across the plotting table — console chrome that follows the
+// HARDWARE: one rotating arm per OWN radar source (planet array / radar ship),
+// pivoted on the source and clipped to ITS reach; co-located sources collapse into
+// one arm showing only the farthest radius. All arms share one rotation phase; map
+// blips light up as an arm crosses them (radar "ping" afterglow). sweepOn guards
 // engines without conic gradients (no visible sweep → no ping).
-let sweepCx = 0;
-let sweepCy = 0;
+type SweepArm = { x: number; y: number; r: number }; // screen-space pivot + reach
+let sweepArms: SweepArm[] = [];
 let sweepAng = 0;
 let sweepOn = false;
 let sweepPrevAng = -1; // previous frame's arm angle, for "did the arm cross X" tests
@@ -615,37 +618,76 @@ const radarMemory = new Map<string, { node: string; size: 'S' | 'M' | 'L'; at: n
  *  imprint lingers a whole rotation). 0 when the sweep is inactive. */
 function sweepGlow(c: { x: number; y: number }): number {
   if (!sweepOn) return 0;
-  const entAng = Math.atan2(c.y - sweepCy, c.x - sweepCx); // canvas-clockwise, matches the conic
-  let delta = (sweepAng - entAng) % TAU;
-  if (delta < 0) delta += TAU;
-  const t = 1 - delta / TAU;
-  return t * t; // ease so the just-crossed flash reads, with a lingering tail
+  let best = 0;
+  for (const a of sweepArms) {
+    const dx = c.x - a.x;
+    const dy = c.y - a.y;
+    if (dx * dx + dy * dy > a.r * a.r) continue; // outside this arm's reach
+    let delta = (sweepAng - Math.atan2(dy, dx)) % TAU; // canvas-clockwise, matches the conic
+    if (delta < 0) delta += TAU;
+    const t = 1 - delta / TAU;
+    if (t * t > best) best = t * t; // ease so the just-crossed flash reads
+  }
+  return best;
 }
 
 function drawScanSweep(now: number) {
+  sweepArms = [];
+  sweepOn = false;
   if (!cx.createConicGradient) return; // graceful: skip on engines without it
-  // Pivot the sweep at the MAP centre (projected through the camera), not the
-  // screen centre — so it pans / zooms with the map instead of staying glued to
-  // the viewport.
-  const mc = world({ x: (MINX + MAXX) / 2, y: (MINY + MAXY) / 2 });
-  const cxp = mc.x;
-  const cyp = mc.y;
-  const ang = (now / SWEEP_DIV) % TAU;
-  sweepCx = cxp;
-  sweepCy = cyp;
-  sweepAng = ang;
-  sweepOn = true;
-  const grd = cx.createConicGradient(ang, cxp, cyp);
-  // very subtle trailing wedge — barely-there in a still frame, reads as a slow
-  // rotating radar sweep in motion (fades over ~0.4 turn behind the leading edge)
-  grd.addColorStop(0, 'rgba(53,214,230,0.032)');
-  grd.addColorStop(0.16, 'rgba(53,214,230,0.008)');
-  grd.addColorStop(0.4, 'rgba(53,214,230,0)');
-  grd.addColorStop(1, 'rgba(53,214,230,0)');
+  // One arm per OWN radar source, pivoted on the array / the ship itself (a moving
+  // ship carries its arm along). Sources sharing a pivot (a radar world with a
+  // radar ship docked) merge — only the farthest radius is shown.
+  const merged = new Map<string, SweepArm>();
+  const add = (at: { x: number; y: number }, reach: number): void => {
+    const c = world(at);
+    const r = world({ x: at.x + reach, y: at.y }).x - c.x; // uniform projection ⇒ true circle
+    if (r <= 0) return;
+    const key = `${Math.round(c.x)}:${Math.round(c.y)}`;
+    const cur = merged.get(key);
+    if (!cur || r > cur.r) merged.set(key, { x: c.x, y: c.y, r });
+  };
+  for (const p of Object.values(s.planets)) {
+    if (p.owner !== ME) continue;
+    const r = planetRadar(p);
+    if (r > 0) add(p.position, r);
+  }
+  for (const f of Object.values(s.fleets)) {
+    if (f.owner !== ME) continue;
+    const r = fleetRadar(f);
+    const pos = r > 0 ? fleetPos(f) : null;
+    if (pos) add(pos, r);
+  }
+  sweepArms = [...merged.values()];
+  sweepAng = (now / SWEEP_DIV) % TAU;
+  sweepOn = sweepArms.length > 0;
+  if (!sweepOn) return;
   cx.save();
   cx.globalCompositeOperation = 'lighter';
-  cx.fillStyle = grd;
-  cx.fillRect(0, 0, VW, VH);
+  for (const a of sweepArms) {
+    if (!visible(a, a.r + 40)) continue; // draw-cull; the arm still paints contacts
+    // subtle trailing wedge, clipped to this source's reach — reads as a slow
+    // rotating radar sweep (fades over ~0.4 turn behind the leading edge)
+    const grd = cx.createConicGradient(sweepAng, a.x, a.y);
+    grd.addColorStop(0, 'rgba(53,214,230,0.05)');
+    grd.addColorStop(0.16, 'rgba(53,214,230,0.012)');
+    grd.addColorStop(0.4, 'rgba(53,214,230,0)');
+    grd.addColorStop(1, 'rgba(53,214,230,0)');
+    cx.save();
+    cx.beginPath();
+    cx.arc(a.x, a.y, a.r, 0, TAU);
+    cx.clip();
+    cx.fillStyle = grd;
+    cx.fillRect(a.x - a.r, a.y - a.r, a.r * 2, a.r * 2);
+    cx.restore();
+    // the leading edge — the visible radar arm itself
+    cx.strokeStyle = 'rgba(53,214,230,0.26)';
+    cx.lineWidth = 1;
+    cx.beginPath();
+    cx.moveTo(a.x, a.y);
+    cx.lineTo(a.x + Math.cos(sweepAng) * a.r, a.y + Math.sin(sweepAng) * a.r);
+    cx.stroke();
+  }
   cx.restore();
 }
 
@@ -670,7 +712,13 @@ function updateRadarContacts(now: number): void {
       const node = s.planets[fn];
       if (!node) continue;
       const pos = world(node.position);
-      if (sweptThisFrame(Math.atan2(pos.y - sweepCy, pos.x - sweepCx))) {
+      // painted only by an arm whose radar disc actually covers the blip
+      const painted = sweepArms.some((a) => {
+        const dx = pos.x - a.x;
+        const dy = pos.y - a.y;
+        return dx * dx + dy * dy <= a.r * a.r && sweptThisFrame(Math.atan2(dy, dx));
+      });
+      if (painted) {
         radarMemory.set(f.id, { node: fn, size: sigClass(fleetSignature(f)), at: now });
       }
     }
@@ -4008,7 +4056,6 @@ const STANCE_COLOR: Record<DiplomaticStance, string> = {
 };
 // Friendliness rank: war (hostile) < peace < pact < alliance (closest). Warming the
 // relation up a rank needs the other side's consent; cooling it down is unilateral.
-const STANCE_RANK: Record<DiplomaticStance, number> = { war: 0, peace: 1, pact: 2, alliance: 3 };
 const STANCES: DiplomaticStance[] = ['war', 'peace', 'pact', 'alliance'];
 
 function worldsOf(id: string): number {
@@ -4019,7 +4066,10 @@ function worldsOf(id: string): number {
 /** A seat the AI drives. Everyone else (ME, or another human in net play) is human —
  *  this drives the roster's human/AI icon and whether a proposal is auto-decided. */
 function isAiSeat(id: string): boolean {
-  return AI_PLAYERS.has(id);
+  // The authoritative flag lives in state (Player.ai, seeded by newGame). The local
+  // AI_PLAYERS set stays only as a local-mode fallback for installed scenarios; in
+  // NET play the server state is the single source — a human-claimed seat is human.
+  return s.players[id]?.ai === true || (!NET && AI_PLAYERS.has(id));
 }
 /** Seats taking part in the match, in the fixed seat order. */
 function diploSeats(): string[] {
@@ -4167,12 +4217,12 @@ function diploRowsHtml(): string {
         ? `<span class="dp-tag">ВЫ</span>`
         : `<span class="dp-stance" style="color:${STANCE_COLOR[st!]};border-color:${STANCE_COLOR[st!]}">${STANCE_RU[st!]}</span>`;
       // Bots (AI seats) carry a favour meter toward you; humans/you don't.
-      const favBar = !isMe && AI_PLAYERS.has(id) ? favourBarHtml(id) : '';
+      const favBar = !isMe && isAiSeat(id) ? favourBarHtml(id) : '';
       const expanded = diploExpanded === id && !isMe;
       const actions = expanded
         ? `<div class="dp-actions">` +
           STANCES.map((t) => {
-            const barred = t === 'alliance' && AI_PLAYERS.has(id); // боты не вступают в коалиции
+            const barred = t === 'alliance' && isAiSeat(id); // боты не вступают в коалиции
             return `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}"${barred ? ' disabled title="Боты не вступают в коалиции"' : ''}>${STANCE_RU[t]}</button>`;
           }).join('') +
           `<button class="dp-msg" data-msgseat="${id}">✉</button></div>`
