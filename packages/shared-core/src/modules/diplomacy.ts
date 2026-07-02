@@ -1,6 +1,14 @@
 import type { Action } from '../action/types';
 import type { GameModule, HandlerContext } from '../kernel/module';
-import { getStance, pairKey, setStance } from '../state/diplomacy';
+import {
+  STANCE_RANK,
+  getStance,
+  isBotPair,
+  pairHas,
+  pairKey,
+  pairParts,
+  setStance,
+} from '../state/diplomacy';
 import type { DiplomaticStance, GameState, PlayerId } from '../state/gameState';
 
 /**
@@ -21,10 +29,7 @@ import type { DiplomaticStance, GameState, PlayerId } from '../state/gameState';
  * relation for consumers that don't care about the pact/peace distinction.
  */
 
-/** Friendliness order — an action is a downgrade or an upgrade along this scale. */
-const RANK: Record<DiplomaticStance, number> = { war: 0, peace: 1, pact: 2, alliance: 3 };
-
-const STANCES = new Set<string>(Object.keys(RANK));
+const STANCES = new Set<string>(Object.keys(STANCE_RANK));
 
 /** The coarse relation the `diplomacy` capability reports (see `DiplomaticStance`
  *  in `state/gameState.ts`): war → hostile, peace/pact → neutral, alliance → ally. */
@@ -44,12 +49,6 @@ export interface DiplomacyCapability {
 interface StancePayload {
   target?: string;
   stance?: string;
-}
-
-/** True when either side of the pair is an AI seat (bot). Coalitions are between
- *  humans only — a bot is not invitable to an alliance (GDD: коалиция). */
-function botParty(h: HandlerContext, a: PlayerId, b: PlayerId): boolean {
-  return h.state.players[a]?.ai === true || h.state.players[b]?.ai === true;
 }
 
 /** Validates actor + target and returns the target id, or rejects (fail-secure):
@@ -91,7 +90,7 @@ export const diplomacyModule: GameModule = {
       }
       const stance = p.stance as DiplomaticStance;
       const target = requireParties(action, h, p.target);
-      if (RANK[stance] >= RANK[getStance(h.state, action.playerId, target)]) {
+      if (STANCE_RANK[stance] >= STANCE_RANK[getStance(h.state, action.playerId, target)]) {
         return h.reject('E_BAD_STANCE'); // not a downgrade — propose it instead
       }
       changeStance(h, action.playerId, target, stance);
@@ -106,10 +105,10 @@ export const diplomacyModule: GameModule = {
       }
       const stance = p.stance as DiplomaticStance;
       const target = requireParties(action, h, p.target);
-      if (stance === 'alliance' && botParty(h, action.playerId, target)) {
+      if (stance === 'alliance' && isBotPair(h.state, action.playerId, target)) {
         return h.reject('E_BOT_ALLIANCE'); // a coalition is between humans only
       }
-      if (RANK[stance] <= RANK[getStance(h.state, action.playerId, target)]) {
+      if (STANCE_RANK[stance] <= STANCE_RANK[getStance(h.state, action.playerId, target)]) {
         return h.reject('E_BAD_STANCE'); // not an upgrade — declare it instead
       }
       (h.state.diplomacyOffers ??= {})[pairKey(action.playerId, target)] = {
@@ -128,13 +127,17 @@ export const diplomacyModule: GameModule = {
         return h.reject('E_NO_OFFER'); // nothing (from them) to accept
       }
       // A rejection discards the draft, so a hand-seeded invalid offer stays in the
-      // state — both checks below are defensive re-validation, not cleanup. Every
+      // state — the checks below are defensive re-validation, not cleanup. Every
       // legitimate stance change voids the pair's offer, so a MODULE-made offer is
-      // always still an upgrade and never a bot alliance (fail-secure over invariants).
-      if (offer.stance === 'alliance' && botParty(h, action.playerId, from)) {
+      // always in-vocabulary, still an upgrade and never a bot alliance (fail-secure
+      // over invariants; state loaded from persistence is not re-validated by zod).
+      if (!STANCES.has(offer.stance)) {
+        return h.reject('E_BAD_STANCE'); // out-of-vocabulary stance never reaches state.diplomacy
+      }
+      if (offer.stance === 'alliance' && isBotPair(h.state, action.playerId, from)) {
         return h.reject('E_BOT_ALLIANCE');
       }
-      if (RANK[offer.stance] <= RANK[getStance(h.state, action.playerId, from)]) {
+      if (STANCE_RANK[offer.stance] <= STANCE_RANK[getStance(h.state, action.playerId, from)]) {
         return h.reject('E_BAD_STANCE');
       }
       changeStance(h, from, action.playerId, offer.stance);
@@ -149,6 +152,25 @@ export const diplomacyModule: GameModule = {
       }
       delete h.state.diplomacyOffers?.[key];
       h.emit('diplomacy.rejected', { from, to: action.playerId, stance: offer.stance });
+    });
+
+    // A defeated player can neither accept nor be dealt with (requireParties bars
+    // them), so their standing offers would hang forever — void them the moment the
+    // player is eliminated, announcing each so clients clear the pending-offer UI.
+    api.on('player.eliminated', (event, h) => {
+      const playerId = (event.payload as { playerId?: string })?.playerId;
+      if (typeof playerId !== 'string' || !h.state.diplomacyOffers) return;
+      for (const key of Object.keys(h.state.diplomacyOffers)) {
+        if (!pairHas(key, playerId)) continue;
+        const offer = h.state.diplomacyOffers[key]!;
+        const [a, b] = pairParts(key);
+        delete h.state.diplomacyOffers[key];
+        h.emit('diplomacy.rejected', {
+          from: offer.from,
+          to: offer.from === a ? b : a,
+          stance: offer.stance,
+        });
+      }
     });
 
     api.provideCapability<DiplomacyCapability>('diplomacy', {

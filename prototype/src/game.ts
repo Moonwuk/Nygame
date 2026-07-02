@@ -26,6 +26,7 @@ import {
   victoryModule,
   technologyModule,
   getStance,
+  isBotPair,
   setStance,
   pairKey,
   timeScaleOf,
@@ -571,6 +572,10 @@ export function clampPowerWeights(seeds: Array<{ x: number; y: number; w: number
   const k = cap / range;
   for (const s of seeds) s.w = wmin + (s.w - wmin) * k;
 }
+
+// Shared stance vocabulary — main.ts routes propose-vs-declare by the same ranks
+// the core module enforces (one table, no drift).
+export { STANCE_RANK } from '../../packages/shared-core/src/index';
 
 function player(
   id: string,
@@ -1303,10 +1308,7 @@ export const diplomacyModule: GameModule = {
       const stance: DiplomaticStance = p.stance ?? 'war';
       // A coalition is between humans only — a bot is never a valid alliance party
       // (server-side rule; the menu greys the option out too).
-      if (
-        stance === 'alliance' &&
-        (h.state.players[action.playerId]?.ai === true || h.state.players[p.target]?.ai === true)
-      ) {
+      if (stance === 'alliance' && isBotPair(h.state, action.playerId, p.target)) {
         return h.reject('E_BOT_ALLIANCE');
       }
       setStance(h.state, action.playerId, p.target, stance);

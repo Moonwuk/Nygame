@@ -171,6 +171,19 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     expect(state.players.p2!.ai).toBeUndefined(); // human seat stays unmarked
   });
 
+  it('rejects a player id carrying the pair-key separator "|" (fail-secure at boot)', () => {
+    // seated via a slot…
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'clan|alpha' }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_BAD_PLAYER_ID/);
+    // …and declared statically on the map (schema-level guard)
+    const raw = readJson('data/maps/skirmish-1.json') as { players: Record<string, unknown> };
+    raw.players['clan|alpha'] = { name: 'X', faction: 'vanguard' };
+    expect(() => parseMatchMap(raw)).toThrow();
+  });
+
   it('rejects a slot granting an unknown technology (fail-secure at boot)', () => {
     expect(() =>
       buildStateFromMap(avaMap(), data, {

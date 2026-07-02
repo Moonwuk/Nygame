@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { createKernel } from '../kernel/kernel';
 import { diplomacyModule, stanceToRelation, type DiplomacyCapability } from './diplomacy';
 import { getStance, pairKey, setStance } from '../state/diplomacy';
-import { createInitialState, type GameState, type Player } from '../state/gameState';
+import {
+  createInitialState,
+  type DiplomaticStance,
+  type GameState,
+  type Player,
+} from '../state/gameState';
 import { parseGameData, type GameData } from '../data/schemas';
 import type { Action, ApplyResult, Context } from '../action/types';
 import type { GameModule } from '../kernel/module';
@@ -178,6 +183,36 @@ describe('diplomacy module — a coalition is between humans only (no bots)', ()
     s.diplomacyOffers = { [pairKey('p1', 'bot')]: { from: 'bot', stance: 'alliance' } };
     const r = kernel.applyAction(s, act('diplomacy.accept', 'p1', { from: 'bot' }), ctx);
     expect(errCode(r)).toBe('E_BOT_ALLIANCE');
+  });
+});
+
+describe('diplomacy module — lifecycle safety', () => {
+  it('accept never writes an out-of-vocabulary stance from a corrupted offer', () => {
+    const s = baseState();
+    s.diplomacyOffers = {
+      [pairKey('p1', 'p2')]: { from: 'p2', stance: 'friendship' as DiplomaticStance },
+    };
+    const r = kernel.applyAction(s, act('diplomacy.accept', 'p1', { from: 'p2' }), ctx);
+    expect(errCode(r)).toBe('E_BAD_STANCE'); // fail-secure: garbage never reaches state.diplomacy
+  });
+
+  it('voids the standing offers of an eliminated player (no zombie offers)', () => {
+    const s = okApply(
+      kernel.applyAction(baseState(), act('diplomacy.propose', 'p2', { target: 'p1', stance: 'peace' }), ctx),
+    ).state;
+    // p2 is eliminated: the scheduled event fires exactly like victoryModule emits it.
+    s.players.p2 = { ...s.players.p2!, status: 'defeated' };
+    s.scheduled = [
+      { id: 'evt:d', at: 1, type: 'player.eliminated', payload: { playerId: 'p2' }, seq: 0 },
+    ];
+    s.scheduleSeq = 1;
+    const r = kernel.advanceTo(s, { ...ctx, now: 1 });
+    if (!r.ok) throw new Error(r.code);
+    expect(r.state.diplomacyOffers?.[pairKey('p1', 'p2')]).toBeUndefined();
+    expect(r.events).toContainEqual({
+      type: 'diplomacy.rejected',
+      payload: { from: 'p2', to: 'p1', stance: 'peace' },
+    });
   });
 });
 

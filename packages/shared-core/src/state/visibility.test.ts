@@ -228,6 +228,15 @@ describe('visibleState (fog of war as a security boundary)', () => {
     expect(view.diplomacy).toEqual({ 'p1|p2': 'peace', 'p2|p3': 'alliance' });
     expect(view.diplomacyOffers).toEqual({ 'p1|p2': { from: 'p2', stance: 'pact' } });
   });
+
+  it('a viewer party to NO offers gets no diplomacyOffers key at all (no first-offer leak)', () => {
+    const state = scenario();
+    state.players.p3 = player('p3');
+    state.diplomacyOffers = { 'p2|p3': { from: 'p3', stance: 'alliance' } };
+    const view = visibleState(state, 'p1', data);
+    // not an empty {} — the key is gone, so a third party's delta stays silent
+    expect('diplomacyOffers' in view).toBe(false);
+  });
 });
 
 describe('visibleState — province kind is fog-gated (no appearance leak)', () => {

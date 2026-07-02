@@ -237,24 +237,30 @@ export function identifiedNodes(state: GameState, viewerId: PlayerId, data: Game
  *  when their node is currently identified. A radar-only contact answers false
  *  (detected is not seen), remembered fog answers false (stale is not now), and
  *  an unknown id answers false (fail-secure). Fog is opt-in: a host that does
- *  not enforce it simply never consults this and everything stays visible. */
+ *  not enforce it simply never consults this and everything stays visible.
+ *
+ *  Computing coverage is the expensive part — a caller checking MANY objects for
+ *  one viewer should hoist `identifiedNodes(state, viewerId, data)` once and pass
+ *  it as `identified` (the matchRoom event-filter pattern); each call is then a
+ *  set lookup. Omitted, the coverage is computed per call. */
 export function isVisibleTo(
   state: GameState,
   viewerId: PlayerId,
   target: { planetId: PlanetId } | { fleetId: string },
   data: GameData,
+  identified?: Set<PlanetId>,
 ): boolean {
   if ('planetId' in target) {
     const planet = state.planets[target.planetId];
     if (!planet) return false;
     if (planet.owner === viewerId) return true;
-    return identifiedNodes(state, viewerId, data).has(target.planetId);
+    return (identified ?? identifiedNodes(state, viewerId, data)).has(target.planetId);
   }
   const fleet = state.fleets[target.fleetId];
   if (!fleet) return false;
   if (fleet.owner === viewerId) return true;
   const node = fleetNode(state, fleet);
-  return node !== null && identifiedNodes(state, viewerId, data).has(node);
+  return node !== null && (identified ?? identifiedNodes(state, viewerId, data)).has(node);
 }
 
 /**
@@ -285,11 +291,14 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
     view.match.scores = own ? { [viewerId]: own } : {};
   }
   // Diplomatic STANCES are public knowledge; pending OFFERS are between the two
-  // parties only — a third player must not see who is courting whom.
+  // parties only — a third player must not see who is courting whom. A map left
+  // EMPTY after the strip is removed entirely: otherwise the undefined→{} flip
+  // rides a third party's delta and leaks "someone made the match's first offer".
   if (view.diplomacyOffers) {
     for (const key of Object.keys(view.diplomacyOffers)) {
       if (!pairHas(key, viewerId)) delete view.diplomacyOffers[key];
     }
+    if (Object.keys(view.diplomacyOffers).length === 0) delete view.diplomacyOffers;
   }
   // Heroes are private: a viewer sees only their own (position + cooldowns). Temp
   // lanes stay — they are public map topology (real `links`), visible to everyone.

@@ -56,6 +56,11 @@ const MapPlayerSchema = z.object({
   ai: z.boolean().default(false),
 });
 
+/** A player id. `|` is barred: it is the diplomacy pair-key separator — an id
+ *  containing it would make `pairKey('a|b','c')` collide with `pairKey('a','b|c')`
+ *  and break the participant check that fogs diplomatic offers. */
+const playerIdSchema = z.string().min(1).regex(/^[^|]+$/, 'player id must not contain "|"');
+
 const MapFleetSchema = z.object({
   owner: z.string(),
   location: z.string(),
@@ -95,7 +100,7 @@ export const MatchMapSchema = z.object({
    *  irrelevant; symmetry, no self-loops and the neighbour-only rule are enforced
    *  in `validateMatchMap`. */
   paths: z.array(z.tuple([z.string(), z.string()])).default([]),
-  players: z.record(z.string(), MapPlayerSchema).default({}),
+  players: z.record(playerIdSchema, MapPlayerSchema).default({}),
   /** Team-aware start slots (`corporation-wars.md`): start positions decoupled from
    *  concrete players. A sector/fleet `owner` may name a slot id; `buildStateFromMap`
    *  seats real players into slots via its `slots` assignments. */

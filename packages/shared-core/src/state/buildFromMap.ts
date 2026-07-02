@@ -210,6 +210,11 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
   for (const [slotId, a] of Object.entries(slotAssign)) {
     const slot = map.slots[slotId];
     if (!slot) continue; // ignore assignments for slots this map does not declare
+    if (a.playerId.includes('|')) {
+      // `|` is the diplomacy pair-key separator — an id carrying it would break
+      // the offer-fog participant check (see `pairKey`). Fail-secure at boot.
+      throw new Error(`E_BAD_PLAYER_ID: ${a.playerId}`);
+    }
     if (a.scientist && !data.scientists[a.scientist]) {
       throw new Error(`E_UNKNOWN_SCIENTIST: ${a.scientist}`); // fail-secure at boot
     }
