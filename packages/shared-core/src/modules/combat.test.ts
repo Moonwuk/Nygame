@@ -849,7 +849,7 @@ describe('combat — artillery standoff fire (GDD §7.2)', () => {
         [planet('PA', null, 0, 0), planet('PB', null, 100, 0)],
       );
     expect(rej(kernel.applyAction(base(), barrage('ZZ', 'E'), ctx(0)))).toBe('E_NO_FLEET');
-    expect(rej(kernel.applyAction(base(), barrage('ART', 'E', 'p2'), ctx(0)))).toBe('E_FORBIDDEN');
+    expect(rej(kernel.applyAction(base(), barrage('ART', 'E', 'p2'), ctx(0)))).toBe('E_NO_FLEET'); // not-yours == not-found (no id probing)
     expect(rej(kernel.applyAction(base(), barrage('PLAIN', 'E'), ctx(0)))).toBe('E_NO_ARTILLERY');
     expect(rej(kernel.applyAction(base(), barrage('ART', 'ART'), ctx(0)))).toBe('E_BAD_PAYLOAD');
     expect(rej(kernel.applyAction(base(), barrage('ART', 'GONE'), ctx(0)))).toBe('E_NO_TARGET');
@@ -859,7 +859,7 @@ describe('combat — artillery standoff fire (GDD §7.2)', () => {
     expect(rej(kernel.applyAction(base(), barrage('__proto__', 'E'), ctx(0)))).toBe('E_NO_FLEET');
     const peaceful = base();
     setStance(peaceful, 'p1', 'p2', 'peace');
-    expect(rej(kernel.applyAction(peaceful, barrage('ART', 'E'), ctx(0)))).toBe('E_NOT_HOSTILE');
+    expect(rej(kernel.applyAction(peaceful, barrage('ART', 'E'), ctx(0)))).toBe('E_NO_TARGET'); // non-hostile == non-existent (no stance probing)
   });
 
   it('self-heals a poisoned barrageTarget instead of crashing the span (DoS guard)', () => {
@@ -995,7 +995,7 @@ describe('combat — artillery fire modes (rules of engagement)', () => {
     expect(set.state.fleets.ART?.barrageMode).toBe('aggressive');
     expect(rej(kernel.applyAction(base(), barrageMode('ART', 'berserk'), ctx(0)))).toBe('E_BAD_PAYLOAD');
     expect(rej(kernel.applyAction(base(), barrageMode('ZZ', 'passive'), ctx(0)))).toBe('E_NO_FLEET');
-    expect(rej(kernel.applyAction(base(), barrageMode('ART', 'passive', 'p2'), ctx(0)))).toBe('E_FORBIDDEN');
+    expect(rej(kernel.applyAction(base(), barrageMode('ART', 'passive', 'p2'), ctx(0)))).toBe('E_NO_FLEET'); // not-yours == not-found
     expect(rej(kernel.applyAction(base(), barrageMode('PLAIN', 'passive'), ctx(0)))).toBe('E_NO_ARTILLERY');
   });
 });
@@ -1072,7 +1072,7 @@ describe('fleet retreat', () => {
       fleets: { ...state.fleets, IDLE: fleet('IDLE', 'p1', 'P', [['fighter', 1]]) },
     };
     expect(rej(kernel.applyAction(withIdle, retreat('IDLE'), ctx(0)))).toBe('E_NOT_IN_BATTLE');
-    expect(rej(kernel.applyAction(state, retreat('A', 'p2'), ctx(0)))).toBe('E_FORBIDDEN');
+    expect(rej(kernel.applyAction(state, retreat('A', 'p2'), ctx(0)))).toBe('E_NO_FLEET'); // A is p1's — not-yours == not-found
     expect(rej(kernel.applyAction(state, retreat('NOPE'), ctx(0)))).toBe('E_NO_FLEET');
     expect(rej(kernel.applyAction(state, { ...retreat('A'), payload: {} }, ctx(0)))).toBe(
       'E_BAD_PAYLOAD',

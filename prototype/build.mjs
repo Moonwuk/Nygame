@@ -73,17 +73,27 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 .res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 /* donate/premium currency (Суверены): gold accent — moved out of the resource bar onto
-   the status line right under it (#devline .dl-donate), pushed to the right end. */
-#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:4px;color:#ffe6a3;font-weight:700;}
-#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 7px rgba(255,212,94,.5);font-style:normal;}
+   the status line right under it (#devline .dl-donate), pushed to the right end. Rendered
+   as an enlarged, glowing gold pill with a slow pulse so it actually draws the eye. */
+#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:6px;
+  padding:3px 11px;border-radius:13px;color:#fff2cf;font-weight:800;font-size:16px;line-height:1;
+  letter-spacing:.4px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,206,92,.22),rgba(240,170,40,.12));
+  border:1px solid rgba(255,208,96,.6);
+  box-shadow:0 0 14px rgba(255,198,72,.4),inset 0 0 7px rgba(255,214,120,.18);
+  animation:donatePulse 2.6s ease-in-out infinite;}
+#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 10px rgba(255,212,94,.85);font-style:normal;font-size:20px;}
+@keyframes donatePulse{
+  0%,100%{box-shadow:0 0 10px rgba(255,198,72,.30),inset 0 0 7px rgba(255,214,120,.16);}
+  50%{box-shadow:0 0 22px rgba(255,205,90,.7),inset 0 0 9px rgba(255,220,130,.30);}}
 #speedbar{position:fixed;right:14px;bottom:14px;z-index:24;display:flex;align-items:center;gap:4px;
   padding:5px 7px;background:rgba(3,12,16,.78);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 16px rgba(40,200,210,.10);transition:bottom .2s ease;}
 body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
-#fps{position:fixed;top:70px;right:10px;z-index:25;pointer-events:none;
+#fps{position:fixed;top:82px;right:10px;z-index:25;pointer-events:none;
   font:700 10px ui-monospace,Menlo,monospace;color:var(--grn);opacity:.72;letter-spacing:.5px;
   text-shadow:0 0 6px rgba(0,0,0,.85);}
-@media (max-width:720px){#fps{top:68px;}}
+@media (max-width:720px){#fps{top:78px;}}
 .spd button{min-width:30px;height:26px;padding:0 5px;border-radius:2px;cursor:pointer;font:11px ui-monospace,monospace;
   background:transparent;color:var(--cyan-dim);border:1px solid var(--line-hi);}
 .spd button.on{background:rgba(53,214,230,.16);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 10px rgba(53,214,230,.4);}
@@ -282,9 +292,32 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pp-act button{flex:1;padding:5px 6px;border-radius:5px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:700 10px ui-monospace,monospace;cursor:pointer;}
 .pp-act .pp-del{border-color:#7a221c;background:rgba(255,90,77,.12);color:var(--red);}
+/* province ping composer: pick a destination (coalition chat / a player's DM) for a
+   map ping on the selected province. Centered modal, like #splitdlg. */
+#pingmenu{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;
+  padding:18px;background:rgba(2,8,11,.62);backdrop-filter:blur(2px);}
+#pingmenu.show{display:flex;}
+#pingmenu .pm-box{width:min(360px,92vw);background:var(--glass);border:1px solid var(--amber);
+  border-radius:12px;padding:16px 16px 14px;box-shadow:0 0 30px rgba(0,0,0,.6);}
+#pingmenu .pm-head{font-size:13px;letter-spacing:1px;color:var(--amber);font-variant-emoji:text;margin-bottom:3px;}
+#pingmenu .pm-head b{color:#eafffb;}
+#pingmenu .pm-sub{color:var(--dim);font-size:11px;line-height:1.5;margin-bottom:11px;}
+#pingmenu .pm-text{width:100%;box-sizing:border-box;margin-bottom:12px;padding:8px 10px;border-radius:6px;
+  border:1px solid var(--cyan-dim);background:rgba(4,14,18,.7);color:#eafffb;font:inherit;font-size:12px;}
+#pingmenu .pm-lbl{color:var(--cyan-dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;margin:2px 0 6px;}
+#pingmenu .pm-dst{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;margin-bottom:6px;
+  padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);background:rgba(53,214,230,.06);
+  color:var(--ink);font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;font-variant-emoji:text;}
+#pingmenu .pm-dst:hover{background:rgba(53,214,230,.14);border-color:var(--cyan);}
+#pingmenu .pm-dst.coal{border-color:var(--amber);background:rgba(255,196,90,.08);}
+#pingmenu .pm-dst .pm-ic{flex:0 0 auto;}
+#pingmenu .pm-dst em{margin-left:auto;color:var(--dim);font-weight:400;font-style:normal;font-size:10px;}
+#pingmenu .pm-cancel{display:block;width:100%;margin-top:8px;padding:9px;border-radius:7px;
+  border:1px solid var(--line-hi);background:transparent;color:var(--dim);font:inherit;font-size:12px;cursor:pointer;}
+#pingmenu .pm-cancel:hover{color:var(--ink);border-color:var(--cyan-dim);}
 
 /* status strip below the top bar: day/time + victory progress */
-#devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
+#devline{position:fixed;top:46px;left:0;right:0;height:28px;z-index:24;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
   white-space:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid rgba(14,59,64,.5);}
 #devline::-webkit-scrollbar{display:none;}
@@ -844,8 +877,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   /* a floating card on the right whose HEIGHT fits its content (grows as rows are
      added, shrinks for a sparse fleet) instead of a fixed full-height column — only
      caps at the viewport, so ordinary panels never need an inner scrollbar */
-  #side{left:auto;right:12px;top:66px;bottom:auto;width:min(380px,40vw);height:auto;
-    max-height:calc(100vh - 80px);flex-direction:column;clip-path:none;
+  #side{left:auto;right:12px;top:74px;bottom:auto;width:min(380px,40vw);height:auto;
+    max-height:calc(100vh - 88px);flex-direction:column;clip-path:none;
     border:1px solid var(--cyan);border-radius:12px;
     box-shadow:-8px 0 30px rgba(0,0,0,.55),inset 0 0 30px rgba(53,214,230,.04);}
   /* content stacks: list on top, hovered-object dossier pinned below. While the card
@@ -863,7 +896,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 /* --- short viewports (landscape phones, split-screen): overlays scroll instead of
    clipping off-screen; the welcome card compacts and stacks its chip/footer in-flow --- */
 @media (max-height:680px){
-  #connect,#setup,#codex,#playercard,#warprompt,#diplo,#splitdlg{
+  #connect,#setup,#codex,#playercard,#warprompt,#diplo,#splitdlg,#pingmenu{
     align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   #connect{padding:14px 18px;}
   #connect .cwrap{display:flex;flex-direction:column;margin:auto;}
@@ -939,6 +972,89 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #hub .hub-tab .hn-ic{font-size:18px;line-height:1;}
 #hub .hub-tab.active{color:var(--cyan);}
 #hub .hub-tab.active .hn-ic{text-shadow:0 0 8px rgba(53,214,230,.6);}
+
+/* corporation cabinet — cross-session alliance management (mock, see docs/corporation-ui.md) */
+#corp{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(2,8,11,.72);padding:16px;}
+#corp .corpbox{width:min(760px,96vw);max-height:92vh;display:flex;flex-direction:column;
+  background:var(--glass);border:1px solid var(--line-hi);border-radius:14px;overflow:hidden;
+  box-shadow:0 0 44px rgba(0,0,0,.65),inset 0 0 40px rgba(40,200,210,.05);}
+#corp .corphd{padding:16px 18px 12px;border-bottom:1px solid var(--line);}
+#corp .chrow{display:flex;align-items:center;gap:12px;}
+#corp .cemblem{width:40px;height:40px;display:grid;place-items:center;flex:none;font-size:22px;color:var(--cyan);
+  border:1px solid var(--line-hi);border-radius:9px;background:rgba(53,214,230,.08);box-shadow:0 0 12px rgba(53,214,230,.15);}
+#corp .cident{flex:1;min-width:0;}
+#corp .cident>b{font-size:17px;letter-spacing:1px;color:var(--ink);}
+#corp .ctag{color:var(--cyan);font-size:12px;letter-spacing:1px;}
+#corp .cmotto{color:var(--dim);font-size:11px;margin-top:2px;font-style:italic;}
+#corp .cx{flex:none;width:32px;height:32px;border-radius:8px;border:1px solid var(--line-hi);background:transparent;
+  color:var(--dim);font-size:14px;cursor:pointer;}
+#corp .cx:active{background:rgba(255,90,77,.15);color:var(--red);}
+#corp .cmetrics{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:11px;color:var(--dim);letter-spacing:.5px;}
+#corp .cmetrics b{color:var(--cyan);font-size:12px;}
+#corp .corptabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);overflow-x:auto;}
+#corp .ctab{padding:9px 13px;border:none;border-bottom:2px solid transparent;background:transparent;
+  color:var(--dim);font:600 12px ui-monospace,monospace;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
+#corp .ctab.on{color:var(--cyan);border-bottom-color:var(--cyan);}
+#corp .corpbody{padding:16px 18px;overflow-y:auto;}
+#corp .ccols{display:flex;gap:14px;flex-wrap:wrap;}
+#corp .ccard{flex:1;min-width:230px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .ccard h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .clist{margin:0;padding-left:16px;color:var(--ink);font-size:12px;line-height:1.7;}
+#corp .chint{margin:10px 0 0;color:var(--dim);font-size:10px;line-height:1.5;font-style:italic;}
+#corp .cwarn{margin:0 0 14px;padding:9px 12px;border:1px solid var(--amber);border-radius:8px;
+  background:rgba(255,180,58,.08);color:var(--amber);font-size:12px;}
+#corp .cline{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px;}
+#corp .cline:last-child{border-bottom:none;}
+#corp .cline em{font-style:normal;}
+#corp .up{color:var(--up);}
+#corp .dn{color:var(--dn);}
+#corp .cwhen{color:var(--dim);font-weight:400;font-size:10px;}
+#corp .ctable{display:flex;flex-direction:column;gap:6px;}
+#corp .crow2{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  font-size:12px;flex-wrap:wrap;}
+#corp .crow2.me{border-color:var(--cyan-dim);background:rgba(53,214,230,.06);}
+#corp .cdot{width:9px;height:9px;border-radius:50%;flex:none;background:currentColor;box-shadow:0 0 7px currentColor;}
+#corp .cnm{flex:1;min-width:120px;color:var(--ink);}
+#corp .cnm i{color:var(--cyan);font-style:normal;font-size:10px;}
+#corp .crole{color:var(--dim);width:70px;}
+#corp .cinf{color:var(--grn);width:92px;text-align:right;}
+#corp .cpres{color:var(--dim);width:64px;}
+#corp .cman{display:flex;gap:5px;}
+#corp .cbonus{flex:1;min-width:140px;color:var(--grn);}
+#corp .cthreat{font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--line-hi);}
+#corp .cthreat.t-low{color:var(--grn);}
+#corp .cthreat.t-med{color:var(--amber);}
+#corp .cthreat.t-high{color:var(--red);border-color:var(--red);}
+#corp .cbtn2{padding:7px 11px;border-radius:7px;border:1px solid var(--cyan);background:rgba(53,214,230,.1);
+  color:var(--cyan);font:600 11px ui-monospace,monospace;cursor:pointer;}
+#corp .cbtn2:active{background:rgba(53,214,230,.24);}
+#corp .cbtn2.danger{border-color:var(--red);color:var(--red);background:rgba(255,90,77,.08);}
+#corp .cbtn2.wide{width:100%;margin-top:12px;}
+#corp .cbig{display:flex;gap:14px;margin-bottom:14px;}
+#corp .cbig>div{flex:1;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .cbig span{display:block;color:var(--dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+#corp .cbig b{color:var(--cyan);font-size:18px;}
+#corp .corpbody h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .cledger{margin-bottom:12px;}
+#corp .cwars{display:flex;flex-direction:column;gap:10px;}
+#corp .cwar{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
+#corp .cwtop{display:flex;justify-content:space-between;align-items:center;}
+#corp .cwtop b{color:var(--ink);}
+#corp .cst{font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--line-hi);color:var(--dim);}
+#corp .cst.st-active{color:var(--red);border-color:var(--red);}
+#corp .cst.st-incoming{color:var(--amber);border-color:var(--amber);}
+#corp .cwmid{color:var(--dim);font-size:11px;margin:6px 0 9px;}
+#corp .cchat{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+#corp .cmsg{border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;}
+#corp .cmsg.audit{border-style:dashed;color:var(--dim);}
+#corp .cmsg b{color:var(--cyan);}
+#corp .cmsg p{margin:4px 0 0;color:var(--ink);}
+#corp .cpin{float:right;}
+#corp .cinput{display:flex;gap:8px;}
+#corp .cinput input{flex:1;padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);
+  background:rgba(2,10,13,.7);color:var(--ink);font:12px ui-monospace,monospace;}
+#corp .cinput input:focus{outline:none;border-color:var(--cyan);}
 `;
 
 const html = `<!doctype html>
@@ -948,7 +1064,7 @@ const html = `<!doctype html>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
-  <div class="crest"><span class="dia"></span>
+  <div class="crest">
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>
@@ -961,6 +1077,7 @@ const html = `<!doctype html>
   <button id="rail-msgs" title="Сообщения">✉</button>
   <button id="rail-tech" title="Технологии">⚛</button>
   <button id="rail-market" title="Рынок">⇄</button>
+  <button id="railcorp" title="Корпорация">⬢</button>
   <button id="rail-chat" title="Чат" class="desk-only">🗨</button>
   <button id="rail-log" title="Сводки">≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
 </nav>
@@ -984,6 +1101,7 @@ const html = `<!doctype html>
 <div id="diplo"></div>
 <div id="pingpop"></div>
 <div id="splitdlg"></div>
+<div id="pingmenu"></div>
 <div id="fps"></div>
 <div id="banner"></div>
 <div id="connect">
@@ -1082,6 +1200,7 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-ally" style="display:none">
       <div class="hub-empty"><span class="he-ic">⚑</span>Альянсы — скоро<br><span style="font-size:11px;color:var(--cyan-dim)">корпорации · общие AvA-битвы · влияние</span></div>
+      <button id="ccorp" class="hub-solo" type="button">⬢ Кабинет корпорации (макет)</button>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
@@ -1102,6 +1221,13 @@ const html = `<!doctype html>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span>Альянсы</button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span>Ещё</button>
   </nav>
+</div>
+<div id="corp">
+  <div class="corpbox">
+    <div id="corphd" class="corphd"></div>
+    <div id="corptabs" class="corptabs"></div>
+    <div id="corpbody" class="corpbody"></div>
+  </div>
 </div>
 <div id="lobby">
   <div class="lbox">

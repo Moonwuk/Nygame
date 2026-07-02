@@ -149,6 +149,9 @@ export const BuildingLevelSchema = z.object({
   /** Fraction of a docked friendly fleet's HULL restored per game hour (0.1 = 10%/h) —
    *  a shipyard / spaceport (shields-roadmap SH-2.1). 0 = this building can't mend hulls. */
   shipRepair: z.number().nonnegative().default(0),
+  /** Anti-ship orbital-AA firepower this level fires per game hour at a hostile fleet on the
+   *  near orbit (an emplacement building). Summed alongside garrison `aaDamage` in combat. */
+  aaDamage: z.number().nonnegative().default(0),
 });
 
 export const BuildingDefSchema = z.object({
@@ -177,6 +180,9 @@ export const BuildingDefSchema = z.object({
   /** Fraction of a docked friendly fleet's HULL restored per game hour — a
    *  shipyard / spaceport (shields-roadmap SH-2.1). 0 = can't mend hulls. */
   shipRepair: z.number().nonnegative().default(0),
+  /** Anti-ship orbital-AA firepower per game hour (an emplacement building like an
+   *  orbital-AA battery). Fires on hostile near-orbit fleets, summed with garrison AA. */
+  aaDamage: z.number().nonnegative().default(0),
 });
 
 /**
@@ -397,8 +403,8 @@ export type GameData = z.infer<typeof GameDataSchema>;
  *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
 export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
   if (level <= 1) {
-    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair } = def;
-    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair };
+    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair, aaDamage } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair, aaDamage };
   }
   return def.upgrades[level - 2] ?? buildingLevel(def, 1);
 }

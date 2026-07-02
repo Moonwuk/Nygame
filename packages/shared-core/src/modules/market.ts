@@ -18,6 +18,10 @@ import type { GameState, MarketOrder } from '../state/gameState';
 
 const MONEY = 'credits';
 const COMMISSION = 0.15;
+/** Max simultaneously-open sell orders per player. The order book is public and
+ *  replicated to every client, so an unbounded seller could inflate shared state by
+ *  splitting a stockpile into many tiny listings (A06 — resource-consumption by design). */
+const MAX_OPEN_ORDERS = 20;
 
 function findOrder(state: GameState, id: string): MarketOrder | undefined {
   return state.market?.find((o) => o.id === id);
@@ -41,6 +45,8 @@ export const marketModule: GameModule = {
       const seller = h.state.players[action.playerId];
       if (!seller) return h.reject('E_FORBIDDEN');
       if ((seller.resources[resource] ?? 0) < amount) return h.reject('E_INSUFFICIENT');
+      const open = (h.state.market ?? []).reduce((n, o) => (o.seller === action.playerId ? n + 1 : n), 0);
+      if (open >= MAX_OPEN_ORDERS) return h.reject('E_ORDER_LIMIT');
 
       seller.resources[resource] = (seller.resources[resource] ?? 0) - amount; // escrow the goods
       const seq = (h.state.marketSeq ?? 0) + 1;

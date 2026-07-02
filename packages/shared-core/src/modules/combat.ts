@@ -2,6 +2,7 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type {
   BarrageMode,
   Battle,
+  BuildingInstance,
   CombatantRef,
   Fleet,
   GameState,
@@ -9,6 +10,7 @@ import type {
   UnitStack,
 } from '../state/gameState';
 import type { GameData, UnitDef } from '../data/schemas';
+import { buildingLevel } from '../data/schemas';
 import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
@@ -655,9 +657,18 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
 
 // --- orbital AA & bombardment (the near orbit, GDD §7.4) ---------------------
 
-/** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage`. */
-function aaStrengthAt(planet: { garrison: UnitStack[] }, data: GameData): number {
-  return sumUnitStat(planet.garrison, data, 'aaDamage');
+/** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage` PLUS Σ its
+ *  buildings' `aaDamage` (a fixed orbital-AA emplacement is a structure, not a unit). */
+function aaStrengthAt(
+  planet: { garrison: UnitStack[]; buildings: BuildingInstance[] },
+  data: GameData,
+): number {
+  let total = sumUnitStat(planet.garrison, data, 'aaDamage');
+  for (const b of planet.buildings) {
+    const def = data.buildings[b.type];
+    if (def) total += buildingLevel(def, b.level).aaDamage;
+  }
+  return total;
 }
 
 /** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`.
@@ -1106,11 +1117,11 @@ export const combatModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = ownFleet(h.state, fleetId); // own-key — rejects an injected `__proto__`
-      if (!fleet) {
+      // One opaque code for "no such fleet" AND "not your fleet": otherwise a client
+      // could enumerate ids and use E_NO_FLEET vs E_FORBIDDEN to confirm the existence
+      // of fog-hidden enemy fleets (A06 — reject-code side-channel).
+      if (!fleet || fleet.owner !== action.playerId) {
         return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
       }
       if (artilleryRange(fleet, h.ctx.data) <= 0) {
         return h.reject('E_NO_ARTILLERY'); // nothing aboard can fire at range
@@ -1124,11 +1135,10 @@ export const combatModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const target = ownFleet(h.state, targetId); // own-key — a poisoned id can't persist
-      if (!target) {
+      // A non-existent target and a non-hostile one both answer with the same code, so
+      // a client can't probe a fog-hidden fleet's existence / war-stance (A06).
+      if (!target || !isHostile(h, fleet.owner, target.owner)) {
         return h.reject('E_NO_TARGET');
-      }
-      if (!isHostile(h, fleet.owner, target.owner)) {
-        return h.reject('E_NOT_HOSTILE');
       }
       fleet.barrageTarget = targetId;
       h.emit('fleet.barrage', { fleetId, target: targetId, owner: action.playerId });
@@ -1145,11 +1155,11 @@ export const combatModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = ownFleet(h.state, fleetId);
-      if (!fleet) {
+      // One opaque code for "no such fleet" AND "not your fleet": otherwise a client
+      // could enumerate ids and use E_NO_FLEET vs E_FORBIDDEN to confirm the existence
+      // of fog-hidden enemy fleets (A06 — reject-code side-channel).
+      if (!fleet || fleet.owner !== action.playerId) {
         return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
       }
       if (artilleryRange(fleet, h.ctx.data) <= 0) {
         return h.reject('E_NO_ARTILLERY');
@@ -1177,11 +1187,11 @@ export const combatModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = ownFleet(h.state, fleetId); // own-key — rejects an injected `__proto__`
-      if (!fleet) {
+      // One opaque code for "no such fleet" AND "not your fleet": otherwise a client
+      // could enumerate ids and use E_NO_FLEET vs E_FORBIDDEN to confirm the existence
+      // of fog-hidden enemy fleets (A06 — reject-code side-channel).
+      if (!fleet || fleet.owner !== action.playerId) {
         return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
       }
       const battleId = fleet.battleId;
       const battle = battleId != null ? h.state.battles[battleId] : undefined;

@@ -8,18 +8,19 @@ export interface IdleFleet extends Fleet {
 }
 
 /** Resolves a fleet the player owns and that is idle (docked, not moving, not
- *  in battle), or rejects with `E_NO_FLEET` / `E_FORBIDDEN` / `E_FLEET_BUSY`. */
+ *  in battle), or rejects with `E_NO_FLEET` / `E_FLEET_BUSY`. A fleet that is absent
+ *  OR owned by someone else answers with the SAME `E_NO_FLEET` — otherwise a client
+ *  could enumerate ids and read the difference to confirm fog-hidden enemy fleets
+ *  exist (A06 — reject-code side-channel). `E_FLEET_BUSY` is only reachable for the
+ *  caller's own fleet, so it leaks nothing. */
 export function requireOwnedIdleFleet(
   h: HandlerContext,
   fleetId: string,
   playerId: string,
 ): IdleFleet {
   const fleet = h.state.fleets[fleetId];
-  if (!fleet) {
+  if (!fleet || fleet.owner !== playerId) {
     h.reject('E_NO_FLEET');
-  }
-  if (fleet.owner !== playerId) {
-    h.reject('E_FORBIDDEN');
   }
   if (fleet.location === null || fleet.movement || fleet.battleId) {
     h.reject('E_FLEET_BUSY');

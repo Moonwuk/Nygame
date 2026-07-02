@@ -172,11 +172,12 @@ const LOCK = '#7df0d0'; // selection / targeting reticle accent
 const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
-const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'];
-// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
-// buildable: it's a tech unlock (pending the in-session research tree). It still
-// comes pre-installed with a space fortress (installFortressAA).
-const BUILD_UNITS = ['marine', 'cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
+const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort', 'orbital_aa'];
+// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is a defensive BUILDING:
+// the player builds it like a fort. It fires on hostile fleets over the world (core
+// `aaStrengthAt` sums building AA) but does NOT block ground capture — only ground troops
+// do that. A space fortress also comes with one pre-installed (installFortressAA).
+const BUILD_UNITS = ['cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
@@ -185,10 +186,9 @@ const BUILD_ICON: Record<string, string> = {
   fort: '⬡',
   starfort: '✦',
   radar: '⊚',
+  orbital_aa: '⌁',
 };
 const UNIT_ICON: Record<string, string> = {
-  marine: '◆',
-  orbital_aa: '⌁',
   cruiser: '▲',
   scout: '◌',
   siege: '✦',
@@ -212,7 +212,7 @@ let ME = 'p1';
 // Суверены — the donate/premium currency (docs/economy-roadmap.md). It's a meta-layer
 // account balance, NOT match state, so the prototype shows a placeholder here; the real
 // balance comes from the account once monetization is wired.
-const SOVEREIGNS = 25;
+const SOVEREIGNS = 500;
 type PlanetTab = 'ground' | 'ships' | 'squadron' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
@@ -459,6 +459,7 @@ let diploExpanded: string | null = null; // participant row showing its action b
 const diploStanceFilter = new Set<DiplomaticStance>();
 const diploTypeFilter = new Set<'human' | 'ai'>();
 let convoOpen = COALITION; // the open conversation in the messages tab (seat id or COALITION)
+let pingMenuLoc: string | null = null; // province whose ping composer is open (null = closed)
 // Screen hit-boxes for the on-map ping markers, rebuilt every frame by drawPings().
 let pingHits: Array<{ loc: string; x: number; y: number }> = [];
 
@@ -1543,15 +1544,14 @@ function apply(out: StepOut) {
   handleEvents(out.events);
 }
 
-// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario
-// rule). The garrison unit makes the junction "defended" — it can no longer be
-// walked into, only stormed — and its AA now fires on near-orbit attackers.
+// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario rule).
+// It's a building now: its AA fires on near-orbit attackers, but it does NOT make the
+// junction "defended" against a walk-in — only ground troops block ground capture.
 function installFortressAA(planetId: string) {
   const pl = s.planets[planetId];
   if (!pl) return;
-  const aa = pl.garrison.find((u) => u.unit === 'orbital_aa' && u.hp === undefined);
-  if (aa) aa.count += 1;
-  else pl.garrison.push({ unit: 'orbital_aa', count: 1 });
+  if (pl.buildings.some((b) => b.type === 'orbital_aa')) return; // already emplaced
+  pl.buildings.push({ type: 'orbital_aa', level: 1, hp: data.buildings.orbital_aa?.hp ?? 30 });
 }
 
 /** Apply a player-issued order and surface a rejection in the log (so a denied
@@ -3156,14 +3156,15 @@ function render(now: number) {
     const yBase = A.y; // baseline of the bottom (widest) row
     const apexTop = yBase - rows.length * TH;
     cx.save();
-    // While in transit, point the ship pyramid along its heading ("нос по курсу"): the
-    // apex (drawn toward -y / up) rotates onto A.ang. Only the triangles turn — the cargo
-    // pips and the ship-count text below stay upright and readable.
-    if (f.movement) {
-      cx.translate(A.x, A.y);
-      cx.rotate(A.ang + Math.PI / 2);
-      cx.translate(-A.x, -A.y);
-    }
+    // Point the ship pyramid along its heading ("нос по курсу"): the apex (drawn toward
+    // -y / up) rotates onto A.ang — the travel lane while in transit, or the orbital
+    // tangent while stationed on the ring (both supplied by fleetAnchor). Previously this
+    // was gated on `f.movement`, so an orbiting fleet kept its default apex-up pose and
+    // appeared frozen pointing straight up. Only the triangles turn — the cargo pips and
+    // ship-count text below stay upright and readable.
+    cx.translate(A.x, A.y);
+    cx.rotate(A.ang + Math.PI / 2);
+    cx.translate(-A.x, -A.y);
     cx.shadowColor = col;
     cx.shadowBlur = 6 + 6 * engine;
     cx.fillStyle = rgba(col, 0.16 + 0.12 * engine);
@@ -3652,7 +3653,7 @@ function panelHtml(): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('marine')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('infantry')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -3669,6 +3670,9 @@ function panelHtml(): string {
       h += `<div class="row">${btn('capital', '', '★ Сделать столицей', true)}</div>`;
     }
   }
+
+  // Tactical ping — mark this province and share it (coalition chat, or a player's DM).
+  h += `<div class="row">${btn('ping', '', '📍 Пинг — отметить и отправить…', true)}</div>`;
 
   h += `<div class="ptabs">${tabButton('ground', 'Ground', ground.length)}${tabButton(
     'ships',
@@ -3817,6 +3821,11 @@ function buildingDossier(id: string, level: number): Dossier | null {
         name: def.name,
         body: `Автономная крепость, вмороженная в астероидное поле: ${hl(pct(lv.defenseBonus ?? 0))} к обороне и ${hl(lv.hp)} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.`,
       };
+    case 'orbital_aa':
+      return {
+        name: def.name,
+        body: `Стационарная зенитная батарея — неподвижное сооружение, ${hl(lv.aaDamage ?? 0)} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.`,
+      };
     case 'metal_station':
       return {
         name: def.name,
@@ -3851,16 +3860,6 @@ function unitDossier(id: string): Dossier | null {
       return {
         name: 'Siege Platform',
         body: `Тяжёлая осадная платформа: ${hl(st.attack)} урона с дистанции ${hl(st.range ?? 0)}, но тонкая броня (${hl(st.defense)} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.`,
-      };
-    case 'marine':
-      return {
-        name: 'Marine',
-        body: `Десантная пехота, ${hl(st.attack)}/${hl(st.defense)} в наземном бою. Грузится на флот и высаживается, чтобы захватывать миры, которые орбита лишь подавляет огнём.`,
-      };
-    case 'orbital_aa':
-      return {
-        name: 'Orbital AA',
-        body: `Стационарная зенитная батарея — неподвижна, но выдаёт ${hl(st.aaDamage ?? 0)} урона по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий.`,
       };
     case 'strike_carrier':
       return {
@@ -3914,6 +3913,7 @@ function codexHtml(kind: string, id: string): string {
       .join(', ');
     if (prod) rows.push(cxRow('Produces', prod));
     if ((lv.defenseBonus ?? 0) > 0.01) rows.push(cxRow('Garrison defense', `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
+    if ((lv.aaDamage ?? 0) > 0) rows.push(cxRow('Anti-air', String(lv.aaDamage)));
     if ((lv.radarRange ?? 0) > 0) rows.push(cxRow('Radar reach', String(lv.radarRange)));
     if ((def.scoreValue ?? 0) > 0) rows.push(cxRow('Victory points', `${def.scoreValue} / level`));
     rows.push(cxRow('Tiers', maxLvl > 1 ? `${maxLvl} (upgradeable)` : '1'));
@@ -4614,6 +4614,8 @@ side.addEventListener('click', (ev) => {
     playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
   } else if (act === 'capital') {
     playerOrder(designateCapital(ME, selPlanet!));
+  } else if (act === 'ping') {
+    openPingMenu();
   } else if (act === 'bombard') {
     playerOrder(bombardFleet(ME, selFleet!, arg === 'on'));
   } else if (act === 'barragemode') {
@@ -6818,6 +6820,70 @@ function pingSelected(): void {
     input.focus();
   }
 }
+
+// --- province ping composer (tap a province → choose where the ping goes) --------
+// A ping marks a province and shares it. Destination is either the coalition channel
+// (a shared on-map marker every ally sees) or a single player's DM (a private jump-to
+// pointer in that thread). Opened from the province panel's 📍 button.
+function openPingMenu(): void {
+  if (!selPlanet || !s.planets[selPlanet]) {
+    note('Сначала выберите провинцию');
+    return;
+  }
+  pingMenuLoc = selPlanet;
+  renderPingMenu();
+  document.getElementById('pingmenu')?.classList.add('show');
+  (document.getElementById('pm-text') as HTMLInputElement | null)?.focus();
+}
+function closePingMenu(): void {
+  pingMenuLoc = null;
+  document.getElementById('pingmenu')?.classList.remove('show');
+}
+function renderPingMenu(): void {
+  const el = document.getElementById('pingmenu');
+  if (!el || !pingMenuLoc) return;
+  const loc = pingMenuLoc;
+  const dstBtn = (dest: string, color: string, ic: string, name: string, tag: string, cls = ''): string =>
+    `<button class="pm-dst${cls}" data-pmdest="${esc(dest)}">` +
+    `<span class="pm-ic" style="color:${color}">${ic}</span>${esc(name)}` +
+    (tag ? `<em>${esc(tag)}</em>` : '') +
+    `</button>`;
+  const coal = dstBtn(COALITION, 'var(--amber)', '⚡', 'Коалиция', `${coalitionMembers().length} уч.`, ' coal');
+  const dms = diploSeats()
+    .filter((id) => id !== ME)
+    .map((id) => dstBtn(id, ownerColor(id), seatBadge(id).icon, NAME[id] ?? id, seatBadge(id).tag))
+    .join('');
+  el.innerHTML =
+    `<div class="pm-box">` +
+    `<div class="pm-head">📍 Пинг · <b>${esc(loc)}</b></div>` +
+    `<div class="pm-sub">Отметьте провинцию и отправьте — метка станет кликабельной (↪ камера).</div>` +
+    `<input id="pm-text" class="pm-text" maxlength="80" placeholder="Описание метки (необязательно)…" autocomplete="off">` +
+    `<div class="pm-lbl">В чат коалиции</div>${coal}` +
+    (dms ? `<div class="pm-lbl">В ЛС игроку</div>${dms}` : '') +
+    `<button class="pm-cancel" data-pmcancel>Отмена</button>` +
+    `</div>`;
+}
+/** Place the pending province ping toward `dest`: the coalition channel (shared on-map
+ *  marker) or a player's DM (private jump-to pointer). Composer text = the description. */
+function createPingTo(dest: string): void {
+  const loc = pingMenuLoc;
+  if (!loc || !s.planets[loc]) {
+    closePingMenu();
+    return;
+  }
+  const input = document.getElementById('pm-text') as HTMLInputElement | null;
+  const desc = (input?.value.trim() ?? '').slice(0, 80);
+  if (dest === COALITION) {
+    // Same path as the coalition composer's 📍: net → server-stamped marker; solo → local line.
+    if (NET && netClient) netClient.placePing({ kind: 'mark', target: { node: loc }, label: desc });
+    else pushMsg(COALITION, desc || `метка ${loc}`, false, ME, loc);
+    note('📍 Пинг → Коалиция');
+  } else {
+    pushMsg(dest, desc || `метка ${loc}`, false, ME, loc);
+    note(`📍 Пинг → ${NAME[dest] ?? dest}`);
+  }
+  closePingMenu();
+}
 /** Active coalition pings, one marker per province (the latest ping there wins). The
  *  coalition chat log and the map markers share this single source. */
 function activePings(): SessionMsg[] {
@@ -6982,6 +7048,27 @@ if (diploEl) {
   });
 }
 
+// Province ping composer: a destination button places the ping; the backdrop or Отмена
+// closes it; Enter in the note field defaults to the coalition channel.
+const pingMenuEl = document.getElementById('pingmenu');
+if (pingMenuEl) {
+  pingMenuEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    const dest = (tg.closest('.pm-dst') as HTMLElement | null)?.dataset.pmdest;
+    if (dest) return createPingTo(dest);
+    if (tg.closest('[data-pmcancel]') || tg === pingMenuEl) closePingMenu();
+  });
+  pingMenuEl.addEventListener('keydown', (e) => {
+    const ke = e as KeyboardEvent;
+    if (ke.key === 'Enter' && (ke.target as HTMLElement).id === 'pm-text') {
+      e.preventDefault();
+      createPingTo(COALITION);
+    } else if (ke.key === 'Escape') {
+      closePingMenu();
+    }
+  });
+}
+
 note(
   'Welcome, Commander. A wide frontier of provinces separates you from CRIMSON — the worlds among them score 50, every other sector 10. Reach 600 points or take the enemy capital.',
 );
@@ -7070,3 +7157,303 @@ requestAnimationFrame(frame);
     if (navigator.onLine !== false) void runCheck(false);
   }
 }
+
+// --- corporation cabinet (mock meta-shell screen) ---------------------------
+// A UI prototype of the cross-session alliance ("corporation") management
+// screen designed in docs/corporation-ui.md. Everything here is LOCAL MOCK
+// data — there is no server, accounts, or meta-layer yet (metagame.md Контур 2).
+// The real screen would read server projections and send intents; this exists
+// to visualise the layout and interactions ahead of that work.
+type CorpRole = 'leader' | 'officer' | 'member';
+type CorpPresence = 'online' | 'match' | 'offline';
+interface CorpMember {
+  name: string;
+  role: CorpRole;
+  presence: CorpPresence;
+  influence: number; // lifetime influence contributed
+  joined: string;
+  me?: boolean;
+}
+interface CorpHolding {
+  sector: string;
+  bonus: string;
+  since: string;
+  threat: 'low' | 'med' | 'high';
+}
+interface CorpWar {
+  foe: string;
+  sector: string;
+  when: string;
+  status: 'scheduled' | 'incoming' | 'active';
+  signed: number;
+}
+interface CorpLedger {
+  kind: 'gain' | 'spend';
+  text: string;
+  amount: string;
+  when: string;
+}
+interface CorpMsg {
+  who: string;
+  text: string;
+  when: string;
+  pinned?: boolean;
+  audit?: boolean;
+}
+interface CorpData {
+  name: string;
+  tag: string;
+  motto: string;
+  influence: number;
+  supply: number;
+  cap: number;
+  rank: number;
+  myRole: CorpRole;
+  bonuses: string[];
+  members: CorpMember[];
+  holdings: CorpHolding[];
+  wars: CorpWar[];
+  ledger: CorpLedger[];
+  chat: CorpMsg[];
+}
+
+const MOCK_CORP: CorpData = {
+  name: 'Obsidian Vanguard',
+  tag: 'OBSV',
+  motto: 'Hold the void, take the dawn.',
+  influence: 48250,
+  supply: 1240,
+  rank: 7,
+  cap: 50,
+  myRole: 'officer',
+  bonuses: ['+5% добыча металла (сектор HELIOS-3)', '+3% скорость постройки (сектор AEGIS)'],
+  members: [
+    { name: 'Nyx', role: 'leader', presence: 'online', influence: 12400, joined: 'Day 12' },
+    { name: 'Max', role: 'officer', presence: 'online', influence: 9100, joined: 'Day 14', me: true },
+    { name: 'Corvus', role: 'officer', presence: 'match', influence: 8600, joined: 'Day 15' },
+    { name: 'Vega', role: 'member', presence: 'offline', influence: 6200, joined: 'Day 21' },
+    { name: 'Rhea', role: 'member', presence: 'online', influence: 5400, joined: 'Day 28' },
+    { name: 'Drax', role: 'member', presence: 'offline', influence: 3300, joined: 'Day 33' },
+    { name: 'Io', role: 'member', presence: 'match', influence: 3250, joined: 'Day 40' },
+  ],
+  holdings: [
+    { sector: 'HELIOS-3', bonus: '+5% добыча металла', since: 'Day 22', threat: 'med' },
+    { sector: 'AEGIS', bonus: '+3% скорость постройки', since: 'Day 31', threat: 'low' },
+    { sector: 'NULLPORT', bonus: '+2% доход кредитов', since: 'Day 44', threat: 'high' },
+  ],
+  wars: [
+    { foe: 'Crimson Syndicate', sector: 'VEIL-9', when: 'через 6ч', status: 'scheduled', signed: 8 },
+    { foe: 'Ashen Concord', sector: 'NULLPORT', when: 'через 2д', status: 'incoming', signed: 3 },
+    { foe: 'Pale Horizon', sector: 'HARBOR', when: 'идёт бой', status: 'active', signed: 11 },
+  ],
+  ledger: [
+    { kind: 'gain', text: 'Nyx — итог сессии skirmish-7', amount: '+1 850 ⟡', when: '1ч назад' },
+    { kind: 'spend', text: 'Объявлена AvA за VEIL-9', amount: '−12 000 ⟡', when: '3ч назад' },
+    { kind: 'gain', text: 'Corvus — итог сессии skirmish-6', amount: '+1 200 ⟡', when: '5ч назад' },
+    { kind: 'spend', text: 'Аренда флагмана «Nyx-класса» (Io)', amount: '−240 ◈', when: '8ч назад' },
+    { kind: 'gain', text: 'Rhea — итог сессии skirmish-5', amount: '+980 ⟡', when: '1д назад' },
+  ],
+  chat: [
+    { who: 'система', text: 'AvA за VEIL-9 назначена на через 6ч — заявляйтесь во вкладке «Войны».', when: '3ч', audit: true, pinned: true },
+    { who: 'Nyx', text: 'Собираем состав на VEIL-9. Нужны 2 генерала и адмирал.', when: '2ч' },
+    { who: 'Corvus', text: 'Беру адмирала. Арендую флагман из казны.', when: '2ч' },
+    { who: 'система', text: 'Corvus получил роль «офицер».', when: '2ч', audit: true },
+    { who: 'Rhea', text: 'Могу генералом, качаю десант.', when: '1ч' },
+  ],
+};
+
+const CORP_TABS: { id: string; label: string }[] = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'members', label: 'Участники' },
+  { id: 'treasury', label: 'Казна' },
+  { id: 'holdings', label: 'Владения' },
+  { id: 'wars', label: 'Войны' },
+  { id: 'comms', label: 'Чат / Лог' },
+];
+const CORP_ROLE_LABEL: Record<CorpRole, string> = {
+  leader: 'Глава',
+  officer: 'Офицер',
+  member: 'Участник',
+};
+const CORP_PRESENCE: Record<CorpPresence, { c: string; t: string }> = {
+  online: { c: 'var(--grn)', t: 'онлайн' },
+  match: { c: 'var(--amber)', t: 'в матче' },
+  offline: { c: 'var(--dim)', t: 'оффлайн' },
+};
+
+const corpEl = $('corp');
+const corpHdEl = $('corphd');
+const corpTabsEl = $('corptabs');
+const corpBodyEl = $('corpbody');
+let corpTab = 'overview';
+const nfmt = (n: number): string => n.toLocaleString('ru-RU');
+
+function corpOverviewHtml(c: CorpData): string {
+  const bonuses = c.bonuses.map((b) => `<li>${esc(b)}</li>`).join('');
+  const feed = c.ledger
+    .slice(0, 4)
+    .map((l) => `<div class="cline"><span>${esc(l.text)}</span><em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`)
+    .join('');
+  const nextWar = c.wars.find((w) => w.status !== 'active');
+  const nextWarHtml = nextWar
+    ? `<div class="cwarn">⚔ AvA за ${esc(nextWar.sector)} vs ${esc(nextWar.foe)} — ${esc(nextWar.when)}</div>`
+    : '';
+  return (
+    `${nextWarHtml}` +
+    `<div class="ccols">` +
+    `<section class="ccard"><h4>Пассивные бонусы</h4><ul class="clist">${bonuses}</ul>` +
+    `<p class="chint">Применяются снапшотом при старте матча (gdd §5.2), не «на лету».</p></section>` +
+    `<section class="ccard"><h4>Лента</h4>${feed}</section>` +
+    `</div>`
+  );
+}
+
+function corpMembersHtml(c: CorpData): string {
+  const canManage = c.myRole === 'leader' || c.myRole === 'officer';
+  const rows = c.members
+    .map((m) => {
+      const p = CORP_PRESENCE[m.presence];
+      const manage =
+        canManage && m.role === 'member'
+          ? `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.name)}">↑ роль</button>` +
+            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.name)}">✖</button>`
+          : '';
+      return (
+        `<div class="crow2${m.me ? ' me' : ''}">` +
+        `<span class="cdot" style="color:${p.c}"></span>` +
+        `<span class="cnm">${esc(m.name)}${m.me ? ' <i>(вы)</i>' : ''}</span>` +
+        `<span class="crole">${CORP_ROLE_LABEL[m.role]}</span>` +
+        `<span class="cinf">${nfmt(m.influence)} ⟡</span>` +
+        `<span class="cpres">${p.t}</span>` +
+        `<span class="cman">${manage}</span>` +
+        `</div>`
+      );
+    })
+    .join('');
+  const invite = canManage
+    ? `<button class="cbtn2 wide" data-corpact="invite">+ Пригласить участника</button>`
+    : '';
+  return `<div class="ctable">${rows}</div>${invite}`;
+}
+
+function corpTreasuryHtml(c: CorpData): string {
+  const rows = c.ledger
+    .map(
+      (l) =>
+        `<div class="cline"><span>${esc(l.text)} <b class="cwhen">· ${esc(l.when)}</b></span>` +
+        `<em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`,
+    )
+    .join('');
+  const canSpend = c.myRole === 'leader';
+  const spend = canSpend
+    ? `<button class="cbtn2 wide" data-corpact="declare">⚔ Объявить AvA (−12 000 ⟡)</button>`
+    : `<p class="chint">Трата влияния (объявление AvA) — только глава.</p>`;
+  return (
+    `<div class="cbig"><div><span>Влияние</span><b>${nfmt(c.influence)} ⟡</b></div>` +
+    `<div><span>Снабжение</span><b>${nfmt(c.supply)} ◈</b></div></div>` +
+    `<h4>История</h4><div class="cledger">${rows}</div>${spend}`
+  );
+}
+
+function corpHoldingsHtml(c: CorpData): string {
+  const rows = c.holdings
+    .map(
+      (h) =>
+        `<div class="crow2"><span class="cnm">▦ ${esc(h.sector)}</span>` +
+        `<span class="cbonus">${esc(h.bonus)}</span>` +
+        `<span class="cwhen">${esc(h.since)}</span>` +
+        `<span class="cthreat t-${h.threat}">${h.threat === 'low' ? 'спокойно' : h.threat === 'med' ? 'угроза' : 'под ударом'}</span></div>`,
+    )
+    .join('');
+  return `<div class="ctable">${rows}</div><p class="chint">Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.</p>`;
+}
+
+function corpWarsHtml(c: CorpData): string {
+  const rows = c.wars
+    .map((w) => {
+      const st = w.status === 'active' ? 'идёт' : w.status === 'incoming' ? 'входящий вызов' : 'назначено';
+      const act =
+        w.status === 'incoming' && c.myRole === 'leader'
+          ? `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(w.foe)}">Принять</button>`
+          : `<button class="cbtn2" data-corpact="signup" data-corparg="${esc(w.sector)}">Заявиться</button>`;
+      return (
+        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(w.sector)}</b><span class="cst st-${w.status}">${st}</span></div>` +
+        `<div class="cwmid">vs ${esc(w.foe)} · ${esc(w.when)} · состав ${w.signed}</div>` +
+        `<div class="cwact">${act}</div></div>`
+      );
+    })
+    .join('');
+  return `<div class="cwars">${rows}</div>`;
+}
+
+function corpCommsHtml(c: CorpData): string {
+  const msgs = c.chat
+    .map((m) => {
+      const cls = m.audit ? 'cmsg audit' : 'cmsg';
+      const pin = m.pinned ? '<span class="cpin">📌</span>' : '';
+      return `<div class="${cls}">${pin}<b>${esc(m.who)}</b> <span class="cwhen">${esc(m.when)}</span><p>${esc(m.text)}</p></div>`;
+    })
+    .join('');
+  return `<div class="cchat">${msgs}</div><div class="cinput"><input id="corpmsg" placeholder="Сообщение в корп-чат…" maxlength="240"><button class="cbtn2" data-corpact="send">Отправить</button></div>`;
+}
+
+function renderCorp(): void {
+  const c = MOCK_CORP;
+  corpHdEl.innerHTML =
+    `<div class="chrow"><span class="cemblem">⬢</span>` +
+    `<div class="cident"><b>${esc(c.name)}</b> <span class="ctag">[${esc(c.tag)}]</span><div class="cmotto">${esc(c.motto)}</div></div>` +
+    `<button id="corpclose" class="cx" title="Закрыть">✕</button></div>` +
+    `<div class="cmetrics">` +
+    `<span>влияние <b>${nfmt(c.influence)} ⟡</b></span>` +
+    `<span>снабжение <b>${nfmt(c.supply)} ◈</b></span>` +
+    `<span>секторов <b>${c.holdings.length} ▦</b></span>` +
+    `<span>участников <b>${c.members.length}/${c.cap} ♟</b></span>` +
+    `<span>ранг <b>#${c.rank}</b></span>` +
+    `<span>роль <b>${CORP_ROLE_LABEL[c.myRole]}</b></span>` +
+    `</div>`;
+  corpTabsEl.innerHTML = CORP_TABS.map(
+    (t) => `<button class="ctab${t.id === corpTab ? ' on' : ''}" data-corptab="${t.id}">${t.label}</button>`,
+  ).join('');
+  let body = '';
+  if (corpTab === 'overview') body = corpOverviewHtml(c);
+  else if (corpTab === 'members') body = corpMembersHtml(c);
+  else if (corpTab === 'treasury') body = corpTreasuryHtml(c);
+  else if (corpTab === 'holdings') body = corpHoldingsHtml(c);
+  else if (corpTab === 'wars') body = corpWarsHtml(c);
+  else if (corpTab === 'comms') body = corpCommsHtml(c);
+  corpBodyEl.innerHTML = body;
+}
+
+function openCorp(): void {
+  renderCorp();
+  corpEl.style.display = 'flex';
+}
+function closeCorp(): void {
+  corpEl.style.display = 'none';
+}
+
+corpTabsEl.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement | null)?.closest('[data-corptab]') as HTMLElement | null;
+  if (!b) return;
+  corpTab = b.dataset.corptab ?? 'overview';
+  renderCorp();
+});
+corpEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement | null;
+  if (!t) return;
+  if (t.id === 'corpclose' || t.id === 'corp') {
+    closeCorp();
+    return;
+  }
+  const act = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corpact;
+  if (act) {
+    // Mock: no server yet — surface the intent as an in-game dispatch note so the
+    // interaction is visible. The real screen would send an authoritative intent.
+    const arg = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corparg ?? '';
+    note(`[corp mock] intent: ${act}${arg ? ' → ' + arg : ''}`);
+  }
+});
+const corpEntry = $('ccorp');
+corpEntry.addEventListener('click', openCorp);
+const corpRail = $('railcorp');
+corpRail.addEventListener('click', openCorp);

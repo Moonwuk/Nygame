@@ -288,11 +288,10 @@ export const movementModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = h.state.fleets[payload.fleetId];
-      if (!fleet) {
+      // Absent OR not-yours → one opaque code, so a client can't enumerate ids to
+      // confirm fog-hidden enemy fleets exist (A06 — reject-code side-channel).
+      if (!fleet || fleet.owner !== action.playerId) {
         return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
       }
       if (fleet.movement || fleet.battleId || (fleet.location === null && !fleet.edge)) {
         return h.reject('E_FLEET_BUSY'); // in transit / in battle → not free to re-task
@@ -325,11 +324,10 @@ export const movementModule: GameModule = {
         return h.reject('E_BAD_PAYLOAD');
       }
       const fleet = h.state.fleets[fleetId];
-      if (!fleet) {
+      // Absent OR not-yours → one opaque code, so a client can't enumerate ids to
+      // confirm fog-hidden enemy fleets exist (A06 — reject-code side-channel).
+      if (!fleet || fleet.owner !== action.playerId) {
         return h.reject('E_NO_FLEET');
-      }
-      if (fleet.owner !== action.playerId) {
-        return h.reject('E_FORBIDDEN');
       }
       const mv = fleet.movement;
       if (!mv || fleet.battleId) {

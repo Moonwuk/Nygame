@@ -182,27 +182,9 @@ export const data: GameData = parseGameData({
       buildTimeHours: 6,
       upkeep: { credits: 12 },
     },
-    marine: {
-      faction: 'blue',
-      stats: { attack: 12, defense: 12, speed: 52, hp: 24 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 1, // ground trooper — faint
-      cost: { metal: 30 },
-      buildTimeHours: 2,
-      upkeep: { credits: 2 },
-    },
-    orbital_aa: {
-      faction: 'blue',
-      stats: { attack: 4, defense: 14, speed: 0, hp: 30, aaDamage: 12 },
-      domain: 'ground',
-      traits: ['ground', 'immobile'], // a fixed emplacement — can't be lifted onto a fleet
-      line: 'rear',
-      signature: 2, // emplacement — moderate return
-      cost: { metal: 110, credits: 30 },
-      buildTimeHours: 4,
-      upkeep: { credits: 3 },
-    },
+    // (marine retired — mobile ground troops now come only from the division/formation
+    //  system. Orbital AA is no longer a unit either: it's a defensive *building* now
+    //  (see `orbital_aa` under buildings) — anti-ship, immobile, player-built.)
     // --- formation roster: the ground units that fill a division template's 6 slots
     // (formation.ts). Each has a distinct role; the template's SUM + composition
     // synergies (combined-arms / entrenched / armour / air) set the division's stats.
@@ -336,7 +318,7 @@ export const data: GameData = parseGameData({
       ],
     },
     // space fortress — only built in an asteroid field; turns the junction into a
-    // defended, assaultable strongpoint (it garrisons a fixed orbital-AA by default)
+    // defended, assaultable strongpoint (it comes with a fixed orbital-AA by default)
     starfort: {
       name: 'Void Fortress',
       cost: { metal: 180, credits: 60 },
@@ -344,6 +326,18 @@ export const data: GameData = parseGameData({
       hp: 70,
       defenseBonus: 0.4,
       scoreValue: 6,
+    },
+    // Orbital-AA emplacement — a fixed anti-ship battery. It fires on hostile fleets on
+    // the near orbit (core `aaStrengthAt` now sums building AA too). Immobile and costly;
+    // the player builds it like a fort. It does NOT block ground capture — only ground
+    // troops do that — it just bleeds a fleet trying to sit over (or bombard) the world.
+    orbital_aa: {
+      name: 'Orbital AA',
+      cost: { metal: 140, credits: 50 },
+      buildTimeHours: 5,
+      hp: 30,
+      aaDamage: 12,
+      scoreValue: 3,
     },
     fort: {
       name: 'Fort',
@@ -1148,8 +1142,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     home.buildings = [
       { type: 'mine', level: 1, hp: hpOfLevel('mine', 1) },
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
+      // Anti-ship defence is a building now: an orbital-AA emplacement over the homeworld.
+      { type: 'orbital_aa', level: 1, hp: hpOfLevel('orbital_aa', 1) },
     ];
-    home.garrison = [{ unit: 'marine', count: 3 }];
+    // Ground defence is what holds a world against capture (an AA battery bleeds a fleet
+    // but can't stop a landing — only ground troops do). Seed a starting infantry garrison
+    // so the homeworld isn't a free walk-in; mobile ground beyond it comes via divisions.
+    home.garrison = [{ unit: 'infantry', count: 3 }];
     players[seat.id] = player(seat.id, seat.name, seat.faction, {
       credits: 260,
       metal: 320,
@@ -1166,7 +1165,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
         ['cruiser', 2],
         ['scout', 1],
       ],
-      [['marine', 3]],
+      [], // no marine landing troops — mobile ground is via the division system now
     );
     // The deployed hero is a projection of the commander, named by their nick: the MAIN
     // (grade-`main`) roster hero, flagship of the home fleet. It respawns at the capital
@@ -1673,8 +1672,8 @@ function reapWipedDivisions(state: GameState): void {
 
 /** Hand a world to the lowest-id attacker present (a non-`defenderOwner` owner),
  *  unless it isn't capturable or a hostile fleet garrison still holds it. The legacy
- *  marine garrison is NOT engaged by division combat yet (a documented seam): a
- *  garrisoned world resists division capture until cleared via the fleet-assault path. */
+ *  ground/emplacement garrison is NOT engaged by division combat yet (a documented seam):
+ *  a garrisoned world resists division capture until cleared via the fleet-assault path. */
 function captureGround(h: HandlerContext, planetId: string, defenderOwner: string | null): void {
   const planet = h.state.planets[planetId];
   if (!planet || !isCapturable(data, planet)) return;
@@ -2499,9 +2498,9 @@ export function aiOrders(state: GameState, ai: string): Action[] {
   if (base && pl) {
     if ((pl.resources.metal ?? 0) > 220 && (pl.resources.credits ?? 0) > 120) {
       out.push(buildUnit(ai, base.id, 'cruiser', 1));
-    } else if ((pl.resources.metal ?? 0) > 70) {
-      out.push(buildUnit(ai, base.id, 'marine', 1));
     }
+    // (marine retired: the AI no longer cheap-builds a ground trooper. Its home keeps its
+    //  seeded infantry garrison + orbital-AA building for defence; mobile ground via divisions.)
     const aiFleets = Object.values(state.fleets).filter((f) => f.owner === ai).length;
     const baseHasShip = base.garrison.some((st) => isShipUnit(st.unit));
     if (aiFleets < 2 && baseHasShip) out.push(launchFleet(ai, base.id));

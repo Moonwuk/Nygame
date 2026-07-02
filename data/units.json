@@ -73,17 +73,6 @@
     "cost": { "metal": 140, "credits": 40 },
     "upkeep": { "credits": 4 }
   },
-  "orbital_aa": {
-    "faction": "vanguard",
-    "domain": "ground",
-    "stats": { "attack": 4, "defense": 14, "speed": 0, "hp": 30, "aaDamage": 14, "cargoSize": 2 },
-    "line": "rear",
-    "traits": [],
-    "abilities": [],
-    "signature": 2,
-    "cost": { "metal": 120, "credits": 40 },
-    "upkeep": { "credits": 3 }
-  },
   "infected_cruiser": {
     "faction": "swarm",
     "stats": { "attack": 12, "defense": 4, "speed": 6, "hp": 32, "shield": 8 },

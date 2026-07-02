@@ -197,9 +197,9 @@ describe('army module — unloading and validation', () => {
 
   it('rejects unauthorized, busy, or wrong-planet transfers', () => {
     const kernel = createKernel([armyModule]);
-    // not your fleet
+    // not your fleet — opaque code, indistinguishable from a non-existent id (A06)
     expect(errCode(kernel.applyAction(base(), load('F', 'militia', 1, 'p2'), ctx))).toBe(
-      'E_FORBIDDEN',
+      'E_NO_FLEET',
     );
     // fleet in transit
     const moving = base();

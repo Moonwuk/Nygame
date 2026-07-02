@@ -53,6 +53,18 @@ describe('market module — list / buy (15% burn) / cancel', () => {
     expect(r.events.map((e) => e.type)).toContain('market.listed');
   });
 
+  it('caps open orders per seller so one player can not bloat the shared book (A06)', () => {
+    let s = world();
+    s.players.seller!.resources.metal = 100;
+    for (let i = 0; i < 20; i++) {
+      s = ok(kernel.applyAction(s, act('market.list', 'seller', { resource: 'metal', amount: 1, price: 5 }, i + 1), ctx)).state;
+    }
+    expect(s.market).toHaveLength(20);
+    expect(err(kernel.applyAction(s, act('market.list', 'seller', { resource: 'metal', amount: 1, price: 5 }, 21), ctx))).toBe(
+      'E_ORDER_LIMIT',
+    );
+  });
+
   it('buy delivers goods, charges the buyer, pays the seller 85%, burns 15%', () => {
     const listed = ok(kernel.applyAction(world(), list(), ctx));
     const orderId = listed.state.market![0]!.id;

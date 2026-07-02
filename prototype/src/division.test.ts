@@ -57,7 +57,7 @@ function inject(
 }
 
 /** A neutral 'planet'-kind world, reassigned to `owner` with an empty garrison so a
- *  ground battle there can resolve to a clean capture (no legacy marines blocking). */
+ *  ground battle there can resolve to a clean capture (no legacy garrison blocking). */
 function ownedWorld(s: GameState, owner: string): string {
   const w = Object.values(s.planets).find((p) => p.kind === 'planet' && p.owner === null)!;
   w.owner = owner;
@@ -126,7 +126,7 @@ describe('divisions — transport (по грузоподъёмности)', () =
     // Two Линия (cargo 9 each) but the home fleet (p1-1) holds 11 → only one fits.
     let st = order(richGame(), mobilizeDivision('p1', HOME, 0), 0).state;
     st = order(st, mobilizeDivision('p1', HOME, 0), st.time).state;
-    st.fleets['p1-1']!.landing = []; // clear the seeded marines so the hold is the ships' full 11
+    st.fleets['p1-1']!.landing = []; // clear any seeded landing so the hold is the ships' full 11
     const [a, b] = Object.keys(divisionsOf(st));
     expect(divisionCargo(divisionsOf(st)[a!]!)).toBe(9); // 4×1 + 1×3 + 1×2
     expect(fleetCargoFree(st, st.fleets['p1-1']!)).toBe(11); // 2 cruisers (5) + scout (1)
@@ -221,11 +221,11 @@ describe('divisions — tick-based ground battle + capture', () => {
   it('a garrison still holding the world blocks division capture (documented seam)', () => {
     const s = richGame();
     const W = ownedWorld(s, 'p2');
-    s.planets[W]!.garrison = [{ unit: 'marine', count: 2 }]; // legacy defenders remain
+    s.planets[W]!.garrison = [{ unit: 'infantry', count: 2 }]; // ground garrison still holds the world
     inject(s, 'p1', W, { tank: 6 });
     const atWarState = order(s, declareWar('p1', 'p2'), 0).state;
     const after = advance(atWarState, atWarState.time + 5 * DAY).state;
-    expect(after.planets[W]!.owner).toBe('p2'); // the marine garrison isn't engaged yet
+    expect(after.planets[W]!.owner).toBe('p2'); // the legacy garrison isn't engaged yet
   });
 });
 

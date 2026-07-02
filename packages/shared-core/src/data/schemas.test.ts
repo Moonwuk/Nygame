@@ -43,8 +43,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.units.tank?.stats.cargoSize).toBe(3); // a tank is bulky cargo
     expect(data.units.dropship?.stats.cargoCapacity).toBe(12); // dedicated lift
     expect(data.units.scout_drone?.stats.cargoCapacity).toBe(0); // default, carries nothing
-    expect(data.units.orbital_aa?.stats.aaDamage).toBe(14); // anti-ship orbital AA
+    expect(data.buildings.orbital_aa?.aaDamage).toBe(14); // anti-ship orbital AA — a defensive building
     expect(data.units.cruiser?.stats.aaDamage).toBe(0); // default, no AA
+    expect(data.buildings.mine_t1?.aaDamage).toBe(0); // buildings default to no AA
     // squadrons-roadmap SQ-0.1: a carrier-borne fighter squadron + the new squadron stats.
     expect(data.units.fighter_squadron?.traits).toContain('squadron');
     expect(data.units.fighter_squadron?.stats.strikeRange).toBe(180); // Euclidean reach

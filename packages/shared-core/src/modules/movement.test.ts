@@ -145,7 +145,7 @@ describe('movement module — orders & validation (OWASP A01)', () => {
       'E_BAD_PAYLOAD',
     );
     expect(errCode(kernel.applyAction(st, move('ghost', 'B'), ctx(0)))).toBe('E_NO_FLEET');
-    expect(errCode(kernel.applyAction(st, move('E', 'B'), ctx(0)))).toBe('E_FORBIDDEN');
+    expect(errCode(kernel.applyAction(st, move('E', 'B'), ctx(0)))).toBe('E_NO_FLEET'); // foreign fleet denied AND indistinguishable from not-found (A06)
     expect(errCode(kernel.applyAction(st, move('F', 'ZZZ'), ctx(0)))).toBe('E_NO_DESTINATION');
     expect(errCode(kernel.applyAction(st, move('F', 'A'), ctx(0)))).toBe('E_SAME_LOCATION');
   });
