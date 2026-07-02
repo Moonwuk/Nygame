@@ -4,7 +4,9 @@ name: CI
 # A Postgres service is attached and DATABASE_URL is set, so the durable-path adapter
 # tests (store.test.ts, gated behind DATABASE_URL) actually run in CI instead of being
 # skipped — the production persistence path is exercised, not just the in-memory one.
-# NOTE: action versions are tag-pinned for now — SHA-pin with SD-6.1 (secure-sdlc-roadmap.md).
+# Actions are SHA-pinned (SD-6.1 / F-16) with a trailing `# vN` for readability, and
+# checkout sets `persist-credentials: false` (the job only reads) — same hardening as
+# security.yml, self-flagged by its zizmor job.
 
 on:
   workflow_dispatch:
@@ -42,11 +44,14 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/void_test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+      # pnpm version comes from package.json "packageManager"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'pnpm'
