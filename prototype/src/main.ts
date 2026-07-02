@@ -4054,7 +4054,7 @@ function aiAcceptsStance(target: string, to: DiplomaticStance): boolean {
     case 'pact':
       return mine * 4 >= theirs * 3; // mine ≥ 0.75× theirs — a respectable partner
     case 'alliance':
-      return mine >= theirs; // ally only an equal-or-stronger power
+      return false; // боты не вступают в коалиции — правило, не сила
   }
 }
 
@@ -4074,6 +4074,10 @@ function proposeStance(target: string, to: DiplomaticStance): void {
   const from = getStance(s, ME, target);
   if (from === to) return;
   if (STANCE_RANK[to] > STANCE_RANK[from]) {
+    if (to === 'alliance' && isAiSeat(target)) {
+      note('Боты не вступают в коалиции');
+      return;
+    }
     if (!isAiSeat(target)) {
       note('переговоры с другими игроками — позже (нужен сервер)');
       return;
@@ -4167,10 +4171,10 @@ function diploRowsHtml(): string {
       const expanded = diploExpanded === id && !isMe;
       const actions = expanded
         ? `<div class="dp-actions">` +
-          STANCES.map(
-            (t) =>
-              `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}">${STANCE_RU[t]}</button>`,
-          ).join('') +
+          STANCES.map((t) => {
+            const barred = t === 'alliance' && AI_PLAYERS.has(id); // боты не вступают в коалиции
+            return `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}"${barred ? ' disabled title="Боты не вступают в коалиции"' : ''}>${STANCE_RU[t]}</button>`;
+          }).join('') +
           `<button class="dp-msg" data-msgseat="${id}">✉</button></div>`
         : '';
       return (

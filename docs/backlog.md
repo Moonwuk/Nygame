@@ -94,8 +94,11 @@
   `diplomacy.accept`/`diplomacy.reject`); любой сдвиг стойки аннулирует оффер пары. События
   `diplomacy.changed`/`proposed`/`rejected`; payload-схемы 4 действий; capability `diplomacy`
   `{getStance, getRelation}` (state параметром; war→hostile, peace/pact→neutral,
-  alliance→ally). `combat.isHostile` по-прежнему читает стойки напрямую (D1). 18 тестов
-  модуля + туман/дельта. Прототип пока живёт на своём упрощённом `diplomacy.declare`.
+  alliance→ally). `combat.isHostile` по-прежнему читает стойки напрямую (D1). **Коалиция —
+  только между людьми**: `alliance` с ИИ-игроком (`Player.ai`, сеется картой/слотом/
+  прототипом) → `E_BOT_ALLIANCE`; мир/пакт с ботом можно (GDD §3). 21 тест модуля +
+  туман/дельта. Прототип пока живёт на своём упрощённом `diplomacy.declare` (то же
+  правило: редьюсер режет `E_BOT_ALLIANCE`, меню гасит кнопку «Союз» для ИИ).
 
 ## Блок EFX · Ядро: движок трейтов/эффектов `[core]` `[data]`
 

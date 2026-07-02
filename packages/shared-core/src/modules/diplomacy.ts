@@ -46,6 +46,12 @@ interface StancePayload {
   stance?: string;
 }
 
+/** True when either side of the pair is an AI seat (bot). Coalitions are between
+ *  humans only — a bot is not invitable to an alliance (GDD: коалиция). */
+function botParty(h: HandlerContext, a: PlayerId, b: PlayerId): boolean {
+  return h.state.players[a]?.ai === true || h.state.players[b]?.ai === true;
+}
+
 /** Validates actor + target and returns the target id, or rejects (fail-secure):
  *  both parties must exist and still be in the match. */
 function requireParties(action: Action, h: HandlerContext, target: unknown): PlayerId {
@@ -100,6 +106,9 @@ export const diplomacyModule: GameModule = {
       }
       const stance = p.stance as DiplomaticStance;
       const target = requireParties(action, h, p.target);
+      if (stance === 'alliance' && botParty(h, action.playerId, target)) {
+        return h.reject('E_BOT_ALLIANCE'); // a coalition is between humans only
+      }
       if (RANK[stance] <= RANK[getStance(h.state, action.playerId, target)]) {
         return h.reject('E_BAD_STANCE'); // not an upgrade — declare it instead
       }
@@ -118,10 +127,14 @@ export const diplomacyModule: GameModule = {
       if (!offer || offer.from !== from) {
         return h.reject('E_NO_OFFER'); // nothing (from them) to accept
       }
-      // Every stance change voids the pair's offer, so a standing offer is always
-      // still an upgrade — re-checked anyway, fail-secure over invariants.
+      // A rejection discards the draft, so a hand-seeded invalid offer stays in the
+      // state — both checks below are defensive re-validation, not cleanup. Every
+      // legitimate stance change voids the pair's offer, so a MODULE-made offer is
+      // always still an upgrade and never a bot alliance (fail-secure over invariants).
+      if (offer.stance === 'alliance' && botParty(h, action.playerId, from)) {
+        return h.reject('E_BOT_ALLIANCE');
+      }
       if (RANK[offer.stance] <= RANK[getStance(h.state, action.playerId, from)]) {
-        delete h.state.diplomacyOffers?.[key];
         return h.reject('E_BAD_STANCE');
       }
       changeStance(h, from, action.playerId, offer.stance);

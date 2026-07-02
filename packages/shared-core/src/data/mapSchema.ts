@@ -51,6 +51,9 @@ const MapPlayerSchema = z.object({
   name: z.string(),
   faction: z.string(),
   resources: ResourceBagSchema.default({}),
+  /** AI-driven seat (bot). Rules may key off it (e.g. bots are not invitable to
+   *  an alliance). Default: human. */
+  ai: z.boolean().default(false),
 });
 
 const MapFleetSchema = z.object({

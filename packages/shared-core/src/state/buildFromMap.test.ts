@@ -43,6 +43,14 @@ describe('buildStateFromMap (map-roadmap.md M1.2)', () => {
     ]);
   });
 
+  it('carries a map player ai flag onto the seated player', () => {
+    const map = exampleMap();
+    map.players.red!.ai = true;
+    const state = buildStateFromMap(map, data);
+    expect(state.players.red!.ai).toBe(true);
+    expect(state.players.green!.ai).toBeUndefined();
+  });
+
   it('derives sector links from the undirected paths (sorted, symmetric)', () => {
     const state = buildStateFromMap(exampleMap(), data);
     // nexus is the hub → linked to all four spokes; a spoke links back to nexus
@@ -153,6 +161,14 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     });
     expect(state.players.p1!.technologies).toEqual({ completed: ['orbital_logistics'] });
     expect(state.players.p2!.technologies).toBeUndefined(); // no picks → untouched
+  });
+
+  it('marks AI-driven seats on the player (bots are not invitable to coalitions)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1', ai: true }, slot_b: { playerId: 'p2' } },
+    });
+    expect(state.players.p1!.ai).toBe(true);
+    expect(state.players.p2!.ai).toBeUndefined(); // human seat stays unmarked
   });
 
   it('rejects a slot granting an unknown technology (fail-secure at boot)', () => {

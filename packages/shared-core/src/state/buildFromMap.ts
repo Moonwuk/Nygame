@@ -127,6 +127,8 @@ export interface SlotAssignment {
    *  A start kit may grant a mid-tree node directly (prerequisites are not enforced
    *  here — the kit designer's choice); unknown ids fail the boot (fail-secure). */
   technologies?: string[];
+  /** Seat an AI-driven player (bot) into this slot. Default: human. */
+  ai?: boolean;
 }
 
 export interface BuildFromMapOptions {
@@ -195,7 +197,14 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
 
   const players: Record<string, Player> = {};
   for (const [id, pl] of Object.entries(map.players)) {
-    players[id] = { id, name: pl.name, faction: pl.faction, status: 'active', resources: { ...pl.resources } };
+    players[id] = {
+      id,
+      name: pl.name,
+      faction: pl.faction,
+      status: 'active',
+      resources: { ...pl.resources },
+      ...(pl.ai ? { ai: true } : {}),
+    };
   }
   // seat assigned slots as concrete players (start kit = the slot's resources)
   for (const [slotId, a] of Object.entries(slotAssign)) {
@@ -213,6 +222,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       faction: a.faction ?? '',
       status: 'active',
       resources: { ...slot.resources },
+      ...(a.ai ? { ai: true } : {}),
       ...(a.scientist ? { scientist: { id: a.scientist, level: a.scientistLevel ?? 1 } } : {}),
       ...(a.technologies?.length ? { technologies: { completed: [...new Set(a.technologies)] } } : {}),
     };

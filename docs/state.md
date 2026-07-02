@@ -123,7 +123,10 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   (`diplomacy.declare`), повышение по согласию — `diplomacy.propose` кладёт оффер в
   `state.diplomacyOffers` (pairKey → `{from, stance}`, один на пару, новее замещает),
   `diplomacy.accept`/`diplomacy.reject` его разрешают; любой сдвиг стойки аннулирует оффер
-  пары. События `diplomacy.changed`/`proposed`/`rejected`; capability `diplomacy`
+  пары. **Коалиция — только между людьми**: `alliance` с участием ИИ-игрока
+  (`Player.ai === true`, сеется картой/слотом/`newGame` прототипа) отклоняется с
+  `E_BOT_ALLIANCE` (propose и защитно accept); мир/пакт с ботом разрешены. События
+  `diplomacy.changed`/`proposed`/`rejected`; capability `diplomacy`
   `{getStance, getRelation}` — методы принимают `state` параметром (war→hostile,
   peace/pact→neutral, alliance→ally). Офферы фог-чувствительны: `visibleState` отдаёт
   только пары с участием зрителя; `diplomacyOffers` — в `delta`-META. Прототип пока живёт

@@ -50,6 +50,10 @@ export interface Player {
   name: string;
   faction: string;
   status: 'active' | 'defeated';
+  /** True for an AI-driven seat (bot). Absent = human. Game rules may key off it —
+   *  e.g. diplomacy: a coalition (alliance) is between humans only, bots are not
+   *  invitable (`diplomacyModule` rejects `E_BOT_ALLIANCE`). */
+  ai?: boolean;
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
   technologies?: PlayerTechnologyState;

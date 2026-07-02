@@ -154,6 +154,33 @@ describe('diplomacy module — propose / accept / reject (consensual upgrade)', 
   });
 });
 
+describe('diplomacy module — a coalition is between humans only (no bots)', () => {
+  function withBot(): GameState {
+    const s = baseState();
+    s.players.bot = { ...player('bot'), ai: true };
+    return s;
+  }
+
+  it('rejects proposing an alliance to a bot — and from one', () => {
+    const toBot = kernel.applyAction(withBot(), act('diplomacy.propose', 'p1', { target: 'bot', stance: 'alliance' }), ctx);
+    expect(errCode(toBot)).toBe('E_BOT_ALLIANCE');
+    const fromBot = kernel.applyAction(withBot(), act('diplomacy.propose', 'bot', { target: 'p1', stance: 'alliance' }), ctx);
+    expect(errCode(fromBot)).toBe('E_BOT_ALLIANCE');
+  });
+
+  it('still allows peace and a pact with a bot', () => {
+    const r = okApply(kernel.applyAction(withBot(), act('diplomacy.propose', 'p1', { target: 'bot', stance: 'pact' }), ctx));
+    expect(r.state.diplomacyOffers).toEqual({ [pairKey('bot', 'p1')]: { from: 'p1', stance: 'pact' } });
+  });
+
+  it('accept re-validates: a hand-seeded bot-alliance offer cannot be accepted', () => {
+    const s = withBot();
+    s.diplomacyOffers = { [pairKey('p1', 'bot')]: { from: 'bot', stance: 'alliance' } };
+    const r = kernel.applyAction(s, act('diplomacy.accept', 'p1', { from: 'bot' }), ctx);
+    expect(errCode(r)).toBe('E_BOT_ALLIANCE');
+  });
+});
+
 describe('diplomacy module — capability (stance → relation)', () => {
   it('maps every stance onto the coarse relation', () => {
     expect(stanceToRelation('war')).toBe('hostile');
