@@ -33,7 +33,9 @@ const data: GameData = parseGameData({
     },
   },
   factions: {},
-  buildings: {},
+  // A fixed orbital-AA emplacement modelled as a *building* (not a garrison unit):
+  // its `aaDamage` fires on near-orbit hostiles just like a garrison AA gun.
+  buildings: { aa_battery: { name: 'AA Battery', hp: 30, aaDamage: 30 } },
   events: {},
 });
 const HOUR = 3_600_000;
@@ -228,6 +230,17 @@ describe('combat — orbital AA (time.advanced)', () => {
     const st = baseState([f], [planet('P', 'p2', [['aa_gun', 1]])]);
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
     expect(r.state.fleets.W).toBeUndefined(); // the wing is destroyed by orbital AA
+    expect(r.events.some((e) => e.type === 'fleet.destroyed')).toBe(true);
+  });
+
+  it('deals building AA damage from an orbital-AA emplacement (no garrison unit needed)', () => {
+    const kernel = createKernel([combatModule]);
+    const f = fleet('F', 'p1', 'P', [['fighter', 1]], { orbit: 'near' });
+    // Planet defended only by an AA *building* — empty garrison, aaDamage comes from the structure.
+    const p: Planet = { ...planet('P', 'p2'), buildings: [{ type: 'aa_battery', level: 1, hp: 30 }] };
+    const st = baseState([f], [p]);
+    const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
+    expect(r.state.fleets.F).toBeUndefined(); // destroyed by the building's AA (30/h vs 20 hp)
     expect(r.events.some((e) => e.type === 'fleet.destroyed')).toBe(true);
   });
 

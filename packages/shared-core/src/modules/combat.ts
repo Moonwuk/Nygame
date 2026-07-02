@@ -2,6 +2,7 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type {
   BarrageMode,
   Battle,
+  BuildingInstance,
   CombatantRef,
   Fleet,
   GameState,
@@ -9,6 +10,7 @@ import type {
   UnitStack,
 } from '../state/gameState';
 import type { GameData, UnitDef } from '../data/schemas';
+import { buildingLevel } from '../data/schemas';
 import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
@@ -655,9 +657,18 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
 
 // --- orbital AA & bombardment (the near orbit, GDD §7.4) ---------------------
 
-/** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage`. */
-function aaStrengthAt(planet: { garrison: UnitStack[] }, data: GameData): number {
-  return sumUnitStat(planet.garrison, data, 'aaDamage');
+/** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage` PLUS Σ its
+ *  buildings' `aaDamage` (a fixed orbital-AA emplacement is a structure, not a unit). */
+function aaStrengthAt(
+  planet: { garrison: UnitStack[]; buildings: BuildingInstance[] },
+  data: GameData,
+): number {
+  let total = sumUnitStat(planet.garrison, data, 'aaDamage');
+  for (const b of planet.buildings) {
+    const def = data.buildings[b.type];
+    if (def) total += buildingLevel(def, b.level).aaDamage;
+  }
+  return total;
 }
 
 /** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`.

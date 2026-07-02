@@ -221,7 +221,7 @@ describe('divisions — tick-based ground battle + capture', () => {
   it('a garrison still holding the world blocks division capture (documented seam)', () => {
     const s = richGame();
     const W = ownedWorld(s, 'p2');
-    s.planets[W]!.garrison = [{ unit: 'orbital_aa', count: 2 }]; // legacy emplacement defenders remain
+    s.planets[W]!.garrison = [{ unit: 'infantry', count: 2 }]; // ground garrison still holds the world
     inject(s, 'p1', W, { tank: 6 });
     const atWarState = order(s, declareWar('p1', 'p2'), 0).state;
     const after = advance(atWarState, atWarState.time + 5 * DAY).state;

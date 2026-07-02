@@ -168,10 +168,11 @@ const LOCK = '#7df0d0'; // selection / targeting reticle accent
 const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
-const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'];
-// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
-// buildable: it's a tech unlock (pending the in-session research tree). It still
-// comes pre-installed with a space fortress (installFortressAA).
+const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort', 'orbital_aa'];
+// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is a defensive BUILDING:
+// the player builds it like a fort. It fires on hostile fleets over the world (core
+// `aaStrengthAt` sums building AA) but does NOT block ground capture — only ground troops
+// do that. A space fortress also comes with one pre-installed (installFortressAA).
 const BUILD_UNITS = ['cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
@@ -181,9 +182,9 @@ const BUILD_ICON: Record<string, string> = {
   fort: '⬡',
   starfort: '✦',
   radar: '⊚',
+  orbital_aa: '⌁',
 };
 const UNIT_ICON: Record<string, string> = {
-  orbital_aa: '⌁',
   cruiser: '▲',
   scout: '◌',
   siege: '✦',
@@ -1532,15 +1533,14 @@ function apply(out: StepOut) {
   handleEvents(out.events);
 }
 
-// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario
-// rule). The garrison unit makes the junction "defended" — it can no longer be
-// walked into, only stormed — and its AA now fires on near-orbit attackers.
+// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario rule).
+// It's a building now: its AA fires on near-orbit attackers, but it does NOT make the
+// junction "defended" against a walk-in — only ground troops block ground capture.
 function installFortressAA(planetId: string) {
   const pl = s.planets[planetId];
   if (!pl) return;
-  const aa = pl.garrison.find((u) => u.unit === 'orbital_aa' && u.hp === undefined);
-  if (aa) aa.count += 1;
-  else pl.garrison.push({ unit: 'orbital_aa', count: 1 });
+  if (pl.buildings.some((b) => b.type === 'orbital_aa')) return; // already emplaced
+  pl.buildings.push({ type: 'orbital_aa', level: 1, hp: data.buildings.orbital_aa?.hp ?? 30 });
 }
 
 /** Apply a player-issued order and surface a rejection in the log (so a denied
@@ -3794,6 +3794,11 @@ function buildingDossier(id: string, level: number): Dossier | null {
         name: def.name,
         body: `Автономная крепость, вмороженная в астероидное поле: ${hl(pct(lv.defenseBonus ?? 0))} к обороне и ${hl(lv.hp)} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.`,
       };
+    case 'orbital_aa':
+      return {
+        name: def.name,
+        body: `Стационарная зенитная батарея — неподвижное сооружение, ${hl(lv.aaDamage ?? 0)} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.`,
+      };
     case 'metal_station':
       return {
         name: def.name,
@@ -3828,11 +3833,6 @@ function unitDossier(id: string): Dossier | null {
       return {
         name: 'Siege Platform',
         body: `Тяжёлая осадная платформа: ${hl(st.attack)} урона с дистанции ${hl(st.range ?? 0)}, но тонкая броня (${hl(st.defense)} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.`,
-      };
-    case 'orbital_aa':
-      return {
-        name: 'Orbital AA',
-        body: `Стационарная зенитная батарея — неподвижна, но выдаёт ${hl(st.aaDamage ?? 0)} урона по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий.`,
       };
     case 'strike_carrier':
       return {
@@ -3886,6 +3886,7 @@ function codexHtml(kind: string, id: string): string {
       .join(', ');
     if (prod) rows.push(cxRow('Produces', prod));
     if ((lv.defenseBonus ?? 0) > 0.01) rows.push(cxRow('Garrison defense', `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
+    if ((lv.aaDamage ?? 0) > 0) rows.push(cxRow('Anti-air', String(lv.aaDamage)));
     if ((lv.radarRange ?? 0) > 0) rows.push(cxRow('Radar reach', String(lv.radarRange)));
     if ((def.scoreValue ?? 0) > 0) rows.push(cxRow('Victory points', `${def.scoreValue} / level`));
     rows.push(cxRow('Tiers', maxLvl > 1 ? `${maxLvl} (upgradeable)` : '1'));
