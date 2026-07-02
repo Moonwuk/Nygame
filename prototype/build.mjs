@@ -933,7 +933,7 @@ const html = `<!doctype html>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
-  <div class="crest"><span class="dia"></span>
+  <div class="crest">
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>

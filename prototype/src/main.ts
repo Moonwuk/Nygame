@@ -172,7 +172,7 @@ const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'
 // `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
 // buildable: it's a tech unlock (pending the in-session research tree). It still
 // comes pre-installed with a space fortress (installFortressAA).
-const BUILD_UNITS = ['marine', 'cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
+const BUILD_UNITS = ['cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
@@ -183,7 +183,6 @@ const BUILD_ICON: Record<string, string> = {
   radar: '⊚',
 };
 const UNIT_ICON: Record<string, string> = {
-  marine: '◆',
   orbital_aa: '⌁',
   cruiser: '▲',
   scout: '◌',
@@ -208,7 +207,7 @@ let ME = 'p1';
 // Суверены — the donate/premium currency (docs/economy-roadmap.md). It's a meta-layer
 // account balance, NOT match state, so the prototype shows a placeholder here; the real
 // balance comes from the account once monetization is wired.
-const SOVEREIGNS = 25;
+const SOVEREIGNS = 500;
 type PlanetTab = 'ground' | 'ships' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
@@ -3641,7 +3640,7 @@ function panelHtml(): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('marine')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('infantry')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -3825,11 +3824,6 @@ function unitDossier(id: string): Dossier | null {
       return {
         name: 'Siege Platform',
         body: `Тяжёлая осадная платформа: ${hl(st.attack)} урона с дистанции ${hl(st.range ?? 0)}, но тонкая броня (${hl(st.defense)} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.`,
-      };
-    case 'marine':
-      return {
-        name: 'Marine',
-        body: `Десантная пехота, ${hl(st.attack)}/${hl(st.defense)} в наземном бою. Грузится на флот и высаживается, чтобы захватывать миры, которые орбита лишь подавляет огнём.`,
       };
     case 'orbital_aa':
       return {

@@ -182,16 +182,8 @@ export const data: GameData = parseGameData({
       buildTimeHours: 6,
       upkeep: { credits: 12 },
     },
-    marine: {
-      faction: 'blue',
-      stats: { attack: 12, defense: 12, speed: 52, hp: 24 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 1, // ground trooper — faint
-      cost: { metal: 30 },
-      buildTimeHours: 2,
-      upkeep: { credits: 2 },
-    },
+    // (marine retired — mobile ground troops now come only from the division/formation
+    //  system; a world's static defence is the immobile orbital_aa emplacement below.)
     orbital_aa: {
       faction: 'blue',
       stats: { attack: 4, defense: 14, speed: 0, hp: 30, aaDamage: 12 },
@@ -1149,7 +1141,9 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { type: 'mine', level: 1, hp: hpOfLevel('mine', 1) },
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
     ];
-    home.garrison = [{ unit: 'marine', count: 3 }];
+    // Static home defence: a fixed orbital-AA emplacement (immobile — not a mobile troop).
+    // Keeps the world defensible against a walk-in fleet; mobile ground is via divisions.
+    home.garrison = [{ unit: 'orbital_aa', count: 1 }];
     players[seat.id] = player(seat.id, seat.name, seat.faction, {
       credits: 260,
       metal: 320,
@@ -1166,7 +1160,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
         ['cruiser', 2],
         ['scout', 1],
       ],
-      [['marine', 3]],
+      [], // no marine landing troops — mobile ground is via the division system now
     );
     // The deployed hero is a projection of the commander, named by their nick: the MAIN
     // (grade-`main`) roster hero, flagship of the home fleet. It respawns at the capital
@@ -1673,8 +1667,8 @@ function reapWipedDivisions(state: GameState): void {
 
 /** Hand a world to the lowest-id attacker present (a non-`defenderOwner` owner),
  *  unless it isn't capturable or a hostile fleet garrison still holds it. The legacy
- *  marine garrison is NOT engaged by division combat yet (a documented seam): a
- *  garrisoned world resists division capture until cleared via the fleet-assault path. */
+ *  ground/emplacement garrison is NOT engaged by division combat yet (a documented seam):
+ *  a garrisoned world resists division capture until cleared via the fleet-assault path. */
 function captureGround(h: HandlerContext, planetId: string, defenderOwner: string | null): void {
   const planet = h.state.planets[planetId];
   if (!planet || !isCapturable(data, planet)) return;
@@ -2499,9 +2493,9 @@ export function aiOrders(state: GameState, ai: string): Action[] {
   if (base && pl) {
     if ((pl.resources.metal ?? 0) > 220 && (pl.resources.credits ?? 0) > 120) {
       out.push(buildUnit(ai, base.id, 'cruiser', 1));
-    } else if ((pl.resources.metal ?? 0) > 70) {
-      out.push(buildUnit(ai, base.id, 'marine', 1));
     }
+    // (marine retired: the AI no longer cheap-builds a ground trooper. Its home keeps the
+    //  seeded orbital_aa emplacement for defence; mobile ground would come via divisions.)
     const aiFleets = Object.values(state.fleets).filter((f) => f.owner === ai).length;
     const baseHasShip = base.garrison.some((st) => isShipUnit(st.unit));
     if (aiFleets < 2 && baseHasShip) out.push(launchFleet(ai, base.id));
