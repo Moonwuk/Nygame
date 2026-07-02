@@ -154,6 +154,11 @@ if (DATABASE_URL) {
 }
 const restored = await matchStore.load('proto');
 const initialState = restored?.state ?? newGame();
+// A NET seat is not a bot: every seat here is claimable by a human, and the
+// server-side AI merely stands in for an empty chair (`humans` is the live truth).
+// Strip the static `ai` branding newGame took from the seat config, or two humans
+// on DEFAULT_SETUP seats could never ally (E_BOT_ALLIANCE against seat p2 forever).
+for (const seat of Object.values(initialState.players)) delete seat.ai;
 // Rehydrate idempotency receipts so a retried action stays deduped across a restart.
 const initialReceipts = await receiptStore.loadAll('proto');
 

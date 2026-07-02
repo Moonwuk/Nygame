@@ -1,5 +1,6 @@
 import { buildingLevel, type GameData } from '../data/schemas';
 import { deepClone } from '../util/clone';
+import { pairHas } from './diplomacy';
 import type { Fleet, GameState, PlanetId, PlayerId, ScheduledEvent } from './gameState';
 
 /** A scheduled event belongs to a player when it clearly references their own planet,
@@ -168,6 +169,19 @@ function fleetNode(state: GameState, fleet: Fleet): PlanetId | null {
   return null;
 }
 
+/** Viewer-wide radar-reach multiplier: ×(1 + Σ completed-tech `radarRangeBonus`
+ *  + faction passive `radarRangeBonus`) — how technologies and factions extend
+ *  every radar the player fields (A2). Data-driven; no data → ×1. */
+function radarMultiplier(state: GameState, viewerId: PlayerId, data: GameData): number {
+  const player = state.players[viewerId];
+  if (!player) return 1;
+  let bonus = data.factions[player.faction]?.passives.radarRangeBonus ?? 0;
+  for (const id of player.technologies?.completed ?? []) {
+    bonus += data.technologies[id]?.effects.radarRangeBonus ?? 0;
+  }
+  return Math.max(0, 1 + bonus); // a (mis)configured negative pile-up darkens, never inverts
+}
+
 interface Coverage {
   identify: Set<PlanetId>;
   radar: Set<PlanetId>;
@@ -177,6 +191,7 @@ interface Coverage {
 function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Coverage {
   const identify = new Set<PlanetId>();
   const radar = new Set<PlanetId>();
+  const mult = radarMultiplier(state, viewerId, data);
   for (const planet of Object.values(state.planets)) {
     if (planet.owner !== viewerId) continue;
     flood(state, planet.id, IDENTIFY_HOPS, identify);
@@ -185,6 +200,7 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
       const def = data.buildings[b.type];
       if (def) reach = Math.max(reach, buildingLevel(def, b.level).radarRange);
     }
+    reach *= mult;
     if (reach > 0) {
       withinRadius(state, planet.id, reach, radar); // signatures (outer)
       withinRadius(state, planet.id, reach * IDENTIFY_REACH_FRACTION, identify); // full reveal (inner)
@@ -195,7 +211,7 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
     const node = fleetNode(state, fleet);
     if (node === null) continue;
     flood(state, node, FLEET_IDENTIFY_HOPS, identify); // own node only — ships are near-blind
-    const reach = fleetRadar(fleet, data);
+    const reach = fleetRadar(fleet, data) * mult;
     if (reach > 0) {
       // Radar is a physical signal from the SHIP — centre it on the fleet's actual
       // continuous position, not the node it is heading to.
@@ -214,6 +230,37 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
  *  `visibilityModule` snapshots exactly what the projection treats as live. */
 export function identifiedNodes(state: GameState, viewerId: PlayerId, data: GameData): Set<PlanetId> {
   return coverageFor(state, viewerId, data).identify;
+}
+
+/** Ad-hoc query (A4): can `viewerId` see this object at IDENTIFY detail right
+ *  now? Exactly the rule `visibleState` projects by — own objects always, others
+ *  when their node is currently identified. A radar-only contact answers false
+ *  (detected is not seen), remembered fog answers false (stale is not now), and
+ *  an unknown id answers false (fail-secure). Fog is opt-in: a host that does
+ *  not enforce it simply never consults this and everything stays visible.
+ *
+ *  Computing coverage is the expensive part — a caller checking MANY objects for
+ *  one viewer should hoist `identifiedNodes(state, viewerId, data)` once and pass
+ *  it as `identified` (the matchRoom event-filter pattern); each call is then a
+ *  set lookup. Omitted, the coverage is computed per call. */
+export function isVisibleTo(
+  state: GameState,
+  viewerId: PlayerId,
+  target: { planetId: PlanetId } | { fleetId: string },
+  data: GameData,
+  identified?: Set<PlanetId>,
+): boolean {
+  if ('planetId' in target) {
+    const planet = state.planets[target.planetId];
+    if (!planet) return false;
+    if (planet.owner === viewerId) return true;
+    return (identified ?? identifiedNodes(state, viewerId, data)).has(target.planetId);
+  }
+  const fleet = state.fleets[target.fleetId];
+  if (!fleet) return false;
+  if (fleet.owner === viewerId) return true;
+  const node = fleetNode(state, fleet);
+  return node !== null && (identified ?? identifiedNodes(state, viewerId, data)).has(node);
 }
 
 /**
@@ -242,6 +289,16 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   if (view.match?.scores) {
     const own = view.match.scores[viewerId];
     view.match.scores = own ? { [viewerId]: own } : {};
+  }
+  // Diplomatic STANCES are public knowledge; pending OFFERS are between the two
+  // parties only — a third player must not see who is courting whom. A map left
+  // EMPTY after the strip is removed entirely: otherwise the undefined→{} flip
+  // rides a third party's delta and leaks "someone made the match's first offer".
+  if (view.diplomacyOffers) {
+    for (const key of Object.keys(view.diplomacyOffers)) {
+      if (!pairHas(key, viewerId)) delete view.diplomacyOffers[key];
+    }
+    if (Object.keys(view.diplomacyOffers).length === 0) delete view.diplomacyOffers;
   }
   // Heroes are private: a viewer sees only their own (position + cooldowns). Temp
   // lanes stay — they are public map topology (real `links`), visible to everyone.

@@ -50,6 +50,10 @@ export interface Player {
   name: string;
   faction: string;
   status: 'active' | 'defeated';
+  /** True for an AI-driven seat (bot). Absent = human. Game rules may key off it —
+   *  e.g. diplomacy: a coalition (alliance) is between humans only, bots are not
+   *  invitable (`diplomacyModule` rejects `E_BOT_ALLIANCE`). */
+  ai?: boolean;
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
   technologies?: PlayerTechnologyState;
@@ -80,8 +84,16 @@ export interface PlayerTechnologyState {
  *  - `pact`     → neutral (a non-aggression pact — like peace, but a declared,
  *                 breakable agreement rather than mere absence of war)
  *  - `alliance` → ally (shared side; an ally's world can't be attacked)
- *  The stance→relation mapping itself lives in the future `diplomacyModule`. */
+ *  The stance→relation mapping itself lives in `diplomacyModule` (D2). */
 export type DiplomaticStance = 'war' | 'peace' | 'pact' | 'alliance';
+
+/** A standing diplomatic offer on a pair: `from` proposed raising the pair's
+ *  stance to `stance`; it waits until the other party accepts (`diplomacy.accept`),
+ *  rejects (`diplomacy.reject`), or the pair's stance changes (which voids it). */
+export interface DiplomacyOffer {
+  from: PlayerId;
+  stance: DiplomaticStance;
+}
 
 export type MatchStatus = 'ongoing' | 'ended';
 export type MatchEndReason = 'domination' | 'elimination' | 'score' | 'timeout';
@@ -338,9 +350,16 @@ export interface GameState {
    *  pair key (`pairKey`). Symmetric and PUBLIC (not fog-gated — who is at war /
    *  allied is open knowledge). A pair with no entry defaults to `DEFAULT_STANCE`
    *  (war), so absence = the engine's no-diplomacy FFA. Read/written through
-   *  `state/diplomacy.ts`; the future `diplomacyModule` (D2) owns the actions and
-   *  exposes it as the `diplomacy` capability that drives combat's `isHostile`. */
+   *  `state/diplomacy.ts`; `diplomacyModule` (D2) owns the actions and exposes
+   *  the `diplomacy` capability. Combat's `isHostile` reads stances directly. */
   diplomacy?: Record<string, DiplomaticStance>;
+  /** Pending diplomatic offers, keyed by the same canonical `pairKey` as
+   *  `diplomacy` — at most ONE standing offer per pair (a newer proposal
+   *  overwrites it, a counter-proposal replaces it). An offer only ever
+   *  UPGRADES the pair's stance (toward alliance); downgrades are unilateral
+   *  declarations and never wait here. Owned by `diplomacyModule` (D2);
+   *  fog-sensitive: a viewer sees only offers they are a party to. */
+  diplomacyOffers?: Record<string, DiplomacyOffer>;
   /** Session resource market: a public per-match order book maintained by
    *  `marketModule`. Sellers escrow a resource at a price; buyers pay money. */
   market?: MarketOrder[];

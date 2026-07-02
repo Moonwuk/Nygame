@@ -55,6 +55,16 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'unit.build': z.object({ planetId: id, unit: id, count: count.optional() }),
   // technology.ts
   'technology.research': z.object({ technology: id }),
+  // diplomacy.ts — a declare only LOWERS a stance (so `alliance` is never declarable)
+  // and a propose only RAISES one (so `war` is never proposable); the CORE
+  // diplomacyModule enforces the same rule against the pair's current stance.
+  // NB: the prototype's transitional `diplomacy.declare` handler accepts any stance
+  // (its client negotiates consent) — under this gate its unilateral upgrades would
+  // be schema-rejected; reconciled when the prototype moves to the core module.
+  'diplomacy.declare': z.object({ target: id, stance: z.enum(['war', 'peace', 'pact']) }),
+  'diplomacy.propose': z.object({ target: id, stance: z.enum(['peace', 'pact', 'alliance']) }),
+  'diplomacy.accept': z.object({ from: id }),
+  'diplomacy.reject': z.object({ from: id }),
   // market.ts — amounts are plain positive numbers (resources accrue continuously,
   // so fractional amounts are legal); price is a non-negative unit price.
   'market.list': z.object({

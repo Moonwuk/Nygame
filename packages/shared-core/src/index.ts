@@ -46,6 +46,7 @@ export {
   type MatchScore,
   type MatchState,
   type DiplomaticStance,
+  type DiplomacyOffer,
 } from './state/gameState';
 export {
   buildStateFromMap,
@@ -69,9 +70,16 @@ export {
   estimateTravelHours,
 } from './state/route';
 export { isBombarded, bombardedPlanets } from './state/orbit';
-export { DEFAULT_STANCE, pairKey, getStance, setStance } from './state/diplomacy';
+export {
+  DEFAULT_STANCE,
+  STANCE_RANK,
+  pairKey,
+  getStance,
+  setStance,
+  isBotPair,
+} from './state/diplomacy';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
-export { visibleState, identifiedNodes } from './state/visibility';
+export { visibleState, identifiedNodes, isVisibleTo } from './state/visibility';
 export type { VisibleState, SignatureContact, SignatureSize } from './state/visibility';
 export { hashState } from './state/hash';
 
@@ -185,3 +193,9 @@ export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
 export { heroModule } from './modules/hero';
 export { marketModule } from './modules/market';
+export {
+  diplomacyModule,
+  stanceToRelation,
+  type DiplomaticRelation,
+  type DiplomacyCapability,
+} from './modules/diplomacy';

@@ -26,6 +26,7 @@ import {
   victoryModule,
   technologyModule,
   getStance,
+  isBotPair,
   setStance,
   pairKey,
   timeScaleOf,
@@ -572,13 +573,18 @@ export function clampPowerWeights(seeds: Array<{ x: number; y: number; w: number
   for (const s of seeds) s.w = wmin + (s.w - wmin) * k;
 }
 
+// Shared stance vocabulary — main.ts routes propose-vs-declare by the same ranks
+// the core module enforces (one table, no drift).
+export { STANCE_RANK } from '../../packages/shared-core/src/index';
+
 function player(
   id: string,
   name: string,
   faction: string,
   resources: Record<string, number>,
+  ai = false,
 ): Player {
-  return { id, name, faction, status: 'active', resources };
+  return { id, name, faction, status: 'active', resources, ...(ai ? { ai: true } : {}) };
 }
 
 function fleet(
@@ -1149,13 +1155,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     // but can't stop a landing — only ground troops do). Seed a starting infantry garrison
     // so the homeworld isn't a free walk-in; mobile ground beyond it comes via divisions.
     home.garrison = [{ unit: 'infantry', count: 3 }];
-    players[seat.id] = player(seat.id, seat.name, seat.faction, {
-      credits: 260,
-      metal: 320,
-      food: 120,
-      energy: 90,
-      microelectronics: 40,
-    });
+    players[seat.id] = player(
+      seat.id,
+      seat.name,
+      seat.faction,
+      { credits: 260, metal: 320, food: 120, energy: 90, microelectronics: 40 },
+      seat.ai,
+    );
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,
       seat.id,
@@ -1300,6 +1306,11 @@ export const diplomacyModule: GameModule = {
       }
       if (!h.state.players[p.target]) return h.reject('E_NO_PLAYER');
       const stance: DiplomaticStance = p.stance ?? 'war';
+      // A coalition is between humans only — a bot is never a valid alliance party
+      // (server-side rule; the menu greys the option out too).
+      if (stance === 'alliance' && isBotPair(h.state, action.playerId, p.target)) {
+        return h.reject('E_BOT_ALLIANCE');
+      }
       setStance(h.state, action.playerId, p.target, stance);
       h.emit('diplomacy.changed', { a: action.playerId, b: p.target, stance });
     });

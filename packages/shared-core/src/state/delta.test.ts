@@ -76,6 +76,19 @@ describe('state delta — diff/apply round-trip', () => {
     expect(prev.planets).toHaveProperty('B'); // original still intact
   });
 
+  it('carries diplomacyOffers as a meta key (add and clear)', () => {
+    const prev = base();
+    const next = deepClone(prev);
+    next.diplomacyOffers = { 'p1|p2': { from: 'p1', stance: 'peace' } };
+    expect(diffState(prev, next).meta).toMatchObject({
+      diplomacyOffers: { 'p1|p2': { from: 'p1', stance: 'peace' } },
+    });
+    expect(applyDelta(prev, diffState(prev, next))).toEqual(next);
+    // and clearing it removes the key on the other side
+    const wire = JSON.parse(JSON.stringify(diffState(next, prev)));
+    expect('diplomacyOffers' in applyDelta(next, wire)).toBe(false);
+  });
+
   it('removes a meta key that went defined → undefined (survives the JSON wire)', () => {
     const prev = base();
     prev.diplomacy = { 'p1|p2': 'war' };
