@@ -593,11 +593,11 @@ const NEBULAE = Array.from({ length: 5 }, (_, i) => {
 });
 
 // The backdrop (deep-space + nebulae + radar grid + star ticks) is baked into the
-// cached static layer (see buildStaticLayer). This is the only live backdrop bit:
-// a slow radar sweep across the plotting table — pure command-console chrome.
-// Live sweep state (pivot + leading-edge angle), captured each frame so map blips
-// can light up as the arm crosses them (radar "ping" afterglow). sweepOn guards
-// engines without conic gradients (no visible sweep → no ping).
+// cached static layer (see buildStaticLayer). The radar "arm" below is INVISIBLE —
+// the old map-wide rotating sweep wedge was cut as visual noise — but its rotation
+// still drives the radar mechanics: contacts are snapshotted as the arm crosses
+// them (updateRadarContacts) and blips flare with a local afterglow (sweepGlow).
+// Live sweep state (pivot + leading-edge angle), captured each frame.
 let sweepCx = 0;
 let sweepCy = 0;
 let sweepAng = 0;
@@ -622,31 +622,16 @@ function sweepGlow(c: { x: number; y: number }): number {
   return t * t; // ease so the just-crossed flash reads, with a lingering tail
 }
 
-function drawScanSweep(now: number) {
-  if (!cx.createConicGradient) return; // graceful: skip on engines without it
-  // Pivot the sweep at the MAP centre (projected through the camera), not the
-  // screen centre — so it pans / zooms with the map instead of staying glued to
-  // the viewport.
+function updateSweepState(now: number) {
+  // Pivot the (invisible) arm at the MAP centre (projected through the camera),
+  // not the screen centre — so contact refresh order pans / zooms with the map.
+  // Nothing is drawn here: the arm only exists to time the radar snapshots and
+  // the per-blip afterglow; the map-wide rotating wedge itself was removed.
   const mc = world({ x: (MINX + MAXX) / 2, y: (MINY + MAXY) / 2 });
-  const cxp = mc.x;
-  const cyp = mc.y;
-  const ang = (now / SWEEP_DIV) % TAU;
-  sweepCx = cxp;
-  sweepCy = cyp;
-  sweepAng = ang;
+  sweepCx = mc.x;
+  sweepCy = mc.y;
+  sweepAng = (now / SWEEP_DIV) % TAU;
   sweepOn = true;
-  const grd = cx.createConicGradient(ang, cxp, cyp);
-  // very subtle trailing wedge — barely-there in a still frame, reads as a slow
-  // rotating radar sweep in motion (fades over ~0.4 turn behind the leading edge)
-  grd.addColorStop(0, 'rgba(53,214,230,0.032)');
-  grd.addColorStop(0.16, 'rgba(53,214,230,0.008)');
-  grd.addColorStop(0.4, 'rgba(53,214,230,0)');
-  grd.addColorStop(1, 'rgba(53,214,230,0)');
-  cx.save();
-  cx.globalCompositeOperation = 'lighter';
-  cx.fillStyle = grd;
-  cx.fillRect(0, 0, VW, VH);
-  cx.restore();
 }
 
 /** Did the sweep arm cross screen-angle `target` between last frame and this one? */
@@ -2772,7 +2757,7 @@ function drawRadarRange(now: number): void {
 function render(now: number) {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
   blitStaticLayer(); // backdrop + province political map (re-baked on camera move, else cached)
-  drawScanSweep(now); // slow radar sweep — pure console chrome
+  updateSweepState(now); // invisible radar arm — times contact snapshots + blip afterglow
   updateRadarContacts(now); // the arm paints enemy signatures as it crosses them
   drawRadarCoverage(); // my sensor reach (radar arrays + ships)
 
