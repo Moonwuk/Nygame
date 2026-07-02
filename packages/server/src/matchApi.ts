@@ -65,15 +65,19 @@ export function registerMatchApi(app: FastifyInstance, deps: MatchApiDeps): void
  * archive is fail-secure per-player (participants only, stable codes).
  */
 export function registerBrowserApi(app: FastifyInstance, registry: MatchRegistry): void {
+  // A repeated `?nick=a&nick=b` parses to an array — treat anything non-string as
+  // absent (fail-secure: anonymous view / E_FORBIDDEN), like the join route's check.
+  const nickOf = (request: FastifyRequest): string | null => {
+    const nick = (request.query as { nick?: unknown }).nick;
+    return typeof nick === 'string' ? nick : null;
+  };
+
   // The three tabs (available/active/archived) for one viewer (`?nick=`).
-  app.get('/matches', (request: FastifyRequest) => {
-    const nick = (request.query as { nick?: string }).nick ?? null;
-    return registry.list(nick);
-  });
+  app.get('/matches', (request: FastifyRequest) => registry.list(nickOf(request)));
 
   const archive = async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const { id, intent } = request.params as { id: string; intent: string };
-    const nick = (request.query as { nick?: string }).nick ?? '';
+    const nick = nickOf(request) ?? '';
     const result =
       intent === 'archive'
         ? await registry.archive(id, nick)

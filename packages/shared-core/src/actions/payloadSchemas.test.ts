@@ -9,6 +9,9 @@ const CLIENT_ACTION_TYPES = [
   'fleet.orbit',
   'fleet.assault',
   'fleet.bombard',
+  'fleet.barrage',
+  'fleet.barrageMode',
+  'fleet.retreat',
   'army.load',
   'army.unload',
   'hero.move',
@@ -19,6 +22,9 @@ const CLIENT_ACTION_TYPES = [
   'building.upgrade',
   'unit.build',
   'technology.research',
+  'market.list',
+  'market.buy',
+  'market.cancel',
 ];
 
 describe('SV-1.2 · action payload schemas', () => {
@@ -34,6 +40,14 @@ describe('SV-1.2 · action payload schemas', () => {
       ['fleet.orbit', { fleetId: 'f1', orbit: 'near' }],
       ['fleet.assault', { fleetId: 'f1' }],
       ['fleet.bombard', { fleetId: 'f1', on: true }],
+      ['fleet.barrage', { fleetId: 'f1', targetId: 'f2' }],
+      ['fleet.barrage', { fleetId: 'f1', targetId: null }], // clear → auto-target
+      ['fleet.barrage', { fleetId: 'f1' }], // absent target also clears
+      ['fleet.barrageMode', { fleetId: 'f1', mode: 'aggressive' }],
+      ['fleet.retreat', { fleetId: 'f1' }],
+      ['market.list', { resource: 'metal', amount: 12.5, price: 3 }], // fractional amount is legal
+      ['market.buy', { orderId: 'market:1', amount: 5 }],
+      ['market.cancel', { orderId: 'market:1' }],
       ['army.load', { fleetId: 'f1', unit: 'marine' }],
       ['army.unload', { fleetId: 'f1', unit: 'marine', count: 3 }],
       ['hero.move', { to: 'p1' }],
@@ -60,6 +74,14 @@ describe('SV-1.2 · action payload schemas', () => {
       ['fleet.orbit', { fleetId: 'f1', orbit: 'far' }], // the old far/near switch is gone
       ['fleet.orbit', { fleetId: 'f1' }], // missing orbit
       ['fleet.bombard', { fleetId: 'f1', on: 'yes' }], // on not a boolean
+      ['fleet.barrage', { fleetId: 'f1', targetId: 7 }], // target neither an id nor null
+      ['fleet.barrageMode', { fleetId: 'f1', mode: 'berserk' }], // not a known ROE mode
+      ['fleet.retreat', {}], // missing fleetId
+      ['market.list', { resource: 'metal', amount: 0, price: 3 }], // nothing to sell
+      ['market.list', { resource: 'metal', amount: 5, price: -1 }], // negative price
+      ['market.list', { resource: 'metal', amount: Infinity, price: 3 }], // not finite
+      ['market.buy', { orderId: 'market:1', amount: -2 }], // negative amount
+      ['market.buy', { orderId: 'market:1' }], // missing amount
       ['unit.build', { planetId: 'p1', unit: 'c', count: 0 }], // count not positive
       ['unit.build', { planetId: 'p1', unit: 'c', count: 1.5 }], // count not an integer
       ['army.load', { fleetId: 'f1' }], // missing unit

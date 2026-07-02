@@ -85,11 +85,16 @@ const observe = (ev: RoomObservation): void => {
   // and re-arm the offline wakeup: an action may schedule or consume events, and a
   // lobby Start releases the frozen clock — both move the next-event time.
   if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
-  // Re-arm on EVERY room event: an action may (un)schedule events, a lobby Start releases
+  // Re-arm on room events: an action may (un)schedule events, a lobby Start releases
   // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
-  // event also gives the stall guard a fresh chance (the situation may have changed).
-  wakeStalls = 0;
-  armWakeup();
+  // external event also gives the stall guard a fresh chance (the situation may have
+  // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
+  // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
+  // back-off in `onWake` (an eternal 0ms wake spin).
+  if (ev.kind !== 'advance_overflow') {
+    wakeStalls = 0;
+    armWakeup();
+  }
 };
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -276,23 +281,25 @@ function runServerQueues(): void {
 function onWake(): void {
   wakeTimer = null;
   const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
-  runServerAI(); // drive any empty seat once the clock has moved
-  runServerQueues(); // CC-server: advance each fleet's authoritative order chain
-  scheduleSave(); // persist the advanced world
   // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
-  // Back off after a few tries instead of busy-looping the wakeup at 0ms (the room has
-  // already surfaced an advance_overflow). A real player action re-arms via `observe`,
-  // which resets the counter and gives it a fresh chance.
-  if (!progressed && room.msUntilNextEvent() === 0) {
-    if (++wakeStalls >= WAKE_STALL_LIMIT) {
-      process.stderr.write(
-        'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
-          'check for a module scheduling events at its own instant.\n',
-      );
-      return; // idle — do not re-arm
-    }
-  } else {
+  // While stalled, SKIP the AI/queue drivers — their submissions (even rejected ones)
+  // emit `action` observations that would reset this guard and re-arm a 0ms wake — and
+  // back off after a few tries instead of busy-looping (the room has already surfaced
+  // an advance_overflow). A real player action re-arms via `observe`, which resets the
+  // counter and gives it a fresh chance.
+  const stalled = !progressed && room.msUntilNextEvent() === 0;
+  if (!stalled) {
     wakeStalls = 0;
+    runServerAI(); // drive any empty seat once the clock has moved
+    runServerQueues(); // CC-server: advance each fleet's authoritative order chain
+  }
+  scheduleSave(); // persist the advanced world
+  if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {
+    process.stderr.write(
+      'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
+        'check for a module scheduling events at its own instant.\n',
+    );
+    return; // idle — do not re-arm
   }
   armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
 }

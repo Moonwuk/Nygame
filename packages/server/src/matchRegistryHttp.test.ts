@@ -69,6 +69,16 @@ describe('match-browser over HTTP (read-model + archive intent)', () => {
     const { body: l2 } = await getJson<MatchLists>(`${base}/matches?nick=alice`);
     expect(l2.archived.map((s) => s.matchId)).toEqual(['m1']);
     expect(l2.active).toHaveLength(0);
+
+    // Restore: POST unarchive moves it back to the active tab.
+    const rest = await getJson<{ ok: boolean }>(`${base}/matches/m1/unarchive?nick=alice`, {
+      method: 'POST',
+    });
+    expect(rest.status).toBe(200);
+    expect(rest.body).toEqual({ ok: true });
+    const { body: l3 } = await getJson<MatchLists>(`${base}/matches?nick=alice`);
+    expect(l3.active.map((s) => s.matchId)).toEqual(['m1']);
+    expect(l3.archived).toHaveLength(0);
   });
 
   it('archive is fail-secure over the wire (404 unknown, 403 non-participant, 404 wrong method)', async () => {
@@ -87,6 +97,10 @@ describe('match-browser over HTTP (read-model + archive intent)', () => {
     // GET on the archive intent matches no route (Fastify's uniform not-found — the
     // wrong method is not accepted, same fail-secure outcome as the old explicit 405).
     expect((await fetch(`${base}/matches/m1/archive?nick=x`)).status).toBe(404);
+    // An intent outside the (archive|unarchive) route constraint never reaches the
+    // handler — the anchored route regex fails to match → uniform 404.
+    expect((await fetch(`${base}/matches/m1/destroy?nick=x`, { method: 'POST' })).status).toBe(404);
+    expect((await fetch(`${base}/matches/m1/rearchive?nick=x`, { method: 'POST' })).status).toBe(404);
   });
 
   it('GET /health stays contentless (F-13); /metrics carries the aggregate count', async () => {

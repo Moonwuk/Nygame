@@ -33,6 +33,13 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'fleet.orbit': z.object({ fleetId: id, orbit: z.literal('near') }), // a single orbit (GDD §7.4)
   'fleet.assault': z.object({ fleetId: id }),
   'fleet.bombard': z.object({ fleetId: id, on: z.boolean() }),
+  // artillery focus-fire: a hostile fleet id, or null/absent to resume auto-targeting
+  'fleet.barrage': z.object({ fleetId: id, targetId: id.nullish() }),
+  'fleet.barrageMode': z.object({
+    fleetId: id,
+    mode: z.enum(['passive', 'return', 'standard', 'aggressive']),
+  }),
+  'fleet.retreat': z.object({ fleetId: id }),
   // army.ts
   'army.load': z.object({ fleetId: id, unit: id, count: count.optional() }),
   'army.unload': z.object({ fleetId: id, unit: id, count: count.optional() }),
@@ -48,6 +55,15 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'unit.build': z.object({ planetId: id, unit: id, count: count.optional() }),
   // technology.ts
   'technology.research': z.object({ technology: id }),
+  // market.ts — amounts are plain positive numbers (resources accrue continuously,
+  // so fractional amounts are legal); price is a non-negative unit price.
+  'market.list': z.object({
+    resource: id,
+    amount: z.number().finite().positive(),
+    price: z.number().finite().nonnegative(),
+  }),
+  'market.buy': z.object({ orderId: id, amount: z.number().finite().positive() }),
+  'market.cancel': z.object({ orderId: id }),
 };
 
 /** True if `payload` is a valid payload for the client-submittable action `type`. A type
