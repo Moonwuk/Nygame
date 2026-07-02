@@ -118,9 +118,18 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 - `diplomacy?: Record<pairKey, DiplomaticStance>` — попарные дип-отношения (`war`/`peace`/
   `pact`/`alliance`), симметрично и **публично** (туман не режет). Дефолт пары без записи —
   `war` (= FFA). Примитивы в `state/diplomacy.ts`. **`combat.isHostile` читает стойку прямо из
-  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне (не
-  через capability: она статична и не видит живой `state`). Прототип сеет всем парам `peace`
-  в `newGame`, даёт `diplomacyModule` (действие `diplomacy.declare` → `setStance`) и клиентский
+  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне.
+  **Ядровой `diplomacyModule` (D2, `modules/diplomacy.ts`)**: понижение стойки одностороннее
+  (`diplomacy.declare`), повышение по согласию — `diplomacy.propose` кладёт оффер в
+  `state.diplomacyOffers` (pairKey → `{from, stance}`, один на пару, новее замещает),
+  `diplomacy.accept`/`diplomacy.reject` его разрешают; любой сдвиг стойки аннулирует оффер
+  пары. События `diplomacy.changed`/`proposed`/`rejected`; capability `diplomacy`
+  `{getStance, getRelation}` — методы принимают `state` параметром (war→hostile,
+  peace/pact→neutral, alliance→ally). Офферы фог-чувствительны: `visibleState` отдаёт
+  только пары с участием зрителя; `diplomacyOffers` — в `delta`-META. Прототип пока живёт
+  на своём упрощённом `diplomacy.declare` (одностороннее выставление любого станса — его
+  UI/боты так согласуют с ИИ повышения на клиенте). Прототип сеет всем парам `peace`
+  в `newGame` и держит клиентский
   гейт: маршрут через чужую территорию без войны блокируется, ручной тык по ней открывает
   предупреждение «это объявит войну», ИИ объявляет войну, когда нейтралы кончились.
   **Сессионное меню дипломатии/сообщений** (прототип, рейл → Дипломатия/Dispatches):
@@ -231,7 +240,11 @@ E_CONDITIONS_UNMET, E_INSUFFICIENT`.
 юниты/здания из unlocks, пока технология не завершена; `economy.production`,
 `fleet.speed` и `combat.damage` применяют сессионные бонусы; `research.slots`
 поднимает число слотов. Без модуля unlock-гейт мягко деградирует: строительство
-остаётся открытым.
+остаётся открытым. **Предматчевый выбор (C3):** `SlotAssignment.technologies`
+(`buildStateFromMap`) выдаёт посаженному в слот игроку стартовые технологии как
+`completed` — бонусы/анлоки действуют с первой секунды; неизвестный id валит сборку
+(`E_UNKNOWN_TECHNOLOGY`, fail-secure), дубли схлопываются, prerequisites намеренно
+не проверяются (стартовый кит может дарить узел из середины дерева).
 
 ### scientist (`scientist`) — research-лидер (учёный)
 
@@ -479,8 +492,16 @@ home?, fleetId?}` — `grade` (редкость, число слотов в кл
 Враг в радаре, но не опознан → **сигнатура** `{location, size:S/M/L}`
 (грубое «что-то есть», ведро по `Σ count × UnitDef.signature`), а не сам флот. Прячет:
 чужую казну/технологии, контент невидимых миров (топология остаётся), невидимые
-флоты/бои и **всё расписание** (утечка планов). Покрыто тестами, включая anti-leak
-по JSON.
+флоты/бои, **всё расписание** (утечка планов) и **чужие дип-офферы** (`diplomacyOffers`
+остаются только у пар с участием зрителя; сами стойки публичны). Покрыто тестами,
+включая anti-leak по JSON. **Радарные бонусы (A2):** reach каждого радара игрока
+(зданий и кораблей) множится на (1 + Σ `radarRangeBonus` завершённых технологий +
+`radarRangeBonus` пассива фракции) — данными, не kernel-хуком: проекция чистая и
+живёт вне кернела. **Разведка флотом (A3):** транзитный флот опознаёт ближайший узел
+по ходу (`fleetNode` интерполирует позицию), так что память фиксирует и пройденные
+узлы маршрута. **Хелпер `isVisibleTo(state, viewer, {planetId|fleetId}, data)` (A4)** —
+ad-hoc запрос «видим ли объект на identify-уровне» по тому же правилу, что режет
+проекция: своё — всегда, radar-blip/память/неизвестный id — false (fail-secure).
 
 **Память (вариант B, `visibilityModule` + `modules/visibility.ts`).** Модуль на
 `time.advanced`/`planet.captured`/`fleet.arrived` пишет per-player снимки опознанных
