@@ -7070,3 +7070,303 @@ requestAnimationFrame(frame);
     if (navigator.onLine !== false) void runCheck(false);
   }
 }
+
+// --- corporation cabinet (mock meta-shell screen) ---------------------------
+// A UI prototype of the cross-session alliance ("corporation") management
+// screen designed in docs/corporation-ui.md. Everything here is LOCAL MOCK
+// data — there is no server, accounts, or meta-layer yet (metagame.md Контур 2).
+// The real screen would read server projections and send intents; this exists
+// to visualise the layout and interactions ahead of that work.
+type CorpRole = 'leader' | 'officer' | 'member';
+type CorpPresence = 'online' | 'match' | 'offline';
+interface CorpMember {
+  name: string;
+  role: CorpRole;
+  presence: CorpPresence;
+  influence: number; // lifetime influence contributed
+  joined: string;
+  me?: boolean;
+}
+interface CorpHolding {
+  sector: string;
+  bonus: string;
+  since: string;
+  threat: 'low' | 'med' | 'high';
+}
+interface CorpWar {
+  foe: string;
+  sector: string;
+  when: string;
+  status: 'scheduled' | 'incoming' | 'active';
+  signed: number;
+}
+interface CorpLedger {
+  kind: 'gain' | 'spend';
+  text: string;
+  amount: string;
+  when: string;
+}
+interface CorpMsg {
+  who: string;
+  text: string;
+  when: string;
+  pinned?: boolean;
+  audit?: boolean;
+}
+interface CorpData {
+  name: string;
+  tag: string;
+  motto: string;
+  influence: number;
+  supply: number;
+  cap: number;
+  rank: number;
+  myRole: CorpRole;
+  bonuses: string[];
+  members: CorpMember[];
+  holdings: CorpHolding[];
+  wars: CorpWar[];
+  ledger: CorpLedger[];
+  chat: CorpMsg[];
+}
+
+const MOCK_CORP: CorpData = {
+  name: 'Obsidian Vanguard',
+  tag: 'OBSV',
+  motto: 'Hold the void, take the dawn.',
+  influence: 48250,
+  supply: 1240,
+  rank: 7,
+  cap: 50,
+  myRole: 'officer',
+  bonuses: ['+5% добыча металла (сектор HELIOS-3)', '+3% скорость постройки (сектор AEGIS)'],
+  members: [
+    { name: 'Nyx', role: 'leader', presence: 'online', influence: 12400, joined: 'Day 12' },
+    { name: 'Max', role: 'officer', presence: 'online', influence: 9100, joined: 'Day 14', me: true },
+    { name: 'Corvus', role: 'officer', presence: 'match', influence: 8600, joined: 'Day 15' },
+    { name: 'Vega', role: 'member', presence: 'offline', influence: 6200, joined: 'Day 21' },
+    { name: 'Rhea', role: 'member', presence: 'online', influence: 5400, joined: 'Day 28' },
+    { name: 'Drax', role: 'member', presence: 'offline', influence: 3300, joined: 'Day 33' },
+    { name: 'Io', role: 'member', presence: 'match', influence: 3250, joined: 'Day 40' },
+  ],
+  holdings: [
+    { sector: 'HELIOS-3', bonus: '+5% добыча металла', since: 'Day 22', threat: 'med' },
+    { sector: 'AEGIS', bonus: '+3% скорость постройки', since: 'Day 31', threat: 'low' },
+    { sector: 'NULLPORT', bonus: '+2% доход кредитов', since: 'Day 44', threat: 'high' },
+  ],
+  wars: [
+    { foe: 'Crimson Syndicate', sector: 'VEIL-9', when: 'через 6ч', status: 'scheduled', signed: 8 },
+    { foe: 'Ashen Concord', sector: 'NULLPORT', when: 'через 2д', status: 'incoming', signed: 3 },
+    { foe: 'Pale Horizon', sector: 'HARBOR', when: 'идёт бой', status: 'active', signed: 11 },
+  ],
+  ledger: [
+    { kind: 'gain', text: 'Nyx — итог сессии skirmish-7', amount: '+1 850 ⟡', when: '1ч назад' },
+    { kind: 'spend', text: 'Объявлена AvA за VEIL-9', amount: '−12 000 ⟡', when: '3ч назад' },
+    { kind: 'gain', text: 'Corvus — итог сессии skirmish-6', amount: '+1 200 ⟡', when: '5ч назад' },
+    { kind: 'spend', text: 'Аренда флагмана «Nyx-класса» (Io)', amount: '−240 ◈', when: '8ч назад' },
+    { kind: 'gain', text: 'Rhea — итог сессии skirmish-5', amount: '+980 ⟡', when: '1д назад' },
+  ],
+  chat: [
+    { who: 'система', text: 'AvA за VEIL-9 назначена на через 6ч — заявляйтесь во вкладке «Войны».', when: '3ч', audit: true, pinned: true },
+    { who: 'Nyx', text: 'Собираем состав на VEIL-9. Нужны 2 генерала и адмирал.', when: '2ч' },
+    { who: 'Corvus', text: 'Беру адмирала. Арендую флагман из казны.', when: '2ч' },
+    { who: 'система', text: 'Corvus получил роль «офицер».', when: '2ч', audit: true },
+    { who: 'Rhea', text: 'Могу генералом, качаю десант.', when: '1ч' },
+  ],
+};
+
+const CORP_TABS: { id: string; label: string }[] = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'members', label: 'Участники' },
+  { id: 'treasury', label: 'Казна' },
+  { id: 'holdings', label: 'Владения' },
+  { id: 'wars', label: 'Войны' },
+  { id: 'comms', label: 'Чат / Лог' },
+];
+const CORP_ROLE_LABEL: Record<CorpRole, string> = {
+  leader: 'Глава',
+  officer: 'Офицер',
+  member: 'Участник',
+};
+const CORP_PRESENCE: Record<CorpPresence, { c: string; t: string }> = {
+  online: { c: 'var(--grn)', t: 'онлайн' },
+  match: { c: 'var(--amber)', t: 'в матче' },
+  offline: { c: 'var(--dim)', t: 'оффлайн' },
+};
+
+const corpEl = $('corp');
+const corpHdEl = $('corphd');
+const corpTabsEl = $('corptabs');
+const corpBodyEl = $('corpbody');
+let corpTab = 'overview';
+const nfmt = (n: number): string => n.toLocaleString('ru-RU');
+
+function corpOverviewHtml(c: CorpData): string {
+  const bonuses = c.bonuses.map((b) => `<li>${esc(b)}</li>`).join('');
+  const feed = c.ledger
+    .slice(0, 4)
+    .map((l) => `<div class="cline"><span>${esc(l.text)}</span><em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`)
+    .join('');
+  const nextWar = c.wars.find((w) => w.status !== 'active');
+  const nextWarHtml = nextWar
+    ? `<div class="cwarn">⚔ AvA за ${esc(nextWar.sector)} vs ${esc(nextWar.foe)} — ${esc(nextWar.when)}</div>`
+    : '';
+  return (
+    `${nextWarHtml}` +
+    `<div class="ccols">` +
+    `<section class="ccard"><h4>Пассивные бонусы</h4><ul class="clist">${bonuses}</ul>` +
+    `<p class="chint">Применяются снапшотом при старте матча (gdd §5.2), не «на лету».</p></section>` +
+    `<section class="ccard"><h4>Лента</h4>${feed}</section>` +
+    `</div>`
+  );
+}
+
+function corpMembersHtml(c: CorpData): string {
+  const canManage = c.myRole === 'leader' || c.myRole === 'officer';
+  const rows = c.members
+    .map((m) => {
+      const p = CORP_PRESENCE[m.presence];
+      const manage =
+        canManage && m.role === 'member'
+          ? `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.name)}">↑ роль</button>` +
+            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.name)}">✖</button>`
+          : '';
+      return (
+        `<div class="crow2${m.me ? ' me' : ''}">` +
+        `<span class="cdot" style="color:${p.c}"></span>` +
+        `<span class="cnm">${esc(m.name)}${m.me ? ' <i>(вы)</i>' : ''}</span>` +
+        `<span class="crole">${CORP_ROLE_LABEL[m.role]}</span>` +
+        `<span class="cinf">${nfmt(m.influence)} ⟡</span>` +
+        `<span class="cpres">${p.t}</span>` +
+        `<span class="cman">${manage}</span>` +
+        `</div>`
+      );
+    })
+    .join('');
+  const invite = canManage
+    ? `<button class="cbtn2 wide" data-corpact="invite">+ Пригласить участника</button>`
+    : '';
+  return `<div class="ctable">${rows}</div>${invite}`;
+}
+
+function corpTreasuryHtml(c: CorpData): string {
+  const rows = c.ledger
+    .map(
+      (l) =>
+        `<div class="cline"><span>${esc(l.text)} <b class="cwhen">· ${esc(l.when)}</b></span>` +
+        `<em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`,
+    )
+    .join('');
+  const canSpend = c.myRole === 'leader';
+  const spend = canSpend
+    ? `<button class="cbtn2 wide" data-corpact="declare">⚔ Объявить AvA (−12 000 ⟡)</button>`
+    : `<p class="chint">Трата влияния (объявление AvA) — только глава.</p>`;
+  return (
+    `<div class="cbig"><div><span>Влияние</span><b>${nfmt(c.influence)} ⟡</b></div>` +
+    `<div><span>Снабжение</span><b>${nfmt(c.supply)} ◈</b></div></div>` +
+    `<h4>История</h4><div class="cledger">${rows}</div>${spend}`
+  );
+}
+
+function corpHoldingsHtml(c: CorpData): string {
+  const rows = c.holdings
+    .map(
+      (h) =>
+        `<div class="crow2"><span class="cnm">▦ ${esc(h.sector)}</span>` +
+        `<span class="cbonus">${esc(h.bonus)}</span>` +
+        `<span class="cwhen">${esc(h.since)}</span>` +
+        `<span class="cthreat t-${h.threat}">${h.threat === 'low' ? 'спокойно' : h.threat === 'med' ? 'угроза' : 'под ударом'}</span></div>`,
+    )
+    .join('');
+  return `<div class="ctable">${rows}</div><p class="chint">Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.</p>`;
+}
+
+function corpWarsHtml(c: CorpData): string {
+  const rows = c.wars
+    .map((w) => {
+      const st = w.status === 'active' ? 'идёт' : w.status === 'incoming' ? 'входящий вызов' : 'назначено';
+      const act =
+        w.status === 'incoming' && c.myRole === 'leader'
+          ? `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(w.foe)}">Принять</button>`
+          : `<button class="cbtn2" data-corpact="signup" data-corparg="${esc(w.sector)}">Заявиться</button>`;
+      return (
+        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(w.sector)}</b><span class="cst st-${w.status}">${st}</span></div>` +
+        `<div class="cwmid">vs ${esc(w.foe)} · ${esc(w.when)} · состав ${w.signed}</div>` +
+        `<div class="cwact">${act}</div></div>`
+      );
+    })
+    .join('');
+  return `<div class="cwars">${rows}</div>`;
+}
+
+function corpCommsHtml(c: CorpData): string {
+  const msgs = c.chat
+    .map((m) => {
+      const cls = m.audit ? 'cmsg audit' : 'cmsg';
+      const pin = m.pinned ? '<span class="cpin">📌</span>' : '';
+      return `<div class="${cls}">${pin}<b>${esc(m.who)}</b> <span class="cwhen">${esc(m.when)}</span><p>${esc(m.text)}</p></div>`;
+    })
+    .join('');
+  return `<div class="cchat">${msgs}</div><div class="cinput"><input id="corpmsg" placeholder="Сообщение в корп-чат…" maxlength="240"><button class="cbtn2" data-corpact="send">Отправить</button></div>`;
+}
+
+function renderCorp(): void {
+  const c = MOCK_CORP;
+  corpHdEl.innerHTML =
+    `<div class="chrow"><span class="cemblem">⬢</span>` +
+    `<div class="cident"><b>${esc(c.name)}</b> <span class="ctag">[${esc(c.tag)}]</span><div class="cmotto">${esc(c.motto)}</div></div>` +
+    `<button id="corpclose" class="cx" title="Закрыть">✕</button></div>` +
+    `<div class="cmetrics">` +
+    `<span>влияние <b>${nfmt(c.influence)} ⟡</b></span>` +
+    `<span>снабжение <b>${nfmt(c.supply)} ◈</b></span>` +
+    `<span>секторов <b>${c.holdings.length} ▦</b></span>` +
+    `<span>участников <b>${c.members.length}/${c.cap} ♟</b></span>` +
+    `<span>ранг <b>#${c.rank}</b></span>` +
+    `<span>роль <b>${CORP_ROLE_LABEL[c.myRole]}</b></span>` +
+    `</div>`;
+  corpTabsEl.innerHTML = CORP_TABS.map(
+    (t) => `<button class="ctab${t.id === corpTab ? ' on' : ''}" data-corptab="${t.id}">${t.label}</button>`,
+  ).join('');
+  let body = '';
+  if (corpTab === 'overview') body = corpOverviewHtml(c);
+  else if (corpTab === 'members') body = corpMembersHtml(c);
+  else if (corpTab === 'treasury') body = corpTreasuryHtml(c);
+  else if (corpTab === 'holdings') body = corpHoldingsHtml(c);
+  else if (corpTab === 'wars') body = corpWarsHtml(c);
+  else if (corpTab === 'comms') body = corpCommsHtml(c);
+  corpBodyEl.innerHTML = body;
+}
+
+function openCorp(): void {
+  renderCorp();
+  corpEl.style.display = 'flex';
+}
+function closeCorp(): void {
+  corpEl.style.display = 'none';
+}
+
+corpTabsEl.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement | null)?.closest('[data-corptab]') as HTMLElement | null;
+  if (!b) return;
+  corpTab = b.dataset.corptab ?? 'overview';
+  renderCorp();
+});
+corpEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement | null;
+  if (!t) return;
+  if (t.id === 'corpclose' || t.id === 'corp') {
+    closeCorp();
+    return;
+  }
+  const act = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corpact;
+  if (act) {
+    // Mock: no server yet — surface the intent as an in-game dispatch note so the
+    // interaction is visible. The real screen would send an authoritative intent.
+    const arg = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corparg ?? '';
+    note(`[corp mock] intent: ${act}${arg ? ' → ' + arg : ''}`);
+  }
+});
+const corpEntry = $('ccorp');
+corpEntry.addEventListener('click', openCorp);
+const corpRail = $('railcorp');
+corpRail.addEventListener('click', openCorp);

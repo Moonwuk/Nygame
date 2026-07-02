@@ -939,6 +939,89 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #hub .hub-tab .hn-ic{font-size:18px;line-height:1;}
 #hub .hub-tab.active{color:var(--cyan);}
 #hub .hub-tab.active .hn-ic{text-shadow:0 0 8px rgba(53,214,230,.6);}
+
+/* corporation cabinet — cross-session alliance management (mock, see docs/corporation-ui.md) */
+#corp{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(2,8,11,.72);padding:16px;}
+#corp .corpbox{width:min(760px,96vw);max-height:92vh;display:flex;flex-direction:column;
+  background:var(--glass);border:1px solid var(--line-hi);border-radius:14px;overflow:hidden;
+  box-shadow:0 0 44px rgba(0,0,0,.65),inset 0 0 40px rgba(40,200,210,.05);}
+#corp .corphd{padding:16px 18px 12px;border-bottom:1px solid var(--line);}
+#corp .chrow{display:flex;align-items:center;gap:12px;}
+#corp .cemblem{width:40px;height:40px;display:grid;place-items:center;flex:none;font-size:22px;color:var(--cyan);
+  border:1px solid var(--line-hi);border-radius:9px;background:rgba(53,214,230,.08);box-shadow:0 0 12px rgba(53,214,230,.15);}
+#corp .cident{flex:1;min-width:0;}
+#corp .cident>b{font-size:17px;letter-spacing:1px;color:var(--ink);}
+#corp .ctag{color:var(--cyan);font-size:12px;letter-spacing:1px;}
+#corp .cmotto{color:var(--dim);font-size:11px;margin-top:2px;font-style:italic;}
+#corp .cx{flex:none;width:32px;height:32px;border-radius:8px;border:1px solid var(--line-hi);background:transparent;
+  color:var(--dim);font-size:14px;cursor:pointer;}
+#corp .cx:active{background:rgba(255,90,77,.15);color:var(--red);}
+#corp .cmetrics{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:11px;color:var(--dim);letter-spacing:.5px;}
+#corp .cmetrics b{color:var(--cyan);font-size:12px;}
+#corp .corptabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);overflow-x:auto;}
+#corp .ctab{padding:9px 13px;border:none;border-bottom:2px solid transparent;background:transparent;
+  color:var(--dim);font:600 12px ui-monospace,monospace;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
+#corp .ctab.on{color:var(--cyan);border-bottom-color:var(--cyan);}
+#corp .corpbody{padding:16px 18px;overflow-y:auto;}
+#corp .ccols{display:flex;gap:14px;flex-wrap:wrap;}
+#corp .ccard{flex:1;min-width:230px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .ccard h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .clist{margin:0;padding-left:16px;color:var(--ink);font-size:12px;line-height:1.7;}
+#corp .chint{margin:10px 0 0;color:var(--dim);font-size:10px;line-height:1.5;font-style:italic;}
+#corp .cwarn{margin:0 0 14px;padding:9px 12px;border:1px solid var(--amber);border-radius:8px;
+  background:rgba(255,180,58,.08);color:var(--amber);font-size:12px;}
+#corp .cline{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px;}
+#corp .cline:last-child{border-bottom:none;}
+#corp .cline em{font-style:normal;}
+#corp .up{color:var(--up);}
+#corp .dn{color:var(--dn);}
+#corp .cwhen{color:var(--dim);font-weight:400;font-size:10px;}
+#corp .ctable{display:flex;flex-direction:column;gap:6px;}
+#corp .crow2{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  font-size:12px;flex-wrap:wrap;}
+#corp .crow2.me{border-color:var(--cyan-dim);background:rgba(53,214,230,.06);}
+#corp .cdot{width:9px;height:9px;border-radius:50%;flex:none;background:currentColor;box-shadow:0 0 7px currentColor;}
+#corp .cnm{flex:1;min-width:120px;color:var(--ink);}
+#corp .cnm i{color:var(--cyan);font-style:normal;font-size:10px;}
+#corp .crole{color:var(--dim);width:70px;}
+#corp .cinf{color:var(--grn);width:92px;text-align:right;}
+#corp .cpres{color:var(--dim);width:64px;}
+#corp .cman{display:flex;gap:5px;}
+#corp .cbonus{flex:1;min-width:140px;color:var(--grn);}
+#corp .cthreat{font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--line-hi);}
+#corp .cthreat.t-low{color:var(--grn);}
+#corp .cthreat.t-med{color:var(--amber);}
+#corp .cthreat.t-high{color:var(--red);border-color:var(--red);}
+#corp .cbtn2{padding:7px 11px;border-radius:7px;border:1px solid var(--cyan);background:rgba(53,214,230,.1);
+  color:var(--cyan);font:600 11px ui-monospace,monospace;cursor:pointer;}
+#corp .cbtn2:active{background:rgba(53,214,230,.24);}
+#corp .cbtn2.danger{border-color:var(--red);color:var(--red);background:rgba(255,90,77,.08);}
+#corp .cbtn2.wide{width:100%;margin-top:12px;}
+#corp .cbig{display:flex;gap:14px;margin-bottom:14px;}
+#corp .cbig>div{flex:1;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .cbig span{display:block;color:var(--dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+#corp .cbig b{color:var(--cyan);font-size:18px;}
+#corp .corpbody h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .cledger{margin-bottom:12px;}
+#corp .cwars{display:flex;flex-direction:column;gap:10px;}
+#corp .cwar{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
+#corp .cwtop{display:flex;justify-content:space-between;align-items:center;}
+#corp .cwtop b{color:var(--ink);}
+#corp .cst{font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--line-hi);color:var(--dim);}
+#corp .cst.st-active{color:var(--red);border-color:var(--red);}
+#corp .cst.st-incoming{color:var(--amber);border-color:var(--amber);}
+#corp .cwmid{color:var(--dim);font-size:11px;margin:6px 0 9px;}
+#corp .cchat{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+#corp .cmsg{border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;}
+#corp .cmsg.audit{border-style:dashed;color:var(--dim);}
+#corp .cmsg b{color:var(--cyan);}
+#corp .cmsg p{margin:4px 0 0;color:var(--ink);}
+#corp .cpin{float:right;}
+#corp .cinput{display:flex;gap:8px;}
+#corp .cinput input{flex:1;padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);
+  background:rgba(2,10,13,.7);color:var(--ink);font:12px ui-monospace,monospace;}
+#corp .cinput input:focus{outline:none;border-color:var(--cyan);}
 `;
 
 const html = `<!doctype html>
@@ -961,6 +1044,7 @@ const html = `<!doctype html>
   <button id="rail-msgs" title="Сообщения">✉</button>
   <button id="rail-tech" title="Технологии">⚛</button>
   <button id="rail-market" title="Рынок">⇄</button>
+  <button id="railcorp" title="Корпорация">⬢</button>
   <button id="rail-chat" title="Чат" class="desk-only">🗨</button>
   <button id="rail-log" title="Сводки">≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
 </nav>
@@ -1082,6 +1166,7 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-ally" style="display:none">
       <div class="hub-empty"><span class="he-ic">⚑</span>Альянсы — скоро<br><span style="font-size:11px;color:var(--cyan-dim)">корпорации · общие AvA-битвы · влияние</span></div>
+      <button id="ccorp" class="hub-solo" type="button">⬢ Кабинет корпорации (макет)</button>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
@@ -1102,6 +1187,13 @@ const html = `<!doctype html>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span>Альянсы</button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span>Ещё</button>
   </nav>
+</div>
+<div id="corp">
+  <div class="corpbox">
+    <div id="corphd" class="corphd"></div>
+    <div id="corptabs" class="corptabs"></div>
+    <div id="corpbody" class="corpbody"></div>
+  </div>
 </div>
 <div id="lobby">
   <div class="lbox">
