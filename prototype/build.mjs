@@ -73,17 +73,27 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 .res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 /* donate/premium currency (Суверены): gold accent — moved out of the resource bar onto
-   the status line right under it (#devline .dl-donate), pushed to the right end. */
-#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:4px;color:#ffe6a3;font-weight:700;}
-#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 7px rgba(255,212,94,.5);font-style:normal;}
+   the status line right under it (#devline .dl-donate), pushed to the right end. Rendered
+   as an enlarged, glowing gold pill with a slow pulse so it actually draws the eye. */
+#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:6px;
+  padding:3px 11px;border-radius:13px;color:#fff2cf;font-weight:800;font-size:16px;line-height:1;
+  letter-spacing:.4px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,206,92,.22),rgba(240,170,40,.12));
+  border:1px solid rgba(255,208,96,.6);
+  box-shadow:0 0 14px rgba(255,198,72,.4),inset 0 0 7px rgba(255,214,120,.18);
+  animation:donatePulse 2.6s ease-in-out infinite;}
+#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 10px rgba(255,212,94,.85);font-style:normal;font-size:20px;}
+@keyframes donatePulse{
+  0%,100%{box-shadow:0 0 10px rgba(255,198,72,.30),inset 0 0 7px rgba(255,214,120,.16);}
+  50%{box-shadow:0 0 22px rgba(255,205,90,.7),inset 0 0 9px rgba(255,220,130,.30);}}
 #speedbar{position:fixed;right:14px;bottom:14px;z-index:24;display:flex;align-items:center;gap:4px;
   padding:5px 7px;background:rgba(3,12,16,.78);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 16px rgba(40,200,210,.10);transition:bottom .2s ease;}
 body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
-#fps{position:fixed;top:70px;right:10px;z-index:25;pointer-events:none;
+#fps{position:fixed;top:82px;right:10px;z-index:25;pointer-events:none;
   font:700 10px ui-monospace,Menlo,monospace;color:var(--grn);opacity:.72;letter-spacing:.5px;
   text-shadow:0 0 6px rgba(0,0,0,.85);}
-@media (max-width:720px){#fps{top:68px;}}
+@media (max-width:720px){#fps{top:78px;}}
 .spd button{min-width:30px;height:26px;padding:0 5px;border-radius:2px;cursor:pointer;font:11px ui-monospace,monospace;
   background:transparent;color:var(--cyan-dim);border:1px solid var(--line-hi);}
 .spd button.on{background:rgba(53,214,230,.16);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 10px rgba(53,214,230,.4);}
@@ -269,7 +279,7 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pp-act .pp-del{border-color:#7a221c;background:rgba(255,90,77,.12);color:var(--red);}
 
 /* status strip below the top bar: day/time + victory progress */
-#devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
+#devline{position:fixed;top:46px;left:0;right:0;height:28px;z-index:24;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
   white-space:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid rgba(14,59,64,.5);}
 #devline::-webkit-scrollbar{display:none;}
@@ -829,8 +839,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   /* a floating card on the right whose HEIGHT fits its content (grows as rows are
      added, shrinks for a sparse fleet) instead of a fixed full-height column — only
      caps at the viewport, so ordinary panels never need an inner scrollbar */
-  #side{left:auto;right:12px;top:66px;bottom:auto;width:min(380px,40vw);height:auto;
-    max-height:calc(100vh - 80px);flex-direction:column;clip-path:none;
+  #side{left:auto;right:12px;top:74px;bottom:auto;width:min(380px,40vw);height:auto;
+    max-height:calc(100vh - 88px);flex-direction:column;clip-path:none;
     border:1px solid var(--cyan);border-radius:12px;
     box-shadow:-8px 0 30px rgba(0,0,0,.55),inset 0 0 30px rgba(53,214,230,.04);}
   /* content stacks: list on top, hovered-object dossier pinned below. While the card
