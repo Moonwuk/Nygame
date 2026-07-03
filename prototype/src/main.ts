@@ -570,7 +570,10 @@ function resize() {
   VW = viewW();
   VH = viewH();
   DPR = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
-  MOBILE = VW < 720;
+  // Width alone misses a LANDSCAPE phone (wide but short, finger-driven): treat a
+  // coarse-pointer device with a short viewport as mobile too, so it never falls
+  // into the hover-dependent desktop layout (audit: ландшафт проваливался в десктоп).
+  MOBILE = VW < 720 || (matchMedia('(pointer: coarse)').matches && VH < 520);
   canvas.width = Math.round(VW * DPR);
   canvas.height = Math.round(VH * DPR);
   canvas.style.width = VW + 'px';
@@ -6218,9 +6221,32 @@ function startMatch(setup: SetupConfig): void {
 }
 
 setupMapEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-cand]');
-  if (!t) return;
-  setupStart = t.getAttribute('data-cand')!;
+  const direct = (ev.target as Element).closest('[data-cand]');
+  let pick: string | null = direct?.getAttribute('data-cand') ?? null;
+  if (!pick) {
+    // The candidate circles are ~8px on a phone — a near miss still counts. Map the
+    // tap into viewBox space (preserveAspectRatio=meet: uniform scale, centred) and
+    // snap to the nearest start world within a generous reach.
+    const r = setupMapEl.getBoundingClientRect();
+    const vb = (setupMapEl as unknown as SVGSVGElement).viewBox.baseVal;
+    if (vb.width > 0 && r.width > 0) {
+      const scale = Math.min(r.width / vb.width, r.height / vb.height);
+      const x = vb.x + (ev.clientX - r.left - (r.width - vb.width * scale) / 2) / scale;
+      const y = vb.y + (ev.clientY - r.top - (r.height - vb.height * scale) / 2) / scale;
+      let best = 90; // viewBox units — roughly three candidate radii
+      for (const id of START_CANDIDATES) {
+        const n = MAP.find((m) => m.id === id);
+        if (!n) continue;
+        const d = Math.hypot(n.x - x, n.y - y);
+        if (d < best) {
+          best = d;
+          pick = id;
+        }
+      }
+    }
+  }
+  if (!pick) return;
+  setupStart = pick;
   renderSetup();
 });
 setupSlotsEl.addEventListener('click', (ev) => {
@@ -6660,7 +6686,114 @@ const BUILD_TAG = (() => {
   const b = currentBuild();
   return b ? buildLabel(b) : '';
 })();
+// --- Android Back = close the top UI layer (APK convenience) ------------------
+// The APK's WebView maps the hardware Back to history.back(). While ANY closable
+// layer is open we keep ONE sentinel entry pushed: Back then pops the sentinel
+// (popstate), we close the topmost layer and re-arm. With nothing left to close
+// the sentinel stays un-armed, so the NEXT Back is the system's (exit) — after a
+// hint toast, the standard Android double-back pattern. Browser Back gets the
+// same behaviour for free.
+let backArmed = false;
+
+/** Is any layer open that the Back button should close (probe only)? */
+function topLayerOpen(): boolean {
+  return Boolean(
+    aiming ||
+      merging ||
+      barrageAim ||
+      pingMenuLoc !== null ||
+      pingPopEl?.classList.contains('show') ||
+      splitState !== null ||
+      codexEl?.classList.contains('show') ||
+      logWin?.classList.contains('show') ||
+      techWin.classList.contains('show') ||
+      marketWin.classList.contains('show') ||
+      diploOpen ||
+      chatOpen ||
+      setupEl.style.display !== 'none' ||
+      selFleet !== null ||
+      selPlanet !== null ||
+      selFleets.size > 0,
+  );
+}
+
+/** Close the TOPMOST open layer; returns false when nothing was open. The order
+ *  mirrors visual stacking: armed order modes → popups → windows → menus →
+ *  the selection sheet → the setup screen. */
+function closeTopLayer(): boolean {
+  if (aiming || merging || barrageAim) {
+    aiming = false;
+    merging = false;
+    barrageAim = false;
+    lastPanelHtml = '';
+    return true;
+  }
+  if (pingMenuLoc !== null) {
+    closePingMenu();
+    return true;
+  }
+  if (pingPopEl?.classList.contains('show')) {
+    closePingPop();
+    return true;
+  }
+  if (splitState !== null) {
+    splitState = null;
+    lastPanelHtml = '';
+    return true;
+  }
+  if (codexEl?.classList.contains('show')) {
+    codexEl.classList.remove('show');
+    return true;
+  }
+  if (logWin?.classList.contains('show')) {
+    logWin.classList.remove('show');
+    return true;
+  }
+  if (techWin.classList.contains('show')) {
+    techWin.classList.remove('show');
+    return true;
+  }
+  if (marketWin.classList.contains('show')) {
+    marketWin.classList.remove('show');
+    return true;
+  }
+  if (diploOpen) {
+    closeDiplo();
+    return true;
+  }
+  if (chatOpen) {
+    closeChat();
+    return true;
+  }
+  if (selFleet !== null || selPlanet !== null || selFleets.size > 0) {
+    clearSelection();
+    return true;
+  }
+  if (setupEl.style.display !== 'none') {
+    ($('setupcancel') as HTMLButtonElement | null)?.click(); // its own Back path (hub/welcome)
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener('popstate', () => {
+  backArmed = false;
+  if (closeTopLayer()) {
+    if (topLayerOpen()) armBack(); // more layers underneath — stay resident
+  } else {
+    note('Ещё раз «Назад» — выход');
+  }
+});
+function armBack(): void {
+  if (backArmed) return;
+  history.pushState({ layer: true }, '');
+  backArmed = true;
+}
+
 function frame(nowReal: number) {
+  // Keep the Back sentinel armed exactly while something closable is open — the
+  // frame loop sees every open path without instrumenting each one.
+  if (!backArmed && topLayerOpen()) armBack();
   const dt = nowReal - lastReal;
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane

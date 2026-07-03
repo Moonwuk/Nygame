@@ -106,7 +106,7 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 #fps{position:fixed;top:82px;right:10px;z-index:25;pointer-events:none;
   font:700 10px ui-monospace,Menlo,monospace;color:var(--grn);opacity:.72;letter-spacing:.5px;
   text-shadow:0 0 6px rgba(0,0,0,.85);}
-@media (max-width:720px){#fps{top:78px;}}
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){#fps{top:78px;}}
 .spd button{min-width:30px;height:26px;padding:0 5px;border-radius:2px;cursor:pointer;font:11px ui-monospace,monospace;
   background:transparent;color:var(--cyan-dim);border:1px solid var(--line-hi);}
 .spd button.on{background:rgba(53,214,230,.16);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 10px rgba(53,214,230,.4);}
@@ -543,7 +543,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 
 /* === FLOATING CHAT (desktop) — sized/positioned/opacity inline by renderChat() === */
 .desk-only{} /* shown by default; the media query below hides it on phones */
-@media (max-width:720px){.desk-only{display:none!important;}}
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){.desk-only{display:none!important;}}
 /* border-color + background alpha are set inline by applyChatGeom() so the
    transparency slider fades the frame too, not just the fill */
 #chatwin{position:fixed;z-index:27;display:none;flex-direction:column;overflow:visible;
@@ -607,7 +607,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   font:700 13px ui-monospace,monospace;}
 #banner .bn-btn:hover{background:rgba(53,214,230,.26);box-shadow:0 0 12px rgba(53,214,230,.4);}
 
-@media (max-width:720px){
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){
   #top{height:44px;}
   .who{display:none;}
   .crest{padding:0 10px;}
@@ -647,8 +647,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #top{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
   #rail{padding-bottom:env(safe-area-inset-bottom);}
   #speedbar{bottom:calc(12px + env(safe-area-inset-bottom));}
-  #cmdbar{bottom:calc(10px + env(safe-area-inset-bottom));}
-  #cmdbar{bottom:10px;gap:5px;}
+  #cmdbar{bottom:calc(10px + env(safe-area-inset-bottom));gap:5px;
+    left:8px;right:8px;transform:none;justify-content:center;flex-wrap:wrap;row-gap:5px;}
+  #cmdbar button .cl{font-size:10px;}
   #cmdbar .cmdlabel{display:none;}
   #cmdbar button{min-width:56px;height:52px;}
   #cmdbar button .ci{font-size:20px;}
@@ -1094,7 +1095,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Void Dominion — Sector Command</title><style>${css}</style></head>
 <body>
 <canvas id="map"></canvas>
