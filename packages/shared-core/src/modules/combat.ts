@@ -735,6 +735,15 @@ function runOrbital(h: HandlerContext, hours: number): void {
       if (aa > 0) {
         const target = nearOrbitHostile(h, planetId, planet.owner, localFleets);
         if (target) {
+          // Announce BEFORE applying: the client draws the flak burst planet→fleet
+          // even when this very volley destroys the target (H2 — visible AA fire).
+          h.emit('aa.fired', {
+            planetId,
+            owner: planet.owner,
+            fleetId: target.id,
+            by: target.owner,
+            damage: aa * hours,
+          });
           applyDamageToSide(h, { kind: 'fleet', fleetId: target.id }, aa * hours, data, planetId);
           const after = h.state.fleets[target.id];
           if (after && after.units.length === 0) {

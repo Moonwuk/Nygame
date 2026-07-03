@@ -504,6 +504,9 @@ let AI_PLAYERS = new Set<string>(['p2']);
 // the AI's fights elsewhere don't inflate your tally.
 let killStats = { destroyed: 0, lost: 0 };
 const myBattleLocs = new Set<string>();
+// Orbital-AA volleys to visualize (H2): map-space endpoints captured at event time
+// (the target may die in that very volley), drawn as a fading flak burst ~0.7s.
+const aaShots: Array<{ from: { x: number; y: number }; to: { x: number; y: number }; at: number }> = [];
 // Casualties per contested location (owner → unit → count), accumulated from
 // unit.died while a battle runs and paid out as a result note on battle.resolved.
 const battleLosses = new Map<string, Record<string, Record<string, number>>>();
@@ -1944,6 +1947,18 @@ function handleEvents(events: DomainEvent[]) {
       case 'fleet.launched':
         note(`🚀 ${NAME[p.owner as string]} launched a fleet from ${p.planetId}`);
         break;
+      case 'aa.fired': {
+        const planet = s.planets[p.planetId as string];
+        if (!planet || !known(p.planetId as string)) break; // fogged flak stays unseen
+        const target = s.fleets[p.fleetId as string];
+        const to = (target && fleetPos(target)) ?? {
+          x: planet.position.x + 6,
+          y: planet.position.y - 14, // the victim died this volley — burst over the orbit
+        };
+        aaShots.push({ from: { ...planet.position }, to, at: performance.now() });
+        while (aaShots.length > 40) aaShots.shift();
+        break;
+      }
       case 'market.bought':
         if (p.seller === ME || p.buyer === ME)
           note(
@@ -2237,16 +2252,34 @@ function targetBrackets(x: number, y: number, r: number, t: number) {
 
 
 
-function drawBattlePulse(x: number, y: number, pulse: number) {
+function drawBattlePulse(x: number, y: number, pulse: number, phase: 'orbital' | 'ground' = 'orbital') {
+  // Two DIFFERENT pictures for the two battle phases (the audit found them
+  // indistinguishable): orbital = the familiar red expanding rings (a dogfight in
+  // space); ground = an amber pulse hugging the surface + a flat "front line" bar.
+  const col = phase === 'ground' ? '#f0b429' : '#ff5a4d';
   cx.save();
-  cx.shadowColor = '#ff5a4d';
+  cx.shadowColor = col;
   cx.shadowBlur = 12;
   for (let i = 0; i < 3; i++) {
     const k = (pulse + i / 3) % 1;
-    cx.strokeStyle = rgba('#ff5a4d', 0.55 * (1 - k));
+    cx.strokeStyle = rgba(col, 0.55 * (1 - k));
     cx.lineWidth = 1.2 + i * 0.25;
     cx.beginPath();
-    cx.arc(x, y, 18 + k * 24, 0, TAU);
+    if (phase === 'ground') {
+      cx.setLineDash([5, 4]);
+      cx.arc(x, y, 14 + k * 12, 0, TAU); // tight, dashed — clamped to the world
+    } else {
+      cx.arc(x, y, 18 + k * 24, 0, TAU);
+    }
+    cx.stroke();
+  }
+  if (phase === 'ground') {
+    cx.setLineDash([]);
+    cx.strokeStyle = rgba(col, 0.85);
+    cx.lineWidth = 2;
+    cx.beginPath();
+    cx.moveTo(x - 10, y + 16);
+    cx.lineTo(x + 10, y + 16); // the front line under the world
     cx.stroke();
   }
   cx.restore();
@@ -2909,15 +2942,54 @@ function render(now: number) {
     if (!anchor) continue;
     const c = world(anchor);
     if (!visible(c, 120)) continue;
-    drawBattlePulse(c.x, c.y, wave);
+    drawBattlePulse(c.x, c.y, wave, b.phase);
     if (typeof b.nextRoundAt === 'number') {
       cx.save();
       cx.font = '700 10px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
-      cx.fillStyle = '#ff8a7d';
-      cx.fillText(`⚔ ${timeLeft(b.nextRoundAt)}`, c.x, c.y - 28);
+      cx.fillStyle = b.phase === 'ground' ? '#f5cf6b' : '#ff8a7d';
+      cx.fillText(
+        `${b.phase === 'ground' ? '⚒ десант' : '⚔ орбита'} · ${timeLeft(b.nextRoundAt)}`,
+        c.x,
+        c.y - 28,
+      );
       cx.restore();
     }
+  }
+
+  // orbital-AA flak (H2): a dashed ground-to-orbit tracer with a burst at the
+  // target end, fading out — a fleet under AA fire no longer melts silently.
+  if (aaShots.length) {
+    const nowMs = performance.now();
+    cx.save();
+    for (let i = aaShots.length - 1; i >= 0; i--) {
+      const shot = aaShots[i]!;
+      const age = nowMs - shot.at;
+      if (age > 700) {
+        aaShots.splice(i, 1);
+        continue;
+      }
+      const a = world(shot.from);
+      const b = world(shot.to);
+      if (!visible(a, 160) && !visible(b, 160)) continue;
+      const fade = 1 - age / 700;
+      cx.strokeStyle = rgba('#ff8a3d', 0.7 * fade);
+      cx.lineWidth = 1.1;
+      cx.setLineDash([3, 5]);
+      cx.lineDashOffset = -age / 12; // the tracer visibly climbs from the surface
+      cx.shadowColor = '#ff8a3d';
+      cx.shadowBlur = 8;
+      cx.beginPath();
+      cx.moveTo(a.x, a.y);
+      cx.lineTo(b.x, b.y);
+      cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle = rgba('#ffd29b', 0.8 * fade);
+      cx.beginPath();
+      cx.arc(b.x, b.y, 2 + (age / 700) * 5, 0, TAU); // the burst blooms as it fades
+      cx.fill();
+    }
+    cx.restore();
   }
 
   // selected sector: its radar detection radius (a physical circle in map space →
@@ -6047,6 +6119,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   memory.clear(); // fog memory belongs to the OLD match — stale intel must not carry over
   radarMemory.clear();
   battleLosses.clear();
+  aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
   // The match goal, written AFTER the wipe so it is the first line a player can read.

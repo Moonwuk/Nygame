@@ -127,7 +127,10 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
 - `diplomacy?: Record<pairKey, DiplomaticStance>` — попарные дип-отношения (`war`/`peace`/
   `pact`/`alliance`), симметрично и **публично** (туман не режет). Дефолт пары без записи —
   `war` (= FFA). Примитивы в `state/diplomacy.ts`. **`combat.isHostile` читает стойку прямо из
-  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне.
+  `state.diplomacy`** (`getStance(...) === 'war'`) — бой идёт только при объявленной войне. **Огонь ПВО объявляется** (H2): каждый залп
+  орбитального ПВО — событие `aa.fired {planetId, owner, fleetId, by, damage}` (эмит до
+  применения урона; прототип рисует трассер+вспышку, фазы боя различимы: красные кольца
+  орбиты vs янтарный пунктир десанта).
   **Ядровой `diplomacyModule` (D2, `modules/diplomacy.ts`)**: понижение стойки одностороннее
   (`diplomacy.declare`), повышение по согласию — `diplomacy.propose` кладёт оффер в
   `state.diplomacyOffers` (pairKey → `{from, stance}`, один на пару, новее замещает),

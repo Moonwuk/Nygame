@@ -230,6 +230,19 @@ describe('orbital — anti-air (orbital AA)', () => {
     expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
   });
 
+  it('announces every volley — aa.fired carries shooter, target and damage (H2)', () => {
+    const kernel = createKernel([combatModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { garrison: [['aa', 1]] })], // 14 aa/h
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })],
+    });
+    const r = okAdvance(kernel.advanceTo(st, at(HOUR)));
+    expect(r.events).toContainEqual({
+      type: 'aa.fired',
+      payload: { planetId: 'P', owner: 'p1', fleetId: 'E', by: 'p2', damage: 14 },
+    });
+  });
+
   it('holds its fire while a ground assault keeps it busy', () => {
     const kernel = createKernel([combatModule]);
     const st = stateWith({
