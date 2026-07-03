@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 859 зелёных** (4 skip, 87 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 886 зелёных** (4 skip, 88 файлов).
 
 ---
 
@@ -76,7 +76,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       army, captureOnArrival, combat, construction, diplomacy, economy, faction, hero, market, movement, planetType, scientist, sector, station, technology, victory, visibility  (17 модулей, + *.test.ts)
+  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, faction, hero, intercept, market, movement, orbital, planetType, scientist, sector, station, technology, victory, visibility  (20 модулей, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)

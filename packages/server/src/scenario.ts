@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import {
   armyModule,
+  artilleryModule,
   captureOnArrivalModule,
   combatModule,
   constructionModule,
@@ -10,8 +11,10 @@ import {
   economyModule,
   factionModule,
   heroModule,
+  interceptModule,
   marketModule,
   movementModule,
+  orbitalModule,
   parseGameData,
   planetTypeModule,
   scientistModule,
@@ -69,8 +72,15 @@ export const DEV_MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // per-player hero: redeploy, temp public lanes, planet annihilation
-  diplomacyModule, // declarations (escalation-only) + the `diplomacy` capability combat consults
-  combatModule,
+  diplomacyModule, // declarations + consent offers + the `diplomacy` capability combat consults
+  // The combat family, split along the bus seams. Order matters (invariant #6):
+  // `orbital` stamps orbit on `fleet.arrived` BEFORE `combat` engages, and runs
+  // its AA/bombard span BEFORE `artillery`'s standoff span — the exact sequence
+  // the old single module had internally.
+  orbitalModule, // the single near-orbit: stationing, AA fire, bombardment
+  combatModule, // melee battles: engage / tick / assault / retreat / capture
+  artilleryModule, // standoff fire accrual + barrage orders
+  interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)

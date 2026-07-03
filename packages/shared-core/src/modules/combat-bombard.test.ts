@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createKernel } from '../kernel/kernel';
 import type { GameModule } from '../kernel/module';
 import { combatModule } from './combat';
+import { orbitalModule } from './orbital';
+import { artilleryModule } from './artillery';
+import { interceptModule } from './intercept';
 import {
   createInitialState,
   type Fleet,
@@ -11,6 +14,12 @@ import {
 } from '../state/gameState';
 import { parseGameData, type GameData } from '../data/schemas';
 import type { Action, AdvanceResult, ApplyResult, Context } from '../action/types';
+
+/** The combat family in canonical manifest order — the split of the old monolith
+ *  (orbital stamps orbit before combat engages; orbital's AA/bombard span runs
+ *  before artillery's standoff span), so these kernels behave exactly like the
+ *  pre-split single module. */
+const combatFamily = [orbitalModule, combatModule, artilleryModule, interceptModule];
 
 const data: GameData = parseGameData({
   version: '0.1.0',
@@ -64,11 +73,7 @@ function fleet(
     bombarding: opts.bombarding,
   };
 }
-function planet(
-  id: string,
-  owner: string | null,
-  garrison?: Array<[string, number]>,
-): Planet {
+function planet(id: string, owner: string | null, garrison?: Array<[string, number]>): Planet {
   return {
     id,
     owner,
@@ -124,7 +129,7 @@ function arrive(fleetId: string, playerId = 'p1'): Action {
 
 describe('combat — fleet.bombard action', () => {
   it('enables bombardment from the near orbit over a hostile world', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near' })],
       [planet('P', 'p2')],
@@ -135,7 +140,7 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('disables bombardment (turns it off)', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near', bombarding: true });
     const st = baseState([f], [planet('P', 'p2')]);
     const r = okApply(kernel.applyAction(st, bombard('F', false), ctx(0)));
@@ -143,7 +148,7 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('rejects bombardment when the fleet is not stationed in orbit', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: undefined })],
       [planet('P', 'p2')],
@@ -152,7 +157,7 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('rejects bombardment of your own planet', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near' })],
       [planet('P', 'p1')],
@@ -161,22 +166,19 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('rejects bombardment with no ships', () => {
-    const kernel = createKernel([combatModule]);
-    const st = baseState(
-      [fleet('F', 'p1', 'P', [], { orbit: 'near' })],
-      [planet('P', 'p2')],
-    );
+    const kernel = createKernel([...combatFamily]);
+    const st = baseState([fleet('F', 'p1', 'P', [], { orbit: 'near' })], [planet('P', 'p2')]);
     expect(rej(kernel.applyAction(st, bombard('F', true), ctx(0)))).toBe('E_NO_SHIPS');
   });
 
   it('rejects bombardment for a non-existent fleet', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState([], [planet('P', 'p2')]);
     expect(rej(kernel.applyAction(st, bombard('ZZZ', true), ctx(0)))).toBe('E_NO_FLEET');
   });
 
   it('rejects bombardment for a fleet you do not own', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('F', 'p2', 'P', [['fighter', 2]], { orbit: 'near' })],
       [planet('P', 'p1')],
@@ -185,7 +187,7 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('rejects bombardment for a fleet that is in transit', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f: Fleet = {
       id: 'F',
       owner: 'p1',
@@ -200,20 +202,25 @@ describe('combat — fleet.bombard action', () => {
   });
 
   it('rejects with E_BAD_PAYLOAD for invalid payload', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near' })],
       [planet('P', 'p2')],
     );
-    const bad: Action = { id: 's:p1:1', type: 'fleet.bombard', playerId: 'p1', payload: {}, issuedAt: 0 };
+    const bad: Action = {
+      id: 's:p1:1',
+      type: 'fleet.bombard',
+      playerId: 'p1',
+      payload: {},
+      issuedAt: 0,
+    };
     expect(rej(kernel.applyAction(st, bad, ctx(0)))).toBe('E_BAD_PAYLOAD');
   });
-
 });
 
 describe('combat — orbital AA (time.advanced)', () => {
   it('deals garrison AA damage to a hostile fleet on the near orbit', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 1]], { orbit: 'near' });
     const st = baseState([f], [planet('P', 'p2', [['aa_gun', 1]])]);
     // aa_gun has aaDamage: 30 per hour; fighter has 20 hp → killed in 1h.
@@ -223,7 +230,7 @@ describe('combat — orbital AA (time.advanced)', () => {
   });
 
   it('counters a launched squadron on the near orbit with AA (SQ-1.2)', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     // A `squadron`-trait wing is just a fleet at the near orbit → AA hits it like any
     // hull. 2× strike_wing (10 hp each) under aa_gun's 30/h is wiped inside 1h.
     const f = fleet('W', 'p1', 'P', [['strike_wing', 2]], { orbit: 'near' });
@@ -234,10 +241,13 @@ describe('combat — orbital AA (time.advanced)', () => {
   });
 
   it('deals building AA damage from an orbital-AA emplacement (no garrison unit needed)', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 1]], { orbit: 'near' });
     // Planet defended only by an AA *building* — empty garrison, aaDamage comes from the structure.
-    const p: Planet = { ...planet('P', 'p2'), buildings: [{ type: 'aa_battery', level: 1, hp: 30 }] };
+    const p: Planet = {
+      ...planet('P', 'p2'),
+      buildings: [{ type: 'aa_battery', level: 1, hp: 30 }],
+    };
     const st = baseState([f], [p]);
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
     expect(r.state.fleets.F).toBeUndefined(); // destroyed by the building's AA (30/h vs 20 hp)
@@ -245,7 +255,7 @@ describe('combat — orbital AA (time.advanced)', () => {
   });
 
   it('does not fire AA if the planet has no owner', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 1]], { orbit: 'near' });
     const st = baseState([f], [planet('P', null, [['aa_gun', 1]])]);
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
@@ -254,7 +264,7 @@ describe('combat — orbital AA (time.advanced)', () => {
   });
 
   it('emits planet.bombarded when a fleet shells the structures below', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near', bombarding: true });
     const st = baseState([f], [planet('P', 'p2')]);
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
@@ -265,16 +275,19 @@ describe('combat — orbital AA (time.advanced)', () => {
   });
 
   it('does NOT bombard once at peace (stance gate, not just an owner mismatch)', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     // A fleet mid-bombardment (flag set) over p2's world, but the pair is now at peace.
     const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near', bombarding: true });
-    const st: GameState = { ...baseState([f], [planet('P', 'p2')]), diplomacy: { 'p1|p2': 'peace' } };
+    const st: GameState = {
+      ...baseState([f], [planet('P', 'p2')]),
+      diplomacy: { 'p1|p2': 'peace' },
+    };
     const r = okAdvance(kernel.advanceTo(st, ctx(HOUR)));
     expect(r.events.some((e) => e.type === 'planet.bombarded')).toBe(false);
   });
 
   it('AA scales with time span', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const f = fleet('F', 'p1', 'P', [['fighter', 2]], { orbit: 'near' });
     // 2 fighters have 40 total hp; aa_gun does 30/h → after 0.5h = 15 damage.
     const st = baseState([f], [planet('P', 'p2', [['aa_gun', 1]])]);
@@ -287,7 +300,7 @@ describe('combat — orbital AA (time.advanced)', () => {
 
 describe('combat — stalemate safety valve', () => {
   it('ends a battle as a draw after MAX_COMBAT_ROUNDS (240)', () => {
-    const kernel = createKernel([combatModule, arrivalModule]);
+    const kernel = createKernel([...combatFamily, arrivalModule]);
     // Both sides deal 0 damage (shields only) → infinite rounds without the cap.
     const shieldData: GameData = parseGameData({
       version: '0.1.0',
@@ -322,7 +335,7 @@ describe('combat — stalemate safety valve', () => {
 
 describe('combat — fleet.assault extra validations', () => {
   it('rejects assault when orbit is contested by an enemy fleet', () => {
-    const kernel = createKernel([combatModule, arrivalModule]);
+    const kernel = createKernel([...combatFamily, arrivalModule]);
     // p1 wants to assault but p2's fleet is still alive at P.
     const st = baseState(
       [
@@ -344,7 +357,7 @@ describe('combat — fleet.assault extra validations', () => {
   });
 
   it('rejects assault on own planet', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = baseState(
       [fleet('A', 'p1', 'P', [['fighter', 1]], { orbit: 'near' })],
       [planet('P', 'p1')],

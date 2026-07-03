@@ -18,6 +18,9 @@ import {
   movementModule,
   heroModule,
   combatModule,
+  orbitalModule,
+  artilleryModule,
+  interceptModule,
   captureOnArrivalModule,
   sectorModule,
   planetTypeModule,
@@ -167,7 +170,15 @@ export const data: GameData = parseGameData({
       // Carrier-borne strike wing (squadrons-roadmap SQ-0.1): very fast + hard-hitting
       // but paper-thin — launch it ahead to strike, orbital AA (orbital_aa) is its counter.
       faction: 'blue',
-      stats: { attack: 14, defense: 3, speed: 92, hp: 10, strikeRange: 180, fuel: 3, rearmRounds: 2 },
+      stats: {
+        attack: 14,
+        defense: 3,
+        speed: 92,
+        hp: 10,
+        strikeRange: 180,
+        fuel: 3,
+        rearmRounds: 2,
+      },
       traits: ['squadron'],
       signature: 2,
       cost: { metal: 90, credits: 40 },
@@ -382,7 +393,14 @@ export const data: GameData = parseGameData({
     debris_field: { name: 'Debris Field', capturable: false, buildable: false, orbit: false },
     // a destroyed planet — re-claimable + metal-rich, but worth only the flat 10; the
     // salvage rig is the one thing buildable there. (Annihilation = a future hero.)
-    dead_world: { name: 'Dead World', scoreValue: 10, capturable: true, buildable: true, orbit: true, allowedBuildings: ['metal_station'] },
+    dead_world: {
+      name: 'Dead World',
+      scoreValue: 10,
+      capturable: true,
+      buildable: true,
+      orbit: true,
+      allowedBuildings: ['metal_station'],
+    },
   },
   planetTypes: {
     terran: { name: 'Terran', productionBonus: 0, defenseBonus: 0.1 },
@@ -395,7 +413,12 @@ export const data: GameData = parseGameData({
     relic_world: { name: 'Relic World', productionBonus: 0.05, defenseBonus: 0 },
     irradiated: { name: 'Irradiated', productionBonus: 0.2, defenseBonus: 0.15 },
     ringworld: { name: 'Ringworld', productionBonus: 0.3, defenseBonus: 0.1 },
-    dead_world: { name: 'Dead World', productionBonus: 0, productionByResource: { metal: 0.3 }, defenseBonus: 0 },
+    dead_world: {
+      name: 'Dead World',
+      productionBonus: 0,
+      productionByResource: { metal: 0.3 },
+      defenseBonus: 0,
+    },
   },
 });
 
@@ -423,19 +446,91 @@ export interface SectorType {
   allowedBuildings?: string[];
 }
 export const SECTOR_TYPES: Record<string, SectorType> = {
-  planet: { name: 'Planet', core: 'empty_space', capturable: true, buildable: true, orbit: true, color: '#5fd0ff' },
-  nebula: { name: 'Nebula', core: 'nebula', capturable: true, buildable: true, orbit: true, color: '#8f6dff' },
-  asteroid: { name: 'Asteroid Field', core: 'asteroid_field', capturable: true, buildable: true, orbit: false, color: '#d6a645', allowedBuildings: ['starfort'] },
-  empty: { name: 'Empty Space', core: 'empty_space', capturable: false, buildable: false, orbit: false, color: '#46606e' },
+  planet: {
+    name: 'Planet',
+    core: 'empty_space',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#5fd0ff',
+  },
+  nebula: {
+    name: 'Nebula',
+    core: 'nebula',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#8f6dff',
+  },
+  asteroid: {
+    name: 'Asteroid Field',
+    core: 'asteroid_field',
+    capturable: true,
+    buildable: true,
+    orbit: false,
+    color: '#d6a645',
+    allowedBuildings: ['starfort'],
+  },
+  empty: {
+    name: 'Empty Space',
+    core: 'empty_space',
+    capturable: false,
+    buildable: false,
+    orbit: false,
+    color: '#46606e',
+  },
   // new terrains — each maps to a core `data.sectors` entry for its speed/HP bonus
-  ion_storm: { name: 'Ion Storm', core: 'ion_storm', capturable: true, buildable: true, orbit: true, color: '#6fe3ff' },
-  dense_nebula: { name: 'Dense Nebula', core: 'dense_nebula', capturable: true, buildable: true, orbit: true, color: '#a78bff' },
-  solar_flare: { name: 'Solar Flare Zone', core: 'solar_flare_zone', capturable: true, buildable: true, orbit: true, color: '#ff9f3a' },
-  graveyard: { name: 'Derelict Graveyard', core: 'derelict_graveyard', capturable: true, buildable: true, orbit: false, color: '#9fb0a8' },
+  ion_storm: {
+    name: 'Ion Storm',
+    core: 'ion_storm',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#6fe3ff',
+  },
+  dense_nebula: {
+    name: 'Dense Nebula',
+    core: 'dense_nebula',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#a78bff',
+  },
+  solar_flare: {
+    name: 'Solar Flare Zone',
+    core: 'solar_flare_zone',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#ff9f3a',
+  },
+  graveyard: {
+    name: 'Derelict Graveyard',
+    core: 'derelict_graveyard',
+    capturable: true,
+    buildable: true,
+    orbit: false,
+    color: '#9fb0a8',
+  },
   // debris field — a fast but UN-capturable corridor (kind `debris_field` in sectorKinds)
-  debris_field: { name: 'Debris Field', core: 'deep_void', capturable: false, buildable: false, orbit: false, color: '#2f4a59' },
+  debris_field: {
+    name: 'Debris Field',
+    core: 'deep_void',
+    capturable: false,
+    buildable: false,
+    orbit: false,
+    color: '#2f4a59',
+  },
   // dead world — a destroyed planet (future hero ability); re-claimable, only the salvage rig builds here
-  dead_world: { name: 'Dead World', core: 'deep_void', capturable: true, buildable: true, orbit: true, color: '#5a4a4a', allowedBuildings: ['metal_station'] },
+  dead_world: {
+    name: 'Dead World',
+    core: 'deep_void',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#5a4a4a',
+    allowedBuildings: ['metal_station'],
+  },
 };
 
 // --- the map -----------------------------------------------------------------
@@ -464,8 +559,24 @@ type KeyNode = Omit<MapNode, 'links'>;
 // owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
 // reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
 const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
-const NON_PLANET_KINDS = ['asteroid', 'nebula', 'graveyard', 'ion_storm', 'dense_nebula', 'solar_flare'];
-const NEUTRAL_PLANET_TYPES = ['oceanic', 'volcanic', 'fortress_world', 'relic_world', 'gas_giant', 'irradiated', 'ringworld', 'crystalline'];
+const NON_PLANET_KINDS = [
+  'asteroid',
+  'nebula',
+  'graveyard',
+  'ion_storm',
+  'dense_nebula',
+  'solar_flare',
+];
+const NEUTRAL_PLANET_TYPES = [
+  'oceanic',
+  'volcanic',
+  'fortress_world',
+  'relic_world',
+  'gas_giant',
+  'irradiated',
+  'ringworld',
+  'crystalline',
+];
 // 4 start candidates — one per corner region (inset), spread wide so starts don't crowd.
 const START_CELLS = ['1,1', '5,1', '1,5', '5,5'];
 // 8 neutral 'planet' worlds, spread through the middle.
@@ -491,16 +602,33 @@ function buildField(): KeyNode[] {
   for (let row = 0; row < FIELD.rows; row += 1) {
     for (let col = 0; col < FIELD.cols; col += 1) {
       const cell = `${col},${row}`;
-      const x = Math.round(FIELD.x0 + col * FIELD.dx + (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx);
-      const y = Math.round(FIELD.y0 + row * FIELD.dy + (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy);
+      const x = Math.round(
+        FIELD.x0 + col * FIELD.dx + (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx,
+      );
+      const y = Math.round(
+        FIELD.y0 + row * FIELD.dy + (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy,
+      );
       i += 1;
       const id = cellId(cell);
       if (starts.has(cell)) {
         nodes.push({ id, owner: null, x, y, sector: 'planet', type: 'terran' });
       } else if (neutralP.has(cell)) {
-        nodes.push({ id, owner: null, x, y, sector: 'planet', type: NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length] });
+        nodes.push({
+          id,
+          owner: null,
+          x,
+          y,
+          sector: 'planet',
+          type: NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length],
+        });
       } else {
-        nodes.push({ id, owner: null, x, y, sector: NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]! });
+        nodes.push({
+          id,
+          owner: null,
+          x,
+          y,
+          sector: NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]!,
+        });
       }
     }
   }
@@ -755,8 +883,17 @@ export const fleetLaunchModule: GameModule = {
     // orbit lack the tag, so a new build never silently merges into them. Ground units
     // (and immobile emplacements) stay in the garrison as before.
     api.on('unit.built', (event, h) => {
-      const p = event.payload as { planetId?: string; unit?: string; count?: number; owner?: string };
-      if (typeof p?.planetId !== 'string' || typeof p?.unit !== 'string' || typeof p?.owner !== 'string') {
+      const p = event.payload as {
+        planetId?: string;
+        unit?: string;
+        count?: number;
+        owner?: string;
+      };
+      if (
+        typeof p?.planetId !== 'string' ||
+        typeof p?.unit !== 'string' ||
+        typeof p?.owner !== 'string'
+      ) {
         return;
       }
       const def = h.ctx.data.units[p.unit];
@@ -1056,7 +1193,11 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
   }
   if (byType.tank >= 3) {
     atkMul += 0.2;
-    synergies.push({ key: 'armor', name: 'Танковый кулак', desc: '+20% атака — ≥3 танков (прорыв)' });
+    synergies.push({
+      key: 'armor',
+      name: 'Танковый кулак',
+      desc: '+20% атака — ≥3 танков (прорыв)',
+    });
   }
   if (byType.bomber >= 1) {
     atkMul += 0.1;
@@ -1105,7 +1246,10 @@ export function botFavour(state: GameState, bot: string, player: string): number
 }
 /** Does `bot` embargo `player` on the market (favour below the embargo line)? */
 export function botEmbargoes(state: GameState, bot: string, player: string): boolean {
-  return (state as DivState).approval?.[bot] !== undefined && botFavour(state, bot, player) < FAVOUR_EMBARGO;
+  return (
+    (state as DivState).approval?.[bot] !== undefined &&
+    botFavour(state, bot, player) < FAVOUR_EMBARGO
+  );
 }
 
 /** Default solo skirmish: you (p1) vs one AI (p2), at two of the start candidates. */
@@ -1410,9 +1554,15 @@ export const marketModule: GameModule = {
   setup(api) {
     // Place a lot: a sell (ask) escrows goods; a buy (bid) escrows credits.
     api.onAction('market.list', (action, h) => {
-      const p = action.payload as { side?: string; resource?: string; amount?: number; price?: number };
+      const p = action.payload as {
+        side?: string;
+        resource?: string;
+        amount?: number;
+        price?: number;
+      };
       if (p?.side !== 'sell' && p?.side !== 'buy') return h.reject('E_BAD_PAYLOAD');
-      if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource)) return h.reject('E_BAD_RESOURCE');
+      if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource))
+        return h.reject('E_BAD_RESOURCE');
       const amount = Math.floor(p.amount ?? 0);
       const price = p.price ?? 0;
       if (!(amount > 0) || !(price >= 0)) return h.reject('E_BAD_PAYLOAD');
@@ -1423,8 +1573,22 @@ export const marketModule: GameModule = {
       payCost(player.resources, escrow);
       const s = h.state as DivState;
       const id = `mk:${action.playerId}:${(s.sessionMarketSeq = (s.sessionMarketSeq ?? 0) + 1)}`;
-      marketLots(h.state).push({ id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
-      h.emit('market.listed', { id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
+      marketLots(h.state).push({
+        id,
+        side: p.side,
+        owner: action.playerId,
+        resource: p.resource,
+        amount,
+        price,
+      });
+      h.emit('market.listed', {
+        id,
+        side: p.side,
+        owner: action.playerId,
+        resource: p.resource,
+        amount,
+        price,
+      });
     });
 
     // Fill (partially) a lot from the other side. Buying from a sell lot pays credits
@@ -1456,8 +1620,13 @@ export const marketModule: GameModule = {
       lot.amount -= qty;
       if (lot.amount <= 0) lots.splice(lots.indexOf(lot), 1);
       h.emit('market.traded', {
-        id: lot.id, taker: action.playerId, owner: lot.owner, side: lot.side,
-        resource: lot.resource, amount: qty, price: lot.price,
+        id: lot.id,
+        taker: action.playerId,
+        owner: lot.owner,
+        side: lot.side,
+        resource: lot.resource,
+        amount: qty,
+        price: lot.price,
       });
     });
 
@@ -1630,7 +1799,9 @@ const atWar = (state: GameState, a: string, b: string): boolean =>
  *  lowest id first (deterministic order). */
 function divisionsAt(state: GameState, planetId: string): Division[] {
   return Object.values(divisionsOf(state))
-    .filter((d) => d.carriedBy == null && d.location === planetId && d.units.some((u) => u.count > 0))
+    .filter(
+      (d) => d.carriedBy == null && d.location === planetId && d.units.some((u) => u.count > 0),
+    )
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
@@ -1673,7 +1844,8 @@ function applyBucketsToDivs(divs: Division[], buckets: DamageTable): void {
     const dmg = buckets[type] ?? 0;
     if (dmg <= 0) continue;
     const stacks: GroundStack[] = [];
-    for (const d of divs) for (const u of d.units) if (u.type === type && u.count > 0) stacks.push(u);
+    for (const d of divs)
+      for (const u of d.units) if (u.type === type && u.count > 0) stacks.push(u);
     const totalHp = stacks.reduce((n, u) => n + u.hp, 0);
     if (totalHp <= 0) continue;
     for (const u of stacks) {
@@ -1706,7 +1878,12 @@ function captureGround(h: HandlerContext, planetId: string, defenderOwner: strin
   const owners = [
     ...new Set(
       divisionsAt(h.state, planetId)
-        .filter((d) => d.owner !== defenderOwner && defenderOwner !== null && atWar(h.state, d.owner, defenderOwner))
+        .filter(
+          (d) =>
+            d.owner !== defenderOwner &&
+            defenderOwner !== null &&
+            atWar(h.state, d.owner, defenderOwner),
+        )
         .map((d) => d.owner),
     ),
   ].sort();
@@ -1781,7 +1958,8 @@ function runGroundCombat(h: HandlerContext, elapsed: number): void {
   const battles = groundBattlesOf(h.state);
   // Candidate worlds: any holding a garrisoning division, plus any mid-battle.
   const worlds = new Set<string>(Object.keys(battles));
-  for (const d of Object.values(divisionsOf(h.state))) if (d.carriedBy == null) worlds.add(d.location);
+  for (const d of Object.values(divisionsOf(h.state)))
+    if (d.carriedBy == null) worlds.add(d.location);
   for (const planetId of [...worlds].sort()) {
     let acc = (battles[planetId] ?? 0) + elapsed;
     let guard = 0;
@@ -1837,13 +2015,21 @@ export const divisionModule: GameModule = {
         units: makeSide(GROUND_ROSTER, stats.byType),
         location: p.planetId,
       };
-      h.emit('division.mobilized', { id, owner: action.playerId, planetId: p.planetId, template: p.template });
+      h.emit('division.mobilized', {
+        id,
+        owner: action.playerId,
+        planetId: p.planetId,
+        template: p.template,
+      });
     });
 
     /** Own-key division lookup owned by `playerId` (rejects a poisoned id / a foreign
      *  or missing division — fail-secure, mirroring the artillery `ownFleet` guard). */
     const ownDivision = (h: HandlerContext, id: unknown, playerId: string): Division => {
-      if (typeof id !== 'string' || !Object.prototype.hasOwnProperty.call(divisionsOf(h.state), id)) {
+      if (
+        typeof id !== 'string' ||
+        !Object.prototype.hasOwnProperty.call(divisionsOf(h.state), id)
+      ) {
         h.reject('E_NO_DIVISION');
       }
       const div = divisionsOf(h.state)[id as string]!;
@@ -1862,7 +2048,12 @@ export const divisionModule: GameModule = {
       if (fleet.location !== div.location) return h.reject('E_NOT_COLOCATED');
       if (divisionCargo(div) > fleetCargoFree(h.state, fleet)) return h.reject('E_NO_CARGO');
       div.carriedBy = fleet.id;
-      h.emit('division.loaded', { id: div.id, fleetId: fleet.id, owner: action.playerId, at: div.location });
+      h.emit('division.loaded', {
+        id: div.id,
+        fleetId: fleet.id,
+        owner: action.playerId,
+        at: div.location,
+      });
     });
 
     // Unload a carried division onto the world its carrier is docked over. An
@@ -1870,7 +2061,11 @@ export const divisionModule: GameModule = {
     // capture), mirroring fleet capture-on-arrival; otherwise the world's ground
     // battle (if any) is resolved by the continuous-time driver below.
     api.onAction('division.unload', (action, h) => {
-      const div = ownDivision(h, (action.payload as { divisionId?: string })?.divisionId, action.playerId);
+      const div = ownDivision(
+        h,
+        (action.payload as { divisionId?: string })?.divisionId,
+        action.playerId,
+      );
       if (div.carriedBy == null) return h.reject('E_NOT_LOADED');
       const fleet = requireOwnedIdleFleet(h, div.carriedBy, action.playerId); // docked at a node
       const target = fleet.location;
@@ -1890,7 +2085,12 @@ export const divisionModule: GameModule = {
         // Same event the fleet capture path uses (`via: 'ground'`) → victory + UI react.
         h.emit('planet.captured', { planetId: target, owner: div.owner, from, via: 'ground' });
       }
-      h.emit('division.unloaded', { id: div.id, fleetId: fleet.id, owner: action.playerId, at: target });
+      h.emit('division.unloaded', {
+        id: div.id,
+        fleetId: fleet.id,
+        owner: action.playerId,
+        at: target,
+      });
     });
 
     // Attach / detach an officer (a hero-like leader granting tunable bonuses). The
@@ -1923,7 +2123,10 @@ export const divisionModule: GameModule = {
       const divs = divisionsOf(h.state);
       for (const id of Object.keys(divs)) {
         const d = divs[id]!;
-        if (d.carriedBy != null && !Object.prototype.hasOwnProperty.call(h.state.fleets, d.carriedBy)) {
+        if (
+          d.carriedBy != null &&
+          !Object.prototype.hasOwnProperty.call(h.state.fleets, d.carriedBy)
+        ) {
           h.emit('division.lost', { id, owner: d.owner });
           delete divs[id];
         }
@@ -1932,7 +2135,7 @@ export const divisionModule: GameModule = {
       runGroundCombat(h, elapsed);
       // Daily restoration: +1 HP/unit/day for a garrisoning division on a friendly
       // planet (not in transit; a wiped division is gone, never resurrected).
-      const days = (elapsed / DAY);
+      const days = elapsed / DAY;
       if (days <= 0) return;
       for (const div of Object.values(divisionsOf(h.state))) {
         if (div.carriedBy != null) continue; // in transit / in a hold — no restoration
@@ -2124,7 +2327,13 @@ export const MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // projection hero: fleet combat aura (+5%) + death/respawn
-  combatModule,
+  // The combat family (split along the bus seams). Order matters (invariant #6):
+  // orbital stamps orbit on fleet.arrived BEFORE combat engages, and runs its
+  // AA/bombard span BEFORE artillery's standoff span — the old internal sequence.
+  orbitalModule, // the single near-orbit: stationing, AA fire, bombardment
+  combatModule, // melee battles: engage / tick / assault / retreat / capture
+  artilleryModule, // standoff fire accrual + barrage orders
+  interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,
   technologyModule, // session research: branch/day-gated techs → effect bonuses + content unlocks
@@ -2366,7 +2575,10 @@ export function sortieSpec(fleet: Fleet): { maxFuel: number; rearmRounds: number
     (s) => s.count > 0 && (data.units[s.unit]?.traits.includes('squadron') ?? false),
   );
   const u = st ? data.units[st.unit]?.stats : undefined;
-  return { maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)), rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)) };
+  return {
+    maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)),
+    rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)),
+  };
 }
 
 /** A fresh, fully-fuelled wing. */
@@ -2385,7 +2597,9 @@ export function canSortie(s: SortieState): boolean {
 export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
   if (!canSortie(s)) return s;
   const fuel = s.fuel - 1;
-  return fuel <= 0 ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) } : { fuel, rearming: 0 };
+  return fuel <= 0
+    ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) }
+    : { fuel, rearming: 0 };
 }
 
 /** Advance the rearm cooldown one round; when it elapses the wing refuels to max and is
@@ -2393,7 +2607,9 @@ export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
 export function tickRearm(s: SortieState, maxFuel: number): SortieState {
   if (s.rearming <= 0) return s;
   const rearming = s.rearming - 1;
-  return rearming <= 0 ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 } : { fuel: s.fuel, rearming };
+  return rearming <= 0
+    ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 }
+    : { fuel: s.fuel, rearming };
 }
 
 // --- squadron strike radius (squadrons-roadmap SQ-3.1) -----------------------
@@ -2577,7 +2793,8 @@ export function serverQueueActions(
     }
     if (step.kind === 'wait') {
       const w = waitStatus(step, now, HOUR);
-      if (step.until === undefined) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: false, holdUntil: w.until });
+      if (step.until === undefined)
+        out.push({ fleetId: fid, owner: f.owner, actions: [], pop: false, holdUntil: w.until });
       else if (w.done) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: true });
       continue; // still counting down → do nothing this tick
     }
@@ -2599,8 +2816,13 @@ export function serverQueueActions(
 }
 /** Place a market lot: `sell` escrows `amount` of `resource` for `price` credits/unit;
  *  `buy` escrows the credits and offers to buy that much of `resource`. */
-export const marketList = (playerId: string, side: MarketSide, resource: string, amount: number, price: number) =>
-  act(playerId, 'market.list', { side, resource, amount, price });
+export const marketList = (
+  playerId: string,
+  side: MarketSide,
+  resource: string,
+  amount: number,
+  price: number,
+) => act(playerId, 'market.list', { side, resource, amount, price });
 /** Take (fill) up to `amount` from an open lot — buy from a sell lot / sell into a buy lot. */
 export const marketTake = (playerId: string, id: string, amount?: number) =>
   act(playerId, 'market.take', amount === undefined ? { id } : { id, amount });
@@ -2694,9 +2916,14 @@ export function aiOrders(state: GameState, ai: string): Action[] {
       lots.some((l) => l.owner === ai && l.side === side && l.resource === resource);
     for (const good of ['food', 'energy', 'microelectronics']) {
       const have = pl.resources[good] ?? 0;
-      if (have >= 40 && !hasLot('sell', good)) out.push(marketList(ai, 'sell', good, Math.floor(have / 2), 2));
+      if (have >= 40 && !hasLot('sell', good))
+        out.push(marketList(ai, 'sell', good, Math.floor(have / 2), 2));
     }
-    if ((pl.resources.metal ?? 0) < 80 && (pl.resources.credits ?? 0) > 300 && !hasLot('buy', 'metal')) {
+    if (
+      (pl.resources.metal ?? 0) < 80 &&
+      (pl.resources.credits ?? 0) > 300 &&
+      !hasLot('buy', 'metal')
+    ) {
       out.push(marketList(ai, 'buy', 'metal', 30, 3));
     }
   }
