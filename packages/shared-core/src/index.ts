@@ -63,12 +63,7 @@ export {
   sectorAppearance,
 } from './state/sectorKind';
 export { factionStart, type FactionStart } from './state/factionStart';
-export {
-  planRoute,
-  routeDistance,
-  fleetBaseSpeed,
-  estimateTravelHours,
-} from './state/route';
+export { planRoute, routeDistance, fleetBaseSpeed, estimateTravelHours } from './state/route';
 export { isBombarded, bombardedPlanets } from './state/orbit';
 export {
   DEFAULT_STANCE,
@@ -189,6 +184,9 @@ export { requireOwnedIdleFleet, type IdleFleet } from './util/fleet';
 export { economyModule } from './modules/economy';
 export { movementModule } from './modules/movement';
 export { combatModule } from './modules/combat';
+export { orbitalModule } from './modules/orbital';
+export { artilleryModule } from './modules/artillery';
+export { interceptModule } from './modules/intercept';
 export { captureOnArrivalModule } from './modules/captureOnArrival';
 export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
