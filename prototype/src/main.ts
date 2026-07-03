@@ -32,6 +32,8 @@ import {
   splitFleet,
   orderEnqueue,
   orderClear,
+  orderRemove,
+  orderRetry,
   engageFleet,
   researchTech,
   buildBuilding,
@@ -70,6 +72,9 @@ import {
   type SeatConfig,
   type StepOut,
   stepActions,
+  popChainStep,
+  unloadHereActions,
+  MAX_CHAIN_STEPS,
   fleetIdle,
   loadHereActions,
   waitStatus,
@@ -1778,6 +1783,7 @@ function tryMoveGroup(fleetIds: string[], destId: string): void {
     renderWarPrompt();
     return;
   }
+  dropChains(movers, 'новый приказ'); // a live move beats the old plan (CC-5.1)
   for (const id of movers) playerOrder(moveFleet(ME, id, destId));
 }
 /** As tryMoveGroup, but the target is a point on a lane (continuous order). Either lane
@@ -1793,6 +1799,7 @@ function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; 
     renderWarPrompt();
     return;
   }
+  dropChains([...fleetIds], 'новый приказ'); // a live march beats the old plan (CC-5.1)
   for (const id of fleetIds) playerOrder(moveFleetEdge(ME, id, edge));
 }
 /** Confirm the staged move: declare war on each blocker (opens the lanes), then issue
@@ -1804,6 +1811,7 @@ function confirmWarPrompt(): void {
   warPrompt = null;
   hideWarPrompt();
   for (const b of wp.blockers) playerOrder(declareWar(ME, b));
+  dropChains(wp.fleetIds, 'новый приказ'); // the confirmed live move beats the old plan
   for (const id of wp.fleetIds) {
     if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
     else playerOrder(moveFleet(ME, id, wp.destId));
@@ -1847,6 +1855,7 @@ function clearSelection() {
   selFleets = new Set();
   merging = false;
   splitState = null;
+  queuing = false; // build mode dies with the selection — no armed mode eating dead taps
   lastPanelHtml = '';
 }
 
@@ -1865,6 +1874,7 @@ function toggleFleetInSelection(id: string) {
 function orderMerge(movers: string[], anchorId: string) {
   const anchor = s.fleets[anchorId];
   if (!anchor || anchor.owner !== ME) return;
+  dropChains(movers, 'слияние'); // merging fleets fly to the anchor — their plans yield
   const dest = anchor.location ?? anchor.movement?.to ?? null;
   let queued = 0;
   for (const moverId of movers) {
@@ -1984,6 +1994,15 @@ function handleEvents(events: DomainEvent[]) {
         );
         break;
       }
+      case 'order.blocked':
+        // CC-4.1 minimum: the chain paused on a failed step — say so the moment the
+        // verdict lands (the fog filter routes this to the owner only).
+        if (p.owner === ME) {
+          const code = String(p.code ?? '');
+          note(`⚠ флот ${p.fleetId}: план прерван — ${code.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')}`);
+          lastPanelHtml = '';
+        }
+        break;
       case 'planet.captured':
         if (p.owner === ME || known(p.planetId as string))
           note(`🚩 ${NAME[p.owner as string]} captured ${p.planetId}`, p.planetId as string);
@@ -2137,15 +2156,25 @@ function checkFleetClashes() {
 
 /** Append a step to each selected fleet's order chain. Single-player keeps a local client
  *  plan (driveQueues issues it); NET sends order.enqueue so the chain is AUTHORITATIVE
- *  server state (CC-server) — the server drives it, and it runs while you're offline. */
+ *  server state (CC-server) — the server drives it, and it runs while you're offline.
+ *  With no fleet selected the build mode disarms instead of eating taps silently. */
 function enqueueStep(fleetIds: string[], step: QStep): void {
+  if (!fleetIds.length) {
+    queuing = false;
+    note('✖ план: сначала выберите свой флот');
+    return;
+  }
   for (const id of fleetIds) {
     if (NET) {
       playerOrder(orderEnqueue(ME, id, step));
       continue;
     }
     const q = fleetQueues.get(id) ?? [];
-    q.push(step);
+    if (q.length >= MAX_CHAIN_STEPS) {
+      note(`✖ план: не длиннее ${MAX_CHAIN_STEPS} шагов`);
+      continue;
+    }
+    q.push({ ...step });
     fleetQueues.set(id, q);
   }
 }
@@ -2154,13 +2183,85 @@ function enqueueStep(fleetIds: string[], step: QStep): void {
 function fleetQueueOf(fleetId: string): QStep[] {
   return NET ? ((s as { orders?: Record<string, QStep[]> }).orders?.[fleetId] ?? []) : (fleetQueues.get(fleetId) ?? []);
 }
+/** Remove one step of a fleet's chain by index (NET: authoritative order.remove). */
+function removeChainStep(fleetId: string, index: number): void {
+  if (NET) {
+    playerOrder(orderRemove(ME, fleetId, index));
+    return;
+  }
+  const q = fleetQueues.get(fleetId);
+  if (!q || index < 0 || index >= q.length) return;
+  q.splice(index, 1);
+  if (q.length === 0) fleetQueues.delete(fleetId);
+}
+/** The node a fleet's PLAN currently ends on — where the next queued step departs from
+ *  (last queued move target → current flight's final destination → parked node). */
+function chainTailNode(f: Fleet): string | null {
+  const q = fleetQueueOf(f.id);
+  for (let i = q.length - 1; i >= 0; i--) {
+    const st = q[i]!;
+    if (st.kind === 'move') return st.to;
+  }
+  if (f.movement) return (f.movement.destination ?? f.movement.to) as string;
+  return fleetNode(f);
+}
+/** A live order takes the wheel (CC-5.1 priority rule): drop each fleet's remaining
+ *  chain, with a toast — so a stale plan can't re-steer the fleet a frame later. */
+function dropChains(fleetIds: string[], why: string): void {
+  let steps = 0;
+  for (const id of fleetIds) {
+    const q = fleetQueueOf(id);
+    if (!q.length) continue;
+    steps += q.length;
+    if (NET) playerOrder(orderClear(ME, id));
+    else fleetQueues.delete(id);
+  }
+  if (steps) {
+    note(`✕ ${why}: план снят (шагов: ${steps})`);
+    lastPanelHtml = '';
+  }
+}
+/** Cumulative plan timing for one fleet: per-step game-hours (null = unroutable) and
+ *  the total from NOW, including the remainder of the current flight. On a 🔁 loop the
+ *  total is one lap (the plan never "finishes"). */
+function chainEta(f: Fleet, q: QStep[]): { per: Array<number | null>; total: number | null; loops: boolean } {
+  const per: Array<number | null> = [];
+  let acc = 0;
+  let unknown = false;
+  let loops = false;
+  if (f.movement) {
+    const dest = (f.movement.destination ?? f.movement.to) as string;
+    acc += Math.max(0, (f.movement.arrivesAt - s.time) / HOUR);
+    if (dest !== f.movement.to) acc += estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0;
+  }
+  let prev = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+  for (const st of q) {
+    let h: number | null = 0;
+    if (st.kind === 'move') {
+      h = prev && prev !== st.to ? estimateTravelHours(s, data, prev, st.to, f) : 0;
+      prev = st.to;
+    } else if (st.kind === 'wait') {
+      h = st.until !== undefined ? Math.max(0, (st.until - s.time) / HOUR) : st.hours;
+    } else if (st.kind === 'repeat') {
+      loops = true;
+    }
+    if (h === null) unknown = true;
+    else acc += h;
+    per.push(h);
+  }
+  return { per, total: unknown ? null : acc, loops };
+}
+/** «≈14ч» / «≈2д 3ч» — plan durations are game-hours, like every duration in the UI. */
+function fmtHrs(h: number): string {
+  const r = Math.max(0, Math.round(h));
+  return r >= 48 ? `${Math.floor(r / 24)}д ${r % 24}ч` : `${r}ч`;
+}
 
 // CC-1 driver: each frame, any of MY fleets that has a queue and is idle runs its head
 // step and pops it. Issuing a move sets `movement` (so `fleetIdle` is false next frame →
 // we wait); on arrival it goes idle again and the next step fires — chaining hands-off.
-// Same host-side shape as autoEngage(); a rejected order just notes + still pops so the
-// chain never wedges. (Promoting this into a kernel/server module is a later brick so the
-// queue also runs server-side while the player is offline.)
+// A REJECTED step does not silently pop: it BLOCKS the chain with its reason (the panel
+// shows «⚠ …», the player edits/retries/clears) — mirroring the NET server driver.
 function driveQueues(): void {
   for (const [fid, steps] of [...fleetQueues]) {
     const f = s.fleets[fid];
@@ -2170,20 +2271,49 @@ function driveQueues(): void {
     }
     if (!fleetIdle(f)) continue; // in transit / fighting → hold
     const step = steps[0]!;
+    if (step.blocked !== undefined) continue; // paused on a failed step — needs the player
+    if (step.kind === 'repeat') {
+      // rotate the 🔁 marker so the next lap starts; an orphan marker just idles
+      if (steps.length > 1) popChainStep(steps);
+      continue;
+    }
     // 'wait' is a timed hold — count it down (starting the timer lazily on first reach)
     // and don't advance until it elapses. A delayed order: "arrive, wait, then strike."
     if (step.kind === 'wait') {
       const w = waitStatus(step, s.time, HOUR);
       step.until = w.until;
       if (!w.done) continue;
-      steps.shift();
+      popChainStep(steps);
       if (steps.length === 0) fleetQueues.delete(fid);
       continue;
     }
-    // 'load' needs the world garrison + cargo (see loadHereActions); the rest are fleet-only.
-    const actions = step.kind === 'load' ? loadHereActions(s, ME, f) : stepActions(ME, fid, step, f);
-    for (const a of actions) playerOrder(a);
-    steps.shift();
+    // 'load'/'unload' need the world garrison / the hold (not just the fleet).
+    const actions =
+      step.kind === 'load'
+        ? loadHereActions(s, ME, f)
+        : step.kind === 'unload'
+          ? unloadHereActions(s, ME, f)
+          : stepActions(ME, fid, step, f);
+    let failed: string | null = null;
+    if ((step.kind === 'load' || step.kind === 'unload') && actions.length === 0) {
+      failed = 'E_NO_CARGO'; // the cargo the plan counted on is gone — a broken plan
+    } else {
+      for (const a of actions) {
+        const out = order(s, a, s.time);
+        apply(out);
+        if (out.error) {
+          failed = out.error;
+          break;
+        }
+      }
+    }
+    if (failed) {
+      step.blocked = failed;
+      note(`⚠ флот ${fid}: план прерван — ${failed.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')}`);
+      lastPanelHtml = '';
+      continue;
+    }
+    popChainStep(steps);
     if (steps.length === 0) fleetQueues.delete(fid);
   }
 }
@@ -2541,10 +2671,88 @@ function drawFleetRoutes() {
   }
 }
 
-/** While "Move" is armed: a dashed line from each selected fleet to the world
- *  under the pointer (snaps to the nearest blip) — preview before committing. */
+/** The PLANNED part of every own fleet's journey — its queued chain — drawn as a
+ *  dimmer dashed polyline continuing from where the current flight ends, with numbered
+ *  waypoint pips (glyphs ⚔/▲/▼/☄/⏸/🔁 for non-move steps), so the whole plan reads
+ *  straight off the map before you log out. A blocked chain turns warning-orange. */
+function drawChainPlans() {
+  for (const f of Object.values(s.fleets)) {
+    if (f.owner !== ME) continue;
+    const q = fleetQueueOf(f.id);
+    if (!q.length) continue;
+    const sel = selFleet === f.id || selFleets.has(f.id);
+    // The chain departs from where the current flight ends (or the parked node).
+    let fromId = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+    const fromPl = fromId ? s.planets[fromId] : undefined;
+    let at: { x: number; y: number } | null = fromPl ? world(fromPl.position) : fleetAnchor(f);
+    if (!at) continue;
+    const blocked = q[0]?.blocked !== undefined;
+    const col = blocked ? '#ff7a3a' : LOCK;
+    const alpha = sel ? 0.8 : 0.3;
+    cx.save();
+    cx.lineWidth = sel ? 1.6 : 1;
+    cx.strokeStyle = rgba(col, alpha);
+    cx.fillStyle = rgba(col, Math.min(1, alpha + 0.15));
+    cx.shadowColor = col;
+    cx.shadowBlur = sel ? 6 : 0;
+    cx.font = '700 8px ui-monospace,Menlo,monospace';
+    cx.textAlign = 'center';
+    let stack = 0; // consecutive non-move glyphs at one node fan out sideways
+    for (let i = 0; i < q.length; i++) {
+      const st = q[i]!;
+      if (st.kind === 'move') {
+        const hops = fromId && fromId !== st.to ? (planRoute(s, fromId, st.to) ?? [st.to]) : [st.to];
+        const pts: Array<{ x: number; y: number }> = [at];
+        for (const hop of hops) {
+          const pl = s.planets[hop];
+          if (pl) pts.push(world(pl.position));
+        }
+        cx.setLineDash([2, 6]); // plan legs read dimmer/sparser than the live route
+        cx.beginPath();
+        cx.moveTo(pts[0]!.x, pts[0]!.y);
+        for (let k = 1; k < pts.length; k++) cx.lineTo(pts[k]!.x, pts[k]!.y);
+        cx.stroke();
+        cx.setLineDash([]);
+        const d = pts[pts.length - 1]!;
+        cx.beginPath();
+        cx.arc(d.x, d.y, 7, 0, TAU); // numbered waypoint pip
+        cx.stroke();
+        cx.fillText(String(i + 1), d.x, d.y + 3);
+        fromId = st.to;
+        at = d;
+        stack = 0;
+      } else {
+        const g =
+          st.kind === 'assault'
+            ? '⚔'
+            : st.kind === 'load'
+              ? '▲'
+              : st.kind === 'unload'
+                ? '▼'
+                : st.kind === 'bombard'
+                  ? '☄'
+                  : st.kind === 'wait'
+                    ? '⏸'
+                    : st.kind === 'repeat'
+                      ? '🔁'
+                      : '🛰';
+        stack++;
+        cx.fillText(`${i + 1}${g}`, at.x + 12 + (stack - 1) * 17, at.y - 10);
+      }
+    }
+    if (blocked) {
+      const fa = fleetAnchor(f);
+      if (fa) cx.fillText('⚠', fa.x + 14, fa.y - 12); // the pause sits where the fleet is
+    }
+    cx.restore();
+  }
+}
+
+/** While "Move" (or chain-building) is armed: a dashed line from each selected fleet
+ *  to the world under the pointer (snaps to the nearest blip) — preview before
+ *  committing. In build mode the leg starts from the PLAN's tail, not the fleet. */
 function drawAimPreview() {
-  if (!aiming || !aimPointer) return;
+  if ((!aiming && !queuing) || !aimPointer) return;
   const ids = selectedFleetIds();
   if (!ids.length) return;
   // Prefer a node target; if none is near, aim at the closest point ON a lane —
@@ -2575,11 +2783,14 @@ function drawAimPreview() {
   for (const id of ids) {
     const f = s.fleets[id];
     if (!f) continue;
-    const a = fleetAnchor(f);
-    if (!a) continue;
+    const anchor = fleetAnchor(f);
+    if (!anchor) continue;
     // draw the ROUTED march path through province centres (Bytro-style), so you
     // see the actual road the army will take — not a straight line to the target.
-    const from = fleetNode(f);
+    // Chain-building: the next step departs from the plan's tail, not the fleet.
+    const tailPl = queuing ? s.planets[chainTailNode(f) ?? ''] : undefined;
+    const from = tailPl ? tailPl.id : fleetNode(f);
+    const a: { x: number; y: number } = tailPl ? world(tailPl.position) : anchor;
     // For a lane target, route to the endpoint the army enters through, then a
     // final segment to the point on the road.
     const routeEndId = laneTarget && from ? laneAim(f, from, laneTarget).endId : targetId;
@@ -2607,7 +2818,7 @@ function drawAimPreview() {
     // travel-time estimate to this target for the first selected fleet (longer
     // route → more hours; the authoritative time is computed by the server).
     const f0 = s.fleets[ids[0]!];
-    const from = f0 ? fleetNode(f0) : null;
+    const from = f0 ? (queuing ? (chainTailNode(f0) ?? fleetNode(f0)) : fleetNode(f0)) : null;
     let hrs: number | null = null;
     if (f0 && from) {
       if (laneTarget) hrs = laneAim(f0, from, laneTarget).hrs;
@@ -3008,6 +3219,7 @@ function render(now: number) {
   drawRadarCoverage(); // my sensor reach (radar arrays + ships)
 
   drawFleetRoutes();
+  drawChainPlans(); // queued chains: numbered waypoints + dim dashed plan legs
 
   // battles — pulsing red contact ring at the actual clash point (an engaged
   // fleet's position, so a mid-lane intercept shows where it really happens) with a
@@ -3556,6 +3768,17 @@ function render(now: number) {
     cx.fillStyle = rgba(col, 0.95);
     cx.font = '700 9px ui-monospace,Menlo,monospace';
     cx.fillText(String(ships), A.x, A.y + 18);
+
+    // plan badge: ▸N = a queued chain of N steps rides this fleet; ⚠ = it paused on
+    // a failed step and waits for you (readable without opening the card).
+    if (f.owner === ME) {
+      const chain = fleetQueueOf(f.id);
+      if (chain.length) {
+        const bad = chain[0]?.blocked !== undefined;
+        cx.fillStyle = bad ? 'rgba(255,122,58,.95)' : rgba(LOCK, 0.9);
+        cx.fillText(bad ? '⚠' : `▸${chain.length}`, A.x + 17, A.y - 10);
+      }
+    }
   }
 
   drawRadarContacts(now); // swept enemy signatures — last-known ghosts until repainted
@@ -3576,6 +3799,28 @@ function render(now: number) {
   }
   drawPings(now); // ally ping markers (coalition), with screen hit-boxes for taps
   drawAimPreview();
+
+  // Build mode is a MODE — it owns the taps, so it announces itself on screen, not
+  // only via a button label inside a (possibly closed) fleet card.
+  if (queuing) {
+    const ids = selectedFleetIds();
+    const q = ids.length ? fleetQueueOf(ids[0]!) : [];
+    const txt = `● СТРОЮ ПЛАН — тапайте миры · шагов: ${q.length}${ids.length > 1 ? ` · флотов: ${ids.length}` : ''}`;
+    cx.save();
+    cx.font = '700 11px ui-monospace,Menlo,monospace';
+    const w = cx.measureText(txt).width + 24;
+    const bx = VW / 2;
+    const by = TOP + 18;
+    cx.fillStyle = 'rgba(3,12,16,.82)';
+    cx.strokeStyle = rgba(LOCK, 0.75);
+    cx.lineWidth = 1;
+    cx.fillRect(bx - w / 2, by - 12, w, 24);
+    cx.strokeRect(bx - w / 2, by - 12, w, 24);
+    cx.fillStyle = rgba(LOCK, 0.95);
+    cx.textAlign = 'center';
+    cx.fillText(txt, bx, by + 4);
+    cx.restore();
+  }
 }
 
 // --- side panel --------------------------------------------------------------
@@ -3662,6 +3907,24 @@ function panelHtml(): string {
       `${group.length} fleets · ${ships} ships · ${troops} troops`,
     );
     h += `<div class="hint">Press <b>Move</b>, then tap a destination to send all selected fleets (they route and stop). Press <b>Merge</b> to fuse the group into one (distant fleets fly in first). Shift-drag selects a group; Ctrl/⌘-click adds a fleet.</div>`;
+    // Chain building fans out over the whole group (enqueueStep takes every selected
+    // fleet), so the group card offers the same plan blocks as a single fleet.
+    const planned = group.filter((f) => fleetQueueOf(f.id).length > 0);
+    h += `<div class="sec">Очередь приказов — на всю группу${planned.length ? ` · план у ${planned.length}` : ''}</div>`;
+    h += `<div class="row">`;
+    h += btn('qmode', '', queuing ? '● тапай миры' : '➕ строить', true);
+    h += btn('qassault', '', '⚔ штурм', true);
+    h += btn('qbomb', '', '☄ обстрел', true);
+    h += `</div><div class="row">`;
+    h += btn('qload', '', '▲ погрузка', true);
+    h += btn('qunload', '', '▼ выгрузка', true);
+    h += btn('qwait', '6', '⏸ 6ч', true);
+    h += btn('qwait', '12', '⏸ 12ч', true);
+    h += btn('qwait', '24', '⏸ 24ч', true);
+    h += `</div><div class="row">`;
+    h += btn('qundo', '', '↩ последний', planned.length > 0);
+    h += btn('qclear', '', '✕ очистить', planned.length > 0);
+    h += `</div>`;
     for (const f of group) {
       const loc =
         f.location ??
@@ -3754,13 +4017,15 @@ function panelHtml(): string {
         const scrambling = patrols.has(f.id);
         const pt = patrols.get(f.id);
         h += `<div class="row">`;
-        h += btn('qscramble', '', scrambling ? '🛩 дежурный вылет: ВКЛ' : '🛩 дежурный вылет: выкл', true);
+        h += btn('qscramble', '', scrambling ? '🛩 дежурный вылет: ВКЛ' : '🛩 дежурный вылет: выкл', !NET);
         h += `</div>`;
         if (scrambling && pt) {
           const status = pt.sortie.rearming > 0 ? `перезарядка ${pt.sortie.rearming}` : `топливо ${pt.sortie.fuel}`;
           h += `<div class="row dim">радиус ${Math.round(pt.radius)} · ${status}</div>`;
         }
-        h += `<div class="hint">Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.</div>`;
+        h += NET
+          ? `<div class="hint">Дежурный вылет пока работает только в одиночной игре.</div>`
+          : `<div class="hint">Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.</div>`;
       }
 
       // The player's projection hero rides here → name it and flag its fleet aura.
@@ -3770,19 +4035,50 @@ function panelHtml(): string {
         h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">— projection · +5% attack/defense to this fleet</span></div>`;
       }
 
-      // CC-1 order queue — chain steps the fleet runs hands-off when it falls idle.
+      // Order chain — the fleet's multi-step plan: status first, then editable steps
+      // with per-step ETA and their own ✕ (CC-4.1 + CC-5.2 minimum).
       if (f.owner === ME) {
         const q = fleetQueueOf(f.id); // server chain in NET, local plan in single-player
-        h += `<div class="sec">Очередь приказов</div><div class="row">`;
+        const eta = chainEta(f, q);
+        const total =
+          q.length === 0
+            ? ''
+            : eta.loops
+              ? ` · 🔁 цикл${eta.total !== null && eta.total > 0 ? ` ≈${fmtHrs(eta.total)}` : ''}`
+              : eta.total !== null && eta.total > 0
+                ? ` · весь план ≈${fmtHrs(eta.total)}`
+                : '';
+        h += `<div class="sec">Очередь приказов${q.length ? ` · ${q.length} шаг.` : ''}${total}</div>`;
+        const head = q[0];
+        if (head?.blocked !== undefined) {
+          // The chain paused on a failed step — say why, and offer the two exits.
+          h += `<div class="row"><b>⚠ план прерван: ${esc(head.blocked.replace(/^E_/, '').toLowerCase().replace(/_/g, ' '))}</b></div>`;
+          h += `<div class="row">${btn('qretry', '', '▶ пробовать снова', true)}${btn('qstep', '0', '✕ убрать шаг', true)}</div>`;
+        } else if (q.length) {
+          const doing = f.movement
+            ? '▶ шаг исполняется: флот в пути'
+            : f.battleId
+              ? '⏸ бой — план ждёт исхода'
+              : head?.kind === 'wait' && head.until !== undefined
+                ? `⏸ выжидаем ещё ~${fmtHrs(Math.max(0, (head.until - s.time) / HOUR))}`
+                : '▶ следующий шаг на очереди';
+          h += `<div class="row dim">${doing}</div>`;
+        }
+        h += `<div class="row">`;
         h += btn('qmode', '', queuing ? '● тапай миры' : '➕ строить', true);
-        h += btn('qassault', '', '⚔ + штурм', true);
-        h += btn('qload', '', '▲ + погрузка', true);
-        h += btn('qclear', '', '✕ очистить', q.length > 0);
+        h += btn('qassault', '', '⚔ штурм', true);
+        h += btn('qbomb', '', '☄ обстрел', true);
         h += `</div><div class="row">`;
+        h += btn('qload', '', '▲ погрузка', true);
+        h += btn('qunload', '', '▼ выгрузка', true);
         // Delayed orders: insert a timed hold so the next step fires N game-hours later.
-        h += btn('qwait', '6', '⏸ +6ч', true);
-        h += btn('qwait', '12', '⏸ +12ч', true);
-        h += btn('qwait', '24', '⏸ +24ч', true);
+        h += btn('qwait', '6', '⏸ 6ч', true);
+        h += btn('qwait', '12', '⏸ 12ч', true);
+        h += btn('qwait', '24', '⏸ 24ч', true);
+        h += `</div><div class="row">`;
+        h += btn('qrepeat', '', q.some((st) => st.kind === 'repeat') ? '🔁 по кругу: ВКЛ' : '🔁 по кругу', true);
+        h += btn('qundo', '', '↩ последний', q.length > 0);
+        h += btn('qclear', '', '✕ очистить', q.length > 0);
         h += `</div>`;
         if (q.length) {
           const label = (st: QStep): string =>
@@ -3792,19 +4088,43 @@ function panelHtml(): string {
                 ? '⚔ штурм'
                 : st.kind === 'load'
                   ? '▲ погрузка'
-                  : st.kind === 'wait'
-                    ? `⏸ ждать ${st.until !== undefined ? Math.max(0, Math.ceil((st.until - s.time) / HOUR)) : st.hours}ч`
-                    : '🛰 орбита';
-          h += `<div class="row dim">${q.map((st, i) => `${i + 1}. ${label(st)}`).join(' · ')}</div>`;
+                  : st.kind === 'unload'
+                    ? '▼ выгрузка'
+                    : st.kind === 'bombard'
+                      ? '☄ обстрел'
+                      : st.kind === 'repeat'
+                        ? '🔁 повторять сначала'
+                        : st.kind === 'wait'
+                          ? `⏸ ждать ${st.until !== undefined ? Math.max(0, Math.ceil((st.until - s.time) / HOUR)) : st.hours}ч`
+                          : '🛰 орбита';
+          // One row per step: number, label, its ETA share, a war-needed badge for a
+          // leg crossing PEACE territory (validated NOW, not hours later) — and its ✕.
+          let fromNode = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+          for (let i = 0; i < q.length; i++) {
+            const st = q[i]!;
+            let warn = '';
+            if (st.kind === 'move') {
+              const wb = peaceBlockers(fromNode, st.to);
+              if (wb.length) warn = ` <b>⚔ нужна война: ${esc(wb.map(blockerName).join(', '))}</b>`;
+              fromNode = st.to;
+            }
+            const hEta = eta.per[i];
+            const etaTxt = hEta !== null && hEta !== undefined && hEta > 0 ? ` <span class="dim">+${fmtHrs(hEta)}</span>` : '';
+            const mark = st.blocked !== undefined ? ' <b>⚠</b>' : '';
+            h += `<div class="row">${i + 1}. ${label(st)}${etaTxt}${mark}${warn} ${btn('qstep', String(i), '✕', true)}</div>`;
+          }
         }
-        h += `<div class="hint">Включите «строить», тапайте миры (переходы) и добавляйте «штурм» / «погрузку» / «ждать N ч». «Погрузка» забирает гарнизон захваченного мира обратно в трюм, «ждать» — отложенный приказ (выждать момент). Так одна армия проходит цепочку (переход→штурм→погрузка→ждать→…) сама, пока вы вышли.</div>`;
+        h += `<div class="hint">«Строить» + тапы по мирам собирают план: переходы, «штурм», «обстрел», «погрузка»/«выгрузка», «ждать N ч». «🔁 по кругу» гоняет план до отмены (патруль). ✕ у шага правит план точечно; живой приказ (Move/Stop/штурм) снимает план целиком. Если шаг сорвался — план встаёт на паузу и ждёт вас, а не рушится молча.</div>`;
 
         // CC-2 standing order — auto-storm stance (independent of the chain above).
+        // Honest in NET: the client driver can't act for a server-owned fleet yet.
         const auto = autoAssault.has(f.id);
         h += `<div class="sec">Дежурный режим</div><div class="row">`;
-        h += btn('qauto', '', auto ? '⚔ авто-штурм: ВКЛ' : '⚔ авто-штурм: выкл', true);
+        h += btn('qauto', '', auto ? '⚔ авто-штурм: ВКЛ' : '⚔ авто-штурм: выкл', !NET);
         h += `</div>`;
-        h += `<div class="hint">Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.</div>`;
+        h += NET
+          ? `<div class="hint">Авто-штурм пока работает только в одиночной игре.</div>`
+          : `<div class="hint">Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.</div>`;
       }
 
       if (f.movement) {
@@ -4998,12 +5318,15 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'ping') {
     openPingMenu();
   } else if (act === 'bombard') {
+    if (arg === 'on') dropChains([selFleet!], 'обстрел'); // a live strike beats the old plan
     playerOrder(bombardFleet(ME, selFleet!, arg === 'on'));
   } else if (act === 'barragemode') {
     playerOrder(barrageModeFleet(ME, selFleet!, arg));
   } else if (act === 'assault') {
+    dropChains([selFleet!], 'штурм');
     playerOrder(assaultFleet(ME, selFleet!));
   } else if (act === 'retreat') {
+    dropChains([selFleet!], 'отступление');
     playerOrder(retreatFleet(ME, selFleet!));
   } else if (act === 'qmode') {
     queuing = !queuing; // arm/disarm queue-append; taps now build the chain
@@ -5011,18 +5334,58 @@ side.addEventListener('click', (ev) => {
       aiming = false;
       merging = false;
       barrageAim = false;
+      note('➕ строю план: тапайте миры — каждый тап добавляет переход');
     }
   } else if (act === 'qassault') {
     enqueueStep(selectedFleetIds(), { kind: 'assault' });
+    note('➕ шаг: ⚔ штурм по прибытии');
   } else if (act === 'qload') {
     enqueueStep(selectedFleetIds(), { kind: 'load' });
+    note('➕ шаг: ▲ погрузка гарнизона');
+  } else if (act === 'qunload') {
+    enqueueStep(selectedFleetIds(), { kind: 'unload' });
+    note('➕ шаг: ▼ выгрузка десанта');
+  } else if (act === 'qbomb') {
+    enqueueStep(selectedFleetIds(), { kind: 'bombard' });
+    note('➕ шаг: ☄ обстрел с орбиты');
   } else if (act === 'qwait') {
     enqueueStep(selectedFleetIds(), { kind: 'wait', hours: Number(arg) });
-  } else if (act === 'qauto') {
+    note(`➕ шаг: ⏸ ждать ${arg}ч`);
+  } else if (act === 'qrepeat') {
+    // Toggle the 🔁 loop marker: present → remove it; absent → append (chain patrols).
     for (const id of selectedFleetIds()) {
-      if (autoAssault.has(id)) autoAssault.delete(id);
-      else autoAssault.add(id);
+      const q = fleetQueueOf(id);
+      const at = q.findIndex((st) => st.kind === 'repeat');
+      if (at >= 0) removeChainStep(id, at);
+      else enqueueStep([id], { kind: 'repeat' });
     }
+    note('🔁 повтор плана переключён');
+  } else if (act === 'qundo') {
+    for (const id of selectedFleetIds()) {
+      const q = fleetQueueOf(id);
+      if (q.length) removeChainStep(id, q.length - 1);
+    }
+    note('↩ последний шаг убран');
+  } else if (act === 'qstep') {
+    // ✕ on one step of the list — surgical plan editing (the index rides in arg).
+    for (const id of selectedFleetIds()) removeChainStep(id, Number(arg));
+  } else if (act === 'qretry') {
+    for (const id of selectedFleetIds()) {
+      if (NET) playerOrder(orderRetry(ME, id));
+      else {
+        const head = fleetQueueOf(id)[0];
+        if (head?.blocked !== undefined) delete head.blocked;
+      }
+    }
+    note('▶ пробую шаг снова');
+  } else if (act === 'qauto') {
+    if (NET) {
+      note('⚠ авто-штурм пока только в одиночной игре'); // the client driver can't run for a server-owned fleet
+    } else
+      for (const id of selectedFleetIds()) {
+        if (autoAssault.has(id)) autoAssault.delete(id);
+        else autoAssault.add(id);
+      }
   } else if (act === 'qclear') {
     for (const id of selectedFleetIds()) {
       if (NET) playerOrder(orderClear(ME, id)); // drop the authoritative server chain
@@ -5038,6 +5401,12 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'qscramble') {
     // CC-4: toggle "дежурный вылет" — stand (or stand down) a reactive auto-strike patrol
     // on each selected squadron fleet, centred on its current node with its strike radius.
+    if (NET) {
+      note('⚠ дежурный вылет пока только в одиночной игре');
+      lastPanelHtml = '';
+      renderPanel();
+      return;
+    }
     for (const id of selectedFleetIds()) {
       const f = s.fleets[id];
       if (!f || !fleetHasSquadron(f)) continue;
@@ -5113,8 +5482,11 @@ cmdbar.addEventListener('click', (ev) => {
       if (merging) note('⛬ pick a fleet to merge with');
     }
   } else if (cmd === 'stop') {
+    // Stop means STOP: the chain goes too, or it would re-steer the fleet next frame.
+    dropChains(ids, 'стоп');
     for (const id of ids) if (s.fleets[id]?.movement) playerOrder(stopFleet(ME, id));
   } else if (cmd === 'attack') {
+    dropChains(ids, 'штурм'); // a live assault beats the old plan
     for (const id of ids) if (s.fleets[id]?.orbit === 'near') playerOrder(assaultFleet(ME, id));
     aiming = false;
   } else if (cmd === 'split') {
@@ -5189,14 +5561,16 @@ function selectAt(mx: number, my: number) {
   // fleet selection never blocks picking a planet (and vice versa).
   // A tap on an ally ping marker opens its description popup (takes priority over
   // selection, since markers float above the node they mark).
-  if (!aiming) {
+  // While BUILDING a chain (queuing), pings and fleets don't swallow taps either —
+  // otherwise a world under one of your fleets could never become a step.
+  if (!aiming && !queuing) {
     const ping = nearestHit(pingHits, (h) => h, mx, my, rPing);
     if (ping) {
       openPingPop(ping.loc);
       return;
     }
   }
-  if (!aiming) {
+  if (!aiming && !queuing) {
     const mine = nearestHit(
       Object.values(s.fleets).filter((f) => f.owner === ME),
       fleetAnchor,
@@ -5216,7 +5590,29 @@ function selectAt(mx: number, my: number) {
       if (queuing) {
         // Queue-append armed → this world becomes the next step in the fleet's chain,
         // not an immediate move. Stays armed so you can tap several worlds in a row.
-        enqueueStep(selectedFleetIds(), { kind: 'move', to: n.id });
+        const ids = selectedFleetIds();
+        // Validate the leg NOW, not hours later: a route crossing PEACE territory is
+        // accepted but flagged, so the plan carries an honest «⚔ нужна война» badge.
+        const blockers = new Set<string>();
+        for (const id of ids) {
+          const f = s.fleets[id];
+          if (!f) continue;
+          for (const b of peaceBlockers(chainTailNode(f), n.id)) blockers.add(b);
+        }
+        const before = ids.length ? fleetQueueOf(ids[0]!).length : 0;
+        enqueueStep(ids, { kind: 'move', to: n.id });
+        const f0 = ids.length ? s.fleets[ids[0]!] : undefined;
+        if (f0) {
+          // In NET the authoritative queue lands with the next broadcast — preview the
+          // appended plan locally so the toast's step number + ETA are already right.
+          const cur = fleetQueueOf(f0.id);
+          const preview = cur.length > before ? cur : [...cur, { kind: 'move', to: n.id } as QStep];
+          const eta = chainEta(f0, preview);
+          const tail = eta.total !== null && eta.total > 0 ? ` · весь план ≈${fmtHrs(eta.total)}` : '';
+          note(`➕ шаг ${preview.length}: → ${n.id}${tail}`);
+          if (blockers.size)
+            note(`⚔ маршрут через ${[...blockers].map(blockerName).join(', ')} — потребует объявить войну`);
+        }
         lastPanelHtml = ''; // refresh the queue list in the panel
         return;
       }
@@ -5313,10 +5709,11 @@ canvas.addEventListener('pointerdown', (ev) => {
     additive = ev.ctrlKey || ev.metaKey; // Ctrl/⌘-click → add to the fleet selection
     selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
-    if (aiming) aimPointer = p; // the aim preview starts under the finger at once
+    if (aiming || queuing) aimPointer = p; // the aim/leg preview starts under the finger at once
     // Touch long-press: a still finger for ~350ms picks a fleet ADDITIVELY (the
     // Ctrl-click of phones) or opens a BOX-SELECT from empty space (the Shift-drag).
-    if (ev.pointerType === 'touch' && !aiming && !merging && !barrageAim) {
+    // Not while an armed mode (move/merge/barrage/chain-build) owns the taps.
+    if (ev.pointerType === 'touch' && !aiming && !merging && !barrageAim && !queuing) {
       cancelLongPress();
       longPressTimer = window.setTimeout(() => {
         longPressTimer = null;
@@ -6834,10 +7231,11 @@ function topLayerOpen(): boolean {
  *  mirrors visual stacking: armed order modes → popups → windows → menus →
  *  the selection sheet → the setup screen. */
 function closeTopLayer(): boolean {
-  if (aiming || merging || barrageAim) {
+  if (aiming || merging || barrageAim || queuing) {
     aiming = false;
     merging = false;
     barrageAim = false;
+    queuing = false; // Back leaves chain-build mode first, like every armed mode
     lastPanelHtml = '';
     return true;
   }

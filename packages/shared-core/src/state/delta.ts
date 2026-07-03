@@ -44,6 +44,18 @@ export interface StateDelta {
   removedMeta?: string[];
 }
 
+/** Top-level keys beyond the known collections/meta — HOST EXTENSIONS riding in
+ *  `GameState` (e.g. the prototype's `orders` command chains or `divisions`). They are
+ *  part of the JSONB snapshot and of every `welcome` full state, so deltas must carry
+ *  them too — otherwise a client's copy goes stale right after the first broadcast. */
+function extensionKeys(prev: GameState, next: GameState): string[] {
+  const known = new Set<string>([...COLLECTIONS, ...META_KEYS]);
+  const keys = new Set<string>();
+  for (const k of Object.keys(prev)) if (!known.has(k)) keys.add(k);
+  for (const k of Object.keys(next)) if (!known.has(k)) keys.add(k);
+  return [...keys];
+}
+
 /** Build the patch that turns `prev` into `next` (entity-level for collections). */
 export function diffState(prev: GameState, next: GameState): StateDelta {
   const changed: StateDelta['changed'] = {};
@@ -64,10 +76,12 @@ export function diffState(prev: GameState, next: GameState): StateDelta {
   }
   let meta: Record<string, unknown> | undefined;
   let removedMeta: string[] | undefined;
-  for (const k of META_KEYS) {
-    if (!deepEqual(prev[k], next[k])) {
-      if (next[k] === undefined) (removedMeta ??= []).push(k);
-      else (meta ??= {})[k] = next[k];
+  const p = prev as unknown as Record<string, unknown>;
+  const n = next as unknown as Record<string, unknown>;
+  for (const k of [...META_KEYS, ...extensionKeys(prev, next)]) {
+    if (!deepEqual(p[k], n[k])) {
+      if (n[k] === undefined) (removedMeta ??= []).push(k);
+      else (meta ??= {})[k] = n[k];
     }
   }
   const out: StateDelta = { changed, removed };

@@ -8,6 +8,7 @@ import {
   type Player,
 } from './gameState';
 import { identifiedNodes, isVisibleTo, visibleState, visibleView } from './visibility';
+import type { VisibleState } from './visibility';
 
 const data: GameData = parseGameData({
   version: '0.1.0',
@@ -120,6 +121,29 @@ describe('visibleState — diplomatic offers are private to the two parties', ()
     const outsider = visibleState(state, 'p3', data);
     expect(outsider.diplomacyOffers).toEqual({ 'p2>p3': 'alliance' });
     expect(JSON.stringify(outsider)).not.toContain('p1>p2');
+  });
+});
+
+describe('visibleState — order chains are the owner’s secret (future intent)', () => {
+  it('keeps only the viewer’s own fleets’ chains, drops the key when none remain', () => {
+    const state = scenario() as GameState & { orders?: Record<string, unknown> };
+    state.orders = {
+      'mine-1': [{ kind: 'move', to: 'B' }], // viewer's plan
+      'enemy-near': [{ kind: 'assault' }], // the enemy's plan — must not leak
+      ghost: [{ kind: 'orbit' }], // a dead fleet's stale entry — nobody's
+    };
+    const view = visibleState(state, 'p1', data) as VisibleState & {
+      orders?: Record<string, unknown>;
+    };
+    expect(view.orders).toEqual({ 'mine-1': [{ kind: 'move', to: 'B' }] });
+    // The enemy (p2) in turn sees only its own chain — and never the viewer's.
+    const enemy = visibleState(state, 'p2', data) as VisibleState & {
+      orders?: Record<string, unknown>;
+    };
+    expect(enemy.orders).toEqual({ 'enemy-near': [{ kind: 'assault' }] });
+    // A player with no chains gets no key at all (no empty-map blip in deltas).
+    state.orders = { 'enemy-near': [{ kind: 'assault' }] };
+    expect('orders' in visibleState(state, 'p1', data)).toBe(false);
   });
 });
 

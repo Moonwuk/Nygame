@@ -108,4 +108,20 @@ describe('state delta — diff/apply round-trip', () => {
     expect('diplomacy' in rebuilt).toBe(false); // key gone, not left stale as 'war'
     expect(rebuilt).toEqual(next);
   });
+
+  it('carries HOST-EXTENSION keys (e.g. `orders` command chains) and their removal', () => {
+    type Ext = GameState & { orders?: Record<string, unknown> };
+    const prev = base();
+    const next = deepClone(prev) as Ext;
+    // A key the core does not know about — the prototype's authoritative chains.
+    next.orders = { F: [{ kind: 'move', to: 'B' }] };
+    const grow = diffState(prev, next);
+    expect(grow.meta).toMatchObject({ orders: { F: [{ kind: 'move', to: 'B' }] } });
+    expect(applyDelta(prev, grow)).toEqual(next);
+    // …and the way back: the chain emptied → the key must vanish, not go stale.
+    const wire = JSON.parse(JSON.stringify(diffState(next, prev)));
+    const rebuilt = applyDelta(next, wire);
+    expect('orders' in rebuilt).toBe(false);
+    expect(rebuilt).toEqual(prev);
+  });
 });

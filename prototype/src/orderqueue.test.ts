@@ -7,7 +7,13 @@ import {
   orderClear,
   orderPop,
   orderHold,
+  orderRemove,
+  orderBlock,
+  orderRetry,
   serverQueueActions,
+  popChainStep,
+  MAX_CHAIN_STEPS,
+  MAX_WAIT_HOURS,
   data,
   type QStep,
 } from './game';
@@ -95,6 +101,97 @@ describe('orderQueueModule — authoritative order chain in state (CC-server)', 
   });
 });
 
+describe('chain bounds, editing and verdicts (CC-4.1 / CC-5.1 minimum)', () => {
+  it('order.enqueue caps the chain (E_QUEUE_FULL) — bounded plans', () => {
+    let s = stateWith(fleet('F'));
+    for (let i = 0; i < MAX_CHAIN_STEPS; i++) {
+      s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    }
+    expect(rej(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()))).toBe('E_QUEUE_FULL');
+  });
+
+  it('wait hours must be finite and bounded (Infinity would wedge the chain + break JSON)', () => {
+    const s = stateWith(fleet('F'));
+    for (const hours of [Infinity, NaN, -1, MAX_WAIT_HOURS + 1]) {
+      expect(rej(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'wait', hours }), ctx()))).toBe('E_BAD_PAYLOAD');
+    }
+    ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'wait', hours: MAX_WAIT_HOURS }), ctx()));
+  });
+
+  it('order.enqueue strips client-supplied runtime stamps (until / blocked)', () => {
+    const sneaky = { kind: 'wait', hours: 1, until: 5, blocked: 'E_FAKE' } as QStep;
+    const s = ok(kernel.applyAction(stateWith(fleet('F')), orderEnqueue('green', 'F', sneaky), ctx()));
+    expect(ordersOf(s).F).toEqual([{ kind: 'wait', hours: 1 }]);
+  });
+
+  it('order.remove deletes one step by index (fail-secure on bad indexes)', () => {
+    let s = stateWith(fleet('F'));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'a' }), ctx()));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'load' }), ctx()));
+    s = ok(kernel.applyAction(s, orderRemove('green', 'F', 1), ctx()));
+    expect(ordersOf(s).F).toEqual([{ kind: 'move', to: 'a' }, { kind: 'load' }]);
+    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 2), ctx()))).toBe('E_NO_STEP');
+    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 1.5), ctx()))).toBe('E_BAD_PAYLOAD');
+    s = ok(kernel.applyAction(s, orderRemove('green', 'F', 1), ctx()));
+    s = ok(kernel.applyAction(s, orderRemove('green', 'F', 0), ctx()));
+    expect(ordersOf(s).F).toBeUndefined(); // emptied → entry dropped
+  });
+
+  it('order.block pauses the chain on the head with its reason; order.retry re-arms it', () => {
+    let s = stateWith(fleet('F'));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
+    s = ok(kernel.applyAction(s, orderBlock('green', 'F', 'E_FORBIDDEN'), ctx()));
+    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault', blocked: 'E_FORBIDDEN' });
+    expect(serverQueueActions(s, 0)).toEqual([]); // the driver holds a blocked chain
+    s = ok(kernel.applyAction(s, orderRetry('green', 'F'), ctx()));
+    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault' });
+    expect(serverQueueActions(s, 0)).toHaveLength(1); // …and it runs again
+    expect(rej(kernel.applyAction(s, orderRetry('green', 'F'), ctx()))).toBe('E_NO_STEP');
+    expect(rej(kernel.applyAction(s, orderBlock('green', 'F', 'not a code!'), ctx()))).toBe('E_BAD_PAYLOAD');
+  });
+
+  it('order.hold puts the resume moment on the schedule so an offline room wakes for it', () => {
+    let s = stateWith(fleet('F'));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'wait', hours: 6 }), ctx()));
+    s = ok(kernel.applyAction(s, orderHold('green', 'F', 6 * HOUR), ctx()));
+    expect(s.scheduled.some((e) => e.type === 'order.wake' && e.at === 6 * HOUR)).toBe(true);
+  });
+
+  it('sweeps the chain of a dead fleet on advance (no immortal orders in state)', () => {
+    let s = stateWith(fleet('F'));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    const gone = { ...s, fleets: {} } as GameState;
+    const r = kernel.advanceTo(gone, ctx(HOUR));
+    if (!r.ok) throw new Error('advance failed');
+    expect((r.state as { orders?: unknown }).orders).toBeUndefined();
+  });
+});
+
+describe('🔁 repeat — a chain that patrols until cleared', () => {
+  it('popChainStep rotates finished steps to the tail on a looping chain', () => {
+    const q: QStep[] = [{ kind: 'move', to: 'a' }, { kind: 'move', to: 'b' }, { kind: 'repeat' }];
+    popChainStep(q);
+    expect(q).toEqual([{ kind: 'move', to: 'b' }, { kind: 'repeat' }, { kind: 'move', to: 'a' }]);
+    popChainStep(q);
+    expect(q).toEqual([{ kind: 'repeat' }, { kind: 'move', to: 'a' }, { kind: 'move', to: 'b' }]);
+    popChainStep(q); // the marker itself rotates, restoring the original order
+    expect(q).toEqual([{ kind: 'move', to: 'a' }, { kind: 'move', to: 'b' }, { kind: 'repeat' }]);
+  });
+
+  it('a re-queued step is cleansed: wait re-counts, a stale verdict does not survive the loop', () => {
+    const q: QStep[] = [{ kind: 'wait', hours: 2, until: 99, blocked: 'E_X' }, { kind: 'repeat' }];
+    popChainStep(q);
+    expect(q).toEqual([{ kind: 'repeat' }, { kind: 'wait', hours: 2 }]);
+  });
+
+  it('without the marker, popChainStep is a plain shift (one-shot chains unchanged)', () => {
+    const q: QStep[] = [{ kind: 'orbit' }, { kind: 'assault' }];
+    popChainStep(q);
+    expect(q).toEqual([{ kind: 'assault' }]);
+  });
+});
+
 describe('serverQueueActions — the server-side chain driver core (CC-server)', () => {
   function withOrders(fleets: Fleet[], orders: Record<string, QStep[]>): GameState {
     return { ...stateWith(...fleets), orders } as GameState;
@@ -129,5 +226,40 @@ describe('serverQueueActions — the server-side chain driver core (CC-server)',
   it('skips a stale entry whose fleet is gone', () => {
     const s = withOrders([], { GONE: [{ kind: 'orbit' }] });
     expect(serverQueueActions(s, 0)).toEqual([]);
+  });
+
+  it('rotates a 🔁 head (empty pop) and lets an orphan marker idle', () => {
+    const looping = withOrders([fleet('F')], { F: [{ kind: 'repeat' }, { kind: 'orbit' }] });
+    expect(serverQueueActions(looping, 0)[0]).toMatchObject({ actions: [], pop: true });
+    const orphan = withOrders([fleet('G')], { G: [{ kind: 'repeat' }] });
+    expect(serverQueueActions(orphan, 0)).toEqual([]);
+  });
+
+  it("an 'unload' head empties the hold onto the world; nothing aboard fails loudly", () => {
+    const dock = (st: ReturnType<typeof withOrders>) =>
+      ({ ...st, planets: { p1: { id: 'p1' } as never } }) as typeof st;
+    const full = dock(
+      withOrders([fleet('F', { landing: [{ unit: 'infantry', count: 2 }] } as Partial<Fleet>)], {
+        F: [{ kind: 'unload' }],
+      }),
+    );
+    const out = serverQueueActions(full, 0);
+    expect(out[0]!.actions.map((a) => a.type)).toEqual(['army.unload']);
+    expect(out[0]!.pop).toBe(true);
+    const empty = dock(withOrders([fleet('G')], { G: [{ kind: 'unload' }] }));
+    expect(serverQueueActions(empty, 0)[0]).toMatchObject({ actions: [], pop: false, fail: 'E_NO_CARGO' });
+  });
+
+  it("a planned 'load' with nothing liftable fails loudly instead of skipping", () => {
+    // p1 does not exist in this bare state → nothing to lift → the plan is broken.
+    const s = withOrders([fleet('F')], { F: [{ kind: 'load' }] });
+    expect(serverQueueActions(s, 0)[0]).toMatchObject({ actions: [], pop: false, fail: 'E_NO_CARGO' });
+  });
+
+  it("a 'bombard' head enters orbit first when needed", () => {
+    const s = withOrders([fleet('F')], { F: [{ kind: 'bombard' }] });
+    expect(serverQueueActions(s, 0)[0]!.actions.map((a) => a.type)).toEqual(['fleet.orbit', 'fleet.bombard']);
+    const inOrbit = withOrders([fleet('G', { orbit: 'near' } as Partial<Fleet>)], { G: [{ kind: 'bombard' }] });
+    expect(serverQueueActions(inOrbit, 0)[0]!.actions.map((a) => a.type)).toEqual(['fleet.bombard']);
   });
 });
