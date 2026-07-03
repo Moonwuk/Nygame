@@ -1,5 +1,14 @@
 import type { DiplomaticStance, GameState, PlayerId } from './gameState';
 
+/** Friendliness order of the stances — the shared vocabulary for "is this change
+ *  an upgrade or a downgrade" (core `diplomacyModule` rules, prototype UI routing). */
+export const STANCE_RANK: Record<DiplomaticStance, number> = {
+  war: 0,
+  peace: 1,
+  pact: 2,
+  alliance: 3,
+};
+
 /**
  * Diplomacy state model (D1) — the pure read/write primitives over the pairwise
  * `GameState.diplomacy` map, plus the stance→relation projection contract (D2).
@@ -26,6 +35,26 @@ const PAIR_SEP = '|';
  *  the stance is stored once per pair. */
 export function pairKey(a: PlayerId, b: PlayerId): string {
   return a <= b ? `${a}${PAIR_SEP}${b}` : `${b}${PAIR_SEP}${a}`;
+}
+
+/** Whether `id` is one of the two parties a pair key names. The projection uses
+ *  this to keep a diplomatic offer visible only to its participants. */
+export function pairHas(key: string, id: PlayerId): boolean {
+  const sep = key.indexOf(PAIR_SEP);
+  return key.slice(0, sep) === id || key.slice(sep + 1) === id;
+}
+
+/** The two party ids a pair key names. Safe because player ids are barred from
+ *  containing the separator at every seeding boundary (map schema / slot check). */
+export function pairParts(key: string): [PlayerId, PlayerId] {
+  const sep = key.indexOf(PAIR_SEP);
+  return [key.slice(0, sep), key.slice(sep + 1)];
+}
+
+/** True when either player of the pair is an AI seat (bot). The humans-only
+ *  coalition rule keys off this (GDD: боты не приглашаются в коалиции). */
+export function isBotPair(state: GameState, a: PlayerId, b: PlayerId): boolean {
+  return state.players[a]?.ai === true || state.players[b]?.ai === true;
 }
 
 /** The diplomatic stance between two players. A player is always `alliance` with

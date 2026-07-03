@@ -107,6 +107,9 @@ export const FactionPassivesSchema = z.object({
   fleetSpeedBonus: z.number().default(0),
   /** Multiplier on outgoing combat damage. */
   combatDamageBonus: z.number().default(0),
+  /** Multiplier on the reach of every radar the player fields (buildings and
+   *  ships). Read by the `visibleState` projection (A2), like the tech effect. */
+  radarRangeBonus: z.number().default(0),
 });
 
 export const FactionDefSchema = z.object({
@@ -128,6 +131,7 @@ export const FactionDefSchema = z.object({
     productionBonus: 0,
     fleetSpeedBonus: 0,
     combatDamageBonus: 0,
+    radarRangeBonus: 0,
   }),
 });
 
@@ -247,6 +251,9 @@ export const TechnologyEffectsSchema = z.object({
   fleetSpeedBonus: z.number().default(0),
   /** Multiplier on outgoing combat damage, e.g. 0.1 = +10%. */
   combatDamageBonus: z.number().default(0),
+  /** Multiplier on the reach of every radar the player fields (buildings and
+   *  ships), e.g. 0.25 = +25%. Read by the `visibleState` projection (A2). */
+  radarRangeBonus: z.number().default(0),
 });
 
 /** The four tech-tree branches (UI tabs), shared by technologies, scientists and the
@@ -305,6 +312,7 @@ export const TechnologyDefSchema = z.object({
     productionBonus: 0,
     fleetSpeedBonus: 0,
     combatDamageBonus: 0,
+    radarRangeBonus: 0,
   }),
 });
 

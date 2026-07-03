@@ -40,6 +40,7 @@ const data: GameData = parseGameData({
   buildings: {
     mine: { name: 'Mine', cost: { metal: 50 }, buildTimeHours: 0, produces: { metal: 10 }, hp: 20 },
     depot: { name: 'Depot', cost: { metal: 40 }, buildTimeHours: 2, hp: 30 },
+    flak: { name: 'Orbital AA', cost: { metal: 60 }, buildTimeHours: 0, hp: 25, aaDamage: 28 },
   },
   events: {},
 });
@@ -237,6 +238,83 @@ describe('orbital — anti-air (orbital AA)', () => {
     const r = okAdvance(kernel.advanceTo(st, at(2 * HOUR))); // 28 × 2 = 56 ≥ 40
     expect(r.state.fleets.E).toBeUndefined();
     expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
+  });
+
+  it('ORBITAL tier (buildings) volleys hourly: a sub-hour dip escapes untouched', () => {
+    const kernel = createKernel([orbitalModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { buildings: [['flak', 1]] })], // 28 per hourly volley
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })],
+    });
+    // (0, 0.9h] crosses no hour boundary — the heavy flak has not volleyed yet.
+    const half = okAdvance(kernel.advanceTo(st, at(0.9 * HOUR)));
+    expect(half.state.fleets.E?.units[0]?.hp ?? 40).toBe(40); // unscathed
+    expect(half.events.map((e) => e.type)).not.toContain('aa.fired');
+    // (0.9h, 1.1h] crosses exactly ONE hour boundary → one full-strength volley (28).
+    const crossed = okAdvance(kernel.advanceTo(half.state, at(1.1 * HOUR)));
+    expect(crossed.events.filter((e) => e.type === 'aa.fired')).toHaveLength(1);
+    expect(crossed.state.fleets.E?.units[0]?.hp).toBe(12); // 40 − 28, not 40 − 28×0.2
+  });
+
+  it('CLOSE tier (garrison) volleys every quarter-hour at a quarter of the rate', () => {
+    const kernel = createKernel([orbitalModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { garrison: [['aa', 2]] })], // 28/h → 7 per 15-min volley
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })],
+    });
+    // (0, 0.2h] crosses no quarter boundary — even the point defense hasn't fired.
+    const dip = okAdvance(kernel.advanceTo(st, at(0.2 * HOUR)));
+    expect(dip.events.map((e) => e.type)).not.toContain('aa.fired');
+    // (0.2h, 0.8h] crosses 0.25h, 0.5h, 0.75h → three quarter-strength volleys.
+    const r = okAdvance(kernel.advanceTo(dip.state, at(0.8 * HOUR)));
+    const volleys = r.events.filter((e) => e.type === 'aa.fired');
+    expect(volleys).toHaveLength(3);
+    expect((volleys[0]?.payload as { damage: number }).damage).toBe(7); // 28 × 0.25
+    expect(r.state.fleets.E?.units[0]?.hp).toBe(19); // 40 − 3×7
+  });
+
+  it('both tiers together: hour boundary lands the heavy volley first, then the flak', () => {
+    const kernel = createKernel([orbitalModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { buildings: [['flak', 1]], garrison: [['aa', 2]] })],
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })], // 80 hp pool
+    });
+    // (0.9h, 1h] crosses ONE shared boundary: orbital 28 first, then close 7.
+    const st2 = okAdvance(kernel.advanceTo(st, at(0.9 * HOUR))).state;
+    const r = okAdvance(kernel.advanceTo(st2, at(HOUR)));
+    const volleys = r.events.filter((e) => e.type === 'aa.fired');
+    expect(volleys.map((v) => (v.payload as { tier: string }).tier)).toEqual([
+      'orbital',
+      'close',
+    ]);
+    // NB: (0, 0.9h] already dealt three close volleys (21) before this span.
+    expect(r.state.fleets.E?.units[0]?.hp).toBe(80 - 21 - 28 - 7);
+  });
+
+  it('the volley grid compresses with timeScale like every other duration', () => {
+    const kernel = createKernel([orbitalModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { buildings: [['flak', 1]] })],
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })],
+    });
+    // ×2: a game-hour passes every 30 real minutes → (0, 1h] holds TWO hourly volleys.
+    const ctx2 = { ...at(HOUR), config: { timeScale: 2 } };
+    const r = kernel.advanceTo(st, ctx2);
+    if (!r.ok) throw new Error(r.code);
+    expect(r.events.filter((e) => e.type === 'aa.fired')).toHaveLength(2);
+  });
+
+  it('announces every volley — aa.fired carries shooter, target, damage and tier (H2)', () => {
+    const kernel = createKernel([orbitalModule]);
+    const st = stateWith({
+      planets: [planet('P', 'p1', { buildings: [['flak', 1]] })],
+      fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })],
+    });
+    const r = okAdvance(kernel.advanceTo(st, at(HOUR)));
+    expect(r.events).toContainEqual({
+      type: 'aa.fired',
+      payload: { planetId: 'P', owner: 'p1', fleetId: 'E', by: 'p2', damage: 28, tier: 'orbital' },
+    });
   });
 
   it('holds its fire while a ground assault keeps it busy', () => {

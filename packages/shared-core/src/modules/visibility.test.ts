@@ -4,6 +4,7 @@ import { createKernel } from '../kernel/kernel';
 import { createInitialState, type GameState, type Planet, type Player } from '../state/gameState';
 import { visibleState } from '../state/visibility';
 import type { Context } from '../action/types';
+import { movementModule } from './movement';
 import { visibilityModule } from './visibility';
 
 const HOUR = 3_600_000;
@@ -114,5 +115,53 @@ describe('radar — two concentric ranges (inner full-reveal, outer signatures)'
     // beyond reach (> 100): FAR at 200 → no fleet, no signature
     expect(view.fleets.fFar).toBeUndefined();
     expect(view.signatures.map((s) => s.location)).not.toContain('FAR');
+  });
+});
+
+describe('fleet scouting (A3) — a traveling fleet commits passed nodes to memory', () => {
+  const sdata: GameData = parseGameData({
+    version: '0.1.0',
+    resources: ['metal'],
+    units: { scout: { faction: 'x', stats: { attack: 1, defense: 1, speed: 10, hp: 8 } } },
+    factions: {},
+    buildings: {},
+    events: {},
+  });
+
+  it('remembers every node the journey touched, not just the destination', () => {
+    // p1 owns NO worlds — sight comes from the moving fleet alone. A(0)–B(100)–C(200),
+    // scout speed 10 → 10h per leg, so the fleet stands on B at hour 10.
+    const state: GameState = {
+      ...createInitialState({ seed: 'scout', version: { data: '0.1.0', manifest: '1' } }),
+      players: { p1: player('p1'), p2: player('p2') },
+      planets: {
+        A: planet('A', null, ['B'], { position: { x: 0, y: 0 } }),
+        B: planet('B', 'p2', ['A', 'C'], { position: { x: 100, y: 0 }, garrison: [{ unit: 'scout', count: 2 }] }),
+        C: planet('C', null, ['B'], { position: { x: 200, y: 0 } }),
+      },
+      fleets: {
+        probe: { id: 'probe', owner: 'p1', location: 'A', movement: null, units: [{ unit: 'scout', count: 1 }], traits: [] },
+      },
+    };
+    const kernel = createKernel([movementModule, visibilityModule]);
+    const sctx = (now: number): Context => ({ now, data: sdata, config: { timeScale: 1 } });
+
+    const move = kernel.applyAction(
+      state,
+      { id: 's:p1:1', type: 'fleet.move', playerId: 'p1', payload: { fleetId: 'probe', to: 'C' }, issuedAt: 0 },
+      sctx(0),
+    );
+    if (!move.ok) throw new Error(move.code);
+    const done = kernel.advanceTo(move.state, sctx(20 * HOUR));
+    if (!done.ok) throw new Error(done.code);
+
+    expect(done.state.fleets.probe?.location).toBe('C');
+    // The waypoint B was identified in passing and lives on in memory — with the
+    // garrison as it stood when the probe flew through.
+    expect(Object.keys(done.state.fog?.p1 ?? {}).sort()).toEqual(['A', 'B', 'C']);
+    expect(done.state.fog?.p1?.B?.garrison).toEqual([{ unit: 'scout', count: 2 }]);
+    // ...and the projection now shows B as a greyed last-known world.
+    const view = visibleState(done.state, 'p1', sdata);
+    expect(view.remembered).toContain('B');
   });
 });

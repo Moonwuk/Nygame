@@ -4,6 +4,8 @@ import {
   clearOffers,
   getOffer,
   getStance,
+  isBotPair,
+  offerInvolves,
   setOffer,
   setStance,
   stanceToRelation,
@@ -77,6 +79,12 @@ export const diplomacyModule: GameModule = {
         return;
       }
 
+      // A coalition is between humans only (GDD §3): an alliance-ward declaration
+      // involving an AI seat is refused outright — it must neither stand as an
+      // offer nor commit. Peace and a pact with a bot remain legal.
+      if (stance === 'alliance' && isBotPair(h.state, me, target)) {
+        return h.reject('E_BOT_ALLIANCE');
+      }
       // De-escalation — the consent protocol (D3): commit on a matching
       // counter-offer, otherwise record/replace this side's standing offer.
       if (getOffer(h.state, target, me) === stance) {
@@ -90,6 +98,19 @@ export const diplomacyModule: GameModule = {
       }
       setOffer(h.state, me, target, stance);
       h.emit('diplomacy.offered', { from: me, to: target, stance });
+    });
+
+    // An eliminated player can never counter-declare, so their standing offers
+    // (sent OR received) would hang in state and in the counterparty's view
+    // forever — sweep them the moment the player falls.
+    api.on('player.eliminated', (event, h) => {
+      const playerId = (event.payload as { playerId?: string })?.playerId;
+      const offers = h.state.diplomacyOffers;
+      if (typeof playerId !== 'string' || !offers) return;
+      for (const key of Object.keys(offers)) {
+        if (offerInvolves(key, playerId)) delete offers[key];
+      }
+      if (Object.keys(offers).length === 0) delete h.state.diplomacyOffers;
     });
   },
 };

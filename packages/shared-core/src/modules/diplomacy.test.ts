@@ -253,3 +253,42 @@ describe('diplomacy × combat — the capability drives isHostile end-to-end', (
     expect(Object.keys(engaged.state.battles)).toHaveLength(1); // hostile — battle starts
   });
 });
+
+describe('diplomacy — humans-only coalition (боты не приглашаются)', () => {
+  const kernel = createKernel([diplomacyModule]);
+  function withBot(): GameState {
+    const s = baseState();
+    s.players.bot = { ...player('bot'), ai: true };
+    return s;
+  }
+
+  it('an alliance-ward declaration involving a bot is refused, never recorded', () => {
+    const toBot = kernel.applyAction(withBot(), declare('p1', 'bot', 'alliance'), ctx());
+    expect(errCode(toBot)).toBe('E_BOT_ALLIANCE');
+    const fromBot = kernel.applyAction(withBot(), declare('bot', 'p1', 'alliance'), ctx());
+    expect(errCode(fromBot)).toBe('E_BOT_ALLIANCE');
+  });
+
+  it('peace and a pact with a bot stay legal (only the coalition is barred)', () => {
+    const r = okApply(kernel.applyAction(withBot(), declare('p1', 'bot', 'peace'), ctx()));
+    expect(r.state.diplomacyOffers).toEqual({ 'p1>bot': 'peace' });
+  });
+});
+
+describe('diplomacy — an eliminated player leaves no zombie offers', () => {
+  const kernel = createKernel([diplomacyModule]);
+
+  it('sweeps offers the fallen player sent and received', () => {
+    const offered = okApply(
+      kernel.applyAction(baseState(), declare('p2', 'p1', 'peace'), ctx()),
+    ).state;
+    offered.players.p2 = { ...offered.players.p2!, status: 'defeated' };
+    offered.scheduled = [
+      { id: 'evt:d', at: 1, type: 'player.eliminated', payload: { playerId: 'p2' }, seq: 0 },
+    ];
+    offered.scheduleSeq = 1;
+    const r = kernel.advanceTo(offered, ctx(1));
+    if (!r.ok) throw new Error(r.code);
+    expect(r.state.diplomacyOffers).toBeUndefined(); // the dead letter is gone
+  });
+});

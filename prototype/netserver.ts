@@ -32,7 +32,7 @@ import {
   type ReceiptStore,
   type RoomObservation,
 } from '../packages/server/src/index';
-import { newGame, kernel, data, aiOrders, HOUR, serverQueueActions, orderPop, orderHold } from './src/game';
+import { newGame, kernel, data, aiOrders, HOUR, serverQueueActions, orderPop, orderHold, orderBlock } from './src/game';
 const { Pool } = pgPkg;
 
 // --- M0 playtest log: append every room event (join/leave/lobby/action/end) to a
@@ -154,6 +154,11 @@ if (DATABASE_URL) {
 }
 const restored = await matchStore.load('proto');
 const initialState = restored?.state ?? newGame();
+// A NET seat is not a bot: every seat here is claimable by a human, and the
+// server-side AI merely stands in for an empty chair (`humans` is the live truth).
+// Strip the static `ai` branding newGame took from the seat config, or two humans
+// on DEFAULT_SETUP seats could never ally (E_BOT_ALLIANCE against seat p2 forever).
+for (const seat of Object.values(initialState.players)) delete seat.ai;
 // Rehydrate idempotency receipts so a retried action stays deduped across a restart.
 const initialReceipts = await receiptStore.loadAll('proto');
 
@@ -272,7 +277,23 @@ function runServerQueues(): void {
   if (!room.isStarted) return;
   const now = room.state.time;
   for (const step of serverQueueActions(room.state, now)) {
-    for (const a of step.actions) room.submitAction(step.owner, a);
+    // A rejected step BLOCKS the chain with its reason (order.block) instead of being
+    // silently popped — the owner wakes up to «⚠ шаг: причина», not a derailed plan
+    // that kept executing in the wrong place (CC-4.1 minimum).
+    let failed = step.fail ?? null;
+    if (!failed) {
+      for (const a of step.actions) {
+        const r = room.submitAction(step.owner, a);
+        if (!r.ok) {
+          failed = r.code ?? 'E_INTERNAL';
+          break;
+        }
+      }
+    }
+    if (failed) {
+      room.submitAction(step.owner, orderBlock(step.owner, step.fleetId, failed));
+      continue;
+    }
     if (step.holdUntil !== undefined) room.submitAction(step.owner, orderHold(step.owner, step.fleetId, step.holdUntil));
     if (step.pop) room.submitAction(step.owner, orderPop(step.owner, step.fleetId));
   }

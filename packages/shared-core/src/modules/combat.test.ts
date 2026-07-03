@@ -1082,13 +1082,27 @@ describe('fleet retreat', () => {
     expect(r.events.map((e) => e.type)).toContain('fleet.retreated');
   });
 
-  it('costs 40% of MAX hull and shield', () => {
-    const { state } = engaged([['aegis', 2]]); // 2×(hull 50 + shield 15) → max 100 hull, 30 shield
+  it('costs 40% of the CURRENT hull and shield (full-health fleet)', () => {
+    const { state } = engaged([['aegis', 2]]); // 2×(hull 50 + shield 15) → pools 100 hull, 30 shield
     const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
     const a = stackOf(r.state.fleets.A, 'aegis');
     expect(a?.count).toBe(2);
-    expect(a?.hp).toBeCloseTo(60); // 100 − 0.4×100
-    expect(a?.shieldHp).toBeCloseTo(18); // 30 − 0.4×30
+    expect(a?.hp).toBeCloseTo(60); // 0.6 × 100
+    expect(a?.shieldHp).toBeCloseTo(18); // 0.6 × 30
+  });
+
+  it('a battered fleet loses 40% of what it has LEFT, not of the maximum', () => {
+    const { state } = engaged([['aegis', 2]]);
+    const pre = stackOf(state.fleets.A, 'aegis');
+    if (pre) {
+      pre.hp = 50; // half the 100 pool — one hull's worth left across 2 ships
+      pre.shieldHp = 30; // shields still full
+    }
+    const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
+    const a = stackOf(r.state.fleets.A, 'aegis');
+    expect(a?.count).toBe(1); // 0.6×50 = 30 fills only one 50-hp hull
+    expect(a?.hp).toBeCloseTo(30);
+    expect(a?.shieldHp).toBeCloseTo(15); // 0.6×30 = 18, capped by the one survivor's 15
   });
 
   it('opens a temporary speed-boost window on the fleeing fleet', () => {
@@ -1116,13 +1130,16 @@ describe('fleet retreat', () => {
     expect(tN / tH).toBeCloseTo(1.5); // ×1.5 speed → travel time ÷1.5
   });
 
-  it('a withdrawal can finish off an already-crippled fleet', () => {
+  it('the toll alone never kills: a crippled fleet escapes with 60% of its remains', () => {
     const { state } = engaged([['fighter', 1]]);
     const a = stackOf(state.fleets.A, 'fighter');
-    if (a) a.hp = 6; // fighter max hull 20; 6 < 0.4×20=8 → the toll wipes it
+    if (a) a.hp = 6; // badly mauled (max 20) — under the old MAX-based toll this died
     const r = okApply(kernel.applyAction(state, retreat('A'), ctx(0)));
-    expect(r.state.fleets.A).toBeUndefined(); // destroyed, no escape
-    expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
+    const out = stackOf(r.state.fleets.A, 'fighter');
+    expect(out?.count).toBe(1); // still flying — with its carried troops aboard
+    expect(out?.hp).toBeCloseTo(3.6); // 0.6 × 6
+    expect(r.state.fleets.A?.battleId).toBe(null);
+    expect(r.events.map((e) => e.type)).not.toContain('fleet.destroyed');
   });
 
   it('fail-secure: rejects a fleet not in a battle, a foreign fleet, and bad input', () => {

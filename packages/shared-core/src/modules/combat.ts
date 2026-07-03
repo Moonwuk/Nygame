@@ -1,5 +1,5 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { Battle, CombatantRef, Fleet, PlanetId, UnitStack } from '../state/gameState';
+import type { Battle, CombatantRef, Fleet, PlanetId } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
@@ -36,34 +36,32 @@ const RETREAT_HASTE_MULT = 1.5;
 /** …and for how long (world-time) the boost lasts. */
 const RETREAT_HASTE_MS = 3 * MS_PER_HOUR;
 
-/** Apply the retreat toll to a fleet's ships in place: −40% MAX hull and −40% MAX
- *  shield per stack. Ships die if the hull hit drops the pool below their count
- *  (retreating while already battered can cost hulls); wiped stacks are dropped. */
+/** Apply the retreat toll to a fleet's ships in place: −40% of the CURRENT hull
+ *  and shield pools per stack (not the maximum — a battered fleet loses 40% of
+ *  what it has LEFT). The toll alone can therefore never finish a fleet off:
+ *  0.6 × a positive pool stays positive, so the carried landing force always
+ *  withdraws with its ships. Ships are still lost when the shrunken pool no
+ *  longer fills their hulls (Math.ceil keeps the last damaged ship alive). */
 function applyRetreatToll(fleet: Fleet, data: GameData): void {
-  const survivors: UnitStack[] = [];
   for (const stack of fleet.units) {
     const def = data.units[stack.unit];
     if (!def) {
-      survivors.push(stack);
       continue;
     }
     const perHull = def.stats.hp > 0 ? def.stats.hp : 1;
     const maxHull = stack.count * perHull;
-    const newHull = Math.max(0, (stack.hp ?? maxHull) - RETREAT_TOLL * maxHull);
+    const newHull = (1 - RETREAT_TOLL) * (stack.hp ?? maxHull);
     const newCount = newHull <= 0 ? 0 : Math.ceil(newHull / perHull);
-    if (newCount <= 0) continue; // this stack didn't survive the withdrawal
+    if (newCount <= 0 || newCount > stack.count) continue; // fail-secure: never grow
 
     const perShield = def.stats.shield ?? 0;
     if (perShield > 0) {
-      const maxShield = stack.count * perShield;
-      const newShield = Math.max(0, (stack.shieldHp ?? maxShield) - RETREAT_TOLL * maxShield);
+      const newShield = (1 - RETREAT_TOLL) * (stack.shieldHp ?? stack.count * perShield);
       stack.shieldHp = Math.min(newShield, newCount * perShield); // cap at surviving capacity
     }
     stack.count = newCount;
     stack.hp = newHull;
-    survivors.push(stack);
   }
-  fleet.units = survivors;
 }
 
 // --- battle lifecycle --------------------------------------------------------
@@ -429,9 +427,10 @@ export const combatModule: GameModule = {
     });
 
     // Disengage from an ongoing battle. Only an orbital ship-side can pull out (a
-    // landing force mid-assault can't). Toll: −40% MAX hull & shield; reward: a
-    // temporary speed boost to flee. The 1-v-1 battle dissolves and the opponent is
-    // freed to give chase. Retreating while already crippled can cost ships or the fleet.
+    // landing force mid-assault can't). Toll: −40% of the CURRENT hull & shield;
+    // reward: a temporary speed boost to flee. The 1-v-1 battle dissolves and the
+    // opponent is freed to give chase. The toll wounds but never kills — leaving
+    // orbit OUTSIDE a battle stays free (a plain fleet.move).
     api.onAction('fleet.retreat', (action, h) => {
       const { fleetId } = action.payload as { fleetId?: string };
       if (typeof fleetId !== 'string') {

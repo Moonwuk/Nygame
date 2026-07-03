@@ -56,6 +56,16 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'unit.build': z.object({ planetId: id, unit: id, count: count.optional() }),
   // technology.ts
   'technology.research': z.object({ technology: id }),
+  // espionage.ts — steal a time-boxed intel window; `planetId` only with kind 'planet'
+  'espionage.spy': z
+    .object({
+      target: id,
+      kind: z.enum(['treasury', 'planet', 'fleets']),
+      planetId: id.optional(),
+    })
+    .refine((v) => v.kind !== 'planet' || v.planetId !== undefined, {
+      message: "kind 'planet' needs a planetId",
+    }),
   // market.ts — amounts are plain positive numbers (resources accrue continuously,
   // so fractional amounts are legal); price is a non-negative unit price.
   'market.list': z.object({
@@ -65,7 +75,8 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   }),
   'market.buy': z.object({ orderId: id, amount: z.number().finite().positive() }),
   'market.cancel': z.object({ orderId: id }),
-  // diplomacy.ts — a declaration toward another player (escalation-only, D2)
+  // diplomacy.ts — one action for the whole protocol (D2+D3): escalation applies
+  // at once, a friendlier declaration records/commits a mutual-consent offer
   'diplomacy.declare': z.object({
     target: id,
     stance: z.enum(['war', 'peace', 'pact', 'alliance']),

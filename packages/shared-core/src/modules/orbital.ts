@@ -2,7 +2,7 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type { BuildingInstance, Fleet, UnitStack } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
-import { timeScaleOf } from '../action/types';
+import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
@@ -11,18 +11,25 @@ import { applyDamageToSide, isHostile, removeIfWiped } from '../util/combat';
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
 const BOMBARD_FRACTION = 0.5;
 
-/** A planet's orbital-AA firepower = Σ its garrison units' `aaDamage` PLUS Σ its
- *  buildings' `aaDamage` (a fixed orbital-AA emplacement is a structure, not a unit). */
-function aaStrengthAt(
-  planet: { garrison: UnitStack[]; buildings: BuildingInstance[] },
-  data: GameData,
-): number {
-  let total = sumUnitStat(planet.garrison, data, 'aaDamage');
+/** One game-hour of world time — the AA volley grid (same value the melee module
+ *  uses for its round interval). */
+const hourIntervalMs = (ctx: Context): number => MS_PER_HOUR / timeScaleOf(ctx);
+
+/** The ORBITAL AA tier: Σ the buildings' `aaDamage` — fixed heavy emplacements.
+ *  Fires one full-strength volley per game-HOUR. */
+function aaOrbitalAt(planet: { buildings: BuildingInstance[] }, data: GameData): number {
+  let total = 0;
   for (const b of planet.buildings) {
     const def = data.buildings[b.type];
     if (def) total += buildingLevel(def, b.level).aaDamage;
   }
   return total;
+}
+/** The CLOSE (point-defense) AA tier: Σ the garrison units' `aaDamage` — mobile
+ *  flak. Fires every QUARTER game-hour at a quarter of the hourly rate, so the
+ *  hourly output matches the stat while the dodge window shrinks to 15 minutes. */
+function aaCloseAt(planet: { garrison: UnitStack[] }, data: GameData): number {
+  return sumUnitStat(planet.garrison, data, 'aaDamage');
 }
 
 /** Lowest-id hostile, free fleet sitting on the NEAR orbit of `planetId`.
@@ -60,7 +67,7 @@ function bombardPower(fleet: Fleet, data: GameData): number {
  *
  *  Optimized with a fleet-by-location index and a ground-assault set so the
  *  cost is O(planets + fleets + battles) instead of O(planets × fleets). */
-function runOrbital(h: HandlerContext, hours: number): void {
+function runOrbital(h: HandlerContext, from: number, to: number, hours: number): void {
   const data = h.ctx.data;
 
   // Pre-index fleets by location — O(fleets).
@@ -86,14 +93,48 @@ function runOrbital(h: HandlerContext, hours: number): void {
     }
     const localFleets = fleetsByLocation.get(planetId);
 
-    // Orbital AA — anti-ship, only when not defending the ground.
+    // AA — anti-ship, only when not defending the ground. Two tiers, both firing
+    // discrete VOLLEYS on the world-time grid (a fleet slipping in and out of orbit
+    // BETWEEN volleys escapes untouched — timing a raid past the flak matters):
+    //   - ORBITAL (buildings): one full-strength volley per game-HOUR;
+    //   - CLOSE (garrison units): a quarter-strength volley every QUARTER-hour —
+    //     same hourly output, but only a 15-minute window to dodge.
+    // The quarter grid contains the hour grid, so one walk over quarter boundaries
+    // covers both; at a shared boundary the heavy orbital volley lands first.
     if (planet.owner !== null && !groundAssaults.has(planetId)) {
-      const aa = aaStrengthAt(planet, data);
-      if (aa > 0) {
-        const target = nearOrbitHostile(h, planetId, planet.owner, localFleets);
-        if (target) {
-          applyDamageToSide(h, { kind: 'fleet', fleetId: target.id }, aa * hours, data, planetId);
+      const aaOrbital = aaOrbitalAt(planet, data);
+      const aaClose = aaCloseAt(planet, data);
+      if (aaOrbital > 0 || aaClose > 0) {
+        const hourMs = hourIntervalMs(h.ctx); // one game-hour of world time
+        const quarterMs = hourMs / 4;
+        const firstQ = Math.floor(from / quarterMs) + 1;
+        const lastQ = Math.floor(to / quarterMs);
+        const volley = (damage: number, tier: 'orbital' | 'close'): boolean => {
+          // Re-aim every volley: a target destroyed mid-span frees the next strike
+          // for the next hostile still hanging in orbit.
+          const target = nearOrbitHostile(h, planetId, planet.owner!, localFleets);
+          if (!target) return false;
+          // Announce BEFORE applying: the client draws the flak burst planet→fleet
+          // even when this very volley destroys the target (H2 — visible AA fire).
+          h.emit('aa.fired', {
+            planetId,
+            owner: planet.owner,
+            fleetId: target.id,
+            by: target.owner,
+            damage,
+            tier,
+          });
+          applyDamageToSide(h, { kind: 'fleet', fleetId: target.id }, damage, data, planetId);
           removeIfWiped(h, target.id);
+          return true;
+        };
+        outer: for (let q = firstQ; q <= lastQ; q++) {
+          if (aaOrbital > 0 && q % 4 === 0) {
+            if (!volley(aaOrbital, 'orbital')) break outer;
+          }
+          if (aaClose > 0) {
+            if (!volley(aaClose / 4, 'close')) break outer;
+          }
         }
       }
     }
@@ -120,9 +161,10 @@ function runOrbital(h: HandlerContext, hours: number): void {
  * Orbital — the near-orbit layer (GDD §7.4), split out of the melee combat
  * module along the bus seams. There is a SINGLE orbit: arriving stations a fleet
  * in it, a stationed fleet can bombard the world below and is exposed to the
- * planet's orbital AA. Both AA fire and bombardment accrue over continuous time
- * (`time.advanced`), like the economy. Degrades gracefully: without this module
- * fleets still fight (melee `combat`) — there is simply no AA and no bombardment.
+ * planet's AA. AA fires discrete two-tier VOLLEYS on the world-time grid (hourly
+ * orbital emplacements, quarter-hour close flak); bombardment accrues over
+ * continuous time (`time.advanced`), like the economy. Degrades gracefully:
+ * without this module fleets still fight (melee `combat`) — no AA, no bombardment.
  */
 export const orbitalModule: GameModule = {
   id: 'orbital',
@@ -186,16 +228,17 @@ export const orbitalModule: GameModule = {
       h.emit('fleet.bombard', { fleetId, on, owner: action.playerId });
     });
 
-    // The orbital layer accrues over continuous time, like the economy. Registered
-    // before `artillery` in the manifest, preserving the old runOrbital→runArtillery
-    // order within each span.
+    // The orbital layer accrues over continuous time, like the economy (AA fires
+    // in discrete volleys on the from→to grid; bombardment accrues by hours).
+    // Registered before `artillery` in the manifest, preserving the old
+    // runOrbital→runArtillery order within each span.
     api.on('time.advanced', (event, h) => {
       const { from, to } = event.payload as { from: number; to: number };
       const span = to - from;
       if (span <= 0) {
         return;
       }
-      runOrbital(h, (span / MS_PER_HOUR) * timeScaleOf(h.ctx));
+      runOrbital(h, from, to, (span / MS_PER_HOUR) * timeScaleOf(h.ctx));
     });
   },
 };

@@ -43,6 +43,14 @@ describe('buildStateFromMap (map-roadmap.md M1.2)', () => {
     ]);
   });
 
+  it('carries a map player ai flag onto the seated player', () => {
+    const map = exampleMap();
+    map.players.red!.ai = true;
+    const state = buildStateFromMap(map, data);
+    expect(state.players.red!.ai).toBe(true);
+    expect(state.players.green!.ai).toBeUndefined();
+  });
+
   it('derives sector links from the undirected paths (sorted, symmetric)', () => {
     const state = buildStateFromMap(exampleMap(), data);
     // nexus is the hub → linked to all four spokes; a spoke links back to nexus
@@ -141,6 +149,47 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slots: { slot_a: { playerId: 'p1', scientist: 'ghost' }, slot_b: { playerId: 'p2' } },
       }),
     ).toThrow(/E_UNKNOWN_SCIENTIST/);
+  });
+
+  it('grants pre-match technology picks as completed research (C3)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        // duplicates collapse — the pick lands once
+        slot_a: { playerId: 'p1', technologies: ['orbital_logistics', 'orbital_logistics'] },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    expect(state.players.p1!.technologies).toEqual({ completed: ['orbital_logistics'] });
+    expect(state.players.p2!.technologies).toBeUndefined(); // no picks → untouched
+  });
+
+  it('marks AI-driven seats on the player (bots are not invitable to coalitions)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1', ai: true }, slot_b: { playerId: 'p2' } },
+    });
+    expect(state.players.p1!.ai).toBe(true);
+    expect(state.players.p2!.ai).toBeUndefined(); // human seat stays unmarked
+  });
+
+  it('rejects a player id carrying the pair-key separator "|" (fail-secure at boot)', () => {
+    // seated via a slot…
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'clan|alpha' }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_BAD_PLAYER_ID/);
+    // …and declared statically on the map (schema-level guard)
+    const raw = readJson('data/maps/skirmish-1.json') as { players: Record<string, unknown> };
+    raw.players['clan|alpha'] = { name: 'X', faction: 'vanguard' };
+    expect(() => parseMatchMap(raw)).toThrow();
+  });
+
+  it('rejects a slot granting an unknown technology (fail-secure at boot)', () => {
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'p1', technologies: ['ghost_tech'] }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_UNKNOWN_TECHNOLOGY/);
   });
 
   it('accepts slot ids as sector/fleet owners (validation clean)', () => {

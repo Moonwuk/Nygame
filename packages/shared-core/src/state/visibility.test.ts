@@ -7,7 +7,8 @@ import {
   type Planet,
   type Player,
 } from './gameState';
-import { identifiedNodes, visibleState, visibleView } from './visibility';
+import { identifiedNodes, isVisibleTo, visibleState, visibleView } from './visibility';
+import type { VisibleState } from './visibility';
 
 const data: GameData = parseGameData({
   version: '0.1.0',
@@ -16,10 +17,17 @@ const data: GameData = parseGameData({
     cruiser: { faction: 'x', stats: { attack: 10, defense: 8, speed: 6, hp: 40 }, signature: 4 },
     scout: { faction: 'x', stats: { attack: 2, defense: 2, speed: 9, hp: 8 }, radarRange: 350 },
   },
-  factions: {},
+  factions: {
+    // A2: a faction whose passive stretches every radar the player fields by +50%.
+    farsight: { name: 'Farsight', passives: { radarRangeBonus: 0.5 } },
+  },
   buildings: {
     // Radar reach is a Euclidean DISTANCE (map units), not jumps.
     radar: { name: 'Radar', radarRange: 300, upgrades: [{ radarRange: 500 }, { radarRange: 700 }] },
+  },
+  technologies: {
+    // A2: a researched tech that stretches radar reach by +50%.
+    long_scan: { name: 'Long-range scanning', effects: { radarRangeBonus: 0.5 } },
   },
   events: {},
 });
@@ -113,6 +121,29 @@ describe('visibleState — diplomatic offers are private to the two parties', ()
     const outsider = visibleState(state, 'p3', data);
     expect(outsider.diplomacyOffers).toEqual({ 'p2>p3': 'alliance' });
     expect(JSON.stringify(outsider)).not.toContain('p1>p2');
+  });
+});
+
+describe('visibleState — order chains are the owner’s secret (future intent)', () => {
+  it('keeps only the viewer’s own fleets’ chains, drops the key when none remain', () => {
+    const state = scenario() as GameState & { orders?: Record<string, unknown> };
+    state.orders = {
+      'mine-1': [{ kind: 'move', to: 'B' }], // viewer's plan
+      'enemy-near': [{ kind: 'assault' }], // the enemy's plan — must not leak
+      ghost: [{ kind: 'orbit' }], // a dead fleet's stale entry — nobody's
+    };
+    const view = visibleState(state, 'p1', data) as VisibleState & {
+      orders?: Record<string, unknown>;
+    };
+    expect(view.orders).toEqual({ 'mine-1': [{ kind: 'move', to: 'B' }] });
+    // The enemy (p2) in turn sees only its own chain — and never the viewer's.
+    const enemy = visibleState(state, 'p2', data) as VisibleState & {
+      orders?: Record<string, unknown>;
+    };
+    expect(enemy.orders).toEqual({ 'enemy-near': [{ kind: 'assault' }] });
+    // A player with no chains gets no key at all (no empty-map blip in deltas).
+    state.orders = { 'enemy-near': [{ kind: 'assault' }] };
+    expect('orders' in visibleState(state, 'p1', data)).toBe(false);
   });
 });
 
@@ -308,6 +339,15 @@ describe('visibleState (fog of war as a security boundary)', () => {
     expect(view.planets.Y?.owner).toBe('p2');
     expect(view.planets.Y?.garrison).toHaveLength(1);
   });
+
+  it('a viewer party to NO offers gets no diplomacyOffers key at all (no first-offer leak)', () => {
+    const state = scenario();
+    state.players.p3 = player('p3');
+    state.diplomacyOffers = { 'p2>p3': 'alliance' };
+    const view = visibleState(state, 'p1', data);
+    // not an empty {} — the key is gone, so a third party's delta stays silent
+    expect('diplomacyOffers' in view).toBe(false);
+  });
 });
 
 describe('visibleState — province kind is fog-gated (no appearance leak)', () => {
@@ -386,5 +426,72 @@ describe('radar tracks the moving ship, not its destination', () => {
     expect(view.signatures.some((s) => s.location === 'P1')).toBe(true);
     expect(view.signatures.some((s) => s.location === 'P2')).toBe(false);
     expect(view.fleets['foe-far']).toBeUndefined(); // out of the ship's radar → removed
+  });
+});
+
+describe('radar reach is stretched by tech / faction bonuses (A2)', () => {
+  // In `scenario`, p1's level-1 radar at A reaches 300: D (x=450, hosting
+  // `enemy-hidden`) is dark. A +50% bonus reaches 450 — D blips on radar but
+  // stays outside the identify half (225), so it is a contact, not an identity.
+  it('a completed technology with radarRangeBonus extends a world radar', () => {
+    const state = scenario();
+    state.players.p1!.technologies = { completed: ['long_scan'] };
+    const view = visibleState(state, 'p1', data);
+    expect(view.signatures).toContainEqual({ location: 'D', size: 'L' });
+    expect(view.fleets['enemy-hidden']).toBeUndefined(); // a blip, not a fleet
+    expect(view.planets.D?.garrison).toEqual([]); // world contents still fogged
+  });
+
+  it('a faction passive radarRangeBonus does the same', () => {
+    const state = scenario();
+    state.players.p1!.faction = 'farsight';
+    const view = visibleState(state, 'p1', data);
+    expect(view.signatures).toContainEqual({ location: 'D', size: 'L' });
+  });
+
+  it('stretches a fleet-carried radar too', () => {
+    const base = createInitialState({ seed: 'stretch', version: { data: '0.1.0', manifest: '1' } });
+    const state: GameState = {
+      ...base,
+      players: { p1: { ...player('p1'), technologies: { completed: ['long_scan'] } }, p2: player('p2') },
+      planets: {
+        X: planet('X', null, ['Z'], { position: { x: 0, y: 0 } }),
+        Z: planet('Z', 'p2', ['X'], { position: { x: 400, y: 0 } }),
+      },
+      fleets: {
+        probe: fleet('probe', 'p1', 'X', [['scout', 1]]), // radarRange 350
+        lurker: fleet('lurker', 'p2', 'Z', [['cruiser', 4]]), // signature 16 → ◆L
+      },
+    };
+    // 350 < 400: dark without the tech; ×1.5 = 525 ≥ 400: the lurker blips.
+    const dark = visibleState({ ...state, players: { ...state.players, p1: player('p1') } }, 'p1', data);
+    expect(dark.signatures).toEqual([]);
+    const lit = visibleState(state, 'p1', data);
+    expect(lit.signatures).toContainEqual({ location: 'Z', size: 'L' });
+  });
+});
+
+describe('isVisibleTo — the ad-hoc identify query (A4)', () => {
+  // Coverage in `scenario` for p1: A owned, B identified (1 jump), C/E radar-only,
+  // D beyond everything.
+  it('answers by the same rule the projection cuts by', () => {
+    const state = scenario();
+    expect(isVisibleTo(state, 'p1', { planetId: 'A' }, data)).toBe(true); // own world
+    expect(isVisibleTo(state, 'p1', { planetId: 'B' }, data)).toBe(true); // identified
+    expect(isVisibleTo(state, 'p1', { planetId: 'C' }, data)).toBe(false); // radar blip ≠ seen
+    expect(isVisibleTo(state, 'p1', { planetId: 'D' }, data)).toBe(false); // dark
+    expect(isVisibleTo(state, 'p1', { fleetId: 'mine-1' }, data)).toBe(true); // own fleet
+    expect(isVisibleTo(state, 'p1', { fleetId: 'enemy-near' }, data)).toBe(true); // at identified B
+    expect(isVisibleTo(state, 'p1', { fleetId: 'enemy-radar' }, data)).toBe(false); // contact only
+    expect(isVisibleTo(state, 'p1', { fleetId: 'enemy-hidden' }, data)).toBe(false);
+  });
+
+  it('remembered is not visible, and unknown ids fail secure', () => {
+    const state = scenario();
+    // p1 once saw D — memory alone must not answer "visible now".
+    state.fog = { p1: { D: { owner: 'p2', garrison: [], buildings: [], at: 0 } } };
+    expect(isVisibleTo(state, 'p1', { planetId: 'D' }, data)).toBe(false);
+    expect(isVisibleTo(state, 'p1', { planetId: 'ghost' }, data)).toBe(false);
+    expect(isVisibleTo(state, 'p1', { fleetId: 'ghost' }, data)).toBe(false);
   });
 });

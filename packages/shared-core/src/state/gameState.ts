@@ -50,6 +50,10 @@ export interface Player {
   name: string;
   faction: string;
   status: 'active' | 'defeated';
+  /** True for an AI-driven seat (bot). Absent = human. Game rules may key off it —
+   *  e.g. diplomacy: a coalition (alliance) is between humans only, bots are not
+   *  invitable (`diplomacyModule` rejects `E_BOT_ALLIANCE`). */
+  ai?: boolean;
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
   technologies?: PlayerTechnologyState;
@@ -83,6 +87,22 @@ export interface PlayerTechnologyState {
  *  The stance→relation mapping is `stanceToRelation` (`state/diplomacy.ts`),
  *  provided as the `diplomacy` capability by `diplomacyModule` (D2). */
 export type DiplomaticStance = 'war' | 'peace' | 'pact' | 'alliance';
+
+
+/** A stolen, time-boxed intel window (espionage): while `until` is ahead of the
+ *  world clock, `visibleState` lets the OWNING viewer see through the fog at the
+ *  granted target. What each kind opens:
+ *  - `treasury` — the target player's resource bag stays visible;
+ *  - `planet`   — the granted world's contents (owner/garrison/buildings) read live;
+ *  - `fleets`   — the target player's fleets stay in view (position + composition).
+ *  Grants are produced by `espionageModule` and expire on their own. */
+export interface IntelGrant {
+  kind: 'treasury' | 'planet' | 'fleets';
+  /** `treasury`/`fleets` → target player id; `planet` → the granted planet id. */
+  target: string;
+  /** World-time (ms) the window closes. */
+  until: number;
+}
 
 export type MatchStatus = 'ongoing' | 'ended';
 export type MatchEndReason = 'domination' | 'elimination' | 'score' | 'timeout';
@@ -350,6 +370,9 @@ export interface GameState {
    *  `visibleState` strips everyone else's negotiations. Maintained by
    *  `diplomacyModule`; helpers in `state/diplomacy.ts`. */
   diplomacyOffers?: Record<string, DiplomaticStance>;
+  /** Stolen intel windows per beneficiary (`espionageModule`). PRIVATE: a viewer's
+   *  projection carries only their own grants — who spies on whom is never public. */
+  intel?: Record<PlayerId, IntelGrant[]>;
   /** Session resource market: a public per-match order book maintained by
    *  `marketModule`. Sellers escrow a resource at a price; buyers pay money. */
   market?: MarketOrder[];
