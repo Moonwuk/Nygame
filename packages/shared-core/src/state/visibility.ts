@@ -273,11 +273,19 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const view = deepClone(state) as VisibleState;
   const { identify, radar } = coverageFor(state, viewerId, data);
 
+  // Stolen intel windows (espionage): the viewer's LIVE grants open narrow holes in
+  // the fog below. Expired grants open nothing — expiry is enforced HERE, at the
+  // security boundary, not only by the module's housekeeping.
+  const grants = (state.intel?.[viewerId] ?? []).filter((g) => g.until > state.time);
+  const spiedTreasury = new Set(grants.filter((g) => g.kind === 'treasury').map((g) => g.target));
+  const spiedPlanets = new Set(grants.filter((g) => g.kind === 'planet').map((g) => g.target));
+  const spiedFleets = new Set(grants.filter((g) => g.kind === 'fleets').map((g) => g.target));
+
   // Other players' private data: keep identity, drop treasury and research (incl. the
   // chosen research leader — its branch focus / +slot is strategic, not public).
   for (const player of Object.values(view.players)) {
     if (player.id === viewerId) continue;
-    player.resources = {};
+    if (!spiedTreasury.has(player.id)) player.resources = {};
     delete player.technologies;
     delete player.scientist;
   }
@@ -289,6 +297,13 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   if (view.match?.scores) {
     const own = view.match.scores[viewerId];
     view.match.scores = own ? { [viewerId]: own } : {};
+  }
+  // Stolen intel is the thief's secret: strip everyone else's grants (and the key
+  // entirely when the viewer has none — no empty-map blip in third-party deltas).
+  if (view.intel) {
+    const own = view.intel[viewerId];
+    if (own?.length) view.intel = { [viewerId]: own };
+    else delete view.intel;
   }
   // Diplomatic STANCES are public knowledge; pending OFFERS are between the two
   // parties only — a third player must not see who is courting whom. A map left
@@ -314,7 +329,8 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const remembered: PlanetId[] = [];
   const memory = state.fog?.[viewerId];
   for (const planet of Object.values(view.planets)) {
-    if (planet.owner === viewerId || identify.has(planet.id)) continue;
+    if (planet.owner === viewerId || identify.has(planet.id) || spiedPlanets.has(planet.id))
+      continue;
     const snap = memory?.[planet.id];
     if (snap) {
       planet.owner = snap.owner;
@@ -347,7 +363,7 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const signatures: SignatureContact[] = [];
   for (const id of Object.keys(view.fleets).sort()) {
     const fleet = view.fleets[id];
-    if (!fleet || fleet.owner === viewerId) continue;
+    if (!fleet || fleet.owner === viewerId || spiedFleets.has(fleet.owner)) continue;
     const node = fleetNode(view, fleet);
     if (node !== null && identify.has(node)) continue; // fully identified
     if (node !== null && radar.has(node)) {

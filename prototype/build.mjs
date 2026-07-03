@@ -349,6 +349,11 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #rail button{position:relative;width:34px;height:34px;background:transparent;border:0;cursor:pointer;
   font-size:17px;color:var(--cyan-dim);border-radius:6px;font-variant-emoji:text;}
 #rail button:hover,#rail button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
+#rail .railbadge{position:absolute;top:2px;right:2px;min-width:14px;height:14px;border-radius:7px;
+  background:var(--amber,#f0b429);color:#08131a;font:700 9px ui-monospace,monospace;
+  display:grid;place-items:center;padding:0 3px;}
+.dp-compose.dp-off{align-items:center;gap:8px;}
+.dp-compose .dp-offtxt{color:var(--dim);font-size:11px;}
 #rail .badge{position:absolute;right:5px;top:4px;min-width:15px;height:15px;border-radius:8px;
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
@@ -1104,7 +1109,7 @@ const html = `<!doctype html>
      features get wired. -->
 <nav id="rail">
   <button id="rail-diplo" title="Дипломатия">⬡</button>
-  <button id="rail-msgs" title="Сообщения">✉</button>
+  <button id="rail-msgs" title="Сообщения">✉<b id="msgbadge" class="railbadge" style="display:none"></b></button>
   <button id="rail-tech" title="Технологии">⚛</button>
   <button id="rail-market" title="Рынок">⇄</button>
   <button id="railcorp" title="Корпорация">⬢</button>

@@ -95,6 +95,21 @@ export interface DiplomacyOffer {
   stance: DiplomaticStance;
 }
 
+/** A stolen, time-boxed intel window (espionage): while `until` is ahead of the
+ *  world clock, `visibleState` lets the OWNING viewer see through the fog at the
+ *  granted target. What each kind opens:
+ *  - `treasury` — the target player's resource bag stays visible;
+ *  - `planet`   — the granted world's contents (owner/garrison/buildings) read live;
+ *  - `fleets`   — the target player's fleets stay in view (position + composition).
+ *  Grants are produced by `espionageModule` and expire on their own. */
+export interface IntelGrant {
+  kind: 'treasury' | 'planet' | 'fleets';
+  /** `treasury`/`fleets` → target player id; `planet` → the granted planet id. */
+  target: string;
+  /** World-time (ms) the window closes. */
+  until: number;
+}
+
 export type MatchStatus = 'ongoing' | 'ended';
 export type MatchEndReason = 'domination' | 'elimination' | 'score' | 'timeout';
 
@@ -360,6 +375,9 @@ export interface GameState {
    *  declarations and never wait here. Owned by `diplomacyModule` (D2);
    *  fog-sensitive: a viewer sees only offers they are a party to. */
   diplomacyOffers?: Record<string, DiplomacyOffer>;
+  /** Stolen intel windows per beneficiary (`espionageModule`). PRIVATE: a viewer's
+   *  projection carries only their own grants — who spies on whom is never public. */
+  intel?: Record<PlayerId, IntelGrant[]>;
   /** Session resource market: a public per-match order book maintained by
    *  `marketModule`. Sellers escrow a resource at a price; buyers pay money. */
   market?: MarketOrder[];

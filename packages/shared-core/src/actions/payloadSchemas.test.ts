@@ -26,6 +26,7 @@ const CLIENT_ACTION_TYPES = [
   'diplomacy.propose',
   'diplomacy.accept',
   'diplomacy.reject',
+  'espionage.spy',
   'market.list',
   'market.buy',
   'market.cancel',
@@ -67,6 +68,8 @@ describe('SV-1.2 · action payload schemas', () => {
       ['diplomacy.propose', { target: 'p2', stance: 'alliance' }],
       ['diplomacy.accept', { from: 'p2' }],
       ['diplomacy.reject', { from: 'p2' }],
+      ['espionage.spy', { target: 'p2', kind: 'treasury' }],
+      ['espionage.spy', { target: 'p2', kind: 'planet', planetId: 'home_b' }],
     ];
     for (const [type, payload] of valid) {
       expect(isValidActionPayload(type, payload), `${type}: ${JSON.stringify(payload)}`).toBe(true);
@@ -99,6 +102,8 @@ describe('SV-1.2 · action payload schemas', () => {
       ['diplomacy.declare', { target: 'p2', stance: 'alliance' }], // an alliance is never declarable
       ['diplomacy.propose', { target: 'p2', stance: 'war' }], // war is declared, not proposed
       ['diplomacy.accept', {}], // missing from
+      ['espionage.spy', { target: 'p2', kind: 'planet' }], // planet theft needs a planetId
+      ['espionage.spy', { target: 'p2', kind: 'pings' }], // not a stealable kind (yet)
     ];
     for (const [type, payload] of bad) {
       expect(isValidActionPayload(type, payload), `${type}: ${JSON.stringify(payload)}`).toBe(false);

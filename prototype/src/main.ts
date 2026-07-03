@@ -112,6 +112,7 @@ import {
   estimateTravelHours,
   fleetBaseSpeed,
   getStance,
+  pairHas,
   hashState,
   planRoute,
 } from '../../packages/shared-core/src/index';
@@ -4198,6 +4199,28 @@ function aiAcceptsStance(target: string, to: DiplomaticStance): boolean {
 }
 
 /** Append a line to the session log (bounded). Patches the feed if it's on screen. */
+/** Unread social events (war declarations, stance shifts) — badge on the ✉ rail. */
+let unreadMsgs = 0;
+/** Snapshots carry no domain events, so a NET client would never hear a war being
+ *  declared on it. Diff the stance map of consecutive snapshots for pairs with ME
+ *  and surface the change through the normal note/DM path. */
+function diffNetDiplomacy(prev: GameState, next: GameState): void {
+  const keys = new Set([...Object.keys(prev.diplomacy ?? {}), ...Object.keys(next.diplomacy ?? {})]);
+  for (const key of keys) {
+    if (!pairHas(key, ME)) continue;
+    const before = prev.diplomacy?.[key] ?? 'war';
+    const after = next.diplomacy?.[key] ?? 'war';
+    if (before === after) continue;
+    const [a, b] = key.split('|');
+    const other = a === ME ? b! : a!;
+    const who = NAME[other] ?? other;
+    if (after === 'war') note(`⚔ ${who} объявил вам войну!`);
+    else note(`🕊 ${who}: отношения → ${STANCE_RU[after]}`);
+    pushMsg(other, `Стойка изменена: ${STANCE_RU[after]}`, true, other);
+    unreadMsgs++;
+  }
+}
+
 function pushMsg(to: string, text: string, sys: boolean, from = ME, ping?: string): void {
   sessionMessages.push({ at: s.time, from, to, text, sys, ping, realAt: Date.now() });
   if (sessionMessages.length > 300) sessionMessages.shift();
@@ -4407,11 +4430,16 @@ function convoThreadHtml(): string {
   const pingBtn = isCoal
     ? `<button class="dp-ping" title="Отметить выбранную провинцию пингом">📍</button>`
     : '';
+  // NET: the text composer is a placebo (messages never leave this browser) — show
+  // the truth and keep the one thing that IS networked, the 📍 ping.
+  const compose = NET
+    ? `<div class="dp-compose dp-off">${pingBtn}<span class="dp-offtxt">Сетевой чат ещё не подключён — используйте пинги 📍</span></div>`
+    : `<div class="dp-compose">${pingBtn}<input id="dp-text" maxlength="160" placeholder="Сообщение…" autocomplete="off"><button class="dp-send">▶</button></div>`;
   return (
     `<div class="dp-thread">` +
     `<div class="dp-thhead">${title}</div>` +
     `<div class="dp-feed" id="dp-feed">${convoFeedInnerHtml(convoOpen)}</div>` +
-    `<div class="dp-compose">${pingBtn}<input id="dp-text" maxlength="160" placeholder="Сообщение…" autocomplete="off"><button class="dp-send">▶</button></div>` +
+    compose +
     `</div>`
   );
 }
@@ -6109,6 +6137,7 @@ function connect(): void {
           pingTimer = setInterval(() => client.ping(performance.now()), 2000);
           client.ping(performance.now()); // seed an RTT reading immediately
         }
+        if (admitted && s !== snap.state) diffNetDiplomacy(s, snap.state);
         s = snap.state;
         if (snap.playerId) ME = snap.playerId;
         // Desync check (M0): the server tags each snapshot with hashState(view); we
@@ -6567,6 +6596,11 @@ function frame(nowReal: number) {
     purse.innerHTML = hudHtml;
     lastHudHtml = hudHtml;
   }
+  const msgBadge = document.getElementById('msgbadge');
+  if (msgBadge) {
+    msgBadge.style.display = unreadMsgs > 0 ? '' : 'none';
+    msgBadge.textContent = String(unreadMsgs);
+  }
   const battles = Object.values(s.battles).filter(
     (b) => b.attacker.owner === ME || b.defender.owner === ME || known(b.location),
   ).length;
@@ -6669,7 +6703,10 @@ if (pingPopEl) {
 
 // Session menu: the rail's Diplomacy / Dispatches buttons open the roster / message log.
 document.getElementById('rail-diplo')?.addEventListener('click', () => openDiplo('diplo'));
-document.getElementById('rail-msgs')?.addEventListener('click', () => openDiplo('msgs'));
+document.getElementById('rail-msgs')?.addEventListener('click', () => {
+  unreadMsgs = 0; // reading the tab clears the badge
+  openDiplo('msgs');
+});
 
 // === floating chat window (desktop only) =====================================
 // A naive profanity scrub for the optional censor toggle — whole-word match, the
@@ -6853,10 +6890,11 @@ function closeChat(): void {
   renderChat();
 }
 function sendChatMsg(): void {
+  if (NET) return note('сетевой чат ещё не подключён — используйте пинги 📍');
   const input = document.getElementById('cw-text') as HTMLInputElement | null;
   const text = input?.value.trim();
   if (!text) return;
-  pushMsg(chatTab, text, false); // to the open channel / DM (net play would broadcast)
+  pushMsg(chatTab, text, false); // local sessions only — the net relay is a next brick
   if (input) {
     input.value = '';
     input.focus?.();
@@ -7036,10 +7074,11 @@ function toggleSet<T>(set: Set<T>, v: T): void {
   else set.add(v);
 }
 function sendDiploMsg(): void {
+  if (NET) return note('сетевой чат ещё не подключён — используйте пинги 📍');
   const input = document.getElementById('dp-text') as HTMLInputElement | null;
   const text = input?.value.trim();
   if (!text) return;
-  pushMsg(convoOpen, text, false); // to the open conversation (in net play this would broadcast)
+  pushMsg(convoOpen, text, false); // local sessions only — the net relay is a next brick
   if (input) {
     input.value = '';
     input.focus();

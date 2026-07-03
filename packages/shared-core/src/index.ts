@@ -47,6 +47,7 @@ export {
   type MatchState,
   type DiplomaticStance,
   type DiplomacyOffer,
+  type IntelGrant,
 } from './state/gameState';
 export {
   buildStateFromMap,
@@ -74,6 +75,7 @@ export {
   DEFAULT_STANCE,
   STANCE_RANK,
   pairKey,
+  pairHas,
   getStance,
   setStance,
   isBotPair,
@@ -193,6 +195,7 @@ export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
 export { heroModule } from './modules/hero';
 export { marketModule } from './modules/market';
+export { espionageModule } from './modules/espionage';
 export {
   diplomacyModule,
   stanceToRelation,

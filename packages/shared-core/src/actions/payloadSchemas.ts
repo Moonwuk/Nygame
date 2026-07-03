@@ -65,6 +65,16 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'diplomacy.propose': z.object({ target: id, stance: z.enum(['peace', 'pact', 'alliance']) }),
   'diplomacy.accept': z.object({ from: id }),
   'diplomacy.reject': z.object({ from: id }),
+  // espionage.ts — steal a time-boxed intel window; `planetId` only with kind 'planet'
+  'espionage.spy': z
+    .object({
+      target: id,
+      kind: z.enum(['treasury', 'planet', 'fleets']),
+      planetId: id.optional(),
+    })
+    .refine((v) => v.kind !== 'planet' || v.planetId !== undefined, {
+      message: "kind 'planet' needs a planetId",
+    }),
   // market.ts — amounts are plain positive numbers (resources accrue continuously,
   // so fractional amounts are legal); price is a non-negative unit price.
   'market.list': z.object({
