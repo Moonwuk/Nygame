@@ -2117,6 +2117,8 @@ export const orbitFleet = (playerId: string, fleetId: string, orbit: 'near' = 'n
   act(playerId, 'fleet.orbit', { fleetId, orbit });
 export const assaultFleet = (playerId: string, fleetId: string) =>
   act(playerId, 'fleet.assault', { fleetId });
+export const retreatFleet = (playerId: string, fleetId: string) =>
+  act(playerId, 'fleet.retreat', { fleetId });
 export const bombardFleet = (playerId: string, fleetId: string, on: boolean) =>
   act(playerId, 'fleet.bombard', { fleetId, on });
 /** Focus an artillery fleet's standoff fire on one enemy fleet (targetId), or

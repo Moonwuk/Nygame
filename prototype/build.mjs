@@ -631,7 +631,18 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   body.sheet-open #speedbar{display:none;}
 
   #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
-  button.b{padding:9px 12px;font-size:12px;min-height:40px;}
+  /* finger-first targets: everything tappable grows to the 44px rule (hud-inmatch.md) */
+  button.b{padding:9px 12px;font-size:12px;min-height:44px;}
+  #rail button{width:46px;height:46px;}
+  .spd button{min-width:38px;height:40px;font-size:12px;}
+  .spd .spdmini{min-width:34px;}
+  .pclose{width:44px;height:44px;font-size:14px;}
+  .ptab{min-height:42px;}
+  /* notched phones: controls step inside the safe area instead of under the notch */
+  #top{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+  #rail{padding-bottom:env(safe-area-inset-bottom);}
+  #speedbar{bottom:calc(12px + env(safe-area-inset-bottom));}
+  #cmdbar{bottom:calc(10px + env(safe-area-inset-bottom));}
   #cmdbar{bottom:10px;gap:5px;}
   #cmdbar .cmdlabel{display:none;}
   #cmdbar button{min-width:56px;height:52px;}
