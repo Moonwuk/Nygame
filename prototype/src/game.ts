@@ -161,16 +161,6 @@ export const data: GameData = parseGameData({
       buildTimeHours: 4,
       upkeep: { credits: 3 },
     },
-    marine: {
-      faction: 'blue',
-      stats: { attack: 12, defense: 12, speed: 52, hp: 24 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 1, // ground trooper — faint
-      cost: { metal: 30 },
-      buildTimeHours: 2,
-      upkeep: { credits: 2 },
-    },
     orbital_aa: {
       faction: 'blue',
       stats: { attack: 4, defense: 14, speed: 0, hp: 30, aaDamage: 12 },
@@ -205,29 +195,6 @@ export const data: GameData = parseGameData({
       signature: 2,
       cost: { metal: 120, credits: 30 },
       buildTimeHours: 4,
-      upkeep: { credits: 4 },
-    },
-    // Бомбардировщик — rear-line striker: big attack, paper armour; hits structures.
-    bomber: {
-      faction: 'blue',
-      stats: { attack: 26, defense: 4, speed: 60, hp: 18, cargoSize: 2 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 3,
-      cost: { metal: 90, credits: 50 },
-      buildTimeHours: 3,
-      upkeep: { credits: 5 },
-    },
-    // ПВО — anti-air specialist: shreds bombers, weak on the ground. (Flat stats here
-    // are the designer's rough preview; the per-type matrix in groundcombat is combat law.)
-    aa: {
-      faction: 'blue',
-      stats: { attack: 6, defense: 9, speed: 44, hp: 20, cargoSize: 2 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 2,
-      cost: { metal: 80, credits: 40 },
-      buildTimeHours: 3,
       upkeep: { credits: 4 },
     },
     // The player's projection hero — cruiser-tier guns but TRIPLE the hull, and the
@@ -958,7 +925,7 @@ export interface SetupConfig {
 // menu and frozen for the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
-export const FORMATION_UNITS = ['infantry', 'tank', 'bomber', 'aa'] as const;
+export const FORMATION_UNITS = ['infantry', 'tank'] as const;
 export type FormationUnit = (typeof FORMATION_UNITS)[number];
 /** Slots per template, and templates per player. */
 export const FORMATION_SLOTS = 6;
@@ -972,9 +939,9 @@ export interface FormationTemplate {
 
 /** The three starter templates a player gets before customising them. */
 export const DEFAULT_TEMPLATES: FormationTemplate[] = [
-  { name: 'Линия', slots: ['infantry', 'infantry', 'infantry', 'infantry', 'tank', 'bomber'] },
-  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'infantry', 'infantry', 'bomber'] },
-  { name: 'Налёт', slots: ['bomber', 'bomber', 'tank', 'infantry', 'infantry', null] },
+  { name: 'Линия', slots: ['infantry', 'infantry', 'infantry', 'infantry', 'tank', 'tank'] },
+  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'infantry', 'infantry', 'infantry'] },
+  { name: 'Клин', slots: ['tank', 'tank', 'tank', 'tank', 'infantry', null] },
 ];
 
 /** An active composition synergy (a doctrine bonus the template's mix unlocks). */
@@ -999,7 +966,7 @@ export interface FormationStats {
  *  (combined-arms / entrenched / armour / air-support). Pure + deterministic; used by
  *  the menu preview and (later) by mobilisation. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
-  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0, bomber: 0, aa: 0 };
+  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0 };
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -1014,43 +981,27 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
-  const count = byType.infantry + byType.tank + byType.bomber + byType.aa;
+  const count = byType.infantry + byType.tank;
   // Composition synergies — additive multipliers on attack / defense.
   let atkMul = 1;
   let defMul = 1;
   const synergies: FormationSynergy[] = [];
-  if (byType.infantry > 0 && byType.tank > 0 && byType.bomber > 0) {
+  if (byType.infantry > 0 && byType.tank > 0) {
     atkMul += 0.15;
     defMul += 0.15;
     synergies.push({
       key: 'combined',
       name: 'Комбинированные войска',
-      desc: '+15% атака и оборона — есть все три рода войск',
+      desc: '+15% атака и оборона — пехота и танки вместе',
     });
   }
-  if (byType.infantry >= 4 && byType.tank === 0 && byType.bomber === 0) {
+  if (byType.infantry >= 4 && byType.tank === 0) {
     defMul += 0.25;
     synergies.push({ key: 'entrench', name: 'Окопались', desc: '+25% оборона — чистая пехота' });
   }
   if (byType.tank >= 3) {
     atkMul += 0.2;
     synergies.push({ key: 'armor', name: 'Танковый кулак', desc: '+20% атака — ≥3 танков (прорыв)' });
-  }
-  if (byType.bomber >= 1) {
-    atkMul += 0.1;
-    synergies.push({
-      key: 'air',
-      name: 'Авиаподдержка',
-      desc: '+10% атака и удар по структурам — есть бомбардировщик',
-    });
-  }
-  if (byType.aa >= 1) {
-    defMul += 0.1;
-    synergies.push({
-      key: 'airdef',
-      name: 'ПВО-зонтик',
-      desc: '+10% оборона и защита от авиации — есть ПВО',
-    });
   }
   return {
     count,
@@ -1128,7 +1079,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { type: 'mine', level: 1, hp: hpOfLevel('mine', 1) },
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
     ];
-    home.garrison = [{ unit: 'marine', count: 3 }];
+    home.garrison = []; // ground force is mobilised as divisions in-match (no seeded garrison)
     players[seat.id] = player(seat.id, seat.name, seat.faction, {
       credits: 260,
       metal: 320,
@@ -1145,7 +1096,7 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
         ['cruiser', 2],
         ['scout', 1],
       ],
-      [['marine', 3]],
+      [],
     );
     // The deployed hero is a projection of the commander, named by their nick: the MAIN
     // (grade-`main`) roster hero, flagship of the home fleet. It respawns at the capital
@@ -1648,9 +1599,8 @@ function reapWipedDivisions(state: GameState): void {
 }
 
 /** Hand a world to the lowest-id attacker present (a non-`defenderOwner` owner),
- *  unless it isn't capturable or a hostile fleet garrison still holds it. The legacy
- *  marine garrison is NOT engaged by division combat yet (a documented seam): a
- *  garrisoned world resists division capture until cleared via the fleet-assault path. */
+ *  unless it isn't capturable or a hostile fleet garrison still holds it. A leftover
+ *  ship garrison still resists division capture until cleared via the fleet-assault path. */
 function captureGround(h: HandlerContext, planetId: string, defenderOwner: string | null): void {
   const planet = h.state.planets[planetId];
   if (!planet || !isCapturable(data, planet)) return;
@@ -2152,7 +2102,7 @@ export function aiOrders(state: GameState, ai: string): Action[] {
     if ((pl.resources.metal ?? 0) > 220 && (pl.resources.credits ?? 0) > 120) {
       out.push(buildUnit(ai, base.id, 'cruiser', 1));
     } else if ((pl.resources.metal ?? 0) > 70) {
-      out.push(buildUnit(ai, base.id, 'marine', 1));
+      out.push(buildUnit(ai, base.id, 'scout', 1));
     }
     const aiFleets = Object.values(state.fleets).filter((f) => f.owner === ai).length;
     const baseHasShip = base.garrison.some((st) => isShipUnit(st.unit));

@@ -724,27 +724,27 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .tpl-cost{color:var(--dim);font-size:11px;margin-top:6px;}
 /* polished live stat preview — labelled rows with base→derived + a track bar (the
    approved loadout-menu look). Shared by the ship / hero / squadron fitting panes. */
-#setup .lstats{border:1px solid var(--line-hi);border-radius:10px;padding:13px 14px;margin-bottom:8px;background:rgba(255,255,255,.02);}
-#setup .lstats .lhd{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);font-weight:800;margin-bottom:11px;}
-#setup .lstats .lsum{font-size:12px;color:var(--ink);line-height:1.7;}
-#setup .lstats .lsum b{color:#eafffb;}
-#setup .lstats .lsum .lpl{color:var(--amber);}
-#setup .lstat{margin-bottom:11px;}
-#setup .lstat:last-child{margin-bottom:0;}
-#setup .lstat .lrow{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:4px;}
-#setup .lstat .lnm{color:var(--dim);font-weight:700;}
-#setup .lstat .lval{font-weight:800;color:#eafffb;}
-#setup .lstat .lval .lb{color:var(--dim);font-weight:600;}
-#setup .lstat .lval .lup{color:var(--grn);}
-#setup .lstat .lval .ldn{color:var(--amber);}
-#setup .lstat .ltrack{height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden;display:flex;}
-#setup .lstat .ltrack .lbar{background:var(--cyan-dim);}
-#setup .lstat .ltrack .ldelta{background:var(--grn);}
-#setup .synlist{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
-#setup .synlist .syn{display:block;color:var(--cyan);font-size:11px;line-height:1.55;margin-bottom:4px;}
-#setup .synlist .syn:last-child{margin-bottom:0;}
-#setup .synlist .syn em{color:var(--amber);font-style:normal;}
-#setup .synlist .syn.none{color:var(--dim);}
+.lstats{border:1px solid var(--line-hi);border-radius:10px;padding:13px 14px;margin-bottom:8px;background:rgba(255,255,255,.02);}
+.lstats .lhd{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);font-weight:800;margin-bottom:11px;}
+.lstats .lsum{font-size:12px;color:var(--ink);line-height:1.7;}
+.lstats .lsum b{color:#eafffb;}
+.lstats .lsum .lpl{color:var(--amber);}
+.lstat{margin-bottom:11px;}
+.lstat:last-child{margin-bottom:0;}
+.lstat .lrow{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:4px;}
+.lstat .lnm{color:var(--dim);font-weight:700;}
+.lstat .lval{font-weight:800;color:#eafffb;}
+.lstat .lval .lb{color:var(--dim);font-weight:600;}
+.lstat .lval .lup{color:var(--grn);}
+.lstat .lval .ldn{color:var(--amber);}
+.lstat .ltrack{height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden;display:flex;}
+.lstat .ltrack .lbar{background:var(--cyan-dim);}
+.lstat .ltrack .ldelta{background:var(--grn);}
+.synlist{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
+.synlist .syn{display:block;color:var(--cyan);font-size:11px;line-height:1.55;margin-bottom:4px;}
+.synlist .syn:last-child{margin-bottom:0;}
+.synlist .syn em{color:var(--amber);font-style:normal;}
+.synlist .syn.none{color:var(--dim);}
 /* hero fitting — Minecraft-inventory style: equip "bays" + a module inventory grid you
    grab from (tap to pick onto the cursor, tap a bay to place; a ghost trails the pointer) */
 .fitpane .heroslots{grid-template-columns:repeat(2,1fr);}

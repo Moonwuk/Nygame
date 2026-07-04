@@ -141,7 +141,7 @@ const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'
 // `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
 // buildable: it's a tech unlock (pending the in-session research tree). It still
 // comes pre-installed with a space fortress (installFortressAA).
-const BUILD_UNITS = ['marine', 'cruiser', 'scout', 'siege'];
+const BUILD_UNITS = ['cruiser', 'scout', 'siege'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
@@ -152,7 +152,6 @@ const BUILD_ICON: Record<string, string> = {
   radar: '⊚',
 };
 const UNIT_ICON: Record<string, string> = {
-  marine: '◆',
   orbital_aa: '⌁',
   cruiser: '▲',
   scout: '◌',
@@ -1074,7 +1073,12 @@ function divisionsHtml(planetId: string): string {
   const cost = Object.entries(f.cost).map(([r, a]) => `${a}${r[0]}`).join(' ') || '—';
   const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
   const syn = f.synergies.map((x) => esc(x.name)).join(' · ');
-  h += `<div class="hint">⚔${f.attack} · 🛡${f.defense} · ❤${f.hp} · состав ${f.count}/${FORMATION_SLOTS} · ${cost}${syn ? ' · ' + syn : ''}</div>`;
+  // Live influence on characteristics as you assemble (same bar preview as ships).
+  const bar = (label: string, val: number, max: number): string =>
+    `<div class="lstat"><div class="lrow"><span class="lnm">${label}</span><span class="lval">${val}</span></div>` +
+    `<div class="ltrack"><div class="lbar" style="width:${Math.round(Math.min(100, (val / max) * 100))}%"></div></div></div>`;
+  h += `<div class="lstats"><div class="lhd">Влияние на характеристики</div>${bar('⚔ Урон в атаке', f.attack, 300)}${bar('🛡 Урон в защите', f.defense, 300)}${bar('❤ Корпус', f.hp, 600)}</div>`;
+  h += `<div class="hint">состав ${f.count}/${FORMATION_SLOTS} · ${cost}${syn ? ' · ' + syn : ''}</div>`;
   h += btn('mobilize', String(idx), `Мобилизовать «${esc(cur.name)}»`, afford && f.count > 0);
   h += `<div class="hint">Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.</div>`;
   return h;
@@ -3438,7 +3442,7 @@ function panelHtml(): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('marine')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>◆ ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -3622,11 +3626,6 @@ function unitDossier(id: string): Dossier | null {
       return {
         name: 'Siege Platform',
         body: `Тяжёлая осадная платформа: ${hl(st.attack)} урона с дистанции ${hl(st.range ?? 0)}, но тонкая броня (${hl(st.defense)} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.`,
-      };
-    case 'marine':
-      return {
-        name: 'Marine',
-        body: `Десантная пехота, ${hl(st.attack)}/${hl(st.defense)} в наземном бою. Грузится на флот и высаживается, чтобы захватывать миры, которые орбита лишь подавляет огнём.`,
       };
     case 'orbital_aa':
       return {
@@ -5068,8 +5067,8 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 /** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈', aa: '◎' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер', aa: 'ПВО' };
+const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡' };
+const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 
 /** The hero's display name — the главный hero shows the player's callsign (nick). */

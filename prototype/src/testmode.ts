@@ -43,8 +43,8 @@ export interface TestModeHooks {
 }
 
 const SPEEDS = [1, 2, 6, 20]; // selectable game-speed multipliers
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈', aa: '◎' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер', aa: 'ПВО' };
+const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡' };
+const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк' };
 
 // Scenario-1 force config: the spacecraft each side's fleets are built from.
 const SHIP_UNITS = ['cruiser', 'scout', 'siege'] as const;
@@ -142,7 +142,7 @@ export function initTestMode(hooks: TestModeHooks): void {
   function groundHtml(): string {
     return `<div class="tmbox">
       <div class="tm-title"><span class="dia"></span><b>СЦЕНАРИЙ 2 · НАЗЕМНЫЙ БОЙ</b></div>
-      <p class="tm-sub">Тапни слот, чтобы сменить род войск (пусто → пехота → танк → бомбер). Затем «Сразиться» — резолвер прогонит бой до конца.</p>
+      <p class="tm-sub">Тапни слот, чтобы сменить род войск (пусто → пехота → танк). Затем «Сразиться» — резолвер прогонит бой до конца.</p>
       <div class="tm-sides">${sideHtml('a', 'Атакующий', tplA)}${sideHtml('d', 'Обороняющийся', tplD)}</div>
       <button class="tm-fight" data-tm="fight">⚔ Сразиться</button>
       ${groundResult ? `<div class="tm-result">${groundResult}</div>` : ''}
