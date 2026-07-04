@@ -47,6 +47,8 @@ export interface MapRenderOpts {
   now: number;
   /** Device-pixel-ratio the canvas transform was set to — the holo sprites bake at it. */
   dpr: number;
+  /** Planet id to ring as the current selection (a fleet's home), if any. */
+  selected?: string | null;
 }
 
 /** Map each player id → a stable seat colour by join order. */
@@ -170,6 +172,34 @@ export function renderMap(
     g.textBaseline = 'alphabetic';
     g.fillStyle = theme.ink;
     g.fillText(p.id, c.x + R + 6, c.y + 3);
+  }
+
+  // Selection reticle — a bright ring + corner brackets around the picked planet.
+  if (opts.selected) {
+    const sp = state.planets[opts.selected];
+    if (sp) {
+      const c = worldToScreen(sp.position, cam, vp, bounds);
+      const rr = R + 8;
+      g.save();
+      g.strokeStyle = rgba('#7df0d0', 0.95);
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(c.x, c.y, rr, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      for (const [dx, dy] of [
+        [-1, -1],
+        [1, -1],
+        [1, 1],
+        [-1, 1],
+      ] as const) {
+        g.moveTo(c.x + dx * rr, c.y + dy * (rr - 4));
+        g.lineTo(c.x + dx * rr, c.y + dy * rr);
+        g.lineTo(c.x + dx * (rr - 4), c.y + dy * rr);
+      }
+      g.stroke();
+      g.restore();
+    }
   }
 
   // Fleets — a small chevron in the owner's colour (with a soft glow) at its position.
