@@ -32,6 +32,8 @@ export function composeGameDataBundle(readJson: JsonReader): Record<string, unkn
     technologies: readJson('technologies.json'),
     scientists: readJson('scientists.json'),
     modules: readJson('modules.json'),
+    heroes: readJson('heroes.json'),
+    heroAbilities: readJson('heroAbilities.json'),
   };
 }
 

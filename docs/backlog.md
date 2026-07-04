@@ -242,8 +242,12 @@
 - **HERO-0** ✅ Скелет: герой-позиция (`GameState.heroes`/`tempLanes`/`topology`),
   `heroModule` с `hero.move`/`hero.path.create`/`planet.annihilate`, `dead_world`,
   приватность в `visibleState`, кэш маршрутов по `topology`. 11 тестов (PR #31).
-- **HERO-1** ⏳ `[data]` Схемы + `data/heroes.json` (архетипы), `data/heroAbilities.json`
-  (тип-эффект/cooldown/range/params); загрузчик дополнен; `parseGameData` валидирует. Тесты схем.
+- **HERO-1** ✅ `[data]` Схемы + `data/heroes.json` (архетипы: `commander/ravager/vanguard/warden`,
+  `HeroArchetypeDef {name, branch?, ship{unit?|stats?}, slots, startAbilities[], startPassives[]}`,
+  ветка героев `transhuman|psionic`) + `data/heroAbilities.json` (`HeroAbilityDef {name, type,
+  cooldownHours, range, cost, params}`: `corridor/annihilate/rally/scan/recall/bulwark`); загрузчик
+  (`loadGameData`) дополнен; `parseGameData` валидирует; тесты схем + referential-integrity
+  (`startAbilities`∈heroAbilities, `ship.unit`∈units) + дефолты + fail-closed. 4 теста.
 - **HERO-2** 🔒(HERO-1) Движок: герой → **корабль** (`Hero.fleetId`, `traits:['hero']`),
   миграция `location`→флот, `on('fleet.destroyed')` → `hero.died` + `respawnAt`. Тесты.
 - **HERO-3** 🔒(HERO-2) `hero.spawn {heroId, at}` — спавн на своём мире, кэп **3/игрок**,
