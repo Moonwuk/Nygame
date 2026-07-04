@@ -3082,17 +3082,49 @@ function render(now: number) {
       continue;
     }
 
-    // province-type badge: a small kind glyph above the node so the type reads at a
-    // glance, regardless of the bespoke art below it (planet / asteroid / nebula / …).
+    // province-type badge — a holographic type icon that HOVERS above the province:
+    // a projected hologram (soft glow halo + holo capsule ring + a faint projector
+    // tether down to the node), gently bobbing in the sector-type colour so the type
+    // reads at a glance regardless of the bespoke art below (planet / asteroid / …).
     if (KIND_ICON[n.sector]) {
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd';
+      const bob = Math.sin(now / 700 + n.x * 0.021 + n.y * 0.017) * 2.4;
+      const brad = 11;
+      const bx = c.x;
+      const by = c.y - R - 6 - brad - 6 + bob; // badge centre floats above, softly bobbing
       cx.save();
-      cx.font = '13px ui-monospace,Menlo,monospace';
+      blitGlow(kc, bx, by, brad + 9, 0.5); // holographic bloom (cached disc)
+      // projector tether — a faint dashed beam from the node up to the badge
+      cx.strokeStyle = rgba(kc, 0.16);
+      cx.setLineDash([2, 3]);
+      cx.lineWidth = 1;
+      cx.beginPath();
+      cx.moveTo(bx, c.y - R);
+      cx.lineTo(bx, by + brad);
+      cx.stroke();
+      cx.setLineDash([]);
+      // holo capsule: translucent disc + bright rim + inner scanline ring
+      cx.fillStyle = rgba(kc, 0.12);
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.fill();
+      cx.strokeStyle = rgba(kc, 0.6);
+      cx.lineWidth = 1.2;
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.stroke();
+      cx.strokeStyle = rgba(kc, 0.26);
+      cx.beginPath();
+      cx.arc(bx, by, brad - 3, 0, TAU);
+      cx.stroke();
+      // the type glyph, glowing in the sector colour
+      cx.font = '700 15px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
       cx.textBaseline = 'middle';
-      cx.shadowColor = 'rgba(0,0,0,0.85)';
-      cx.shadowBlur = 3;
-      cx.fillStyle = rgba(SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd', 1);
-      cx.fillText(KIND_ICON[n.sector]!, c.x, c.y - 18);
+      cx.shadowColor = kc;
+      cx.shadowBlur = 5;
+      cx.fillStyle = rgba(kc, 0.95);
+      cx.fillText(KIND_ICON[n.sector]!, bx, by + 0.5);
       cx.restore();
     }
 
@@ -3158,12 +3190,23 @@ function render(now: number) {
       cx.save();
       cx.shadowColor = 'rgba(0,0,0,0.85)';
       cx.shadowBlur = 3;
-      cx.fillStyle = p.owner ? col : '#9fc9c4';
-      cx.font = '700 11px ui-monospace,Menlo,monospace';
-      cx.fillText(n.id, c.x + 16, c.y - 1);
-      cx.fillStyle = 'rgba(150,210,205,0.55)';
-      cx.font = '9px ui-monospace,Menlo,monospace';
-      cx.fillText(fort ? 'void fortress ✦' : 'asteroid field', c.x + 16, c.y + 11);
+      if (fort) {
+        // a fortress stays a prominent, special designation (unchanged)
+        cx.fillStyle = p.owner ? col : '#9fc9c4';
+        cx.font = '700 11px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.55)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('void fortress ✦', c.x + 16, c.y + 11);
+      } else {
+        // a plain asteroid field is a minor sector — de-emphasised (dim, smaller)
+        cx.fillStyle = p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)';
+        cx.font = '600 10px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.38)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('asteroid field', c.x + 16, c.y + 11);
+      }
       cx.restore();
       continue;
     }
@@ -3243,21 +3286,33 @@ function render(now: number) {
 
     if (selPlanet === n.id) targetBrackets(c.x, c.y, R + 10, now);
 
-    // callout: id + garrison/buildings, monospace (fogged → no telemetry)
+    // callout: id + garrison/buildings, monospace. Worlds (planets — the capturable
+    // prize) get a BRIGHT designation; every other sector is de-emphasised to a dim,
+    // smaller coordinate so the map reads "worlds first" (fogged → no telemetry).
+    const isWorld = n.sector === 'planet';
     cx.save();
     cx.shadowColor = 'rgba(0,0,0,0.85)';
     cx.shadowBlur = 3;
-    cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
-    cx.font = '700 12px ui-monospace,Menlo,monospace';
+    if (isWorld) {
+      cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
+      cx.font = '700 12px ui-monospace,Menlo,monospace';
+    } else {
+      cx.fillStyle = kn ? (p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)') : 'rgba(120,140,150,0.4)';
+      cx.font = '600 10px ui-monospace,Menlo,monospace';
+    }
     cx.fillText(n.id, c.x + R + 12, c.y - 1);
-    cx.font = '10px ui-monospace,Menlo,monospace';
     if (kn) {
       const g = p.garrison.reduce((a, st) => a + st.count, 0);
-      cx.fillStyle = 'rgba(150,210,205,0.6)';
       const icons = p.buildings.map((b) => BUILD_ICON[b.type] ?? '▪').join('');
-      cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + 12);
+      // worlds always show telemetry; a quiet sector only when it holds something
+      if (isWorld || g > 0 || p.buildings.length) {
+        cx.fillStyle = rgba('#96d2cd', isWorld ? 0.6 : 0.42);
+        cx.font = isWorld ? '10px ui-monospace,Menlo,monospace' : '9px ui-monospace,Menlo,monospace';
+        cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + (isWorld ? 12 : 11));
+      }
     } else {
       cx.fillStyle = 'rgba(110,130,140,0.5)';
+      cx.font = '10px ui-monospace,Menlo,monospace';
       cx.fillText('· no telemetry', c.x + R + 12, c.y + 12);
     }
     cx.restore();
