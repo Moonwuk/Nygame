@@ -500,7 +500,6 @@ const railEl = $('rail');
 const railToggle = $('railtoggle');
 const railGlyph = $('railglyph');
 const railAlert = $('railalert');
-const donateEl = $('donate');
 const crestMark = $('crestmark');
 
 // Player emblem — a cosmetic console crest the player picks in the main menu (hub) and
@@ -6536,10 +6535,6 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
-  // The match goal, written AFTER the wipe so it is the first line a player can read.
-  // Kept honest against the kernel: victoryModule ends on score (SCORE_LIMIT), on
-  // elimination, or on domination — no "capital capture" victory exists.
-  note(`Задача: ✦ ${SCORE_LIMIT} (мир — 50, сектор — 10) или уничтожение соперников.`);
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
   defaultView(); // phone: zoom onto home; desktop: whole-map fit
   setupEl.style.display = 'none';
@@ -7166,7 +7161,8 @@ function frame(nowReal: number) {
   const need = Math.max(0, SCORE_LIMIT - score);
   const statusHtml =
     `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
-    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>`;
+    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>` +
+    `<span class="dl-donate" title="Суверены — донат-валюта"><i>◆</i>${kfmt(SOVEREIGNS)}</span>`;
   if (statusHtml !== lastClockText) {
     devlineEl.innerHTML = statusHtml;
     lastClockText = statusHtml;
@@ -7291,13 +7287,10 @@ if (codexEl) {
 
 // Player card: tap the top-left crest to open your session dossier (faction, worlds,
 // fleets, score, treasury); tap the backdrop or CLOSE to dismiss.
+// the left crest (emblem + title) opens the player dossier
 document.querySelector('.crest')?.addEventListener('click', () => openPlayerCard());
-// the top-bar emblem opens the same dossier as the left crest
-crestMark.addEventListener('click', () => openPlayerCard());
 
-// top-bar right cluster: fill the donate readout once (constant placeholder in the
-// prototype) and mirror the chosen emblem into the top bar + hub avatar.
-donateEl.innerHTML = `<i>◆</i>${kfmt(SOVEREIGNS)}`;
+// mirror the chosen emblem into the top-left corner + the hub avatar
 applyEmblem();
 
 // collapsible rail — the hamburger toggles the tool panel; picking a tool closes it.

@@ -86,23 +86,23 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
   color:var(--dim);text-shadow:none;}
 .res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
   white-space:nowrap;flex:0 0 auto;}
-/* top-bar right cluster: the donate currency (Суверены ◆, gold pill) + the player's
-   chosen emblem, tucked into the right corner so the resource chips own the middle. */
-.topend{display:flex;align-items:center;gap:8px;height:100%;padding:0 10px 0 9px;flex:0 0 auto;
-  border-left:1px solid var(--line);}
-#donate{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:11px;
-  color:#fff2cf;font-weight:800;font-size:13px;line-height:1;letter-spacing:.3px;font-variant-numeric:tabular-nums;
-  background:linear-gradient(180deg,rgba(255,206,92,.20),rgba(240,170,40,.10));border:1px solid rgba(255,208,96,.55);
-  box-shadow:0 0 12px rgba(255,198,72,.32),inset 0 0 6px rgba(255,214,120,.16);
-  animation:donatePulse 2.8s ease-in-out infinite;white-space:nowrap;}
-#donate i{color:#ffd45e;text-shadow:0 0 9px rgba(255,212,94,.85);font-style:normal;font-size:15px;}
-/* player emblem — a console crest the player picks in the main menu (hub). Tap → dossier. */
-#crestmark{width:34px;height:34px;border-radius:9px;flex:0 0 auto;cursor:pointer;padding:0;
-  display:grid;place-items:center;font-size:18px;color:var(--cyan);font-variant-emoji:text;
+/* player emblem — a console crest the player picks in the main menu (hub), worn in the
+   TOP-LEFT corner. Tap → player dossier (bubbles to the .crest handler). */
+#crestmark{width:32px;height:32px;border-radius:9px;flex:0 0 auto;cursor:pointer;padding:0;
+  display:grid;place-items:center;font-size:17px;color:var(--cyan);font-variant-emoji:text;
   background:rgba(3,12,16,.7);border:1px solid var(--line-hi);
   box-shadow:inset 0 0 10px rgba(53,214,230,.14),0 0 10px rgba(53,214,230,.12);
   text-shadow:0 0 8px rgba(53,214,230,.5);}
 #crestmark:hover,#crestmark:active{background:rgba(53,214,230,.16);}
+/* donate currency (Суверены ◆, gold) sits UNDER the resource bar on the status line,
+   pushed to the right end — so the resource chips get the full top-bar width for numbers. */
+#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:5px;
+  padding:2px 9px;border-radius:11px;color:#fff2cf;font-weight:800;font-size:12px;line-height:1;
+  letter-spacing:.3px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,206,92,.20),rgba(240,170,40,.10));border:1px solid rgba(255,208,96,.55);
+  box-shadow:0 0 12px rgba(255,198,72,.30),inset 0 0 6px rgba(255,214,120,.16);
+  animation:donatePulse 2.8s ease-in-out infinite;white-space:nowrap;}
+#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 9px rgba(255,212,94,.85);font-style:normal;font-size:14px;}
 @keyframes donatePulse{
   0%,100%{box-shadow:0 0 10px rgba(255,198,72,.30),inset 0 0 7px rgba(255,214,120,.16);}
   50%{box-shadow:0 0 22px rgba(255,205,90,.7),inset 0 0 9px rgba(255,220,130,.30);}}
@@ -639,17 +639,14 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 @media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){
   #top{height:44px;}
   .who{display:none;}
-  /* the left crest is empty on phones (title hidden) — drop it so the resource chips get
-     the width; the top-right emblem is the identity tap-target here. */
-  .crest{display:none;}
-  #devline{top:44px;}
-  /* tighten the right cluster + chips so five currencies + donate + emblem all fit */
-  .topend{gap:6px;padding:0 8px 0 7px;}
-  #donate{font-size:12px;padding:2px 7px;gap:4px;}
-  #donate i{font-size:13px;}
+  /* phones: the left crest is just the player emblem (title hidden) */
+  .crest{padding:0 8px;}
   #crestmark{width:30px;height:30px;font-size:16px;}
-  .res{padding:0 5px;gap:4px;}
+  #devline{top:44px;}
+  /* the chips get the full bar now (donate moved under it) — tighten just a touch */
+  .res{padding:0 6px;gap:4px;}
   .res i{width:18px;height:18px;font-size:11px;}
+  #devline .dl-donate{font-size:11px;padding:2px 8px;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
@@ -1161,13 +1158,10 @@ const html = `<!doctype html>
 <canvas id="map"></canvas>
 <header id="top">
   <div class="crest">
+    <button id="crestmark" title="Ваш профиль" type="button">◆</button>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>
-  <div class="topend">
-    <span id="donate" title="Суверены — донат-валюта"><i>◆</i>0</span>
-    <button id="crestmark" title="Ваш профиль" type="button">◆</button>
-  </div>
 </header>
 <div id="devline"></div>
 <!-- slim left rail: only the wired tools (each opens its window). More icons land here as
