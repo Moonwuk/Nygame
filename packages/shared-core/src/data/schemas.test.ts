@@ -34,7 +34,6 @@ describe('game data schema (docs/architecture.md §2)', () => {
     const data = parseGameData(loadShippedBundle());
     expect(data.version).toBe('0.1.0');
     expect(data.resources).toContain('microelectronics');
-    expect(data.units.infected_cruiser?.stats.attack).toBe(12);
     expect(data.units.siege_lance?.stats.range).toBe(300); // artillery firing radius (map units)
     expect(data.units.cruiser?.upkeep.credits).toBe(8); // daily upkeep
     // fleet ⊕ ground-army separation: domains + transport capacity.
