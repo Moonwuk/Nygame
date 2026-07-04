@@ -10,6 +10,7 @@ export {
   type PingKind,
 } from './multiplayer';
 
+export { openLiveMatch, type LiveMatch } from './net';
 export { theme, type Theme } from './theme';
 export {
   type Cam,

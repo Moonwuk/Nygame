@@ -9,13 +9,14 @@
  * This is intentionally thin: map rendering, the network transport and the PWA install
  * layer are later bricks (CP0.2 / CP1.x). No forked copy of the core or its data.
  */
-import { createInitialState } from '@void/shared-core';
+import { createInitialState, type GameState } from '@void/shared-core';
 import { theme } from './theme';
 import { createWelcomeModel, resolveWelcomeAction, nextCallsign } from './welcomeScreen';
 import type { WelcomeModel, WelcomeOutcome, AuthProviderId } from './welcomeScreen';
 import { clampCam, zoomAt, type Cam, type Viewport, type Bounds } from './camera';
 import { renderMap } from './mapRender';
 import { shippedGameData, skirmishState } from './gameData';
+import { openLiveMatch } from './net';
 
 /** Bind the typed theme tokens to CSS custom properties (docs/main-menu.md §5.4 — one
  *  TS engine → one look). The stylesheet in index.html reads these vars. */
@@ -150,22 +151,9 @@ function showEngine(): void {
 
 let matchStarted = false;
 
-/** Single-player: build a real GameState from the shipped skirmish map (via the shared
- *  loader + buildStateFromMap) and draw it on the map canvas — the first time the Stage-4
- *  client shows the actual game, not just the menu. Pan (drag) and zoom (wheel) go through
- *  the shared camera. Static for now; server snapshots + a sim loop arrive in CP1.x. */
-function startMatch(): void {
-  if (matchStarted) return;
-  const canvas = document.getElementById('map') as HTMLCanvasElement | null;
-  const g = canvas?.getContext('2d') ?? null;
-  if (!canvas || !g) return;
-  matchStarted = true;
-
-  const state = skirmishState(shippedGameData());
-  const app = document.getElementById('app');
-  if (app) app.hidden = true;
-  canvas.hidden = false;
-
+/** Map-space bounding box of a state's planets — the camera's world extent. Guards an
+ *  empty map (no planets yet) so the camera math stays finite. */
+function boundsOf(state: GameState): Bounds {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -176,10 +164,23 @@ function startMatch(): void {
     maxX = Math.max(maxX, p.position.x);
     maxY = Math.max(maxY, p.position.y);
   }
-  const bounds: Bounds = { minX, minY, maxX, maxY };
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+  return { minX, minY, maxX, maxY };
+}
+
+/** Shared map runner: reveals the canvas, wires the shared-camera pan (drag) / zoom
+ *  (wheel), and draws `getState()` every frame. Single-player passes a fixed local state;
+ *  a live match passes the latest server snapshot. */
+function runMatch(getState: () => GameState, bounds: Bounds): void {
+  const canvas = document.getElementById('map') as HTMLCanvasElement | null;
+  const g = canvas?.getContext('2d') ?? null;
+  if (!canvas || !g) return;
+  const app = document.getElementById('app');
+  if (app) app.hidden = true;
+  canvas.hidden = false;
+
   let vp: Viewport = { left: 0, top: 0, right: 1, bottom: 1 };
   let cam: Cam = { scale: 1, x: 0, y: 0 };
-
   const resize = (): void => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = window.innerWidth;
@@ -221,10 +222,55 @@ function startMatch(): void {
   canvas.addEventListener('pointercancel', endDrag);
 
   const loop = (): void => {
+    const state = getState();
     renderMap(g, state, cam, vp, bounds, { now: state.time });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+}
+
+/** Single-player: build a real GameState from the shipped skirmish map (via the shared
+ *  loader + buildStateFromMap) and draw it — the first time the client shows the actual
+ *  game, not just the menu. Static; the live server path is {@link connectLive}. */
+function startMatch(): void {
+  if (matchStarted) return;
+  matchStarted = true;
+  const state = skirmishState(shippedGameData());
+  runMatch(() => state, boundsOf(state));
+}
+
+/** CP1.1: connect to a live match over WebSocket and render the server's authoritative
+ *  snapshots — the first time the Stage-4 client shows a LIVE, server-driven world instead
+ *  of a static local map. World extent is taken from the first snapshot; deltas patch the
+ *  state and the loop always draws the latest. A manual-start lobby WE host is auto-started
+ *  (dev/first-cut — a real lobby-wait UI is a later CP). */
+function connectLive(url: string): void {
+  if (matchStarted) return;
+  let live: GameState | null = null;
+  let running = false;
+  let started = false;
+  setStatus('⇄ Подключение к матчу…');
+  const { client } = openLiveMatch(url, {
+    onStatus: (s) => {
+      if (s === 'closed' && !running) setStatus('✖ соединение закрыто');
+    },
+    onError: (code) => {
+      if (!running) setStatus(`✖ ${code}`);
+    },
+    onSnapshot: (snap) => {
+      live = snap.state;
+      if (!started && snap.lobby && !snap.lobby.started && snap.lobby.host === snap.playerId) {
+        started = true;
+        client.start(); // host of an unstarted lobby → run the world
+      }
+      if (!running) {
+        running = true;
+        matchStarted = true;
+        const first = live;
+        runMatch(() => live ?? first, boundsOf(first));
+      }
+    },
+  });
 }
 
 applyTheme();
@@ -232,3 +278,8 @@ const welcome = createWelcomeModel();
 render(welcome);
 wire(welcome);
 showEngine();
+
+// CP1.1 deep-link: `?join=<url-encoded ws url>` connects straight to a live match (a shared
+// invite, or the dev proto-server). The ws url is encoded so its own ?query survives.
+const joinUrl = new URLSearchParams(location.search).get('join');
+if (joinUrl) connectLive(joinUrl);
