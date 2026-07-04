@@ -31,9 +31,13 @@ RTMP — «80% результата за 20% усилий»), а не разов
 
 ## Текущая база (что уже даёт защиту — сверено по коду)
 
-- **SEC-0 ✅** — пайплайн (GitLab): Semgrep SAST, `pnpm audit` (блокирует) + osv-scanner,
-  Gitleaks (блокирует), Trivy fs, Syft SBOM, ratcheting-гейт; GitHub Actions (build+audit,
-  `permissions: contents: read`).
+- **SEC-0 ✅** — пайплайн (GitHub Actions, `.github/workflows/security.yml`), **информационный /
+  неблокирующий** (все сканеры `continue-on-error`, `pnpm audit … || true`): `pnpm run check`
+  (lint+typecheck+test), `pnpm audit`, Semgrep + CodeQL SAST, Gitleaks + TruffleHog (секреты),
+  osv-scanner (SCA, `pnpm-lock.yaml` + `mobile/package-lock.json`), Trivy fs/image, Syft SBOM
+  (CycloneDX), zizmor (workflow-безопасность), OpenSSF Scorecard; агрегация всех находок в один
+  отчёт (SARIF → Code Scanning + sticky PR-комментарий). Экшены пиннятся по SHA, образы —
+  по тегу/`@sha256`; `permissions: {}` по умолчанию, права выдаются поджобно.
 - **Детерминизм-инварианты** в ESLint (`eslint.config.js`): запрет `Math.random`/`Date.now`
   в `shared-core/src`.
 - **Валидация на границе данных**: `parseGameData`/`safeParseGameData` (zod) — A05/A08.
@@ -125,10 +129,12 @@ RTMP — «80% результата за 20% усилий»), а не разов
 
 ### SD-3.1 · pnpm: блокировка lifecycle-скриптов + cooldown `[sec]` ⏳ — S
 **Подзадачи:** pnpm 10 по умолчанию **блокирует** `preinstall`/`install`/`postinstall` — вести явный `onlyBuiltDependencies` allow-list; `minimumReleaseAge` (cooldown, в pnpm 11 дефолт 1440 мин) с `minimumReleaseAgeExclude` для хотфиксов; `--frozen-lockfile` в CI (дефолт в CI); `blockExoticSubdeps`.
+✅ уже в коде: frozen-lockfile в CI — `security.yml` (`pnpm install --frozen-lockfile`) и `android.yml` (`npm ci` для `mobile/`). Остаётся `onlyBuiltDependencies` allow-list, `minimumReleaseAge`, `blockExoticSubdeps`.
 **Готово, когда:** сборка скриптов — только из allow-list; новые версии «отлёживаются» сутки; lockfile-drift роняет CI.
 
 ### SD-3.2 · SCA-гейт + автообновления с политикой `[sec]` ⏳ — M
 **Подзадачи:** osv-scanner (✅ в SEC-0) → PR-режим «только новые vulns»; Renovate/Dependabot с **cooldown** (`minimumReleaseAge`/`cooldown` ≥7–14 дней), группировкой, авто-мердж только patch/minor dev-deps после выдержки, security-update в обход cooldown; пин версий + пин GitHub Actions по SHA; ежеквартальная прополка зависимостей (минимализм — по CLAUDE.md).
+✅ уже в коде: Dependabot настроен — `.github/dependabot.yml` (три экосистемы: npm `/`, npm `/mobile`, github-actions; еженедельно, dev-deps сгруппированы); osv-scanner уже покрывает `mobile/package-lock.json`; экшены пиннятся по SHA. Остаётся политика cooldown (`minimumReleaseAge`/`cooldown` ≥7–14 дней), авто-мердж patch/minor после выдержки, PR-режим «только новые vulns», ежеквартальная прополка.
 **Готово, когда:** обновления идут с выдержкой и политикой; прямые зависимости ревьюятся.
 
 ### SD-3.3 · Провенанс артефактов + проверка `[sec]` 🔒(SEC-5) — M
@@ -169,6 +175,7 @@ RTMP — «80% результата за 20% усилий»), а не разов
 
 ### SD-6.1 · SHA-пин экшенов и образов + least-priv токены `[sec]` ⏳ — M
 **Подзадачи:** пин сторонних GitHub Actions по **полному commit SHA** (урок CVE-2025-30066 tj-actions: репойнт тега → дамп секретов в логи); пин scanner-образов по `sha256`; `permissions:` read-only по умолчанию, write — поджобно; masked/protected vars. **Это бирка SEC-3.**
+✅ уже в коде (`security.yml`/`android.yml`): все экшены пиннятся по полному commit SHA; scanner-образы semgrep/trufflehog/zizmor — по `@sha256`-дайджесту (остальные — по версионному тегу); `permissions: {}` по умолчанию, write выдаётся поджобно. Осталось: `@sha256` для версионно-тегированных образов и masked/protected vars по мере появления секретов.
 **Готово, когда:** ни один экшен/образ не по плавающему тегу; токены минимальны.
 
 ### SD-6.2 · OIDC вместо долгоживущих секретов `[sec]` 🔒(F1) — S
@@ -204,7 +211,7 @@ RTMP — «80% результата за 20% усилий»), а не разов
 **Готово, когда:** есть заполненный ASVS L2-отчёт с трекингом разрывов.
 
 ### SD-8.2 · DAST против живого сервера `[sec]` 🔒(F1) — M
-**Подзадачи:** раскомментировать ZAP baseline (шаблон готов в `.gitlab-ci.yml`) против `@void/server`. **Это бирка SEC-6.**
+**Подзадачи:** добавить ZAP baseline-джобу в `.github/workflows/security.yml` против `@void/server` (GitLab-пайплайн с готовым шаблоном удалён — стартуем с нуля). **Это бирка SEC-6.**
 **Готово, когда:** ZAP гоняется по живому серверу, находки триажатся.
 
 ### SD-8.3 · Процесс реакции на уязвимости `[docs]` ⏳ — S

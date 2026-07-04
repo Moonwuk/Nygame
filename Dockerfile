@@ -20,7 +20,15 @@
 # user, so those writes succeed without a writable top-level /app.
 
 # ---- Stage 1: build (full toolchain) ----
-FROM node:22-slim AS build
+# Both FROM lines are digest-pinned (audit F-15 / CWE-1357): a tag is mutable, a digest
+# names the exact multi-arch index that was reviewed. To bump: re-resolve the tag's
+# current digest (Docker Hub API `/v2/repositories/library/node/tags/22-slim` for node;
+# `gcr.io/v2/distroless/nodejs22-debian13/manifests/nonroot` Docker-Content-Digest for
+# distroless), update the digest + the refreshed-date below, and re-review .trivyignore.
+# The dates live in these comments, not inline: a `#` after FROM's args would be parsed
+# as extra arguments (Dockerfile comments only count at line start) and break the build.
+# node:22-slim digest refreshed 2026-07.
+FROM node:22-slim@sha256:813a7480f28fdadac1f7f5c824bcdad435b5bc1322a5968bbbdef8d058f9dff4 AS build
 WORKDIR /app
 RUN corepack enable
 
@@ -41,9 +49,13 @@ RUN pnpm run prototype # bake prototype/dist/void-dominion.html (served at /)
 RUN mkdir -p playtest-logs packages/server/dist
 
 # ---- Stage 2: runtime (distroless, no shell, non-root by default) ----
-# The :nonroot tag runs as uid 65532. TODO: digest-pin this image (same hardening
-# TODO as the scanner images in .github/workflows/security.yml).
-FROM gcr.io/distroless/nodejs22-debian12:nonroot AS runtime
+# The :nonroot tag runs as uid 65532. Base is nodejs22-**debian13** (trixie): upstream
+# deprecated the nodejs*-debian12 repos (their digests carry deprecated-public-image-*
+# tags; last rebuild 2026-02), so debian12 is frozen with the libssl3/libc6 CVEs Trivy
+# flags — debian13 is the actively rebuilt line with current trixie-security packages.
+# Digest-pinned like the build stage (bump procedure in the Stage 1 comment);
+# nodejs22-debian13:nonroot digest refreshed 2026-07.
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:4606394f4b64979f42eb6178d19885a975bffa19c226b344a0ea92b7a61dec2d AS runtime
 # Bring the fully-installed app (source + node_modules incl. esbuild/ws/pg + baked HTML)
 # and hand the whole tree to the non-root user so startup writes (esbuild bundle, logs)
 # succeed. node_modules uses pnpm's relative symlink layout, so copying all of /app keeps
@@ -55,6 +67,11 @@ USER nonroot
 ENV HOST=0.0.0.0
 ENV PORT=8788
 EXPOSE 8788
-# distroless/nodejs ENTRYPOINT is already ["/usr/bin/node"], so CMD is just the script.
+# Liveness probe (Trivy DS026). Distroless has no shell or curl, so the probe is
+# exec-form node hitting the server's own contentless GET /health. It reads $PORT the
+# same way the server does, so a platform-injected PORT moves both together.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+  CMD ["/nodejs/bin/node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT||8788}/health`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+# distroless/nodejs ENTRYPOINT is already ["/nodejs/bin/node"], so CMD is just the script.
 # The proto-server reads $PORT (platforms like Render/Fly inject their own).
 CMD ["prototype/netserver.mjs"]

@@ -96,12 +96,26 @@ export interface AdvanceFailure {
 
 /**
  * Result of advancing the world clock. Advancing itself only fails when asked
- * to move backwards (`E_TIME_BACKWARDS`) or on a runaway schedule
- * (`E_ADVANCE_OVERFLOW`); individual misbehaving events are dead-lettered into
- * `failures` and do not abort the advance.
+ * to move backwards (`E_TIME_BACKWARDS`); individual misbehaving events are
+ * dead-lettered into `failures` and do not abort the advance.
+ *
+ * `partial: true` means the advance hit the per-call work bound
+ * (`MAX_ADVANCE_STEPS`) before reaching `ctx.now`: the returned `state` holds the
+ * deterministic progress made so far (exactly that many events in (at, seq)
+ * order) and the caller must call again to continue. This turns an enormous
+ * catch-up — or a runaway schedule — into bounded, resumable work instead of a
+ * discarded advance that wedges the world on every retry. A caller that keeps
+ * calling makes guaranteed forward progress unless the world time itself has
+ * stalled (a same-instant runaway), which it can detect and surface.
  */
 export type AdvanceResult =
-  | { ok: true; state: GameState; events: DomainEvent[]; failures: AdvanceFailure[] }
+  | {
+      ok: true;
+      state: GameState;
+      events: DomainEvent[];
+      failures: AdvanceFailure[];
+      partial?: boolean;
+    }
   | { ok: false; code: string };
 
 /**

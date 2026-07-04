@@ -19,6 +19,7 @@ import {
   MatchRoom,
   MatchRegistry,
   createMultiplayerServer,
+  registerBrowserApi,
   MemoryAccountStore,
   MemoryMatchStore,
   MemoryReceiptStore,
@@ -31,7 +32,7 @@ import {
   type ReceiptStore,
   type RoomObservation,
 } from '../packages/server/src/index';
-import { newGame, kernel, data, aiOrders, HOUR } from './src/game';
+import { newGame, kernel, data, aiOrders, stewardActive, HOUR, serverQueueActions, orderPop, orderHold, orderBlock } from './src/game';
 const { Pool } = pgPkg;
 
 // --- M0 playtest log: append every room event (join/leave/lobby/action/end) to a
@@ -84,9 +85,16 @@ const observe = (ev: RoomObservation): void => {
   // and re-arm the offline wakeup: an action may schedule or consume events, and a
   // lobby Start releases the frozen clock — both move the next-event time.
   if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
-  // Re-arm on EVERY room event: an action may (un)schedule events, a lobby Start releases
-  // the clock, and a join/leave starts/stops the live-player heartbeat below.
-  armWakeup();
+  // Re-arm on room events: an action may (un)schedule events, a lobby Start releases
+  // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
+  // external event also gives the stall guard a fresh chance (the situation may have
+  // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
+  // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
+  // back-off in `onWake` (an eternal 0ms wake spin).
+  if (ev.kind !== 'advance_overflow') {
+    wakeStalls = 0;
+    armWakeup();
+  }
 };
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -146,6 +154,11 @@ if (DATABASE_URL) {
 }
 const restored = await matchStore.load('proto');
 const initialState = restored?.state ?? newGame();
+// A NET seat is not a bot: every seat here is claimable by a human, and the
+// server-side AI merely stands in for an empty chair (`humans` is the live truth).
+// Strip the static `ai` branding newGame took from the seat config, or two humans
+// on DEFAULT_SETUP seats could never ally (E_BOT_ALLIANCE against seat p2 forever).
+for (const seat of Object.values(initialState.players)) delete seat.ai;
 // Rehydrate idempotency receipts so a retried action stays deduped across a restart.
 const initialReceipts = await receiptStore.loadAll('proto');
 
@@ -163,6 +176,16 @@ const room = new MatchRoom({
   emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
   observe, // M0: log every room event to JSONL + count for the on-exit summary
   initialReceipts, // rehydrated idempotency (deduped action stays deduped after restart)
+  initialSeq: restored?.seq, // resume the action counter — else the optimistic-by-seq
+  // store drops post-restart saves until seq climbs back past the stored value
+  // Strict commit-before-broadcast: await the durable write of the new snapshot +
+  // receipt before the room commits state / broadcasts. The debounced scheduleSave in
+  // `observe` above becomes a harmless coalesced extra for actions (still needed for
+  // tick-driven advances, which are recomputable and persist after the fact).
+  persist: async (snapshot, receipt) => {
+    await matchStore.save(snapshot);
+    await receiptStore.save('proto', receipt);
+  },
   timeScale: TIME_SCALE, // playtest fast-forward (1 = real-time)
 });
 
@@ -214,7 +237,9 @@ const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift s
 // on-screen between actions. newGame() starts with NO scheduled events, so without this
 // the very first thing players see after Start is a frozen "Day 1 00:00".
 const HEARTBEAT_MS = 1_000;
+const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeStalls = 0;
 function armWakeup(): void {
   if (wakeTimer) {
     clearTimeout(wakeTimer);
@@ -238,16 +263,70 @@ function runServerAI(): void {
   if (now - aiLastAt < 2 * HOUR) return;
   aiLastAt = now;
   for (const seat of Object.keys(room.state.players)) {
-    if (humans.has(seat)) continue; // a human commands this seat
-    for (const action of aiOrders(room.state, seat)) room.submitAction(seat, action);
+    // «Хранитель»: a delegated seat is played by the AI on its posture (defend) even while
+    // its owner is connected but asleep; an unclaimed/empty seat gets the full expansion AI.
+    const posture = stewardActive(room.state, seat, now);
+    if (humans.has(seat) && !posture) continue; // a human is actively commanding this seat
+    for (const action of aiOrders(room.state, seat, posture ?? 'expand')) {
+      room.submitAction(seat, action);
+    }
+  }
+}
+
+// CC-server: drive the authoritative per-fleet command-chains server-side, so a queued
+// chain (move → assault → load → wait → …) advances even with NOBODY connected — the
+// player "sleeps and it plays". The pure decision is `serverQueueActions` (tested); this
+// just issues its orders + pop/hold through the same authoritative room, mirroring
+// runServerAI. Runs on every wake (heartbeat while connected, event wakeup while offline).
+function runServerQueues(): void {
+  if (!room.isStarted) return;
+  const now = room.state.time;
+  for (const step of serverQueueActions(room.state, now)) {
+    // A rejected step BLOCKS the chain with its reason (order.block) instead of being
+    // silently popped — the owner wakes up to «⚠ шаг: причина», not a derailed plan
+    // that kept executing in the wrong place (CC-4.1 minimum).
+    let failed = step.fail ?? null;
+    if (!failed) {
+      for (const a of step.actions) {
+        const r = room.submitAction(step.owner, a);
+        if (!r.ok) {
+          failed = r.code ?? 'E_INTERNAL';
+          break;
+        }
+      }
+    }
+    if (failed) {
+      room.submitAction(step.owner, orderBlock(step.owner, step.fleetId, failed));
+      continue;
+    }
+    if (step.holdUntil !== undefined) room.submitAction(step.owner, orderHold(step.owner, step.fleetId, step.holdUntil));
+    if (step.pop) room.submitAction(step.owner, orderPop(step.owner, step.fleetId));
   }
 }
 
 function onWake(): void {
   wakeTimer = null;
-  room.tick(); // fire whatever is now due (a no-op if a capped timer fired early)
-  runServerAI(); // drive any empty seat once the clock has moved
+  const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
+  // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
+  // While stalled, SKIP the AI/queue drivers — their submissions (even rejected ones)
+  // emit `action` observations that would reset this guard and re-arm a 0ms wake — and
+  // back off after a few tries instead of busy-looping (the room has already surfaced
+  // an advance_overflow). A real player action re-arms via `observe`, which resets the
+  // counter and gives it a fresh chance.
+  const stalled = !progressed && room.msUntilNextEvent() === 0;
+  if (!stalled) {
+    wakeStalls = 0;
+    runServerAI(); // drive any empty seat once the clock has moved
+    runServerQueues(); // CC-server: advance each fleet's authoritative order chain
+  }
   scheduleSave(); // persist the advanced world
+  if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {
+    process.stderr.write(
+      'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
+        'check for a module scheduling events at its own instant.\n',
+    );
+    return; // idle — do not re-arm
+  }
   armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
 }
 
@@ -260,7 +339,15 @@ registry.register(room, {
   createdAt: Date.now(),
   startedAt: initialState.time,
 });
-const server = createMultiplayerServer({ registry, host, port, indexHtml });
+const server = createMultiplayerServer({
+  registry,
+  host,
+  port,
+  indexHtml,
+  accountStore, // `?nick=` WS login resolves its seat here
+  // The match-browser read-model + archive intents (GET /matches, POST …/archive).
+  httpRoutes: (app) => registerBrowserApi(app, registry),
+});
 let wsUrl: string;
 try {
   wsUrl = await server.listen();

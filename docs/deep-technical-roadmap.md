@@ -14,7 +14,14 @@
 
 Цель: превратить действия игрока в безопасный, проверяемый поток.
 
-1. `@void/action-layer`
+> ✅ уже в коде: пакет `packages/action-layer/` собран (`envelope.ts` —
+> `validateActionEnvelope`/`authorizeActionEnvelope`/`createActionEnvelope`; `gate.ts` —
+> `ActionGate`; `sequence.ts` — `InMemorySequenceGate` с `E_REPLAY`/`E_OUT_OF_ORDER`;
+> `receipts.ts`; тесты `envelope.test.ts`/`gate.test.ts`). Осталось **интегрировать пакет
+> в сервер**: `packages/server/src/matchRoom.ts` пока принимает сырой `Action` и держит
+> собственный `ActionReceipt`, без `@void/action-layer`.
+
+1. `@void/action-layer` — ✅ построен
    - `ActionEnvelope` вокруг core `Action`:
      - `matchId`;
      - `playerId`;
@@ -24,16 +31,16 @@
      - `issuedAt`;
      - `schemaVersion`.
    - `validateActionEnvelope(raw)` — JSON/zod validation.
-   - `authorizeAction(envelope, session)` — действие принадлежит игроку.
-   - `dedupe(actionId)` — повтор не применяет эффект второй раз.
-   - `sequence gate` — защита от out-of-order команд.
+   - `authorizeActionEnvelope(envelope, session)` — действие принадлежит игроку.
+   - `dedupe(actionId)` — повтор не применяет эффект второй раз (`InMemoryActionReceiptStore`).
+   - `sequence gate` — защита от out-of-order команд (`InMemorySequenceGate`).
 
-2. Integration с server slice из PR #9
+2. Integration с server slice из PR #9 — ⏳ следующий шаг
    - заменить прямой WebSocket `Action` на `ActionEnvelope`;
    - `MatchRoom` должен принимать только envelope;
    - rejection codes остаются стабильными и без внутренних деталей.
 
-3. Тесты гонок
+3. Тесты гонок — ✅ покрыты в пакете (`gate.test.ts`/`envelope.test.ts`)
    - double spend;
    - double fleet move;
    - retry same action;
@@ -45,7 +52,12 @@
 
 Цель: матч работает на сервере, переживает reconnect и не теряет state.
 
-1. PostgreSQL persistence
+> ✅ уже в коде (частично): `packages/server/src/store/` содержит интерфейсы `MatchStore`/
+> `ReceiptStore` (`types.ts`, с optimistic concurrency) и обе реализации — in-memory
+> (`memory.ts`) и Postgres (`postgres.ts`, с `migrate`). Осталось прогнать боевой сценарий
+> reconnect/retry через persisted store в хосте.
+
+1. PostgreSQL persistence — ✅ store-слой построен
    - `matches(id, version, game_state_jsonb, manifest, updated_at)`;
    - `action_receipts(action_id, match_id, player_id, seq, result_code, state_version)`;
    - optimistic locking: `WHERE version = previousVersion`.
@@ -97,7 +109,12 @@
 
 ## 2. Самый логичный следующий PR
 
-Я бы следующим сделал **Action Layer**.
+> ✅ уже в коде: сам пакет **Action Layer** (`packages/action-layer/`) построен с тестами.
+> Следующий PR теперь — **интеграция action-layer в сервер** (`MatchRoom` принимает
+> `ActionEnvelope` через `ActionGate` вместо сырого `Action`). Ниже — исходная мотивация,
+> она всё ещё объясняет, зачем этот слой идёт впереди «большего мультиплеера».
+
+Я бы следующим сделал **Action Layer** (теперь: его интеграцию в сервер).
 
 Почему не сразу «больше мультиплеера»:
 
@@ -256,11 +273,15 @@ advance 3h -> 8h: income новому владельцу
 
 ## 5. Network sync: от full-state к diff-stream
 
-Текущий multiplayer slice может broadcast full state. Это нормально для первого шага, но не для MMO.
+> ✅ уже в коде: `packages/server/src/matchRoom.ts` уже шлёт **per-player fog deltas**
+> (`type: 'delta'` через `diffState(baseline, view.base)` поверх `visibleState`), а не full
+> state. Fog-of-war — серверная граница: каждый игрок диффится против своего последнего
+> видимого view, поэтому скрытые миры/флоты физически не уходят на провод. Описанный ниже
+> Sync v1 пройден; текущее состояние ближе к Sync v2 (не хватает seq-протокола reconnect).
 
 Путь развития:
 
-### Sync v1 — сейчас/ближайшее
+### Sync v1 — пройдено
 
 ```ts
 welcome: { snapshot }
@@ -269,6 +290,8 @@ action result: { full state, events }
 
 Плюсы: просто, легко тестировать.
 Минусы: дорого, раскрывает fog-of-war, плохо для мобильного интернета.
+
+(Оставлено для контекста: с этого начинали; slice уже ушёл дальше — см. заметку выше.)
 
 ### Sync v2 — production baseline
 
@@ -292,6 +315,10 @@ reconnect(lastSeq): missing patches | snapshot
 ## 6. Fog of war как security boundary
 
 UI не является защитой. Если сервер отправил скрытый флот в JSON, игрок его найдёт.
+
+> ✅ уже в коде: `visibleState(state, viewerId, data)` в
+> `packages/shared-core/src/state/visibility.ts`; сервер применяет его перед каждой дельтой,
+> так что скрытые данные физически не уходят на провод. Раздел ниже — граница и что фильтровать.
 
 Нужен отдельный слой:
 
@@ -546,22 +573,22 @@ action_receipts(
 
 ## 12. Предлагаемый порядок PR после текущего состояния
 
-### PR A — Action Layer
+### PR A — Action Layer — ✅ пакет построен, ⏳ осталась интеграция в сервер
 
 Файлы:
 
-- `packages/action-layer/` или `packages/server/src/actionLayer/`;
-- tests for validation/idempotency/sequence/spoofing.
+- ✅ `packages/action-layer/` (envelope/gate/sequence/receipts + tests);
+- ⏳ wiring в `packages/server/src/matchRoom.ts` (сейчас всё ещё сырой `Action` + собственный `ActionReceipt`).
 
 Почему первым: закрывает самые опасные multiplayer гонки.
 
-### PR B — Persisted MatchStore
+### PR B — Persisted MatchStore — ✅ store-слой построен
 
 Файлы:
 
-- `packages/server/src/store/MatchStore.ts`;
-- `InMemoryMatchStore` for tests;
-- interface ready for PostgreSQL implementation.
+- ✅ `packages/server/src/store/types.ts` (`MatchStore`/`ReceiptStore`, optimistic concurrency);
+- ✅ `MemoryMatchStore` for tests (`store/memory.ts`);
+- ✅ PostgreSQL implementation (`store/postgres.ts` + `migrate`).
 
 Почему вторым: можно подключить persistence без реальной БД и сохранить тестируемость.
 
@@ -575,11 +602,12 @@ action_receipts(
 
 Почему третьим: после action receipts можно безопасно reconnect.
 
-### PR D — Fog-of-war projection
+### PR D — Fog-of-war projection — ✅ уже в коде
 
 Файлы:
 
-- `packages/shared-core/src/visibility/visibleState.ts` or server-side projection;
+- ✅ `packages/shared-core/src/state/visibility.ts` (`visibleState`), применяется в
+  `matchRoom.ts` перед broadcast'ом дельт;
 - tests that hidden enemy data is absent from serialized JSON.
 
 Почему до UI: иначе UI начнёт зависеть от full state.

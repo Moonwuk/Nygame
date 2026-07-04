@@ -70,11 +70,11 @@ https://github.com/Moonwuk/Nygame/releases/download/alpha/void-dominion-alpha.ap
 | `rng/`     | Seeded PRNG (sfc32) — детерминизм; состояние сериализуется в `GameState` (golden-тест)               |
 | `util/`    | `deepClone`/`deepFreeze` (immutable-контракт), общие хелперы казны/стеков/времени                    |
 
-**Модули ядра (15):** `sector`, `planetType`, `technology`, `economy`, `market`,
-`movement`, `combat` (орбитальный/наземный бой, двухфазный захват, ПВО, бомбардировка),
-`captureOnArrival` (walk-in захват необоронённого нейтрального сектора), `construction`,
-`army` (флот ⊕ наземная армия + транспорт), `station`, `faction`, `hero` (аура/респаун),
-`victory` (data-driven очки/счёт), `visibility` (память тумана, вариант B).
+**Модули ядра (16):** `sector`, `planetType`, `technology`, `scientist` (лидер исследований),
+`economy`, `market`, `movement`, `combat` (орбитальный/наземный бой, двухфазный захват, ПВО,
+бомбардировка), `captureOnArrival` (walk-in захват необоронённого нейтрального сектора),
+`construction`, `army` (флот ⊕ наземная армия + транспорт), `station`, `faction`,
+`hero` (аура/респаун), `victory` (data-driven очки/счёт), `visibility` (память тумана, вариант B).
 **`combat.isHostile` читает стойку из `state.diplomacy`** — бой только при объявленной войне.
 Новая механика = новый модуль (+ данные), ядро не трогается. Прототип добавляет свои
 модули поверх (налоги, авто-ралли построек, `diplomacy.declare`).

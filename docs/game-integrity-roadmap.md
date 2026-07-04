@@ -11,8 +11,11 @@
 
 Заложен фундамент честности: **server-authority** (клиент шлёт намерение, не состояние),
 детерминизм, идемпотентность/anti-replay (action-layer), `visibleState` (анти-maphack в ядре),
-fail-secure. **Нет:** rate-limit, детекции аномалий, анти-мультиаккаунта/сговора, bot-detection,
-per-player очереди (double-spend), тумана-на-отправке (maphack «бесплатно» сейчас).
+**туман-на-отправке** (per-player `visibleState` + дельта считаются на сервере — невидимые
+миры/флоты физически не уходят клиенту; ✅ уже в коде: `packages/server/src/matchRoom.ts`
+`viewFor`/`broadcastState`), базовый per-player rate-limit (`E_RATE_LIMIT`,
+`packages/server/src/matchRoom.ts`), fail-secure. **Нет:** anti-cheat rate-shaping (детекции
+аномалий), анти-мультиаккаунта/сговора, bot-detection, per-player очереди (double-spend).
 
 ## Карта угроз → контроль (STRIDE/игровое)
 
@@ -20,7 +23,7 @@ per-player очереди (double-spend), тумана-на-отправке (ma
 | --- | --- | --- |
 | Подделка интентов (S/T) | server-authority + per-message authz | ✅ инвариант / SV-1.1 |
 | Double-spend / TOCTOU (T) | per-player очередь (concurrency=1) | 🔒 F5/SE-6.3 |
-| Maphack / утечка тумана (I) | `visibleState` **на отправке** | 🔒 F6/SE-6.4 |
+| Maphack / утечка тумана (I) | `visibleState` **на отправке** | ✅ (server `viewFor`/`broadcastState`; остаётся byte-level anti-leak тест) |
 | Replay / abuse идемпотентности | sequence-gate + receipts | ✅ (in-mem) |
 | Флуд/спам/бот (DoS экономики) | rate-limit + аномалии + bot-detect | 🔴 этот блок |
 | Мультиаккаунт/сговор | детекция связей + правила | 🔴 этот блок |
@@ -44,8 +47,13 @@ per-player очереди (double-spend), тумана-на-отправке (ma
 **Подзадачи:** сериализация действий игрока (= SV-2.3 / F5 / SE-6.3); атомарность экономических операций (нет check-then-act).
 **Готово, когда:** двойная трата невозможна; тест гонки экономики.
 
-### GI-0.3 · Туман как граница (анти-maphack) `[srv]` 🔒(F4) — M
-**Подзадачи:** `visibleState` на отправке (= SV-3.1 / F6); тест anti-leak по байтам; не полагаться на клиент.
+### GI-0.3 · Туман как граница (анти-maphack) `[srv]` ✅ (в основном) — M
+**✅ уже в коде:** `packages/server/src/matchRoom.ts` — `viewFor` считает per-player `visibleState`
+на сервере, `broadcastState` шлёт каждому игроку только дельту против его собственного видимого
+вида (невидимые миры/флоты физически не отправляются); события тоже фильтруются туманом
+(`eventVisibleTo`). Не полагается на клиент.
+**Подзадачи:** ~~`visibleState` на отправке (= SV-3.1 / F6)~~ ✅; ~~не полагаться на клиент~~ ✅;
+остаётся тест anti-leak по байтам.
 **Готово, когда:** невидимые данные физически не уходят клиенту.
 
 ---

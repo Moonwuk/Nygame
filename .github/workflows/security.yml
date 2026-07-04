@@ -103,7 +103,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -119,12 +119,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+      - uses: github/codeql-action/init@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           languages: javascript-typescript
       - id: cqa
         continue-on-error: true
-        uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/analyze@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           category: codeql
           output: codeql-out
@@ -177,7 +177,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -241,7 +241,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: osv.sarif
           category: osv-scanner
@@ -276,7 +276,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: trivy.sarif
           category: trivy-fs
@@ -317,7 +317,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
@@ -382,7 +382,7 @@ jobs:
           if-no-files-found: warn
       - name: upload to code scanning
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: zizmor.sarif
           category: zizmor
@@ -417,7 +417,7 @@ jobs:
       - name: upload to code scanning
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3.36.3
         with:
           sarif_file: scorecard.sarif
           category: scorecard

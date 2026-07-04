@@ -38,6 +38,10 @@ function matchStoreContract(name: string, make: () => MatchStore): void {
       expect(loaded?.seq).toBe(10);
       expect(loaded?.state.time).toBe(1000);
     });
+
+    it('ping reports the backing store reachable (the /ready probe)', async () => {
+      expect(await make().ping?.()).toBe(true);
+    });
   });
 }
 

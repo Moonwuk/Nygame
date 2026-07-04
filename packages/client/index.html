@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#03141a" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2303141a'/%3E%3Cpath d='M16 5l11 11-11 11L5 16z' fill='%2335d6e6'/%3E%3C/svg%3E"
+    />
+    <title>Void Dominion</title>
+    <style>
+      /* Palette vars are set from the typed theme tokens at runtime (src/main.ts →
+         applyTheme); these fallbacks keep the page styled before the module loads. */
+      :root {
+        --cyan: #35d6e6;
+        --cyan-dim: #1c6f78;
+        --amber: #ffb43a;
+        --ink: #bfeee6;
+        --dim: #5f8f8c;
+        --line: #0e3b40;
+        --line-hi: #1d6b70;
+        --glass: rgba(3, 14, 18, 0.82);
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: radial-gradient(120% 90% at 50% 0%, #061c22 0%, #030b0f 60%, #01060a 100%);
+        color: var(--ink);
+        font: 15px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .welcome {
+        width: min(380px, 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        padding: 26px 22px 20px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--glass);
+        box-shadow: 0 0 60px rgba(53, 214, 230, 0.06), inset 0 0 40px rgba(53, 214, 230, 0.03);
+      }
+      .crest {
+        width: 62px;
+        height: 62px;
+        display: grid;
+        place-items: center;
+        font-size: 26px;
+        color: var(--cyan);
+        border: 1px solid var(--cyan-dim);
+        border-radius: 50%;
+        box-shadow: 0 0 20px rgba(53, 214, 230, 0.35);
+      }
+      h1 {
+        margin: 4px 0 0;
+        font-size: 26px;
+        letter-spacing: 6px;
+        color: var(--cyan);
+        text-shadow: 0 0 18px rgba(53, 214, 230, 0.4);
+      }
+      .tagline {
+        margin: 0 0 6px;
+        color: var(--dim);
+        letter-spacing: 4px;
+        text-transform: uppercase;
+        font-size: 11px;
+      }
+      .btn {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid var(--cyan-dim);
+        border-radius: 8px;
+        background: rgba(53, 214, 230, 0.06);
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease;
+      }
+      .btn:hover {
+        background: rgba(53, 214, 230, 0.14);
+        border-color: var(--cyan);
+      }
+      .btn.primary {
+        border-color: var(--cyan);
+        color: #eafffb;
+        letter-spacing: 1px;
+      }
+      .btn.ghost {
+        border-color: var(--line-hi);
+        background: transparent;
+        color: var(--dim);
+      }
+      .btn.stub {
+        opacity: 0.75;
+      }
+      .sep {
+        width: 100%;
+        text-align: center;
+        color: var(--dim);
+        font-size: 11px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        border-top: 1px solid var(--line);
+        line-height: 0.1em;
+        margin: 6px 0 2px;
+      }
+      .sep span {
+        background: var(--glass);
+        padding: 0 10px;
+      }
+      .providers {
+        display: flex;
+        gap: 10px;
+        width: 100%;
+      }
+      .login {
+        display: flex;
+        gap: 8px;
+        width: 100%;
+      }
+      .login input {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid var(--cyan-dim);
+        border-radius: 8px;
+        background: rgba(4, 14, 18, 0.7);
+        color: #eafffb;
+        font: inherit;
+      }
+      .login .btn {
+        flex: 0 0 auto;
+        width: auto;
+      }
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--dim);
+      }
+      footer a {
+        color: var(--dim);
+        cursor: pointer;
+      }
+      footer span {
+        opacity: 0.5;
+      }
+      .status {
+        min-height: 1.4em;
+        width: 100%;
+        text-align: center;
+        font-size: 12px;
+        color: var(--amber);
+      }
+      .engine {
+        font-size: 10px;
+        color: var(--dim);
+        letter-spacing: 1px;
+      }
+      /* Match view: a full-viewport map canvas (shown when a match starts; the welcome
+         card is hidden). touch-action:none so drag-pan / pinch aren't stolen by scroll. */
+      #map {
+        position: fixed;
+        inset: 0;
+        display: block;
+        touch-action: none;
+      }
+      #map[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="map" hidden></canvas>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

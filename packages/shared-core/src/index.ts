@@ -31,6 +31,7 @@ export {
   type BuildingInstance,
   type ActiveResearch,
   type PlayerTechnologyState,
+  type StewardState,
   type ResourceBag,
   type PlayerId,
   type PlanetId,
@@ -47,6 +48,7 @@ export {
   type MatchScore,
   type MatchState,
   type DiplomaticStance,
+  type IntelGrant,
 } from './state/gameState';
 export {
   buildStateFromMap,
@@ -63,17 +65,28 @@ export {
   sectorAppearance,
 } from './state/sectorKind';
 export { factionStart, type FactionStart } from './state/factionStart';
-export {
-  planRoute,
-  routeDistance,
-  fleetBaseSpeed,
-  estimateTravelHours,
-} from './state/route';
+export { planRoute, routeDistance, fleetBaseSpeed, estimateTravelHours } from './state/route';
 export { isBombarded, bombardedPlanets } from './state/orbit';
-export { DEFAULT_STANCE, pairKey, getStance, setStance } from './state/diplomacy';
+export {
+  DEFAULT_STANCE,
+  STANCE_RANK,
+  pairKey,
+  pairHas,
+  getStance,
+  setStance,
+  isBotPair,
+  offerKey,
+  offerInvolves,
+  getOffer,
+  setOffer,
+  clearOffers,
+  stanceToRelation,
+  type DiplomaticRelation,
+  type DiplomacyCapability,
+} from './state/diplomacy';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
-export { visibleState, identifiedNodes } from './state/visibility';
-export type { VisibleState, SignatureContact, SignatureSize } from './state/visibility';
+export { visibleState, visibleView, identifiedNodes, isVisibleTo } from './state/visibility';
+export type { VisibleState, VisibleView, SignatureContact, SignatureSize } from './state/visibility';
 export { hashState } from './state/hash';
 
 // Action contract
@@ -91,6 +104,7 @@ export {
   type AdvanceFailure,
   type ActionIdParts,
 } from './action/types';
+export { isValidActionPayload } from './actions/payloadSchemas';
 
 // Microkernel
 export { Kernel, createKernel } from './kernel/kernel';
@@ -171,6 +185,7 @@ export {
   type TechnologyUnlocks,
   type UnitStats,
 } from './data/schemas';
+export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loadGameData';
 
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';
@@ -192,6 +207,9 @@ export { requireOwnedIdleFleet, type IdleFleet } from './util/fleet';
 export { economyModule } from './modules/economy';
 export { movementModule } from './modules/movement';
 export { combatModule } from './modules/combat';
+export { orbitalModule } from './modules/orbital';
+export { artilleryModule } from './modules/artillery';
+export { interceptModule } from './modules/intercept';
 export { captureOnArrivalModule } from './modules/captureOnArrival';
 export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
@@ -204,4 +222,12 @@ export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
 export { heroModule } from './modules/hero';
+export {
+  stewardModule,
+  stewardActive,
+  STEWARD_POSTURES,
+  type StewardPosture,
+} from './modules/steward';
 export { marketModule } from './modules/market';
+export { espionageModule } from './modules/espionage';
+export { diplomacyModule } from './modules/diplomacy';

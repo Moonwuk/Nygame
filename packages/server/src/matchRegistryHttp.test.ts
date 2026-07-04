@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { MS_PER_DAY, type GameData } from '@void/shared-core';
 import { createMultiplayerServer, type MultiplayerServerHandle } from './wsServer';
 import { MatchRegistry, type MatchLists } from './matchRegistry';
+import { registerBrowserApi } from './matchApi';
 import { MemoryAccountStore } from './store';
 import { createDevMatch, loadShippedData } from './scenario';
 
@@ -16,11 +17,18 @@ afterEach(async () => {
   handle = null;
 });
 
-/** Start the server on the registry and return its http base URL. */
+/** Start the server on the registry (as both the room source and the browser
+ *  read-model, wired through the `httpRoutes` seam) and return its http base URL. */
 async function startHttp(registry: MatchRegistry): Promise<string> {
-  handle = createMultiplayerServer({ registry });
+  handle = createMultiplayerServer({
+    registry,
+    accountStore: registry.accounts,
+    httpRoutes: (app) => registerBrowserApi(app, registry),
+  });
   const wsUrl = await handle.listen();
-  return wsUrl.replace(/^ws/, 'http').replace(/\/matches\/.*$/, '');
+  // listen() returns the single match's full URL, or the bare `/matches` prefix when
+  // hosting several — strip either down to the http origin.
+  return wsUrl.replace(/^ws/, 'http').replace(/\/matches(\/.*)?$/, '');
 }
 
 const getJson = async <T>(url: string, init?: RequestInit): Promise<{ status: number; body: T }> => {
@@ -61,9 +69,19 @@ describe('match-browser over HTTP (read-model + archive intent)', () => {
     const { body: l2 } = await getJson<MatchLists>(`${base}/matches?nick=alice`);
     expect(l2.archived.map((s) => s.matchId)).toEqual(['m1']);
     expect(l2.active).toHaveLength(0);
+
+    // Restore: POST unarchive moves it back to the active tab.
+    const rest = await getJson<{ ok: boolean }>(`${base}/matches/m1/unarchive?nick=alice`, {
+      method: 'POST',
+    });
+    expect(rest.status).toBe(200);
+    expect(rest.body).toEqual({ ok: true });
+    const { body: l3 } = await getJson<MatchLists>(`${base}/matches?nick=alice`);
+    expect(l3.active.map((s) => s.matchId)).toEqual(['m1']);
+    expect(l3.archived).toHaveLength(0);
   });
 
-  it('archive is fail-secure over the wire (404 unknown, 403 non-participant, 405 wrong method)', async () => {
+  it('archive is fail-secure over the wire (404 unknown, 403 non-participant, 404 wrong method)', async () => {
     const accounts = new MemoryAccountStore();
     const reg = new MatchRegistry(accounts);
     reg.register(createDevMatch(data, { id: 'm1' }), {
@@ -76,10 +94,16 @@ describe('match-browser over HTTP (read-model + archive intent)', () => {
     expect((await fetch(`${base}/matches/m1/archive?nick=stranger`, { method: 'POST' })).status).toBe(
       403,
     );
-    expect((await fetch(`${base}/matches/m1/archive?nick=x`)).status).toBe(405); // GET not allowed
+    // GET on the archive intent matches no route (Fastify's uniform not-found — the
+    // wrong method is not accepted, same fail-secure outcome as the old explicit 405).
+    expect((await fetch(`${base}/matches/m1/archive?nick=x`)).status).toBe(404);
+    // An intent outside the (archive|unarchive) route constraint never reaches the
+    // handler — the anchored route regex fails to match → uniform 404.
+    expect((await fetch(`${base}/matches/m1/destroy?nick=x`, { method: 'POST' })).status).toBe(404);
+    expect((await fetch(`${base}/matches/m1/rearchive?nick=x`, { method: 'POST' })).status).toBe(404);
   });
 
-  it('GET /health lists the registered matches', async () => {
+  it('GET /health stays contentless (F-13); /metrics carries the aggregate count', async () => {
     const reg = new MatchRegistry(new MemoryAccountStore());
     reg.register(createDevMatch(data, { id: 'm1' }), {
       mapId: 'duel',
@@ -87,7 +111,9 @@ describe('match-browser over HTTP (read-model + archive intent)', () => {
       createdAt: 1,
     });
     const base = await startHttp(reg);
-    const { body } = await getJson<{ ok: boolean; matches: string[] }>(`${base}/health`);
-    expect(body).toEqual({ ok: true, matches: ['m1'] });
+    const health = await getJson<{ ok: boolean }>(`${base}/health`);
+    expect(health.body).toEqual({ ok: true }); // no match ids on the liveness probe
+    const metrics = await getJson<{ matches: number; connections: number }>(`${base}/metrics`);
+    expect(metrics.body).toEqual({ matches: 1, connections: 0 });
   });
 });

@@ -26,9 +26,11 @@ export {
   InMemoryActionReceiptStore,
   type ActionReceipt,
   type ActionReceiptStore,
+  type InMemoryActionReceiptStoreOptions,
 } from './receipts';
 export {
   InMemorySequenceGate,
+  type InMemorySequenceGateOptions,
   type SequenceCursor,
   type SequenceGate,
   type SequenceKey,

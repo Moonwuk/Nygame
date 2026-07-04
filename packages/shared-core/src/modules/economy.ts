@@ -23,30 +23,34 @@ function baseProduction(planet: Planet, data: GameData): ResourceBag {
   return out;
 }
 
-/** Total daily upkeep a player owes for all of their units — ship stacks,
- *  landing troops and the garrisons of their planets. */
-function totalUpkeep(state: GameState, playerId: string, data: GameData): ResourceBag {
-  const out: Record<string, number> = {};
-  const addStacks = (stacks: UnitStack[]) => {
+/** Daily upkeep owed per owner for every unit in the world — ship stacks,
+ *  landing troops and planet garrisons — aggregated in ONE pass over fleets and
+ *  planets (O(world), not O(players × world)). An owner with no upkeep-bearing
+ *  units has no entry. */
+function upkeepByOwner(state: GameState, data: GameData): Map<string, ResourceBag> {
+  const out = new Map<string, ResourceBag>();
+  const addStacks = (owner: string, stacks: UnitStack[]) => {
     for (const stack of stacks) {
       const def = data.units[stack.unit];
       if (!def) {
         continue;
       }
+      let bag = out.get(owner);
+      if (!bag) {
+        out.set(owner, (bag = {}));
+      }
       for (const res of Object.keys(def.upkeep)) {
-        out[res] = (out[res] ?? 0) + (def.upkeep[res] ?? 0) * stack.count;
+        bag[res] = (bag[res] ?? 0) + (def.upkeep[res] ?? 0) * stack.count;
       }
     }
   };
   for (const fleet of Object.values(state.fleets)) {
-    if (fleet.owner === playerId) {
-      addStacks(fleet.units);
-      if (fleet.landing) addStacks(fleet.landing);
-    }
+    addStacks(fleet.owner, fleet.units);
+    if (fleet.landing) addStacks(fleet.owner, fleet.landing);
   }
   for (const planet of Object.values(state.planets)) {
-    if (planet.owner === playerId) {
-      addStacks(planet.garrison);
+    if (planet.owner !== null) {
+      addStacks(planet.owner, planet.garrison);
     }
   }
   return out;
@@ -103,12 +107,13 @@ export const economyModule: GameModule = {
         }
       }
 
+      const upkeepPerOwner = upkeepByOwner(h.state, data);
       for (const playerId of Object.keys(h.state.players)) {
         const player = h.state.players[playerId];
-        if (!player) {
+        const upkeep = upkeepPerOwner.get(playerId);
+        if (!player || !upkeep) {
           continue;
         }
-        const upkeep = totalUpkeep(h.state, playerId, data);
         for (const res of Object.keys(upkeep)) {
           const perDay = upkeep[res] ?? 0;
           if (perDay !== 0) {

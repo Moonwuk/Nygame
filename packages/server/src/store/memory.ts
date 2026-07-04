@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
@@ -6,6 +7,8 @@ import type {
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
+  UserRecord,
+  UserStore,
 } from './types';
 
 /** In-memory match store — the default for dev/tests (a restart still loses the
@@ -25,6 +28,10 @@ export class MemoryMatchStore implements MatchStore {
       this.snaps.set(snapshot.matchId, clone(snapshot)); // optimistic: keep the newest
     }
     return Promise.resolve();
+  }
+
+  ping(): Promise<boolean> {
+    return Promise.resolve(true); // no external dependency to be down
   }
 }
 
@@ -57,6 +64,26 @@ export class MemoryAccountStore implements AccountStore {
 
   occupiedSeats(room: string): Promise<number> {
     return Promise.resolve(this.rooms.get(room)?.size ?? 0);
+  }
+}
+
+/** In-memory user store — accounts keyed by lower-cased login (case-insensitive). */
+export class MemoryUserStore implements UserStore {
+  private readonly byLogin = new Map<string, UserRecord>();
+
+  createUser(
+    login: string,
+    passHash: string,
+  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    const key = login.toLowerCase();
+    if (this.byLogin.has(key)) return Promise.resolve({ ok: false, code: 'E_LOGIN_TAKEN' });
+    const userId = randomUUID();
+    this.byLogin.set(key, { userId, login, passHash });
+    return Promise.resolve({ ok: true, userId });
+  }
+
+  findUser(login: string): Promise<UserRecord | null> {
+    return Promise.resolve(this.byLogin.get(login.toLowerCase()) ?? null);
   }
 }
 

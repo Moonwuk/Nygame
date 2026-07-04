@@ -1,6 +1,6 @@
 # Multiplayer slice
 
-This is the server-authoritative multiplayer slice (Stage 3, in progress). **Implemented and code-verified:** per-player fog-of-war deltas (filtered before broadcast) + event visibility filtering; durable, bounded, rate-limited idempotency receipts; a Postgres match/receipt store; and a **v1 offline scheduler** (`MatchRoom.tick()`/`msUntilNextEvent()`) so the world advances 24/7 with nobody connected. **Wiring nuance:** the gate-covered `pnpm dev:server` entry (`main.ts`) is still in-memory; persistence + the wakeup driver are wired in the prototype host (`prototype/netserver.ts`). **Still missing for production:** connection auth/JWT (+ Origin/TLS), a multi-match registry, the durable cross-process scheduler (pg-boss, v2), and wiring `@void/action-layer`. The live, code-verified status is in `state.md`.
+This is the server-authoritative multiplayer slice (Stage 3; the critical path to an online session is closed). **Implemented and code-verified:** per-player fog-of-war deltas (filtered before broadcast) + event visibility filtering; durable, bounded, rate-limited idempotency receipts; a Postgres match/receipt store with strict commit-before-broadcast; a **v1 offline scheduler** (`MatchRoom.tick()`/`msUntilNextEvent()` + `clockDriver.ts`) so the world advances 24/7 with nobody connected; a **multi-match registry** with hibernation (`LazyRoomRegistry`); JWT join-token auth + Origin allowlist at the WS handshake (opt-in via env); and the `@void/action-layer` gate (envelope validation → payload schemas → authorization → dedup → sequence) in front of the reducer. The `pnpm dev:server` entry (`packages/server/src/main.ts`) hosts all of it; auth/gate switch on via `AUTH_JWT_SECRET`/`GATE=1`. **Still missing for production:** OIDC identity on create/join, an envelope-sending client (the gate waits for `action.v1` from the client), the durable cross-process scheduler (pg-boss, v2), and TLS termination in front. The live, code-verified status is in `state.md`.
 
 ## What exists now
 
@@ -53,7 +53,7 @@ deltas. The construction (data loader + `createDevMatch`) lives in
 
 The section above connects to a minimal core harness (`dev:server`, green/red). To
 play the **actual prototype** — the map, the HUD, the whole console — as a
-two-player session, use the prototype dev server. It hosts the prototype's *own*
+two-player session, use the prototype dev server. It hosts the prototype's _own_
 world (same `kernel` + `data` + `newGame()`), so the client renders the live
 session exactly like single-player, and it **serves the game HTML at `/`** so a
 peer needs no file at all.
@@ -101,7 +101,7 @@ the debug build allows cleartext (`usesCleartextTraffic`), so it connects over p
 
 1. Host runs `pnpm host`.
 2. Get the APK: **Actions → "Android APK (prototype)" → download `void-dominion-debug-apk`**
-   (or trigger it manually via *Run workflow*); send `app-debug.apk` to your friend.
+   (or trigger it manually via _Run workflow_); send `app-debug.apk` to your friend.
 3. Both sideload it. In the overlay each types `ws://<host-LAN-IP>:8788` (the host can
    use `ws://localhost:8788`), one picks Azure, the other Crimson → **Connect**.
 
@@ -118,8 +118,8 @@ Both (browser **or** APK) paste the printed `wss://…trycloudflare.com` URL; on
 Azure, the other Crimson.
 
 Keep the server (and tunnel) running for the session — state is in-memory, so a restart
-loses the match. Do **not** leave an unauthenticated server tunnelled long-term (auth is
-brick F7 / SE-0.1).
+loses the match. Do **not** leave an unauthenticated server tunnelled long-term (enable
+the JWT handshake — `AUTH_JWT_SECRET`, SE-0.1 — for anything beyond a throwaway session).
 
 ### Path D — hosted, truly "just a link" (no local server)
 
@@ -164,7 +164,7 @@ first failing step:
    `lsof -tiTCP:8788 -sTCP:LISTEN | xargs -r kill`; Windows `netstat -ano | findstr :8788`
    then `taskkill /PID <pid> /F`).
 
-3. **Reachable from another box?** From a *second* device on the same network:
+3. **Reachable from another box?** From a _second_ device on the same network:
    `curl -sS http://<host-ip>:8788/health`. Connection **refused** ⇒ loopback-only bind
    (step 1). **Timeout** ⇒ a firewall is dropping 8788 — open it: Linux
    `sudo ufw allow 8788/tcp`; Windows (elevated PowerShell)
@@ -226,62 +226,77 @@ seats N players — each gets a homeworld (spread around the neutral `nexus`) an
 `<id>_1`. The default is `['green', 'red']`.
 
 **Expose the server.**
-- *Same machine:* open two browser contexts (two tabs / a private window) as `green` and `red`.
-- *LAN (two devices):* `HOST=0.0.0.0 PORT=9000 pnpm dev:server`, then dial
+
+- _Same machine:_ open two browser contexts (two tabs / a private window) as `green` and `red`.
+- _LAN (two devices):_ `HOST=0.0.0.0 PORT=9000 pnpm dev:server`, then dial
   `ws://<this-machine-LAN-IP>:9000/matches/dev?player=green`.
-- *Internet (throwaway):* tunnel the port — `cloudflared tunnel --url http://localhost:8787`
+- _Internet (throwaway):_ tunnel the port — `cloudflared tunnel --url http://localhost:8787`
   (or `ngrok http 8787`) — and use the printed `wss://…` URL; or host it (Fly.io/Railway). Do
-  **not** expose an unauthenticated dev server long-term — JWT is brick F7 / SE-0.1.
+  **not** expose an unauthenticated dev server long-term — enable the JWT handshake
+  (`AUTH_JWT_SECRET`, SE-0.1) for anything beyond a LAN playtest.
 
 **Headless coverage (runs in `pnpm test`):**
+
 - `scenario.test.ts` — the two-player wire (action → broadcast to both → exact reconstruction).
 - `restart.test.ts` — graceful restart: `close()` drains active clients (clean 1001) and a fresh
-  server resumes a client from preserved state (the only missing piece for crash-safe restart is
-  durable state, F2).
+  server resumes a client from preserved state (crash-safe restart over the durable store is
+  covered by `f8-persistence.test.ts`).
 - `soak.test.ts` — N clients fire K actions concurrently; the room serializes all N×K and every
   client converges on the same authoritative state. (This caught a real JSON-stability bug: a `-0`
   coordinate desynced reconstruction, since JSON has no `-0`.)
 
 **Manual checklist for a human two-player test:**
+
 1. Both clients connect and receive a `welcome` snapshot.
 2. An action from one player is reflected on the **other** within the broadcast.
 3. An unknown `?player=` is refused (HTTP 403).
 4. Kill the server mid-session → clients disconnect cleanly; restart → they reconnect and resync
-   from `welcome` (state is lost until persistence/F2 — expected for now).
+   from `welcome` (with `DATABASE_URL` set the match resumes from the durable snapshot; without
+   it, memory-only state is lost — expected for a throwaway dev run).
 5. Bad / oversized messages are rejected (`E_BAD_MESSAGE` / `E_PAYLOAD_TOO_LARGE`), not crashing.
 
-**Known constraints before this is "real" multiplayer** (see limitations below): in-memory
-(restart loses the match), no auth, lazy world clock (advances on action, no scheduler), and deltas
-are not yet visibility-filtered per player (F6).
+**Known constraints before this is "real" multiplayer** (see limitations below): auth and the
+action gate are opt-in (env-switched, default off for dev), the client does not yet send
+`action.v1` envelopes, identity is nick-based (no OIDC), and the scheduler is single-process
+(pg-boss v2 is the multi-process step).
 
 ## Protocol
 
 Client → server:
 
 ```ts
-{ type: 'action', action: Action }
+{ type: 'action', action: Action }            // bare action (refused by a gated room)
+{ type: 'action.v1', envelope }               // gated envelope (requires GATE=1)
 { type: 'ping', clientTime?: number }
+{ type: 'start' }                             // host-only: begin a manual-start lobby
+{ type: 'ping.place', ping: PingDraft }       // tactical ally ping
+{ type: 'ping.clear', pingId?: string }
 ```
 
 Server → client:
 
 ```ts
-{ type: 'welcome', matchId, playerId, seq, serverTime, state }       // full snapshot (join)
-{ type: 'state',   matchId, seq, serverTime, state, events }         // full snapshot (resync)
-{ type: 'delta',   matchId, seq, serverTime, delta, events }         // incremental update
+{ type: 'welcome', matchId, playerId, seq, serverTime, state, sessionId?, … }  // full snapshot (join)
+{ type: 'state',   matchId, seq, serverTime, state, events, … }                // full snapshot (resync)
+{ type: 'delta',   matchId, seq, serverTime, delta, events, … }                // incremental update
 { type: 'rejection', matchId, seq, actionId, code }
 { type: 'pong',    matchId, serverTime, clientTime? }
 { type: 'error',   matchId, code }
+{ type: 'ping.added',   matchId, ping }
+{ type: 'ping.removed', matchId, pingId, reason }
 ```
 
-Broadcasts are entity-level deltas (changed entities per collection + removed ids + changed top-level fields). What remains for production is **per-player visibility filtering** — diffing against `visibleState(playerId)` instead of the full state, which is gated on fog-of-war (backlog A1).
+`welcome`/`state`/`delta` additionally carry the fog extras (`signatures`, `remembered`), the
+lobby fields (`waiting?`, `lobby?`) and an optional desync `hash` (see `protocol.ts`).
+
+Broadcasts are entity-level deltas (changed entities per collection + removed ids + changed top-level fields), **diffed per player against their own `visibleState` baseline** — hidden worlds/fleets are physically never sent.
 
 ## Important limitations before real production multiplayer
 
-- **Persistence:** ✅ a Postgres `GameState`+receipts store exists (`store/postgres.ts`), wired in the prototype host (`netserver.ts`, opt-in via `DATABASE_URL`); durable matches survive restart. ⚠️ the gate-covered `dev:server`/`main.ts` is still memory-only — promoting the store into the Stage-3 server path is the remaining work.
-- **Scheduling:** ✅ a v1 offline scheduler exists — `MatchRoom.tick()`/`msUntilNextEvent()` + a single-process `setTimeout` driver in the prototype host fire due events with nobody connected. ⚠️ a durable, cross-process wake-up (pg-boss, v2 — NOT Redis/BullMQ) is needed for >1 server process.
-- **Auth:** 🔴 `playerId` is a query parameter (`?player=`). Production needs JWT/session auth + an Origin check in the handshake (and `wss://`).
+- **Persistence:** ✅ a Postgres `GameState`+receipts store exists (`store/postgres.ts`) and is wired in **both** hosts (`packages/server/src/main.ts` via `createStores` + strict commit-before-broadcast, and the prototype host `netserver.ts`; opt-in via `DATABASE_URL`); durable matches survive restart.
+- **Scheduling:** ✅ a v1 offline scheduler exists — `MatchRoom.tick()`/`msUntilNextEvent()` + the single-process `clockDriver` (in both hosts) fire due events with nobody connected. ⚠️ a durable, cross-process wake-up (pg-boss, v2 — NOT Redis/BullMQ) is needed for >1 server process.
+- **Auth:** ✅ opt-in JWT join-token handshake (`auth.ts`, `?token=`; `?player=`/`?nick=` refused when enabled) + Origin allowlist. ⚠️ default-off for dev; OIDC identity on create/join and TLS termination are the remaining production steps.
 - **Fog of war:** ✅ done — deltas are diffed per player against `visibleState(playerId)` and events are fog-filtered; nothing a player can't see leaves the server.
-- **Action gate:** 🔴 `@void/action-layer` (envelope/`clientSeq`/authz) is built and tested but not yet imported by the server; the live path uses an inline ownership check + dedup + rate-limit.
+- **Action gate:** ✅ `@void/action-layer` is wired (`MatchRoom.gate`, `GATE=1`): `action.v1` envelopes pass validate → payload schema → authorize → dedup → sequence before the reducer, and bare `action` is refused on a gated room. ⚠️ the client does not send envelopes yet, so the gate waits for the envelope client.
 - **Diffs:** ✅ deltas are sent (full snapshots only on join/resync). Reconnect works via the `welcome`/`state` full snapshot.
-- **Queues:** JavaScript message handling is serialized in one process. Multi-instance deployment needs DB optimistic locking / a per-match queue, and a multi-match registry (today: one room per process).
+- **Queues:** JavaScript message handling is serialized in one process (per-room actor mailbox on the committed path). ✅ a multi-match registry hosts N isolated matches per process (`RoomRegistry`/`LazyRoomRegistry` with hibernation). ⚠️ multi-instance deployment still needs DB optimistic locking / a cross-process per-match queue.

@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { createInitialState, type GameState } from './gameState';
-import { DEFAULT_STANCE, pairKey, getStance, setStance } from './diplomacy';
+import {
+  DEFAULT_STANCE,
+  pairKey,
+  getStance,
+  setStance,
+  offerKey,
+  offerInvolves,
+  getOffer,
+  setOffer,
+  clearOffers,
+} from './diplomacy';
 import { diffState, applyDelta } from './delta';
 import { deepClone, deepFreeze } from '../util/clone';
 
@@ -67,6 +77,48 @@ describe('diplomacy — setStance', () => {
   it('does not mutate a frozen input it was not given (purity of the read path)', () => {
     const s = deepFreeze(base());
     expect(() => getStance(s, 'p1', 'p2')).not.toThrow(); // getStance never writes
+  });
+});
+
+describe('diplomacy — offers (D3 primitives)', () => {
+  it('offer keys are DIRECTED and involvement is by either end', () => {
+    expect(offerKey('p1', 'p2')).not.toBe(offerKey('p2', 'p1'));
+    expect(offerInvolves(offerKey('p1', 'p2'), 'p1')).toBe(true);
+    expect(offerInvolves(offerKey('p1', 'p2'), 'p2')).toBe(true);
+    expect(offerInvolves(offerKey('p1', 'p2'), 'p3')).toBe(false);
+  });
+
+  it('set / get / clear round-trip, clearing both directions and dropping the empty map', () => {
+    const s = base();
+    expect(getOffer(s, 'p1', 'p2')).toBeNull(); // absent map reads as no offer
+    setOffer(s, 'p1', 'p2', 'peace');
+    setOffer(s, 'p2', 'p1', 'pact');
+    expect(getOffer(s, 'p1', 'p2')).toBe('peace');
+    expect(getOffer(s, 'p2', 'p1')).toBe('pact');
+    clearOffers(s, 'p2', 'p1'); // order-independent: voids both directions
+    expect(getOffer(s, 'p1', 'p2')).toBeNull();
+    expect(s.diplomacyOffers).toBeUndefined(); // emptied map is dropped
+  });
+
+  it('a self-offer is a no-op', () => {
+    const s = base();
+    setOffer(s, 'p1', 'p1', 'peace');
+    expect(s.diplomacyOffers).toBeUndefined();
+  });
+
+  it('an offers change is carried by the state delta', () => {
+    const prev = deepFreeze(base());
+    const next = deepClone(prev);
+    setOffer(next, 'p1', 'p2', 'peace');
+    const delta = diffState(prev, next);
+    expect(delta.meta).toHaveProperty('diplomacyOffers');
+    expect(applyDelta(prev, delta)).toEqual(next);
+    // …and clearing the last offer removes the key on the wire (removedMeta).
+    const cleared = deepClone(next);
+    clearOffers(cleared, 'p1', 'p2');
+    const wire = JSON.parse(JSON.stringify(diffState(next, cleared)));
+    const rebuilt = applyDelta(next, wire);
+    expect('diplomacyOffers' in rebuilt).toBe(false);
   });
 });
 

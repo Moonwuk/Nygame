@@ -26,7 +26,7 @@ via esbuild, so you can double-click it or send it anywhere.
 - On **your** planets: build mines/refineries (economy), a **fort** (defense, upgradeable to a
   fortress), and units. Built units join the **garrison**; **Launch fleet** turns a garrison's
   ships + troops into a mobile force.
-- Taking a **defended** world needs landing troops (marines) aboard the attacking fleet.
+- Taking a **defended** world needs landing troops (a mobilised **division**) aboard the attacking fleet.
 - **Goal:** capture **CRIMSON** (the red capital). You **lose** if **HOME** falls.
 
 ## What it exercises

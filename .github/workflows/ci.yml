@@ -1,0 +1,65 @@
+name: CI
+
+# The gate for every push to main and every PR: lint + typecheck + test + audit.
+# A Postgres service is attached and DATABASE_URL is set, so the durable-path adapter
+# tests (store.test.ts, gated behind DATABASE_URL) actually run in CI instead of being
+# skipped — the production persistence path is exercised, not just the in-memory one.
+# Actions are SHA-pinned (SD-6.1 / F-16) with a trailing `# vN` for readability, and
+# checkout sets `persist-credentials: false` (the job only reads) — same hardening as
+# security.yml, self-flagged by its zizmor job.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint · typecheck · test · audit
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: void_test
+        ports:
+          - 5432:5432
+        # Wait until the DB accepts connections before the job's steps run.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # store.test.ts runs its Postgres adapter contracts only when this is set; every
+      # other test either uses in-memory stores or passes an explicit empty env.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/void_test
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # pnpm version comes from package.json "packageManager"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Gate (lint + typecheck + test, incl. Postgres adapters)
+        run: pnpm run check
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level=high

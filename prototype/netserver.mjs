@@ -20,9 +20,10 @@ await build({
   format: 'esm',
   platform: 'node',
   target: 'node22',
-  // `ws` and `pg` ship optional native bits / dynamic requires; leave them for Node
-  // to resolve at runtime. Everything else (the @void/* TS source + game) is bundled.
-  external: ['ws', 'pg'],
+  // `ws`, `pg` and `fastify` ship native/optional bits and dynamic requires (fastify's
+  // avvio/find-my-way/pino); leave them for Node to resolve at runtime. Everything else
+  // (the @void/* TS source + game) is bundled — mirrors packages/server/dev.mjs.
+  external: ['ws', 'pg', 'fastify'],
 });
 
 await import(pathToFileURL(outfile).href);

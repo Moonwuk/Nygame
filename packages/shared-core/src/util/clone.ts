@@ -30,6 +30,55 @@ export function deepClone<T>(value: T): T {
 }
 
 /**
+ * Structural equality over JSON-shaped values, mirroring `hashState`'s notion
+ * of logical equality: object keys holding `undefined` count as absent (so
+ * `{a: undefined}` equals `{}`), key ORDER is ignored, arrays compare by
+ * position. Replaces `JSON.stringify(a) === JSON.stringify(b)` on hot paths —
+ * it short-circuits on the first difference and allocates nothing.
+ */
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false;
+  }
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqual(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (Array.isArray(b)) {
+    return false;
+  }
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  let yDefined = 0;
+  for (const key of Object.keys(y)) {
+    if (y[key] !== undefined) yDefined++;
+  }
+  let xDefined = 0;
+  for (const key of Object.keys(x)) {
+    if (x[key] === undefined) {
+      continue; // JSON semantics: an undefined value = an absent key
+    }
+    xDefined++;
+    // Own-key lookup so a key like `constructor` can never match via the prototype.
+    const yValue = Object.prototype.hasOwnProperty.call(y, key) ? y[key] : undefined;
+    if (!deepEqual(x[key], yValue)) {
+      return false;
+    }
+  }
+  return xDefined === yDefined; // no extra defined keys on the other side
+}
+
+/**
  * Recursively freezes an object graph. Used in tests to assert the reducer
  * never mutates its input, and available to callers that want a hard
  * immutability guarantee on a snapshot.

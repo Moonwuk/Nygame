@@ -23,5 +23,10 @@
     "name": "Polymath",
     "description": "Generalist: grants one extra concurrent research slot instead of a branch focus.",
     "slotBonus": 1
+  },
+  "overseer": {
+    "name": "Куратор",
+    "description": "Command-branch research leader: automation and delegation doctrine. Gates the «Steward» protocol — handing the seat to the AI while you sleep — and future command-chain / standing-posture content on choosing this leader.",
+    "branch": "command"
   }
 }

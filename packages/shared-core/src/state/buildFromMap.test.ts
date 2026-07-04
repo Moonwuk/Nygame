@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData, type GameData } from '../data/schemas';
+import type { GameData } from '../data/schemas';
+import { loadGameData } from '../data/loadGameData';
 import { parseMatchMap, type MatchMap } from '../data/mapSchema';
 import { buildStateFromMap, validateMatchMap } from './buildFromMap';
 
@@ -10,20 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const readJson = (p: string): unknown => JSON.parse(readFileSync(path.join(repoRoot, p), 'utf8'));
 
 function shippedData(): GameData {
-  const manifest = readJson('data/manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('data/resources.json'),
-    units: readJson('data/units.json'),
-    factions: readJson('data/factions.json'),
-    buildings: readJson('data/buildings.json'),
-    events: readJson('data/events.json'),
-    sectors: readJson('data/sectors.json'),
-    sectorKinds: readJson('data/sectorKinds.json'),
-    planetTypes: readJson('data/planetTypes.json'),
-    technologies: readJson('data/technologies.json'),
-    scientists: readJson('data/scientists.json'),
-  });
+  return loadGameData((name) => readJson('data/' + name));
 }
 
 const data = shippedData();
@@ -41,6 +29,14 @@ describe('buildStateFromMap (map-roadmap.md M1.2)', () => {
       { unit: 'cruiser', count: 2 },
       { unit: 'scout_drone', count: 1 },
     ]);
+  });
+
+  it('carries a map player ai flag onto the seated player', () => {
+    const map = exampleMap();
+    map.players.red!.ai = true;
+    const state = buildStateFromMap(map, data);
+    expect(state.players.red!.ai).toBe(true);
+    expect(state.players.green!.ai).toBeUndefined();
   });
 
   it('derives sector links from the undirected paths (sorted, symmetric)', () => {
@@ -141,6 +137,47 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slots: { slot_a: { playerId: 'p1', scientist: 'ghost' }, slot_b: { playerId: 'p2' } },
       }),
     ).toThrow(/E_UNKNOWN_SCIENTIST/);
+  });
+
+  it('grants pre-match technology picks as completed research (C3)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        // duplicates collapse — the pick lands once
+        slot_a: { playerId: 'p1', technologies: ['orbital_logistics', 'orbital_logistics'] },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    expect(state.players.p1!.technologies).toEqual({ completed: ['orbital_logistics'] });
+    expect(state.players.p2!.technologies).toBeUndefined(); // no picks → untouched
+  });
+
+  it('marks AI-driven seats on the player (bots are not invitable to coalitions)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1', ai: true }, slot_b: { playerId: 'p2' } },
+    });
+    expect(state.players.p1!.ai).toBe(true);
+    expect(state.players.p2!.ai).toBeUndefined(); // human seat stays unmarked
+  });
+
+  it('rejects a player id carrying the pair-key separator "|" (fail-secure at boot)', () => {
+    // seated via a slot…
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'clan|alpha' }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_BAD_PLAYER_ID/);
+    // …and declared statically on the map (schema-level guard)
+    const raw = readJson('data/maps/skirmish-1.json') as { players: Record<string, unknown> };
+    raw.players['clan|alpha'] = { name: 'X', faction: 'vanguard' };
+    expect(() => parseMatchMap(raw)).toThrow();
+  });
+
+  it('rejects a slot granting an unknown technology (fail-secure at boot)', () => {
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'p1', technologies: ['ghost_tech'] }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_UNKNOWN_TECHNOLOGY/);
   });
 
   it('accepts slot ids as sector/fleet owners (validation clean)', () => {

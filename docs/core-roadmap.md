@@ -8,10 +8,11 @@
 
 ## Текущее состояние (факт)
 
-Этап 1 в основном готов: микроядро (`createKernel`/`applyAction`/`advanceTo`), 9 модулей
-(army/combat/construction/economy/movement/planetType/sector/technology/victory), seeded RNG
+Этап 1 в основном готов: микроядро (`createKernel`/`applyAction`/`advanceTo`), 16 базовых модулей
+(army/combat/construction/economy/movement/planetType/sector/technology/victory + captureOnArrival/station/faction/reanimation/visibility/hero/market — `packages/shared-core/src/index.ts`), seeded RNG
 (+golden), модель времени, `diffState`/`applyDelta`, `visibleState` (туман как проекция). Данные
-валидируются zod (`parseGameData`). **Осталось:** фракции, дипломатия, доводка видимости, трейты,
+валидируются zod (`parseGameData`). Фракции (Фаза 1) и память видимости (CR-2.1) — уже в коде.
+**Осталось:** дипломатия, доводка видимости (радар как явные хуки), трейты,
 **версияирование сейвов и реплей** (🔴-пробел из тех-исследования).
 
 ## Зависимости
@@ -64,13 +65,14 @@
 
 ## Фаза 2 · Доводка видимости (Блок A)
 
-### CR-2.1 · Память «последнего увиденного» `[core]` ⏳ — M
-**Подзадачи:** per-player снимки в `GameState`; `visibleState` отдаёт серое «last known» вместо unknown. **Бирка A1m.**
-**Готово, когда:** игрок видит устаревшую картинку покинутых зон, а не пустоту; тест.
+### CR-2.1 · Память «последнего увиденного» `[core]` ✅ — M
+**Подзадачи:** ✅ per-player снимки в `GameState` (`fog`); ✅ `visibleState` отдаёт серое «last known» вместо unknown. **Бирка A1m.**
+**Готово:** `visibilityModule` (`modules/visibility.ts`) снимает опознанные миры в per-player память тумана и кормит `visibleState` серым last-known миром покинутых зон; тест `visibility.test.ts:53`.
 
-### CR-2.2 · Сенсорная/радарная дальность от зданий `[core][data]` ⏳ — S
-**Подзадачи:** хук `vision.source`/`radar.source` + радарные постройки/корабли в данных. **Бирка A2.**
+### CR-2.2 · Сенсорная/радарная дальность от зданий `[core][data]` ⏳ (частично) — S
+**Подзадачи:** радарные постройки/корабли в данных ✅ (`radarRange` на зданиях и юнитах — `data/schemas.ts`); двухзонное обнаружение (внутренняя зона — полное опознание, внешняя — сигнатуры) уже считается в `visibleState`, тест `visibility.test.ts:75-106`. Осталось: обобщить как явные хуки `vision.source`/`radar.source` (сейчас логика зашита в `visibleState`, не хук). **Бирка A2.**
 **Готово, когда:** здания/корабли расширяют видимость по данным; тест.
+**✅ уже в коде:** `state/visibility.ts` (двухзонный радар от `radarRange` зданий/флотов).
 
 ### CR-2.3 · Разведка флотом + хелпер видимости `[core]` 🔒(CR-2.1) — S
 **Подзадачи:** флот раскрывает узлы по маршруту/в орбите (A3); хелпер «виден ли X игроку P» с дефолтом «видно всё» без модуля (A4).

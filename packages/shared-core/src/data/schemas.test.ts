@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseGameData, safeParseGameData, buildingLevel, buildingMaxLevel } from './schemas';
+import { composeGameDataBundle } from './loadGameData';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const dataDir = path.join(repoRoot, 'data');
@@ -11,23 +12,10 @@ function readJson(name: string): unknown {
   return JSON.parse(readFileSync(path.join(dataDir, name), 'utf8'));
 }
 
-/** Composes the shipped data fragments into one bundle, the way a loader would. */
+/** Composes the shipped data fragments into one bundle via the shared composer (CP0.3),
+ *  injecting the Node file reader — the fragment list now lives in one place. */
 function loadShippedBundle(): Record<string, unknown> {
-  const manifest = readJson('manifest.json') as { version: string };
-  return {
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-    modules: readJson('modules.json'),
-  };
+  return composeGameDataBundle(readJson);
 }
 
 describe('game data schema (docs/architecture.md §2)', () => {
@@ -43,8 +31,17 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.units.tank?.stats.cargoSize).toBe(3); // a tank is bulky cargo
     expect(data.units.dropship?.stats.cargoCapacity).toBe(12); // dedicated lift
     expect(data.units.scout_drone?.stats.cargoCapacity).toBe(0); // default, carries nothing
-    expect(data.units.orbital_aa?.stats.aaDamage).toBe(14); // anti-ship orbital AA
+    expect(data.buildings.orbital_aa?.aaDamage).toBe(14); // anti-ship orbital AA — a defensive building
     expect(data.units.cruiser?.stats.aaDamage).toBe(0); // default, no AA
+    expect(data.buildings.mine_t1?.aaDamage).toBe(0); // buildings default to no AA
+    // squadrons-roadmap SQ-0.1: a carrier-borne fighter squadron + the new squadron stats.
+    expect(data.units.fighter_squadron?.traits).toContain('squadron');
+    expect(data.units.fighter_squadron?.stats.strikeRange).toBe(180); // Euclidean reach
+    expect(data.units.fighter_squadron?.stats.fuel).toBe(3); // sorties before rearm
+    expect(data.units.fighter_squadron?.stats.rearmRounds).toBe(2);
+    expect(data.units.strike_carrier?.stats.cargoCapacity).toBe(6); // hangar = shared cargo hold
+    expect(data.units.cruiser?.stats.strikeRange).toBe(0); // schema default (not a squadron)
+    // reanimate_on_kill/Necromancer cut (designer-role) → assert a surviving event instead.
     expect(data.events.infect_planet?.trigger).toBe('planet_captured');
     expect(data.sectors.asteroid_field?.speedBonus).toBeCloseTo(-0.25);
     expect(data.sectors.asteroid_field?.hpBonus).toBeCloseTo(0.1);

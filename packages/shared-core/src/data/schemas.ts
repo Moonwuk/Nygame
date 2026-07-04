@@ -39,6 +39,15 @@ export const UnitStatsSchema = z
     /** Orbital-AA damage per hour a (ground) unit deals to a hostile fleet on the
      *  NEAR orbit while the planet is not under a ground assault. 0 = no AA. */
     aaDamage: z.number().nonnegative().default(0),
+    /** Squadron reach (squadrons-roadmap SQ-3.1): the Euclidean distance in MAP
+     *  UNITS a launched `squadron` may strike from its carrier. 0 = no reach. */
+    strikeRange: z.number().nonnegative().default(0),
+    /** Squadron sorties before it must rearm (SQ-2.1). 0 = not a squadron / no
+     *  sortie limit. Decrements per sortie; at 0 the squadron goes to `rearmRounds`. */
+    fuel: z.number().nonnegative().default(0),
+    /** Combat rounds a spent squadron sits rearming on its carrier before it can
+     *  sortie again (SQ-2.1). Deterministic cooldown, like a hero ability. */
+    rearmRounds: z.number().nonnegative().default(0),
   })
   .catchall(z.number());
 
@@ -115,6 +124,9 @@ export const FactionPassivesSchema = z.object({
   fleetSpeedBonus: z.number().default(0),
   /** Multiplier on outgoing combat damage. */
   combatDamageBonus: z.number().default(0),
+  /** Multiplier on the reach of every radar the player fields (buildings and
+   *  ships). Read by the `visibleState` projection (A2), like the tech effect. */
+  radarRangeBonus: z.number().default(0),
 });
 
 export const FactionDefSchema = z.object({
@@ -136,6 +148,7 @@ export const FactionDefSchema = z.object({
     productionBonus: 0,
     fleetSpeedBonus: 0,
     combatDamageBonus: 0,
+    radarRangeBonus: 0,
   }),
 });
 
@@ -157,6 +170,9 @@ export const BuildingLevelSchema = z.object({
   /** Fraction of a docked friendly fleet's HULL restored per game hour (0.1 = 10%/h) —
    *  a shipyard / spaceport (shields-roadmap SH-2.1). 0 = this building can't mend hulls. */
   shipRepair: z.number().nonnegative().default(0),
+  /** Anti-ship orbital-AA firepower this level fires per game hour at a hostile fleet on the
+   *  near orbit (an emplacement building). Summed alongside garrison `aaDamage` in combat. */
+  aaDamage: z.number().nonnegative().default(0),
 });
 
 export const BuildingDefSchema = z.object({
@@ -185,6 +201,9 @@ export const BuildingDefSchema = z.object({
   /** Fraction of a docked friendly fleet's HULL restored per game hour — a
    *  shipyard / spaceport (shields-roadmap SH-2.1). 0 = can't mend hulls. */
   shipRepair: z.number().nonnegative().default(0),
+  /** Anti-ship orbital-AA firepower per game hour (an emplacement building like an
+   *  orbital-AA battery). Fires on hostile near-orbit fleets, summed with garrison AA. */
+  aaDamage: z.number().nonnegative().default(0),
 });
 
 /**
@@ -249,11 +268,15 @@ export const TechnologyEffectsSchema = z.object({
   fleetSpeedBonus: z.number().default(0),
   /** Multiplier on outgoing combat damage, e.g. 0.1 = +10%. */
   combatDamageBonus: z.number().default(0),
+  /** Multiplier on the reach of every radar the player fields (buildings and
+   *  ships), e.g. 0.25 = +25%. Read by the `visibleState` projection (A2). */
+  radarRangeBonus: z.number().default(0),
 });
 
-/** The four tech-tree branches (UI tabs), shared by technologies, scientists and the
- *  `has_scientist` gate. */
-const BranchSchema = z.enum(['ground', 'space', 'squadron', 'missile']);
+/** The five tech-tree branches (UI tabs), shared by technologies, scientists and the
+ *  `has_scientist` gate. `command` is the automation / command-and-control branch (AI
+ *  delegation "Steward", and later order chains and standing postures). */
+const BranchSchema = z.enum(['ground', 'space', 'squadron', 'missile', 'command']);
 
 /** Shared "at least N" threshold for a condition (default 1 = mere existence). This
  *  single `min` knob is the main data lever for tuning a gate without touching code. */
@@ -307,6 +330,7 @@ export const TechnologyDefSchema = z.object({
     productionBonus: 0,
     fleetSpeedBonus: 0,
     combatDamageBonus: 0,
+    radarRangeBonus: 0,
   }),
 });
 
@@ -449,8 +473,8 @@ export type GameData = z.infer<typeof GameDataSchema>;
  *  levels 2..N come from `upgrades`. Out-of-range levels fall back to level 1. */
 export function buildingLevel(def: BuildingDef, level: number): BuildingLevel {
   if (level <= 1) {
-    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair } = def;
-    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair };
+    const { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair, aaDamage } = def;
+    return { cost, buildTimeHours, produces, hp, defenseBonus, radarRange, healRate, shipRepair, aaDamage };
   }
   return def.upgrades[level - 2] ?? buildingLevel(def, 1);
 }

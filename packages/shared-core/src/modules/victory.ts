@@ -156,13 +156,20 @@ function evaluateVictory(h: HandlerContext): void {
   // Domination: hold a share of the CAPTURABLE provinces. The denominator counts
   // only ownable territory — non-capturable void/empty/debris nodes (the bulk of a
   // post-vision-rework map) must not dilute the share, or 60% becomes unreachable.
-  const capturable = Object.values(h.state.planets).filter((p) => isCapturable(h.ctx.data, p));
+  // One pass counts the denominator and each owner's holdings (O(planets), not
+  // O(players × planets) — evaluateVictory runs on every time.advanced span).
+  let capturableCount = 0;
+  const ownedCapturable = new Map<PlayerId, number>();
+  for (const p of Object.values(h.state.planets)) {
+    if (!isCapturable(h.ctx.data, p)) continue;
+    capturableCount += 1;
+    if (p.owner !== null) ownedCapturable.set(p.owner, (ownedCapturable.get(p.owner) ?? 0) + 1);
+  }
   const dominationPercent = h.ctx.config?.victory?.dominationPercent ?? DEFAULT_DOMINATION_PERCENT;
-  if (capturable.length > 0 && dominationPercent > 0) {
-    const dominator = active.find((playerId) => {
-      const owned = capturable.filter((p) => p.owner === playerId).length;
-      return owned / capturable.length >= dominationPercent;
-    });
+  if (capturableCount > 0 && dominationPercent > 0) {
+    const dominator = active.find(
+      (playerId) => (ownedCapturable.get(playerId) ?? 0) / capturableCount >= dominationPercent,
+    );
     if (dominator) {
       endMatch(h, dominator, 'domination');
       return;

@@ -65,6 +65,15 @@ export interface ClientActionMessage {
   action: Action;
 }
 
+/** A gated action (SV-1.1): the raw `@void/action-layer` ActionEnvelope on the wire.
+ *  The envelope is passed through UNVALIDATED — the `ActionGate` owns its schema check,
+ *  so a malformed one yields the gate's stable `E_BAD_PAYLOAD` rather than a generic
+ *  `E_BAD_MESSAGE`. Only rooms configured with a `gate` accept this type. */
+export interface ClientActionEnvelopeMessage {
+  type: 'action.v1';
+  envelope: unknown;
+}
+
 export interface ClientPingMessage {
   type: 'ping';
   clientTime?: number;
@@ -96,6 +105,7 @@ export interface ClientPingClearMessage {
 
 export type ClientMessage =
   | ClientActionMessage
+  | ClientActionEnvelopeMessage
   | ClientPingMessage
   | ClientStartMessage
   | ClientPingPlaceMessage
@@ -133,6 +143,10 @@ export interface ServerWelcomeMessage extends VisibilityFields, LobbyField, Hash
   seq: number;
   serverTime: number;
   state: GameState;
+  /** The server-minted session id for this connection (SV-1.1-live-A). The client echoes
+   *  it in every `action.v1` envelope so a gated room can authorize the session binding.
+   *  Present only when the transport bound one; absent for a bare in-process room. */
+  sessionId?: string;
 }
 
 export interface ServerStateMessage extends VisibilityFields, LobbyField, HashField {
@@ -250,6 +264,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
   if (!isRecord(decoded) || typeof decoded.type !== 'string') return null;
   if (decoded.type === 'action' && isAction(decoded.action)) {
     return { type: 'action', action: decoded.action };
+  }
+  if (decoded.type === 'action.v1') {
+    // Pass the envelope through as-is; the ActionGate validates it (stable E_BAD_PAYLOAD).
+    return { type: 'action.v1', envelope: decoded.envelope };
   }
   if (decoded.type === 'ping') {
     return typeof decoded.clientTime === 'number'

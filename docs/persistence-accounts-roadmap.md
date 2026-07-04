@@ -32,8 +32,11 @@
 - **Ops ✅** `deploy/docker-compose.yml` — Postgres на VPS (loopback-bind, volume,
   healthcheck); `deploy/server.env` хранит `DATABASE_URL`.
 
-Ещё **in-memory / отсутствует** (см. фазы ниже): квитанции идемпотентности и event-log
-не персистятся; нет внешней «будилки» отложенных событий (offline-catch-up только на
+Ещё **in-memory / отсутствует** (см. фазы ниже): durable-стор квитанций идемпотентности
+уже есть (`store/postgres.ts` `PostgresReceiptStore`, `MatchRoom.initialReceipts` для
+регидратации — покрыто тестами), но пока **не подключён к живому хосту** (сохранение/
+загрузка `loadAll`→`initialReceipts` не проброшены — см. PA-1.2); event-log не
+персистится; нет внешней «будилки» отложенных событий (offline-catch-up только на
 действие); нет настоящей аутентификации (ник без пароля); БД не захардена (роли/TLS/
 шифрование/бэкапы) — только loopback-bind.
 

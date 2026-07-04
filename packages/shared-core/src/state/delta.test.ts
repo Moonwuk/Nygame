@@ -76,6 +76,27 @@ describe('state delta — diff/apply round-trip', () => {
     expect(prev.planets).toHaveProperty('B'); // original still intact
   });
 
+  it('carries diplomacyOffers as a meta key (add and clear)', () => {
+    const prev = base();
+    const next = deepClone(prev);
+    next.diplomacyOffers = { 'p1>p2': 'peace' };
+    expect(diffState(prev, next).meta).toMatchObject({ diplomacyOffers: { 'p1>p2': 'peace' } });
+    expect(applyDelta(prev, diffState(prev, next))).toEqual(next);
+    // and clearing it removes the key on the other side
+    const wire = JSON.parse(JSON.stringify(diffState(next, prev)));
+    expect('diplomacyOffers' in applyDelta(next, wire)).toBe(false);
+  });
+
+  it('treats a key-reordered but logically equal entity as unchanged', () => {
+    const prev = base();
+    const next = deepClone(prev);
+    // Same content, different key insertion order — logically the same entity.
+    next.players.p1 = { name: 'One', id: 'p1', resources: { metal: 10 }, faction: 'x', status: 'active' };
+    const delta = diffState(prev, next);
+    expect(delta.changed).toEqual({});
+    expect(delta.meta).toBeUndefined();
+  });
+
   it('removes a meta key that went defined → undefined (survives the JSON wire)', () => {
     const prev = base();
     prev.diplomacy = { 'p1|p2': 'war' };
@@ -86,5 +107,21 @@ describe('state delta — diff/apply round-trip', () => {
     const rebuilt = applyDelta(prev, wire);
     expect('diplomacy' in rebuilt).toBe(false); // key gone, not left stale as 'war'
     expect(rebuilt).toEqual(next);
+  });
+
+  it('carries HOST-EXTENSION keys (e.g. `orders` command chains) and their removal', () => {
+    type Ext = GameState & { orders?: Record<string, unknown> };
+    const prev = base();
+    const next = deepClone(prev) as Ext;
+    // A key the core does not know about — the prototype's authoritative chains.
+    next.orders = { F: [{ kind: 'move', to: 'B' }] };
+    const grow = diffState(prev, next);
+    expect(grow.meta).toMatchObject({ orders: { F: [{ kind: 'move', to: 'B' }] } });
+    expect(applyDelta(prev, grow)).toEqual(next);
+    // …and the way back: the chain emptied → the key must vanish, not go stale.
+    const wire = JSON.parse(JSON.stringify(diffState(next, prev)));
+    const rebuilt = applyDelta(next, wire);
+    expect('orders' in rebuilt).toBe(false);
+    expect(rebuilt).toEqual(prev);
   });
 });

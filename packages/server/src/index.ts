@@ -18,9 +18,41 @@ export {
   type MatchLists,
   type ArchiveResult,
 } from './matchRegistry';
+export {
+  InMemoryRoomRegistry,
+  LazyRoomRegistry,
+  type LazyRoomRegistryOptions,
+  type LoadedMatch,
+  type RoomRegistry,
+} from './roomRegistry';
+export {
+  registerBrowserApi,
+  registerMatchApi,
+  type CreatedMatch,
+  type JoinFailure,
+  type JoinResult,
+  type MatchApiDeps,
+} from './matchApi';
 export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
+export {
+  hmacSecret,
+  signJoinToken,
+  signSessionToken,
+  verifyJoinToken,
+  verifySessionToken,
+  type JoinClaim,
+  type JoinTokenResult,
+  type JoinTokenSignConfig,
+  type JoinTokenVerifyConfig,
+  type SessionClaim,
+  type SessionTokenResult,
+  type VerifyKey,
+} from './auth';
+export { registerAuthApi, type AuthApiDeps } from './authApi';
+export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {
   ClientActionMessage,
+  ClientActionEnvelopeMessage,
   ClientMessage,
   ClientPingMessage,
   ServerErrorCode,
@@ -39,11 +71,15 @@ export {
   type ReceiptStore,
   type SeatAssignment,
   type StoredReceipt,
+  type UserRecord,
+  type UserStore,
   MemoryAccountStore,
   MemoryMatchStore,
   MemoryReceiptStore,
+  MemoryUserStore,
   migrate,
   PostgresAccountStore,
   PostgresMatchStore,
   PostgresReceiptStore,
+  PostgresUserStore,
 } from './store';

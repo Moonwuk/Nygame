@@ -1,19 +1,21 @@
-import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import type { PlayerId } from '@void/shared-core';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { MatchRoom } from './matchRoom';
-import { MatchRegistry } from './matchRegistry';
-import { MemoryAccountStore, type AccountStore } from './store';
+import { InMemoryRoomRegistry, type RoomRegistry } from './roomRegistry';
+import type { AccountStore } from './store';
+import { verifyJoinToken, type JoinTokenVerifyConfig } from './auth';
 
 export interface MultiplayerServerOptions {
-  /** Multi-match mode: the registry of joinable matches. The WS layer routes
-   *  `/<pathPrefix>/<id>` to the registered room and exposes the match-browser
-   *  read-model (`GET /matches`) + archive intents over HTTP. */
-  registry?: MatchRegistry;
-  /** Single-match mode (legacy): one room, wrapped into a registry-of-one so the
-   *  routing/serving path is identical. */
+  /** Single-match shortcut. Exactly one of `room` / `registry` must be given; `room`
+   *  is sugar for a one-entry registry (backward-compatible with every existing caller). */
   room?: MatchRoom;
+  /** Multi-match: host N isolated matches in one process, routed by `${pathPrefix}/:id`.
+   *  Any room source fits — the browser `MatchRegistry` implements this structurally. */
+  registry?: RoomRegistry;
   host?: string;
   port?: number;
   pathPrefix?: string;
@@ -21,11 +23,38 @@ export interface MultiplayerServerOptions {
    *  the client the game itself, so a peer just opens `http://host:port/` (no file
    *  transfer, and the connect overlay auto-fills the same-origin ws:// URL). */
   indexHtml?: string;
-  /** Optional nick-login for the single-match path: when a client connects with
-   *  `?nick=…` (instead of `?player=`), the seat is resolved/assigned here so a
-   *  returning nick gets its own side back. Absent ⇒ only `?player=` works. In
-   *  multi-match mode the registry's own account store is used instead. */
+  /** Optional nick-login: when a client connects with `?nick=…` (instead of
+   *  `?player=`), the seat is resolved/assigned here so a returning nick gets its
+   *  own side back. Absent ⇒ only the direct `?player=` handshake works. */
   accountStore?: AccountStore;
+  /** Structured logging: pass `true` (or a pino config) to have Fastify emit JSON logs
+   *  for boot/shutdown and requests. Default `false` (quiet — the default for tests). */
+  logger?: boolean | object;
+  /** Readiness probe for `GET /ready` (SV-0.1): return false while a hard dependency (the
+   *  durable store) is unreachable, so a load balancer stops routing new traffic without
+   *  failing liveness. Absent ⇒ always ready. `/ready` also reports 503 while draining. */
+  ready?: () => boolean | Promise<boolean>;
+  /** Require a verified join token at the WS handshake (SE-0.1, closes F-01). When set,
+   *  the insecure `?player=` / `?nick=` dev handshakes are REFUSED: the token (carried in
+   *  `?token=`) is the sole identity, and its claim's `matchId` must match the routed
+   *  match and its `playerId` must be a seat in it. Absent ⇒ the dev `?player=`/`?nick=`
+   *  handshake (the default for local dev, LAN playtests, and tests). */
+  auth?: JoinTokenVerifyConfig;
+  /** Origin allowlist (CSWSH defense, F-06). When set, an upgrade whose `Origin` header is
+   *  not in the list is rejected (403) before any work. Absent ⇒ no Origin check (dev).
+   *  Should ship WITH `auth`: a token gates identity, the Origin check gates which sites
+   *  may drive an already-authenticated browser session. */
+  allowedOrigins?: readonly string[];
+  /** Register extra HTTP routes on the Fastify app (e.g. the match create/join API,
+   *  SV-2.4), after `/health` and `/ready`. Keeps this transport module generic — the
+   *  routes and their dependencies live with the caller. */
+  httpRoutes?: (app: FastifyInstance) => void;
+  /** Behind a reverse proxy (Caddy/Nginx terminating TLS), trust `X-Forwarded-For` so
+   *  `request.ip` is the CLIENT address, not the proxy's — without this the auth API's
+   *  per-IP rate limit would throttle every player behind the proxy as one bucket.
+   *  Only enable when a trusted proxy is actually in front (a direct client could
+   *  otherwise spoof the header to dodge per-IP limits). Default off. */
+  trustProxy?: boolean;
 }
 
 export interface MultiplayerServerHandle {
@@ -38,32 +67,17 @@ function baseUrl(request: IncomingMessage): string {
   return `http://${request.headers.host ?? 'localhost'}`;
 }
 
+const UPGRADE_REASON: Record<number, string> = {
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  409: 'Conflict',
+  500: 'Internal Server Error',
+};
+
 function rejectUpgrade(socket: Duplex, status: number): void {
-  const reason =
-    status === 403
-      ? 'Forbidden'
-      : status === 409
-        ? 'Conflict'
-        : status === 500
-          ? 'Internal Server Error'
-          : 'Not Found';
-  socket.write(`HTTP/1.1 ${status} ${reason}\r\n\r\n`);
+  socket.write(`HTTP/1.1 ${status} ${UPGRADE_REASON[status] ?? 'Not Found'}\r\n\r\n`);
   socket.destroy();
 }
-
-/** In single-match mode, wrap the one room in a registry-of-one so routing and the
- *  read-model have a uniform source. The legacy meta is a placeholder (legacy callers
- *  don't read the browser); real metadata comes from the caller's registry. */
-function toRegistry(options: MultiplayerServerOptions): MatchRegistry {
-  if (options.registry) return options.registry;
-  const registry = new MatchRegistry(options.accountStore ?? new MemoryAccountStore());
-  if (options.room) {
-    registry.register(options.room, { mapId: 'dev', rules: { timeScale: 1 }, createdAt: Date.now() });
-  }
-  return registry;
-}
-
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function createMultiplayerServer(
   options: MultiplayerServerOptions,
@@ -71,111 +85,162 @@ export function createMultiplayerServer(
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 0;
   const pathPrefix = options.pathPrefix ?? '/matches';
-  const registry = toRegistry(options);
-  // Seat resolver for `?nick=`: the registry's store in multi-match mode, or the
-  // explicitly-provided store in legacy mode (absent ⇒ `?nick=` is rejected, as before).
-  const seatResolver: AccountStore | undefined = options.registry
-    ? registry.accounts
-    : options.accountStore;
-  // listen() reports a concrete match URL when there is one (back-compat: tests dial it).
-  const firstRoomId = options.room?.id ?? registry.ids()[0];
+  if (!options.room && !options.registry) {
+    throw new Error('createMultiplayerServer: pass either `room` or `registry`');
+  }
+  const registry: RoomRegistry =
+    options.registry ?? new InMemoryRoomRegistry([options.room as MatchRoom]);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32_768 });
 
-  const archiveRe = new RegExp(`^${escapeRe(pathPrefix)}/([^/]+)/(archive|unarchive)$`);
   const indexHtml = options.indexHtml;
-  const httpServer = createServer((request, response) => {
-    const method = request.method ?? 'GET';
-    const path = (request.url ?? '/').split('?')[0] ?? '/';
-    const json = (status: number, body: unknown): void => {
-      response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify(body));
-    };
-    if (path === '/health') {
-      json(200, { ok: true, matches: registry.ids() });
-      return;
-    }
-    // Match-browser read-model: the three tabs (available/active/archived) for a
-    // viewer (`?nick=`). A server projection — the client only reads it (A10/fog rule).
-    if (path === pathPrefix || path === `${pathPrefix}/`) {
-      void (async () => {
-        try {
-          const nick = new URL(request.url ?? '/', baseUrl(request)).searchParams.get('nick');
-          json(200, await registry.list(nick));
-        } catch {
-          json(500, { ok: false, code: 'E_INTERNAL' });
-        }
-      })();
-      return;
-    }
-    // Archive / restore intent: POST /<prefix>/<id>/archive?nick=… — fail-secure.
-    const archive = archiveRe.exec(path);
-    if (archive) {
-      if (method !== 'POST') {
-        json(405, { ok: false, code: 'E_METHOD' });
-        return;
-      }
-      void (async () => {
-        try {
-          const matchId = decodeURIComponent(archive[1] ?? '');
-          const nick = new URL(request.url ?? '/', baseUrl(request)).searchParams.get('nick') ?? '';
-          const result =
-            archive[2] === 'archive'
-              ? await registry.archive(matchId, nick)
-              : await registry.unarchive(matchId, nick);
-          json(result.ok ? 200 : result.code === 'E_NO_MATCH' ? 404 : 403, result);
-        } catch {
-          json(500, { ok: false, code: 'E_INTERNAL' });
-        }
-      })();
-      return;
-    }
-    if (indexHtml !== undefined && (path === '/' || path === '/index.html')) {
-      // The single-file client changes every rebuild; never let a browser serve a
-      // stale cached copy (else client fixes silently don't reach the player).
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store, must-revalidate',
-      });
-      response.end(indexHtml);
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'text/plain' });
-    response.end('not found');
+  const ready = options.ready;
+  let draining = false; // flips at close() so /ready reports 503 during graceful drain
+
+  // SV-0.1: Fastify owns HTTP routing (health/ready now, match create/join later) and
+  // brings structured pino logging; the WebSocket upgrade is still handled on the raw
+  // underlying server (`app.server`) via the `ws` noServer instance, byte-identically.
+  // `disableRequestLogging`: the HTTP surface is tiny (health/ready now, create/join
+  // later) while the real traffic is WebSocket — per-request logs would just be a flood
+  // of health-poll noise. Boot/shutdown + explicit logs stay; add per-route logging where
+  // it earns its keep.
+  const app = Fastify({
+    logger: options.logger ?? false,
+    disableRequestLogging: true,
+    trustProxy: options.trustProxy ?? false,
   });
 
-  httpServer.on('upgrade', (request, socket, head) => {
-    // Async because nick-login resolves a seat through the (possibly DB-backed)
-    // account store before we accept the upgrade.
+  // Fail-secure (invariant #4): a route handler that throws/rejects (e.g. a store fault in
+  // the match API) must return a stable code with NO internal detail — Fastify's default
+  // handler would echo err.message on the wire. The detail stays in the logs.
+  app.setErrorHandler((error, request, reply) => {
+    request.log.error(error);
+    void reply.code(500).send({ error: 'E_INTERNAL' });
+  });
+
+  // Liveness: cheap, unauthenticated, and DELIBERATELY contentless — it must not leak
+  // match ids/seqs (audit F-13, which the old node:http `/health` did). Readiness is a
+  // SEPARATE signal: NOT-ready while a hard dependency is down or the server is draining,
+  // so a load balancer stops sending new traffic before shutdown without failing liveness.
+  app.get('/health', async () => ({ ok: true }));
+  app.get('/ready', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const ok = !draining && (ready ? await ready() : true);
+    void reply.code(ok ? 200 : 503);
+    return { ready: ok };
+  });
+  // Minimal ops metrics (OPS-0.1): AGGREGATE gauges only — live match count and total
+  // connected sockets. No match ids (F-13). Richer per-match metrics / a Prometheus
+  // exposition are a later ops brick.
+  app.get('/metrics', async () => {
+    const ids = registry.ids();
+    let connections = 0;
+    for (const id of ids) connections += registry.get(id)?.peerCount ?? 0;
+    return { matches: ids.length, connections };
+  });
+  if (indexHtml !== undefined) {
+    // The single-file client changes every rebuild; never let a browser serve a stale
+    // cached copy (else client fixes silently don't reach the player).
+    const serveIndex = async (_request: FastifyRequest, reply: FastifyReply): Promise<string> => {
+      void reply.header('content-type', 'text/html; charset=utf-8');
+      void reply.header('cache-control', 'no-store, must-revalidate');
+      return indexHtml;
+    };
+    app.get('/', serveIndex);
+    app.get('/index.html', serveIndex);
+  }
+
+  // Caller-supplied routes (the match create/join API, SV-2.4) — registered after the
+  // built-in health/ready so this module stays generic.
+  options.httpRoutes?.(app);
+
+  const accountStore = options.accountStore;
+  const auth = options.auth;
+  const allowedOrigins = options.allowedOrigins;
+  app.server.on('upgrade', (request, socket, head) => {
+    // Async because auth/nick-login resolve identity through the join-token verifier or
+    // the (possibly DB-backed) account store before we accept the upgrade.
     void (async () => {
       try {
+        // Origin allowlist (F-06): reject a cross-site upgrade up front. A missing Origin
+        // (a non-browser client) is not on any allowlist, so it is refused when configured.
+        if (allowedOrigins && !allowedOrigins.includes(request.headers.origin ?? '')) {
+          rejectUpgrade(socket, 403);
+          return;
+        }
         const url = new URL(request.url ?? '/', baseUrl(request));
-        if (!url.pathname.startsWith(`${pathPrefix}/`)) {
+        // Route by match id: the path is `${pathPrefix}/<matchId>` (one segment, no
+        // nesting). Resolve the target match from the registry — an unknown or
+        // not-currently-hosted match is a 404, same as before for the single-room case.
+        const prefix = `${pathPrefix}/`;
+        if (!url.pathname.startsWith(prefix)) {
           rejectUpgrade(socket, 404);
           return;
         }
-        const matchId = decodeURIComponent(url.pathname.slice(pathPrefix.length + 1));
-        const room = registry.get(matchId);
+        let matchId: string;
+        try {
+          matchId = decodeURIComponent(url.pathname.slice(prefix.length));
+        } catch {
+          // A malformed %-escape (e.g. `/matches/%zz`) is a bad request path, not a
+          // server error — a 404 like any other unroutable path, not a 500.
+          rejectUpgrade(socket, 404);
+          return;
+        }
+        if (matchId === '' || matchId.includes('/')) {
+          rejectUpgrade(socket, 404);
+          return;
+        }
+        // Load-on-demand for a lazy registry (an evicted match reloads here); an eager
+        // registry has no `resolve`, so fall back to the in-memory `get`.
+        const room = registry.resolve
+          ? await registry.resolve(matchId)
+          : registry.get(matchId);
         if (!room) {
           rejectUpgrade(socket, 404);
           return;
         }
-        let playerId = url.searchParams.get('player') ?? '';
-        const nick = url.searchParams.get('nick');
-        if (!playerId && nick && seatResolver) {
-          const seats = Object.keys(room.state.players) as PlayerId[];
-          const seat = await seatResolver.resolveSeat(matchId, nick, seats);
-          if (!seat) {
-            rejectUpgrade(socket, 409); // every side already taken by another nick
+        let playerId: string;
+        if (auth) {
+          // Authenticated handshake (SE-0.1): the join token is the SOLE identity —
+          // `?player=`/`?nick=` are ignored so they can't bypass it. The token rides in
+          // `?token=` (fully browser-settable on the WS URL, unlike request headers).
+          const token = url.searchParams.get('token');
+          if (!token) {
+            rejectUpgrade(socket, 401);
             return;
           }
-          playerId = seat.playerId;
+          const verified = await verifyJoinToken(token, auth);
+          if (!verified.ok) {
+            rejectUpgrade(socket, 401); // bad/expired/forged — no reason leaked
+            return;
+          }
+          if (verified.claim.matchId !== matchId) {
+            rejectUpgrade(socket, 403); // a token for a different match
+            return;
+          }
+          playerId = verified.claim.playerId;
+        } else {
+          // Insecure dev handshake: `?player=` directly, or `?nick=` via the account store.
+          playerId = url.searchParams.get('player') ?? '';
+          const nick = url.searchParams.get('nick');
+          if (!playerId && nick && accountStore) {
+            const seats = Object.keys(room.state.players) as PlayerId[];
+            const seat = await accountStore.resolveSeat(room.id, nick, seats);
+            if (!seat) {
+              rejectUpgrade(socket, 409); // every side already taken by another nick
+              return;
+            }
+            playerId = seat.playerId;
+          }
         }
         if (!room.hasPlayer(playerId)) {
           rejectUpgrade(socket, 403);
           return;
         }
+        // Mint a SERVER-owned session id, bound to this connection — never taken from the
+        // client (a client-chosen value could reset its own sequence cursor / forge the
+        // envelope's session binding, SV-1.1-live-A). A reconnect mints a fresh one.
+        const sessionId = randomUUID();
         wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request, { room, playerId });
+          wss.emit('connection', ws, request, playerId, room, sessionId);
         });
       } catch {
         rejectUpgrade(socket, 500);
@@ -202,12 +267,22 @@ export function createMultiplayerServer(
   const inbound = new WeakMap<WebSocket, { n: number; since: number }>();
   wss.on(
     'connection',
-    (ws: WebSocket, _request: IncomingMessage, ctx: { room: MatchRoom; playerId: string }) => {
-      const { room, playerId } = ctx;
+    (
+      ws: WebSocket,
+      _request: IncomingMessage,
+      playerId: string,
+      room: MatchRoom,
+      sessionId: string,
+    ) => {
       sockets.add(ws);
       alive.set(ws, true);
       ws.on('pong', () => alive.set(ws, true));
-      room.addPeer(playerId, ws);
+      // Only retain when the peer actually joined — addPeer rejects (and closes the socket)
+      // for an unknown player or a duplicate on a single-seat slot, and a spurious retain
+      // would disarm a legitimate hibernation countdown, starving eviction under reconnects.
+      if (room.addPeer(playerId, ws, sessionId)) {
+        registry.retain?.(room.id); // keep the match resident while this socket is connected
+      }
       ws.on('message', (data) => {
         const now = Date.now();
         const c = inbound.get(ws) ?? { n: 0, since: now };
@@ -219,11 +294,14 @@ export function createMultiplayerServer(
         inbound.set(ws, c);
         if (c.n > FLOOD_MAX) return; // drop a raw flood before the parse (cheap)
         const raw = typeof data === 'string' ? data : data.toString('utf8');
-        void room.receive(playerId, ws, raw); // fire-and-forget; ping handling may be async
+        // Pass the server-minted sessionId so a gated room can authorize the envelope's
+        // session binding against it (SV-1.1-live-A). Ignored by an un-gated room.
+        void room.receive(playerId, ws, raw, sessionId); // fire-and-forget; ping may be async
       });
       ws.on('close', () => {
         sockets.delete(ws);
         room.removePeer(playerId, ws);
+        registry.release?.(room.id); // may start the idle→hibernate countdown if unwatched
       });
     },
   );
@@ -243,39 +321,38 @@ export function createMultiplayerServer(
   }, HEARTBEAT_MS);
   heartbeat.unref(); // never keep the process alive just for the heartbeat
 
-  const matchUrl = (addrPort: number): string =>
-    firstRoomId !== undefined
-      ? `ws://${host}:${addrPort}${pathPrefix}/${firstRoomId}`
-      : `ws://${host}:${addrPort}`;
-
   return {
-    httpServer,
-    listen: () =>
-      new Promise((resolve, reject) => {
-        httpServer.once('error', reject);
-        httpServer.listen(port, host, () => {
-          httpServer.off('error', reject);
-          const address = httpServer.address();
-          resolve(matchUrl(typeof address === 'object' && address !== null ? address.port : port));
-        });
-      }),
-    close: () =>
-      new Promise((resolve, reject) => {
-        clearInterval(heartbeat);
-        // Graceful drain: ask every client to close (1001 "going away"), then
-        // terminate any straggler after a short grace so close() always resolves.
-        for (const ws of sockets) ws.close(1001, 'server shutting down');
-        const grace = setTimeout(() => {
-          for (const ws of sockets) ws.terminate();
-        }, 1000);
-        grace.unref();
-        wss.close(() => {
-          httpServer.close((error) => {
-            clearTimeout(grace);
-            if (error) reject(error);
-            else resolve();
-          });
-        });
-      }),
+    httpServer: app.server,
+    listen: async () => {
+      await app.listen({ host, port });
+      const address = app.server.address();
+      const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+      // Hosting exactly one match ⇒ return its full URL (backward-compatible: callers
+      // connect straight to it). Multiple ⇒ return the base prefix; the client appends
+      // `/<matchId>`.
+      const ids = registry.ids();
+      const suffix = ids.length === 1 ? `${pathPrefix}/${ids[0]}` : pathPrefix;
+      app.log.info({ host, port: boundPort, matches: ids.length }, 'server listening');
+      return `ws://${host}:${boundPort}${suffix}`;
+    },
+    close: async () => {
+      draining = true; // /ready now reports 503 so a load balancer drains us first
+      app.log.info('server draining');
+      clearInterval(heartbeat);
+      // Graceful drain: ask every client to close (1001 "going away"), then
+      // terminate any straggler after a short grace so close() always resolves.
+      for (const ws of sockets) ws.close(1001, 'server shutting down');
+      const grace = setTimeout(() => {
+        for (const ws of sockets) ws.terminate();
+      }, 1000);
+      grace.unref();
+      // Persist + tear down every live match (lazy registry); a no-op for an eager one,
+      // whose rooms the caller stops via its own shutdown handler.
+      await registry.shutdown?.();
+      // Stop accepting WS upgrades, then let Fastify close the HTTP server + its plugins.
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await app.close();
+      clearTimeout(grace);
+    },
   };
 }

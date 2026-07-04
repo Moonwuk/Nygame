@@ -19,6 +19,7 @@ import {
   TAX_OFFICE_BONUS,
   moveFleet,
   moveFleetEdge,
+  spyOn,
   stopFleet,
   orbitFleet,
   assaultFleet,
@@ -29,6 +30,10 @@ import {
   unloadArmy,
   mergeFleet,
   splitFleet,
+  orderEnqueue,
+  orderClear,
+  orderRemove,
+  orderRetry,
   engageFleet,
   researchTech,
   buildBuilding,
@@ -36,6 +41,9 @@ import {
   buildUnit,
   aiOrders,
   declareWar,
+  netIncome,
+  retreatFleet,
+  STANCE_RANK,
   marketLots,
   marketList,
   marketTake,
@@ -58,12 +66,33 @@ import {
   isInhabited,
   divisionCargo,
   fleetCargoFree,
-  clampPowerWeights,
   type FormationTemplate,
   type FormationUnit,
   type SetupConfig,
   type SeatConfig,
   type StepOut,
+  stepActions,
+  popChainStep,
+  unloadHereActions,
+  MAX_CHAIN_STEPS,
+  fleetIdle,
+  loadHereActions,
+  waitStatus,
+  squadronTake,
+  squadronStrikeRange,
+  sortieSpec,
+  freshSortie,
+  tickRearm,
+  scrambleOrder,
+  botFavour,
+  FAVOUR_BASE,
+  FAVOUR_EMBARGO,
+  FAVOUR_WAR,
+  delegateSteward,
+  recallSteward,
+  stewardActive,
+  type QStep,
+  type Patrol,
 } from './game';
 import { OFFICERS } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
@@ -74,10 +103,19 @@ import {
   estimateTravelHours,
   fleetBaseSpeed,
   getStance,
+  pairHas,
   hashState,
   planRoute,
 } from '../../packages/shared-core/src/index';
-import { MultiplayerClient, type MultiplayerPing } from '../../packages/client/src/index';
+import { MultiplayerClient, type MultiplayerPing, createBattleModel, type BattleSideView } from '../../packages/client/src/index';
+import {
+  worldToScreen as camWorldToScreen,
+  zoomAt as camZoomAt,
+  clampCam as camClampCam,
+  centerOn as camCenterOn,
+} from '../../packages/client/src/camera';
+import { rgba, blitGlow as hdBlitGlow, blitSphere as hdBlitSphere } from '../../packages/client/src/holoDraw';
+import { drawTerritory } from '../../packages/client/src/territory';
 import {
   buildLabel,
   checkForUpdateDetailed,
@@ -96,6 +134,7 @@ import type {
   Action,
   DiplomaticStance,
   DomainEvent,
+  IntelGrant,
 } from '../../packages/shared-core/src/index';
 
 // --- constants ---------------------------------------------------------------
@@ -137,11 +176,12 @@ const LOCK = '#7df0d0'; // selection / targeting reticle accent
 const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
-const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort'];
-// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is NOT freely
-// buildable: it's a tech unlock (pending the in-session research tree). It still
-// comes pre-installed with a space fortress (installFortressAA).
-const BUILD_UNITS = ['cruiser', 'scout', 'siege'];
+const BUILDABLE = ['mine', 'refinery', 'tax_office', 'barracks', 'radar', 'fort', 'orbital_aa'];
+// `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is a defensive BUILDING:
+// the player builds it like a fort. It fires on hostile fleets over the world (core
+// `aaStrengthAt` sums building AA) but does NOT block ground capture — only ground troops
+// do that. A space fortress also comes with one pre-installed (installFortressAA).
+const BUILD_UNITS = ['cruiser', 'scout', 'siege', 'strike_carrier', 'fighter_squadron'];
 const BUILD_ICON: Record<string, string> = {
   mine: '⬢',
   refinery: '◇',
@@ -150,12 +190,14 @@ const BUILD_ICON: Record<string, string> = {
   fort: '⬡',
   starfort: '✦',
   radar: '⊚',
+  orbital_aa: '⌁',
 };
 const UNIT_ICON: Record<string, string> = {
-  orbital_aa: '⌁',
   cruiser: '▲',
   scout: '◌',
   siege: '✦',
+  strike_carrier: '◈', // a flat-top capital hull — hangar bays for the wing
+  fighter_squadron: '△', // light strike wing (hollow, to read apart from the cruiser ▲)
   hero: '♔', // the player's projection — a crowned flagship
 };
 // A small glyph per province KIND, drawn above each province so its type reads at a
@@ -174,8 +216,8 @@ let ME = 'p1';
 // Суверены — the donate/premium currency (docs/economy-roadmap.md). It's a meta-layer
 // account balance, NOT match state, so the prototype shows a placeholder here; the real
 // balance comes from the account once monetization is wired.
-const SOVEREIGNS = 25;
-type PlanetTab = 'ground' | 'ships' | 'buildings';
+const SOVEREIGNS = 500;
+type PlanetTab = 'ground' | 'ships' | 'squadron' | 'buildings';
 type BuildLane = 'buildings' | 'units';
 type BuildKind = 'building' | 'upgrade' | 'unit';
 
@@ -218,89 +260,16 @@ function esc(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
-function rgba(hex: string, a: number): string {
-  const v = hex.replace('#', '');
-  const r = parseInt(v.slice(0, 2), 16);
-  const g = parseInt(v.slice(2, 4), 16);
-  const b = parseInt(v.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-// Cached radial-glow sprites: building a `createRadialGradient` per node every frame
-// (×60 provinces) is a major CPU cost, as is `shadowBlur`. Bake one soft glow disc
-// per (colour, radius) once and blit it with `drawImage` + `globalAlpha` instead —
-// drawImage is cheap, so the map glow scales to many provinces.
-const glowCache = new Map<string, HTMLCanvasElement>();
-function glowSprite(color: string, radius: number): HTMLCanvasElement {
-  const rad = Math.max(4, Math.round(radius));
-  const key = `${color}:${rad}`;
-  const hit = glowCache.get(key);
-  if (hit) return hit;
-  const cv = document.createElement('canvas');
-  const px = Math.ceil(rad * 2 * DPR);
-  cv.width = px;
-  cv.height = px;
-  const g = cv.getContext('2d') as CanvasRenderingContext2D;
-  g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const grd = g.createRadialGradient(rad, rad, 0, rad, rad, rad);
-  grd.addColorStop(0, rgba(color, 0.95));
-  grd.addColorStop(0.5, rgba(color, 0.32));
-  grd.addColorStop(1, rgba(color, 0));
-  g.fillStyle = grd;
-  g.fillRect(0, 0, rad * 2, rad * 2);
-  glowCache.set(key, cv);
-  return cv;
-}
-/** Blit a cached glow disc of `color` centred at (x,y), radius r, at opacity `a`. */
+// Holographic draw primitives (rgba tint, cached glow/sphere sprites) now live in the
+// shared render kit (@void/client · holoDraw.ts, CP0.2 — one render implementation). The
+// prototype keeps thin same-named delegators so every call site is unchanged; it passes its
+// canvas ctx (`cx`) + current DPR, and the module owns the dpr-keyed sprite caches. `rgba`
+// is imported directly (a pure colour helper).
 function blitGlow(color: string, x: number, y: number, r: number, a: number): void {
-  if (a <= 0.004) return;
-  const spr = glowSprite(color, r);
-  const rad = Math.max(4, Math.round(r));
-  cx.globalAlpha = Math.min(1, a);
-  cx.drawImage(spr, x - rad, y - rad, rad * 2, rad * 2);
-  cx.globalAlpha = 1;
+  hdBlitGlow(cx, DPR, color, x, y, r, a);
 }
-
-// EXPERIMENT (holographic volume): give map objects a sense of depth so they read as
-// orbs projected on the ship's command terminal, not flat rings. Bake one shaded sphere
-// per colour — lit from the upper-left with a Fresnel rim — and blit it scaled to the
-// node, same cache-and-blit trick as the glow (no per-node gradient on the hot path).
-const sphereCache = new Map<string, HTMLCanvasElement>();
-function sphereSprite(color: string): HTMLCanvasElement {
-  const hit = sphereCache.get(color);
-  if (hit) return hit;
-  const rad = 32;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = Math.ceil(rad * 2 * DPR);
-  const g = cv.getContext('2d') as CanvasRenderingContext2D;
-  g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  // specular highlight up-left → colour body → translucent rim = a lit sphere
-  const grd = g.createRadialGradient(rad - rad * 0.34, rad - rad * 0.4, rad * 0.06, rad, rad, rad);
-  grd.addColorStop(0, rgba('#ffffff', 0.8));
-  grd.addColorStop(0.18, rgba(color, 0.62));
-  grd.addColorStop(0.55, rgba(color, 0.26));
-  grd.addColorStop(0.85, rgba(color, 0.1));
-  grd.addColorStop(1, rgba(color, 0.02));
-  g.fillStyle = grd;
-  g.beginPath();
-  g.arc(rad, rad, rad - 1, 0, TAU);
-  g.fill();
-  g.strokeStyle = rgba('#ffffff', 0.26); // holographic rim
-  g.lineWidth = 1.2;
-  g.beginPath();
-  g.arc(rad, rad, rad - 1.4, 0, TAU);
-  g.stroke();
-  sphereCache.set(color, cv);
-  return cv;
-}
-/** Blit the cached shaded sphere of `color` centred at (x,y) at node radius r, scaled
- *  by `a` (fade the volume out at the far/whole-map view where nodes pack together). */
 function blitSphere(color: string, x: number, y: number, r: number, a = 1): void {
-  if (a <= 0.02) return;
-  cx.globalAlpha = a;
-  cx.drawImage(sphereSprite(color), x - r, y - r, r * 2, r * 2);
-  cx.globalAlpha = 1;
+  hdBlitSphere(cx, DPR, color, x, y, r, a);
 }
 
 /** Total count across a stack of units (ships, garrison or landing troops). */
@@ -319,13 +288,27 @@ const ORBIT_COLOR = '#7df0d0'; // the single orbit ring (GDD §7.4 — no near/f
 // --- state -------------------------------------------------------------------
 
 let s: GameState = newGame();
-let speed = 1; // game-hours per real second (0 = paused); calm ×1 baseline, set per match
+let speed = 1 / 3600; // game-hours per real second (0 = paused); ×1 = wall-clock, overwritten at launch
 let banner: string | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
 let barrageAim = false; // "Обстрел" armed → next tap picks the artillery's focus target
+// CC-1 order queue: while `queuing` is armed, world taps APPEND a move step to each
+// selected fleet's chain instead of ordering an immediate move. `fleetQueues` holds the
+// pending steps per fleet (client-side plan); driveQueues() pops the head when idle.
+let queuing = false;
+const fleetQueues = new Map<string, QStep[]>();
+// CC-2 standing order: fleets whose owner opted into AUTO-STORM — they descend and assault
+// a hostile world on arrival by themselves (the AI's autoEngage capture loop, opted-in).
+const autoAssault = new Set<string>();
+// CC-4 reactive auto-scramble: squadron fleets on "дежурный вылет" — they auto-sortie at
+// any identified, at-war contact that enters their strike radius (SQ-4.1 patrol core),
+// burning fuel and rearming on a game-hour cadence (SQ-2.1). Client-side plan, like the
+// order queue; single-player only (the server owns fleets in net play).
+const patrols = new Map<string, Patrol>();
+let lastPatrolTick = 0; // game-time (ms) the rearm cadence last advanced
 // A staged move that would cross territory of a player you're at PEACE with: held
 // until you confirm in the war-prompt (declaring war opens the route) or cancel.
 let warPrompt: {
@@ -407,6 +390,7 @@ let diploExpanded: string | null = null; // participant row showing its action b
 const diploStanceFilter = new Set<DiplomaticStance>();
 const diploTypeFilter = new Set<'human' | 'ai'>();
 let convoOpen = COALITION; // the open conversation in the messages tab (seat id or COALITION)
+let pingMenuLoc: string | null = null; // province whose ping composer is open (null = closed)
 // Screen hit-boxes for the on-map ping markers, rebuilt every frame by drawPings().
 let pingHits: Array<{ loc: string; x: number; y: number }> = [];
 
@@ -448,13 +432,25 @@ let AI_PLAYERS = new Set<string>(['p2']);
 // the AI's fights elsewhere don't inflate your tally.
 let killStats = { destroyed: 0, lost: 0 };
 const myBattleLocs = new Set<string>();
+// Orbital-AA volleys to visualize (H2): map-space endpoints captured at event time
+// (the target may die in that very volley), drawn as a fading flak burst ~0.7s.
+const aaShots: Array<{
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  at: number;
+  close: boolean; // ближняя ПВО (гарнизон, залп раз в 15 мин) — рисуется легче
+}> = [];
+// Casualties per contested location (owner → unit → count), accumulated from
+// unit.died while a battle runs and paid out as a result note on battle.resolved.
+const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 // Single-player setup screen state: per-seat role (seat 0 is always you) + your
 // chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
 // Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
 // normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
-let setupSpeed = 1;
+const SETUP_SPEEDS = [1, 2, 5, 10, 50];
+let setupSpeed = 10;
 let lastPanelHtml = '';
 let lastCmdHtml = '';
 let lastSplitHtml = '';
@@ -463,6 +459,7 @@ let lastClockText = '';
 let lastObjDescHtml = '';
 let lastLogHtml = '';
 let lastAlertText = '';
+let lastRailAlert = '';
 // --- fog of war (renderer projection; always on) -----------------------------
 // Client-side projection just for the renderer — NOT the real security boundary
 // (that is `visibleState` in shared-core). Fog is always on: ships are near-blind,
@@ -485,6 +482,36 @@ const restartSep = $('restart-sep');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
+// top-bar right cluster + collapsible rail
+const railEl = $('rail');
+const railToggle = $('railtoggle');
+const railGlyph = $('railglyph');
+const railAlert = $('railalert');
+const crestMark = $('crestmark');
+
+// Player emblem — a cosmetic console crest the player picks in the main menu (hub) and
+// wears in the in-match top-bar corner. Client-side only (localStorage) — never match
+// state, never sent to the server. Falls back to the first glyph if unset/unknown.
+const EMBLEMS = ['◆', '◇', '⬡', '⬢', '✦', '✧', '★', '⚛', '◉', '⌖', '❖', '⟡'];
+function playerEmblem(): string {
+  const e = (typeof localStorage !== 'undefined' && localStorage.getItem('void.emblem')) || '';
+  return EMBLEMS.includes(e) ? e : EMBLEMS[0]!;
+}
+function applyEmblem(): void {
+  const g = playerEmblem();
+  const hubAv = document.getElementById('hubav');
+  if (hubAv) hubAv.textContent = g;
+  crestMark.textContent = g;
+}
+function setPlayerEmblem(g: string): void {
+  if (!EMBLEMS.includes(g)) return;
+  try {
+    localStorage.setItem('void.emblem', g);
+  } catch {
+    /* private mode — keep the in-memory choice only */
+  }
+  applyEmblem();
+}
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -502,7 +529,10 @@ function resize() {
   VW = viewW();
   VH = viewH();
   DPR = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
-  MOBILE = VW < 720;
+  // Width alone misses a LANDSCAPE phone (wide but short, finger-driven): treat a
+  // coarse-pointer device with a short viewport as mobile too, so it never falls
+  // into the hover-dependent desktop layout (audit: ландшафт проваливался в десктоп).
+  MOBILE = VW < 720 || (matchMedia('(pointer: coarse)').matches && VH < 520);
   canvas.width = Math.round(VW * DPR);
   canvas.height = Math.round(VH * DPR);
   canvas.style.width = VW + 'px';
@@ -542,15 +572,35 @@ const NEBULAE = Array.from({ length: 5 }, (_, i) => {
 
 // The backdrop (deep-space + nebulae + radar grid + star ticks) is baked into the
 // cached static layer (see buildStaticLayer). This is the only live backdrop bit:
-// a slow radar sweep across the plotting table — pure command-console chrome.
-// Live sweep state (pivot + leading-edge angle), captured each frame so map blips
-// can light up as the arm crosses them (radar "ping" afterglow). sweepOn guards
+// a slow radar sweep across the plotting table — console chrome that follows the
+// HARDWARE: one rotating arm per OWN radar source (planet array / radar ship),
+// pivoted on the source and clipped to ITS reach; co-located sources collapse into
+// one arm showing only the farthest radius. All arms share one rotation phase; map
+// blips light up as an arm crosses them (radar "ping" afterglow). sweepOn guards
 // engines without conic gradients (no visible sweep → no ping).
-let sweepCx = 0;
-let sweepCy = 0;
+type SweepArm = { x: number; y: number; r: number }; // screen-space pivot + reach
+let sweepArms: SweepArm[] = [];
 let sweepAng = 0;
 let sweepOn = false;
 let sweepPrevAng = -1; // previous frame's arm angle, for "did the arm cross X" tests
+// Player display preference (client-only, localStorage): the sweep's VISUAL opacity 0..1.
+// 0 hides the wedge + arm entirely; any value only dims the CHROME — the radar MECHANIC
+// (contact snapshots + blip afterglow) is computed before the visual gate, so it is
+// unaffected at every setting. Absent key ⇒ full (1); a stored 0 must NOT be read as absent.
+let sweepOpacity = ((): number => {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('void.sweepOpacity') : null;
+  if (raw === null) return 1;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1;
+})();
+function setSweepOpacity(v: number): void {
+  sweepOpacity = Math.min(1, Math.max(0, v));
+  try {
+    localStorage.setItem('void.sweepOpacity', String(sweepOpacity));
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
 /** Radar contacts as PAINTED BY THE SWEEP: a signature is refreshed only as the arm
@@ -563,37 +613,82 @@ const radarMemory = new Map<string, { node: string; size: 'S' | 'M' | 'L'; at: n
  *  imprint lingers a whole rotation). 0 when the sweep is inactive. */
 function sweepGlow(c: { x: number; y: number }): number {
   if (!sweepOn) return 0;
-  const entAng = Math.atan2(c.y - sweepCy, c.x - sweepCx); // canvas-clockwise, matches the conic
-  let delta = (sweepAng - entAng) % TAU;
-  if (delta < 0) delta += TAU;
-  const t = 1 - delta / TAU;
-  return t * t; // ease so the just-crossed flash reads, with a lingering tail
+  let best = 0;
+  for (const a of sweepArms) {
+    const dx = c.x - a.x;
+    const dy = c.y - a.y;
+    if (dx * dx + dy * dy > a.r * a.r) continue; // outside this arm's reach
+    let delta = (sweepAng - Math.atan2(dy, dx)) % TAU; // canvas-clockwise, matches the conic
+    if (delta < 0) delta += TAU;
+    const t = 1 - delta / TAU;
+    if (t * t > best) best = t * t; // ease so the just-crossed flash reads
+  }
+  return best;
 }
 
 function drawScanSweep(now: number) {
+  sweepArms = [];
+  sweepOn = false;
   if (!cx.createConicGradient) return; // graceful: skip on engines without it
-  // Pivot the sweep at the MAP centre (projected through the camera), not the
-  // screen centre — so it pans / zooms with the map instead of staying glued to
-  // the viewport.
-  const mc = world({ x: (MINX + MAXX) / 2, y: (MINY + MAXY) / 2 });
-  const cxp = mc.x;
-  const cyp = mc.y;
-  const ang = (now / SWEEP_DIV) % TAU;
-  sweepCx = cxp;
-  sweepCy = cyp;
-  sweepAng = ang;
-  sweepOn = true;
-  const grd = cx.createConicGradient(ang, cxp, cyp);
-  // very subtle trailing wedge — barely-there in a still frame, reads as a slow
-  // rotating radar sweep in motion (fades over ~0.4 turn behind the leading edge)
-  grd.addColorStop(0, 'rgba(53,214,230,0.032)');
-  grd.addColorStop(0.16, 'rgba(53,214,230,0.008)');
-  grd.addColorStop(0.4, 'rgba(53,214,230,0)');
-  grd.addColorStop(1, 'rgba(53,214,230,0)');
+  // One arm per OWN radar source, pivoted on the array / the ship itself (a moving
+  // ship carries its arm along). Sources sharing a pivot (a radar world with a
+  // radar ship docked) merge — only the farthest radius is shown.
+  const merged = new Map<string, SweepArm>();
+  const add = (at: { x: number; y: number }, reach: number): void => {
+    const c = world(at);
+    const r = world({ x: at.x + reach, y: at.y }).x - c.x; // uniform projection ⇒ true circle
+    if (r <= 0) return;
+    const key = `${Math.round(c.x)}:${Math.round(c.y)}`;
+    const cur = merged.get(key);
+    if (!cur || r > cur.r) merged.set(key, { x: c.x, y: c.y, r });
+  };
+  for (const p of Object.values(s.planets)) {
+    if (p.owner !== ME) continue;
+    const r = planetRadar(p);
+    if (r > 0) add(p.position, r);
+  }
+  for (const f of Object.values(s.fleets)) {
+    if (f.owner !== ME) continue;
+    const r = fleetRadar(f);
+    const pos = r > 0 ? fleetPos(f) : null;
+    if (pos) add(pos, r);
+  }
+  sweepArms = [...merged.values()];
+  sweepAng = (now / SWEEP_DIV) % TAU;
+  sweepOn = sweepArms.length > 0;
+  if (!sweepOn) return;
+  // Visual gate (player preference). Everything above — arms, angle, sweepOn — is the
+  // MECHANIC and always runs; only the chrome below is skipped/dimmed. At 0 the sweep is
+  // invisible yet still snapshots contacts and lights blips exactly as before.
+  const op = sweepOpacity;
+  if (op <= 0) return;
   cx.save();
   cx.globalCompositeOperation = 'lighter';
-  cx.fillStyle = grd;
-  cx.fillRect(0, 0, VW, VH);
+  for (const a of sweepArms) {
+    if (!visible(a, a.r + 40)) continue; // draw-cull; the arm still paints contacts
+    // subtle trailing wedge, clipped to this source's reach — reads as a slow
+    // rotating radar sweep (fades over ~0.4 turn behind the leading edge). Alpha is
+    // scaled by the player's opacity preference so it can be dimmed toward invisible.
+    const grd = cx.createConicGradient(sweepAng, a.x, a.y);
+    grd.addColorStop(0, `rgba(53,214,230,${0.05 * op})`);
+    grd.addColorStop(0.16, `rgba(53,214,230,${0.012 * op})`);
+    grd.addColorStop(0.4, 'rgba(53,214,230,0)');
+    grd.addColorStop(1, 'rgba(53,214,230,0)');
+    cx.save();
+    cx.beginPath();
+    cx.arc(a.x, a.y, a.r, 0, TAU);
+    cx.clip();
+    cx.fillStyle = grd;
+    cx.fillRect(a.x - a.r, a.y - a.r, a.r * 2, a.r * 2);
+    cx.restore();
+    // the leading edge — the visible radar arm itself
+    cx.strokeStyle = `rgba(53,214,230,${0.26 * op})`;
+    cx.lineWidth = 1;
+    cx.beginPath();
+    cx.moveTo(a.x, a.y);
+    cx.lineTo(a.x + Math.cos(sweepAng) * a.r, a.y + Math.sin(sweepAng) * a.r);
+    cx.stroke();
+  }
   cx.restore();
 }
 
@@ -618,8 +713,16 @@ function updateRadarContacts(now: number): void {
       const node = s.planets[fn];
       if (!node) continue;
       const pos = world(node.position);
-      if (sweptThisFrame(Math.atan2(pos.y - sweepCy, pos.x - sweepCx))) {
-        radarMemory.set(f.id, { node: fn, size: sigClass(fleetSignature(f)), at: now });
+      // painted only by an arm whose radar disc actually covers the blip
+      const painted = sweepArms.some((a) => {
+        const dx = pos.x - a.x;
+        const dy = pos.y - a.y;
+        return dx * dx + dy * dy <= a.r * a.r && sweptThisFrame(Math.atan2(dy, dx));
+      });
+      if (painted) {
+        const size = sigClass(fleetSignature(f));
+        if (!radarMemory.has(f.id)) note(`◆ новый радарный контакт (${size}) у ${fn}`, fn);
+        radarMemory.set(f.id, { node: fn, size, at: now });
       }
     }
   }
@@ -678,91 +781,47 @@ function insets(): { left: number; right: number; top: number; bottom: number } 
   const botPad = Math.min(150, Math.max(78, VH * 0.16));
   return { left: RAIL + 80, right: VW - rightPad, top: TOP + topPad, bottom: VH - botPad };
 }
-// Leave a little breathing room around the whole-map (scale-1) view so it reads as a
-// framed board, not edge-to-edge. This is the floor of the zoom range (MIN_SCALE = 1).
-const FIT_MARGIN = 0.94;
-// Base fit: map-space → screen, fitting the whole map inside the play area at scale 1.
-function projBase(p: { x: number; y: number }): { x: number; y: number } {
-  const { left, right, top, bottom } = insets();
-  const aw = Math.max(60, right - left);
-  const ah = Math.max(60, bottom - top);
-  const mapW = MAXX - MINX || 1;
-  const mapH = MAXY - MINY || 1;
-  // UNIFORM scale (preserve aspect): one factor for both axes, so a circle in map
-  // space stays a circle on screen — distances aren't stretched, and the radar
-  // ring reads as a true circle. Fit the whole map inside the play area and centre
-  // it (the spare axis gets symmetric margins / letterbox).
-  const scale = Math.min(aw / mapW, ah / mapH) * FIT_MARGIN;
-  const offX = left + (aw - mapW * scale) / 2;
-  const offY = top + (ah - mapH * scale) / 2;
-  return { x: offX + (p.x - MINX) * scale, y: offY + (p.y - MINY) * scale };
-}
+// The view transform (fit / zoom / pan / projection) lives in the shared camera module
+// (@void/client · camera.ts, CP0.2 — one render implementation for the prototype and the
+// Stage-4 client). MINX..MAXY (set once from MAP above) are the map bounds it projects.
+const mapBounds = () => ({ minX: MINX, minY: MINY, maxX: MAXX, maxY: MAXY });
 
-// Camera: pan offset + zoom over the base fit. Node/label sizes stay constant
-// in screen pixels; only positions transform (a node-graph style zoom).
+// Camera: pan offset + zoom over the base fit (scale range MIN_SCALE..MAX_SCALE lives in
+// the module: 1 = whole-map fit, 6 = one province + neighbours). Node/label sizes stay
+// constant in screen px; only positions transform (node-graph style zoom). On a phone the
+// opening view zooms onto the home region; double-tap resets, pinch out to the overview.
 const cam = { scale: 1, x: 0, y: 0 };
-// Zoom range tied to content: 1 = the whole-map fit (you can't zoom out past it into
-// empty void); 6 = close enough to read one province + its neighbours on a phone. On a
-// phone the opening view zooms onto your home region (the wide map is too dense to read
-// whole on a narrow screen); double-tap resets to that view, pinch out to the overview.
-const MIN_SCALE = 1;
-const MAX_SCALE = 6;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // node sector type by id — drives asteroid-junction rendering + capture-by-arrival
 const SECTOR_OF: Record<string, string> = Object.fromEntries(MAP.map((n) => [n.id, n.sector]));
 function world(p: { x: number; y: number }): { x: number; y: number } {
-  const b = projBase(p);
-  return { x: b.x * cam.scale + cam.x, y: b.y * cam.scale + cam.y };
+  return camWorldToScreen(p, cam, insets(), mapBounds());
 }
 function visible(c: { x: number; y: number }, pad = 80): boolean {
   return c.x >= -pad && c.x <= VW + pad && c.y >= -pad && c.y <= VH + pad;
 }
 function zoomAt(fx: number, fy: number, factor: number) {
-  // Anchor the zoom on the focal point (cursor / pinch centre): the map-space point under
-  // it stays put, so zoom grows toward where you're looking instead of drifting.
-  const bx = (fx - cam.x) / cam.scale;
-  const by = (fy - cam.y) / cam.scale;
-  cam.scale = clamp(cam.scale * factor, MIN_SCALE, MAX_SCALE);
-  cam.x = fx - bx * cam.scale;
-  cam.y = fy - by * cam.scale;
-  clampCam();
+  // Zoom anchored on the focal point (cursor / pinch centre) — camera.ts clamps scale + pan.
+  const n = camZoomAt(cam, fx, fy, factor, insets(), mapBounds());
+  cam.scale = n.scale;
+  cam.x = n.x;
+  cam.y = n.y;
 }
 
-/** Keep the map filling the play area, but with SLACK at the edges so the outermost
- *  provinces don't jam against the screen border — you can pan a comfortable margin
- *  past the content edge, which makes edge navigation easy. At the whole-map (min-zoom)
- *  floor the map sits centred and still; a zoomed-in map pans freely across its content. */
+/** Keep the map filling the play area with SLACK at the edges (module: PAN_SLACK) so the
+ *  outermost provinces don't jam against the border. Delegates to the shared camera. */
 function clampCam(): void {
-  const { left, right, top, bottom } = insets();
-  const tl = projBase({ x: MINX, y: MINY });
-  const br = projBase({ x: MAXX, y: MAXY });
-  const pL = tl.x * cam.scale;
-  const pR = br.x * cam.scale;
-  const pT = tl.y * cam.scale;
-  const pB = br.y * cam.scale;
-  // Breathing room: allow panning ~16% of the play area past each edge.
-  const mx = (right - left) * 0.16;
-  const my = (bottom - top) * 0.16;
-  // Per axis: if the map is at least as big as the play area, pan within it (+ slack) so
-  // an edge can sit a margin inside; otherwise it fits, so park it centred in the play area.
-  cam.x =
-    pR - pL >= right - left
-      ? clamp(cam.x, right - pR - mx, left - pL + mx)
-      : (left + right - pL - pR) / 2;
-  cam.y =
-    pB - pT >= bottom - top
-      ? clamp(cam.y, bottom - pB - my, top - pT + my)
-      : (top + bottom - pT - pB) / 2;
+  const n = camClampCam(cam, insets(), mapBounds());
+  cam.x = n.x;
+  cam.y = n.y;
 }
 
 /** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
 function centerOn(p: { x: number; y: number }, scale: number): void {
-  cam.scale = clamp(scale, MIN_SCALE, MAX_SCALE);
-  const b = projBase(p);
-  const { left, right, top, bottom } = insets();
-  cam.x = (left + right) / 2 - b.x * cam.scale;
-  cam.y = (top + bottom) / 2 - b.y * cam.scale;
-  clampCam();
+  const n = camCenterOn(cam, p, scale, insets(), mapBounds());
+  cam.scale = n.scale;
+  cam.x = n.x;
+  cam.y = n.y;
 }
 /** The opening / reset view. On a phone the wide map is too dense to read whole, so
  *  zoom onto your home region and pan to explore; on a wide screen the whole-map fit
@@ -788,7 +847,14 @@ if (typeof window !== 'undefined') window.addEventListener('resize', () => clamp
 
 const planet = (id: string | null | undefined): Planet | undefined =>
   id ? s.planets[id] : undefined;
-const isShip = (u: string) => !data.units[u]?.traits.includes('ground');
+// Squadrons/carriers are their own build category (air wing): a carrier (◈) ferries the
+// fighter squadrons (△) it launches, so both live under the Wings tab — apart from line
+// spacecraft (which stay under Ships).
+const isSquadron = (u: string) => {
+  const t = data.units[u]?.traits ?? [];
+  return t.includes('squadron') || t.includes('carrier');
+};
+const isShip = (u: string) => !data.units[u]?.traits.includes('ground') && !isSquadron(u);
 const isGround = (u: string) => data.units[u]?.domain === 'ground';
 const floor = Math.floor;
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
@@ -801,7 +867,7 @@ function kfmt(n: number): string {
 
 function cost(bag: Record<string, number> | undefined): string {
   if (!bag) return 'free';
-  const parts = Object.entries(bag).map(([r, n]) => `${n}${r === 'metal' ? 'm' : 'c'}`);
+  const parts = Object.entries(bag).map(([r, n]) => `${n}${TECH_CUR[r] ?? r[0]}`);
   return parts.length ? parts.join(' ') : 'free';
 }
 function afford(bag: Record<string, number> | undefined): boolean {
@@ -1015,6 +1081,23 @@ function fleetHasArtillery(f: Fleet | undefined): boolean {
   return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('artillery') ?? false));
 }
 
+/** Does this fleet carry a launchable strike wing (squadron-trait ships)? The carrier
+ *  can split them off as a fast, short-range fleet (squadrons-roadmap SQ-1.1). */
+function fleetHasSquadron(f: Fleet | undefined): boolean {
+  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('squadron') ?? false));
+}
+
+/** Can the fleet launch its squadrons right now? `fleet.split` refuses to take the whole
+ *  stack (E_SPLIT_ALL) and only works on a stationary fleet (E_IN_TRANSIT / E_IN_BATTLE),
+ *  so the launch is offered only when a non-squadron ship stays behind and the carrier is
+ *  parked and out of combat (squadrons-roadmap SQ-1.1). */
+function fleetCanLaunchSquadron(f: Fleet | undefined): boolean {
+  if (!fleetHasSquadron(f) || f!.movement || !f!.location || f!.battleId) return false;
+  const total = f!.units.reduce((n, u) => n + u.count, 0);
+  const wing = squadronTake(f!).reduce((n, u) => n + u.count, 0);
+  return wing > 0 && total > wing;
+}
+
 /** A fleet's standoff firing radius (map units) — the longest gun among its live
  *  artillery units sets the reach (mirrors combat.ts artilleryRange). 0 = none. */
 function artilleryRangeOf(f: Fleet | undefined): number {
@@ -1062,7 +1145,7 @@ function divisionsHtml(planetId: string): string {
     h += btn('mobtpl', String(i), esc(tpls[i]!.name), i !== idx);
   }
   h += `</div>`;
-  // Tap a slot to cycle its род войск (пусто → пехота → танк → бомбер → ПВО → пусто).
+  // Tap a slot to cycle its род войск (пусто → пехота → танк → пусто).
   h += `<div class="row">`;
   for (let i = 0; i < FORMATION_SLOTS; i++) {
     const u = cur.slots[i] ?? null;
@@ -1197,11 +1280,33 @@ function fleetAnchor(f: Fleet): { x: number; y: number; ang: number } | null {
   const ang = orbitsLive() ? a0 + Math.PI / 2 : a0;
   return { x: pc.x + Math.cos(a0) * r, y: pc.y + Math.sin(a0) * r, ang };
 }
-function note(msg: string) {
+function note(msg: string, at?: string) {
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   logLines.push(`D${d} ${String(h).padStart(2, '0')}h · ${msg}`);
   while (logLines.length > 9) logLines.shift();
+  toast(msg, at);
+}
+
+/** Transient event toast over the map — feedback must not live only in a hidden
+ *  log window. Tap dismisses; with a map anchor the tap also flies the camera
+ *  there (the jumpToPing path). At most 3 stacked, ~5s life each. */
+function toast(msg: string, at?: string): void {
+  const host = document.getElementById('toasts');
+  if (!host) return;
+  const el = document.createElement('div');
+  el.className = at ? 'toast jump' : 'toast';
+  el.textContent = at ? `${msg} ↪` : msg;
+  el.addEventListener('click', () => {
+    if (at) jumpToPing(at);
+    el.remove();
+  });
+  host.appendChild(el);
+  while (host.children.length > 3) host.firstElementChild?.remove();
+  window.setTimeout(() => {
+    el.classList.add('out');
+    window.setTimeout(() => el.remove(), 450);
+  }, 5200);
 }
 
 /** The map node a fleet occupies / is travelling over / is parked nearest to. */
@@ -1353,6 +1458,29 @@ interface Vision {
   identify: Set<string>;
   radar: Set<string>;
 }
+
+// --- espionage (SPY-1 in the prototype) ---------------------------------------
+// The core `espionageModule` grants time-boxed intel windows (`state.intel[ME]`);
+// here the client fog honours them: a `planet` grant identifies that node, a
+// `fleets` grant shows the target's fleets through the fog, a `treasury` grant is
+// read by the diplomacy roster. Mirrors what `visibleState` does server-side.
+/** Base fee of one attempt — mirrors the core module's BASE_COST (UI label only;
+ *  the kernel is authoritative and rejects with E_INSUFFICIENT when short). */
+const SPY_COST = 150;
+/** My LIVE intel windows (expired ones are ignored even before the core prunes them). */
+function myIntel(): IntelGrant[] {
+  return (s.intel?.[ME] ?? []).filter((g) => g.until > s.time);
+}
+/** Live grants of one kind, as a target-id set (planet ids / player ids). */
+function intelTargets(kind: IntelGrant['kind']): Set<string> {
+  const out = new Set<string>();
+  for (const g of myIntel()) if (g.kind === kind) out.add(g.target);
+  return out;
+}
+// Owners whose fleets are revealed this frame by a live `fleets` grant — rebuilt
+// alongside `vision` each frame so the render path checks a Set, not the grant list.
+let intelFleetOwners = new Set<string>();
+
 /** Variant-B visibility: an identify range (full detail, feeds memory) plus a
  *  wider radar range (enemy fleets seen only as coarse signatures). The radar
  *  reach scales with radar-array level and radar-ships. null vision = fog off. */
@@ -1382,8 +1510,20 @@ function computeVision(): Vision {
         }
       }
     }
+  // Stolen `planet` windows identify their node (feeds memory too, so the scan
+  // is remembered after the window closes); `fleets` windows fill the owner set
+  // that fleet rendering consults.
+  for (const id of intelTargets('planet')) if (s.planets[id]) identify.add(id);
+  intelFleetOwners = intelTargets('fleets');
   for (const id of identify) radar.add(id); // identify implies radar
   return { identify, radar };
+}
+
+/** Is this fleet visible? Own always; enemy — when its node is identified OR a
+ *  live `fleets` intel window covers its owner. */
+function fleetSeen(f: Fleet): boolean {
+  if (f.owner === ME) return true;
+  return known(fleetNode(f)) || intelFleetOwners.has(f.owner);
 }
 
 // Per-viewer MEMORY of the last identified state of a node (variant B): once you
@@ -1487,15 +1627,14 @@ function apply(out: StepOut) {
   handleEvents(out.events);
 }
 
-// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario
-// rule). The garrison unit makes the junction "defended" — it can no longer be
-// walked into, only stormed — and its AA now fires on near-orbit attackers.
+// A space fortress comes with a fixed orbital-AA emplacement (prototype scenario rule).
+// It's a building now: its AA fires on near-orbit attackers, but it does NOT make the
+// junction "defended" against a walk-in — only ground troops block ground capture.
 function installFortressAA(planetId: string) {
   const pl = s.planets[planetId];
   if (!pl) return;
-  const aa = pl.garrison.find((u) => u.unit === 'orbital_aa' && u.hp === undefined);
-  if (aa) aa.count += 1;
-  else pl.garrison.push({ unit: 'orbital_aa', count: 1 });
+  if (pl.buildings.some((b) => b.type === 'orbital_aa')) return; // already emplaced
+  pl.buildings.push({ type: 'orbital_aa', level: 1, hp: data.buildings.orbital_aa?.hp ?? 30 });
 }
 
 /** Apply a player-issued order and surface a rejection in the log (so a denied
@@ -1595,6 +1734,7 @@ function tryMoveGroup(fleetIds: string[], destId: string): void {
     renderWarPrompt();
     return;
   }
+  dropChains(movers, 'новый приказ'); // a live move beats the old plan (CC-5.1)
   for (const id of movers) playerOrder(moveFleet(ME, id, destId));
 }
 /** As tryMoveGroup, but the target is a point on a lane (continuous order). Either lane
@@ -1610,6 +1750,7 @@ function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; 
     renderWarPrompt();
     return;
   }
+  dropChains([...fleetIds], 'новый приказ'); // a live march beats the old plan (CC-5.1)
   for (const id of fleetIds) playerOrder(moveFleetEdge(ME, id, edge));
 }
 /** Confirm the staged move: declare war on each blocker (opens the lanes), then issue
@@ -1621,6 +1762,7 @@ function confirmWarPrompt(): void {
   warPrompt = null;
   hideWarPrompt();
   for (const b of wp.blockers) playerOrder(declareWar(ME, b));
+  dropChains(wp.fleetIds, 'новый приказ'); // the confirmed live move beats the old plan
   for (const id of wp.fleetIds) {
     if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
     else playerOrder(moveFleet(ME, id, wp.destId));
@@ -1664,6 +1806,7 @@ function clearSelection() {
   selFleets = new Set();
   merging = false;
   splitState = null;
+  queuing = false; // build mode dies with the selection — no armed mode eating dead taps
   lastPanelHtml = '';
 }
 
@@ -1682,6 +1825,7 @@ function toggleFleetInSelection(id: string) {
 function orderMerge(movers: string[], anchorId: string) {
   const anchor = s.fleets[anchorId];
   if (!anchor || anchor.owner !== ME) return;
+  dropChains(movers, 'слияние'); // merging fleets fly to the anchor — their plans yield
   const dest = anchor.location ?? anchor.movement?.to ?? null;
   let queued = 0;
   for (const moverId of movers) {
@@ -1736,22 +1880,111 @@ function handleEvents(events: DomainEvent[]) {
     const p = e.payload as Record<string, unknown>;
     switch (e.type) {
       case 'battle.started':
-        note(`⚔️ battle at ${p.location} (${p.phase})`);
+        // Fogged: a bots' brawl behind the fog is not our intel (NET already fogs
+        // events server-side; this matches it for the local sim).
+        if (p.attacker === ME || p.defender === ME || known(p.location as string))
+          note(`⚔️ battle at ${p.location} (${p.phase})`, p.location as string);
         if (p.attacker === ME || p.defender === ME) myBattleLocs.add(p.location as string);
         break;
-      case 'battle.resolved':
-        note(
-          `battle at ${p.location} ended — ${p.winner ? NAME[p.winner as string] + ' won' : 'stalemate'}`,
-        );
-        myBattleLocs.delete(p.location as string);
+      case 'battle.resolved': {
+        const loc = p.location as string;
+        if (myBattleLocs.has(loc) || known(loc)) {
+          const losses = battleLosses.get(loc);
+          const tally = losses
+            ? Object.entries(losses)
+                .map(([who, units]) => {
+                  const total = Object.values(units).reduce((a, b) => a + b, 0);
+                  return `${NAME[who] ?? who} −${total}`;
+                })
+                .join(', ')
+            : '';
+          note(
+            `⚔ battle at ${loc} ended — ${p.winner ? NAME[p.winner as string] + ' won' : 'stalemate'}${tally ? ` · потери: ${tally}` : ''}`,
+            loc,
+          );
+        }
+        battleLosses.delete(loc);
+        myBattleLocs.delete(loc);
         break;
+      }
       case 'technology.researched':
         if (p.playerId === ME)
           note(`⚛ изучено: ${data.technologies[p.technology as string]?.name ?? (p.technology as string)}`);
         if (techWin.classList.contains('show')) renderTech();
         break;
+      // «Хранитель» lifecycle: snapshot at delegation, diff on expiry (the morning report).
+      case 'steward.delegated':
+        if (p.playerId === ME) {
+          stewSnapshot = stewMetrics();
+          note('😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.');
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
+      case 'steward.recalled':
+        if (p.playerId === ME) {
+          stewSnapshot = null;
+          note('🎮 Вы вернули командование себе.');
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
+      case 'steward.expired':
+        if (p.playerId === ME) {
+          const now = stewMetrics();
+          const base = stewSnapshot;
+          stewSnapshot = null;
+          const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+          const diff = base
+            ? ` Пока вы спали: планет ${base.planets}→${now.planets}, металл ${sign(now.metal - base.metal)}, кредиты ${sign(now.credits - base.credits)}.`
+            : '';
+          note(`🌅 Хранитель вернул вам управление (была «Оборона»).${diff}`);
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
+      // Both espionage events are addressed to the ACTOR (`owner`); in NET play the
+      // server's fog filter already withholds them from the victim — mirror it here.
+      case 'intel.stolen': {
+        if (p.owner !== ME) break;
+        const what =
+          p.kind === 'treasury'
+            ? `казна ${NAME[p.target as string] ?? p.target}`
+            : p.kind === 'fleets'
+              ? `флоты ${NAME[p.target as string] ?? p.target}`
+              : `мир ${p.intelPlanet ?? p.target}`;
+        note(`🕵 Агент добыл разведданные: ${what} — окно 24ч`);
+        if (diploOpen && diploTab === 'diplo') renderDiplo(); // the intel row appeared
+        break;
+      }
+      case 'espionage.failed':
+        if (p.owner === ME)
+          note(`🕵 Агент провалился (${NAME[p.target as string] ?? p.target}) — плата сгорела`);
+        break;
+      // Counter-intel (SPY-2): addressed to the VICTIM. A failed attempt names the
+      // spy (caught red-handed); a noticed clean theft only says WHAT leaked.
+      case 'espionage.detected': {
+        // A caught spy shifts the victim-bot's favour meter — repaint the roster.
+        if (diploOpen && diploTab === 'diplo') renderDiplo();
+        if (p.owner !== ME) break;
+        const what =
+          p.kind === 'treasury' ? 'казна' : p.kind === 'fleets' ? 'данные о флотах' : 'данные мира';
+        note(
+          p.spy
+            ? `🛡 Контрразведка: агент ${NAME[p.spy as string] ?? p.spy} пойман при попытке кражи (${what})!`
+            : `🛡 Контрразведка: утечка разведданных (${what}) — вор не установлен`,
+        );
+        break;
+      }
+      case 'order.blocked':
+        // CC-4.1 minimum: the chain paused on a failed step — say so the moment the
+        // verdict lands (the fog filter routes this to the owner only).
+        if (p.owner === ME) {
+          const code = String(p.code ?? '');
+          note(`⚠ флот ${p.fleetId}: план прерван — ${code.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')}`);
+          lastPanelHtml = '';
+        }
+        break;
       case 'planet.captured':
-        note(`🚩 ${NAME[p.owner as string]} captured ${p.planetId}`);
+        if (p.owner === ME || known(p.planetId as string))
+          note(`🚩 ${NAME[p.owner as string]} captured ${p.planetId}`, p.planetId as string);
         if (diploOpen && diploTab === 'diplo') renderDiplo(); // province counts shifted
         break;
       case 'diplomacy.changed': {
@@ -1782,13 +2015,31 @@ function handleEvents(events: DomainEvent[]) {
         note(`⬆️ ${p.building} → L${p.level} at ${p.planetId}`);
         break;
       case 'building.destroyed':
-        note(`💥 ${p.building} destroyed at ${p.planetId}`);
+        note(`💥 ${p.building} destroyed at ${p.planetId}`, p.planetId as string);
         break;
       case 'unit.built':
         note(`🛠️ ${p.count}× ${p.unit} at ${p.planetId}`);
         break;
       case 'fleet.launched':
         note(`🚀 ${NAME[p.owner as string]} launched a fleet from ${p.planetId}`);
+        break;
+      case 'aa.fired': {
+        const planet = s.planets[p.planetId as string];
+        if (!planet || !known(p.planetId as string)) break; // fogged flak stays unseen
+        const target = s.fleets[p.fleetId as string];
+        const to = (target && fleetPos(target)) ?? {
+          x: planet.position.x + 6,
+          y: planet.position.y - 14, // the victim died this volley — burst over the orbit
+        };
+        aaShots.push({ from: { ...planet.position }, to, at: performance.now(), close: p.tier === 'close' });
+        while (aaShots.length > 40) aaShots.shift();
+        break;
+      }
+      case 'market.bought':
+        if (p.seller === ME || p.buyer === ME)
+          note(
+            `⇄ биржа: ${p.amount} ${TECH_CUR[p.resource as string] ?? p.resource} за ${p.paid ?? '?'} ¤ (${p.buyer === ME ? 'покупка' : 'продажа'})`,
+          );
         break;
       case 'fleet.merged':
         if (p.owner === ME) note(`⛬ fleets merged at ${p.at}`);
@@ -1806,6 +2057,15 @@ function handleEvents(events: DomainEvent[]) {
           const n = (p.count as number) ?? 0;
           if (p.owner === ME) killStats.lost += n;
           else killStats.destroyed += n;
+        }
+        // Ledger for the battle-result card (visible fights only).
+        if (myBattleLocs.has(p.at as string) || known(p.at as string)) {
+          const at = p.at as string;
+          const owner = (p.owner as string) ?? '?';
+          const perOwner = battleLosses.get(at) ?? {};
+          const perUnit = (perOwner[owner] ??= {});
+          perUnit[p.unit as string] = (perUnit[p.unit as string] ?? 0) + ((p.count as number) ?? 0);
+          battleLosses.set(at, perOwner);
         }
         break;
       }
@@ -1827,6 +2087,12 @@ function runAI() {
   for (const ai of AI_PLAYERS) {
     for (const a of aiOrders(s, ai)) apply(order(s, a, s.time));
   }
+  // «Хранитель»: while your own seat is delegated, the local AI plays it too — on its
+  // posture (defend), so solo delegation actually holds the line, not just shows a timer.
+  const myPosture = stewardActive(s, ME, s.time);
+  if (myPosture && !AI_PLAYERS.has(ME)) {
+    for (const a of aiOrders(s, ME, myPosture)) apply(order(s, a, s.time));
+  }
 }
 
 // Enemy (AI) auto-engagement: an idle hostile fleet over a world it doesn't own,
@@ -1835,7 +2101,11 @@ function runAI() {
 // assault controls in the fleet panel), so they are skipped here.
 function autoEngage() {
   for (const f of Object.values(s.fleets)) {
-    if (f.owner === ME || f.location == null || f.movement || f.battleId) continue;
+    if (f.location == null || f.movement || f.battleId) continue;
+    const mine = f.owner === ME;
+    // AI fleets always press the capture loop; the player's do so only when opted into
+    // auto-storm (CC-2) — otherwise the player drives assaults by hand.
+    if (mine && !autoAssault.has(f.id)) continue;
     if (!SECTOR_TYPES[SECTOR_OF[f.location]]?.capturable) continue; // empty space can't be taken
     const here = s.planets[f.location];
     if (!here || here.owner === f.owner) continue;
@@ -1843,8 +2113,10 @@ function autoEngage() {
       (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
     );
     if (enemyHere) continue; // let the auto orbital battle settle first
-    if (f.orbit !== 'near') apply(order(s, orbitFleet(f.owner, f.id, 'near'), s.time));
-    apply(order(s, assaultFleet(f.owner, f.id), s.time));
+    // Player fleets go through playerOrder (server-authoritative in net play); AI applies locally.
+    const issue = (a: Action) => (mine ? playerOrder(a) : apply(order(s, a, s.time)));
+    if (f.orbit !== 'near') issue(orbitFleet(f.owner, f.id, 'near'));
+    issue(assaultFleet(f.owner, f.id));
   }
 }
 
@@ -1864,6 +2136,204 @@ function checkFleetClashes() {
       const foeFleet = myFleet === f ? g : f;
       apply(order(s, engageFleet(myFleet.owner, myFleet.id, foeFleet.id), s.time));
     }
+  }
+}
+
+/** Append a step to each selected fleet's order chain. Single-player keeps a local client
+ *  plan (driveQueues issues it); NET sends order.enqueue so the chain is AUTHORITATIVE
+ *  server state (CC-server) — the server drives it, and it runs while you're offline.
+ *  With no fleet selected the build mode disarms instead of eating taps silently. */
+function enqueueStep(fleetIds: string[], step: QStep): void {
+  if (!fleetIds.length) {
+    queuing = false;
+    note('✖ план: сначала выберите свой флот');
+    return;
+  }
+  for (const id of fleetIds) {
+    if (NET) {
+      playerOrder(orderEnqueue(ME, id, step));
+      continue;
+    }
+    const q = fleetQueues.get(id) ?? [];
+    if (q.length >= MAX_CHAIN_STEPS) {
+      note(`✖ план: не длиннее ${MAX_CHAIN_STEPS} шагов`);
+      continue;
+    }
+    q.push({ ...step });
+    fleetQueues.set(id, q);
+  }
+}
+/** A fleet's pending order chain, from whichever side owns it (server state in NET,
+ *  the local plan in single-player). Read-only view for the panel + node-tap guard. */
+function fleetQueueOf(fleetId: string): QStep[] {
+  return NET ? ((s as { orders?: Record<string, QStep[]> }).orders?.[fleetId] ?? []) : (fleetQueues.get(fleetId) ?? []);
+}
+/** Remove one step of a fleet's chain by index (NET: authoritative order.remove). */
+function removeChainStep(fleetId: string, index: number): void {
+  if (NET) {
+    playerOrder(orderRemove(ME, fleetId, index));
+    return;
+  }
+  const q = fleetQueues.get(fleetId);
+  if (!q || index < 0 || index >= q.length) return;
+  q.splice(index, 1);
+  if (q.length === 0) fleetQueues.delete(fleetId);
+}
+/** The node a fleet's PLAN currently ends on — where the next queued step departs from
+ *  (last queued move target → current flight's final destination → parked node). */
+function chainTailNode(f: Fleet): string | null {
+  const q = fleetQueueOf(f.id);
+  for (let i = q.length - 1; i >= 0; i--) {
+    const st = q[i]!;
+    if (st.kind === 'move') return st.to;
+  }
+  if (f.movement) return (f.movement.destination ?? f.movement.to) as string;
+  return fleetNode(f);
+}
+/** A live order takes the wheel (CC-5.1 priority rule): drop each fleet's remaining
+ *  chain, with a toast — so a stale plan can't re-steer the fleet a frame later. */
+function dropChains(fleetIds: string[], why: string): void {
+  let steps = 0;
+  for (const id of fleetIds) {
+    const q = fleetQueueOf(id);
+    if (!q.length) continue;
+    steps += q.length;
+    if (NET) playerOrder(orderClear(ME, id));
+    else fleetQueues.delete(id);
+  }
+  if (steps) {
+    note(`✕ ${why}: план снят (шагов: ${steps})`);
+    lastPanelHtml = '';
+  }
+}
+/** Cumulative plan timing for one fleet: per-step game-hours (null = unroutable) and
+ *  the total from NOW, including the remainder of the current flight. On a 🔁 loop the
+ *  total is one lap (the plan never "finishes"). */
+function chainEta(f: Fleet, q: QStep[]): { per: Array<number | null>; total: number | null; loops: boolean } {
+  const per: Array<number | null> = [];
+  let acc = 0;
+  let unknown = false;
+  let loops = false;
+  if (f.movement) {
+    const dest = (f.movement.destination ?? f.movement.to) as string;
+    acc += Math.max(0, (f.movement.arrivesAt - s.time) / HOUR);
+    if (dest !== f.movement.to) acc += estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0;
+  }
+  let prev = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+  for (const st of q) {
+    let h: number | null = 0;
+    if (st.kind === 'move') {
+      h = prev && prev !== st.to ? estimateTravelHours(s, data, prev, st.to, f) : 0;
+      prev = st.to;
+    } else if (st.kind === 'wait') {
+      h = st.until !== undefined ? Math.max(0, (st.until - s.time) / HOUR) : st.hours;
+    } else if (st.kind === 'repeat') {
+      loops = true;
+    }
+    if (h === null) unknown = true;
+    else acc += h;
+    per.push(h);
+  }
+  return { per, total: unknown ? null : acc, loops };
+}
+/** «≈14ч» / «≈2д 3ч» — plan durations are game-hours, like every duration in the UI. */
+function fmtHrs(h: number): string {
+  const r = Math.max(0, Math.round(h));
+  return r >= 48 ? `${Math.floor(r / 24)}д ${r % 24}ч` : `${r}ч`;
+}
+
+// CC-1 driver: each frame, any of MY fleets that has a queue and is idle runs its head
+// step and pops it. Issuing a move sets `movement` (so `fleetIdle` is false next frame →
+// we wait); on arrival it goes idle again and the next step fires — chaining hands-off.
+// A REJECTED step does not silently pop: it BLOCKS the chain with its reason (the panel
+// shows «⚠ …», the player edits/retries/clears) — mirroring the NET server driver.
+function driveQueues(): void {
+  for (const [fid, steps] of [...fleetQueues]) {
+    const f = s.fleets[fid];
+    if (!f || f.owner !== ME || steps.length === 0) {
+      fleetQueues.delete(fid);
+      continue;
+    }
+    if (!fleetIdle(f)) continue; // in transit / fighting → hold
+    const step = steps[0]!;
+    if (step.blocked !== undefined) continue; // paused on a failed step — needs the player
+    if (step.kind === 'repeat') {
+      // rotate the 🔁 marker so the next lap starts; an orphan marker just idles
+      if (steps.length > 1) popChainStep(steps);
+      continue;
+    }
+    // 'wait' is a timed hold — count it down (starting the timer lazily on first reach)
+    // and don't advance until it elapses. A delayed order: "arrive, wait, then strike."
+    if (step.kind === 'wait') {
+      const w = waitStatus(step, s.time, HOUR);
+      step.until = w.until;
+      if (!w.done) continue;
+      popChainStep(steps);
+      if (steps.length === 0) fleetQueues.delete(fid);
+      continue;
+    }
+    // 'load'/'unload' need the world garrison / the hold (not just the fleet).
+    const actions =
+      step.kind === 'load'
+        ? loadHereActions(s, ME, f)
+        : step.kind === 'unload'
+          ? unloadHereActions(s, ME, f)
+          : stepActions(ME, fid, step, f);
+    let failed: string | null = null;
+    if ((step.kind === 'load' || step.kind === 'unload') && actions.length === 0) {
+      failed = 'E_NO_CARGO'; // the cargo the plan counted on is gone — a broken plan
+    } else {
+      for (const a of actions) {
+        const out = order(s, a, s.time);
+        apply(out);
+        if (out.error) {
+          failed = out.error;
+          break;
+        }
+      }
+    }
+    if (failed) {
+      step.blocked = failed;
+      note(`⚠ флот ${fid}: план прерван — ${failed.replace(/^E_/, '').toLowerCase().replace(/_/g, ' ')}`);
+      lastPanelHtml = '';
+      continue;
+    }
+    popChainStep(steps);
+    if (steps.length === 0) fleetQueues.delete(fid);
+  }
+}
+
+// CC-4 reactive auto-scramble driver: each frame, a squadron fleet on "дежурный вылет"
+// that's idle auto-sorties at the nearest identified, at-war contact inside its strike
+// radius — burning one fuel (SQ-2.1) — and rearms one round per elapsed game-hour. The
+// pure decision is scrambleOrder (tested); this just reads the world (vision + diplomacy)
+// and issues the order. Same host-side shape as autoEngage/driveQueues; single-player only
+// (net play → the server owns fleets — promoting this server-side is the CC-server brick).
+function drivePatrols(): void {
+  if (patrols.size === 0) return;
+  const rounds = Math.max(0, Math.floor((s.time - lastPatrolTick) / HOUR));
+  if (rounds > 0) lastPatrolTick += rounds * HOUR;
+  for (const [fid, p] of [...patrols]) {
+    const f = s.fleets[fid];
+    if (!f || f.owner !== ME || !fleetHasSquadron(f)) {
+      patrols.delete(fid);
+      continue;
+    }
+    const spec = sortieSpec(f);
+    for (let i = 0; i < rounds && p.sortie.rearming > 0; i++) p.sortie = tickRearm(p.sortie, spec.maxFuel);
+    if (!fleetIdle(f)) continue; // busy (transit / battle) — let it resolve first
+    // Hostile, identified contacts parked on a node — the wing's legal targets.
+    const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
+    for (const g of Object.values(s.fleets)) {
+      if (g.owner === ME || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+      if (getStance(s, ME, g.owner) !== 'war') continue; // only declared enemies — never auto-war
+      if (!known(g.location)) continue; // identified only — "опознанная цель в зоне видимости"
+      const pos = s.planets[g.location]?.position;
+      if (pos) targets.push({ id: g.id, location: g.location, pos });
+    }
+    const { action, sortie } = scrambleOrder(ME, f, p, targets, spec.rearmRounds);
+    p.sortie = sortie;
+    if (action) playerOrder(action);
   }
 }
 
@@ -1975,16 +2445,34 @@ function targetBrackets(x: number, y: number, r: number, t: number) {
 
 
 
-function drawBattlePulse(x: number, y: number, pulse: number) {
+function drawBattlePulse(x: number, y: number, pulse: number, phase: 'orbital' | 'ground' = 'orbital') {
+  // Two DIFFERENT pictures for the two battle phases (the audit found them
+  // indistinguishable): orbital = the familiar red expanding rings (a dogfight in
+  // space); ground = an amber pulse hugging the surface + a flat "front line" bar.
+  const col = phase === 'ground' ? '#f0b429' : '#ff5a4d';
   cx.save();
-  cx.shadowColor = '#ff5a4d';
+  cx.shadowColor = col;
   cx.shadowBlur = 12;
   for (let i = 0; i < 3; i++) {
     const k = (pulse + i / 3) % 1;
-    cx.strokeStyle = rgba('#ff5a4d', 0.55 * (1 - k));
+    cx.strokeStyle = rgba(col, 0.55 * (1 - k));
     cx.lineWidth = 1.2 + i * 0.25;
     cx.beginPath();
-    cx.arc(x, y, 18 + k * 24, 0, TAU);
+    if (phase === 'ground') {
+      cx.setLineDash([5, 4]);
+      cx.arc(x, y, 14 + k * 12, 0, TAU); // tight, dashed — clamped to the world
+    } else {
+      cx.arc(x, y, 18 + k * 24, 0, TAU);
+    }
+    cx.stroke();
+  }
+  if (phase === 'ground') {
+    cx.setLineDash([]);
+    cx.strokeStyle = rgba(col, 0.85);
+    cx.lineWidth = 2;
+    cx.beginPath();
+    cx.moveTo(x - 10, y + 16);
+    cx.lineTo(x + 10, y + 16); // the front line under the world
     cx.stroke();
   }
   cx.restore();
@@ -2168,20 +2656,97 @@ function drawFleetRoutes() {
   }
 }
 
-/** While "Move" is armed: a dashed line from each selected fleet to the world
- *  under the pointer (snaps to the nearest blip) — preview before committing. */
+/** The PLANNED part of every own fleet's journey — its queued chain — drawn as a
+ *  dimmer dashed polyline continuing from where the current flight ends, with numbered
+ *  waypoint pips (glyphs ⚔/▲/▼/☄/⏸/🔁 for non-move steps), so the whole plan reads
+ *  straight off the map before you log out. A blocked chain turns warning-orange. */
+function drawChainPlans() {
+  for (const f of Object.values(s.fleets)) {
+    if (f.owner !== ME) continue;
+    const q = fleetQueueOf(f.id);
+    if (!q.length) continue;
+    const sel = selFleet === f.id || selFleets.has(f.id);
+    // The chain departs from where the current flight ends (or the parked node).
+    let fromId = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+    const fromPl = fromId ? s.planets[fromId] : undefined;
+    let at: { x: number; y: number } | null = fromPl ? world(fromPl.position) : fleetAnchor(f);
+    if (!at) continue;
+    const blocked = q[0]?.blocked !== undefined;
+    const col = blocked ? '#ff7a3a' : LOCK;
+    const alpha = sel ? 0.8 : 0.3;
+    cx.save();
+    cx.lineWidth = sel ? 1.6 : 1;
+    cx.strokeStyle = rgba(col, alpha);
+    cx.fillStyle = rgba(col, Math.min(1, alpha + 0.15));
+    cx.shadowColor = col;
+    cx.shadowBlur = sel ? 6 : 0;
+    cx.font = '700 8px ui-monospace,Menlo,monospace';
+    cx.textAlign = 'center';
+    let stack = 0; // consecutive non-move glyphs at one node fan out sideways
+    for (let i = 0; i < q.length; i++) {
+      const st = q[i]!;
+      if (st.kind === 'move') {
+        const hops = fromId && fromId !== st.to ? (planRoute(s, fromId, st.to) ?? [st.to]) : [st.to];
+        const pts: Array<{ x: number; y: number }> = [at];
+        for (const hop of hops) {
+          const pl = s.planets[hop];
+          if (pl) pts.push(world(pl.position));
+        }
+        cx.setLineDash([2, 6]); // plan legs read dimmer/sparser than the live route
+        cx.beginPath();
+        cx.moveTo(pts[0]!.x, pts[0]!.y);
+        for (let k = 1; k < pts.length; k++) cx.lineTo(pts[k]!.x, pts[k]!.y);
+        cx.stroke();
+        cx.setLineDash([]);
+        const d = pts[pts.length - 1]!;
+        cx.beginPath();
+        cx.arc(d.x, d.y, 7, 0, TAU); // numbered waypoint pip
+        cx.stroke();
+        cx.fillText(String(i + 1), d.x, d.y + 3);
+        fromId = st.to;
+        at = d;
+        stack = 0;
+      } else {
+        const g =
+          st.kind === 'assault'
+            ? '⚔'
+            : st.kind === 'load'
+              ? '▲'
+              : st.kind === 'unload'
+                ? '▼'
+                : st.kind === 'bombard'
+                  ? '☄'
+                  : st.kind === 'wait'
+                    ? '⏸'
+                    : st.kind === 'repeat'
+                      ? '🔁'
+                      : '🛰';
+        stack++;
+        cx.fillText(`${i + 1}${g}`, at.x + 12 + (stack - 1) * 17, at.y - 10);
+      }
+    }
+    if (blocked) {
+      const fa = fleetAnchor(f);
+      if (fa) cx.fillText('⚠', fa.x + 14, fa.y - 12); // the pause sits where the fleet is
+    }
+    cx.restore();
+  }
+}
+
+/** While "Move" (or chain-building) is armed: a dashed line from each selected fleet
+ *  to the world under the pointer (snaps to the nearest blip) — preview before
+ *  committing. In build mode the leg starts from the PLAN's tail, not the fleet. */
 function drawAimPreview() {
-  if (!aiming || !aimPointer) return;
+  if ((!aiming && !queuing) || !aimPointer) return;
   const ids = selectedFleetIds();
   if (!ids.length) return;
   // Prefer a node target; if none is near, aim at the closest point ON a lane —
   // the army will route to that road and park there (Bytro continuous order).
-  // The node pick radius MUST match selectAt's (24px): with the old 30px, a tap
-  // 24–30px from a junction dispatched a lane park (fleet flies to the road point)
-  // while the preview drew the path to the node — the reported mismatch.
+  // The node pick radius MUST match selectAt's rNode (24px mouse / 30px touch):
+  // any mismatch makes the preview draw a path the release will not dispatch.
   let target: { x: number; y: number } | null = null;
   let targetId: string | null = null;
-  let best = 24;
+  let best = tapByTouch ? 30 : 24;
   for (const n of MAP) {
     const c = world(n);
     const d = Math.hypot(aimPointer.x - c.x, aimPointer.y - c.y);
@@ -2203,11 +2768,14 @@ function drawAimPreview() {
   for (const id of ids) {
     const f = s.fleets[id];
     if (!f) continue;
-    const a = fleetAnchor(f);
-    if (!a) continue;
+    const anchor = fleetAnchor(f);
+    if (!anchor) continue;
     // draw the ROUTED march path through province centres (Bytro-style), so you
     // see the actual road the army will take — not a straight line to the target.
-    const from = fleetNode(f);
+    // Chain-building: the next step departs from the plan's tail, not the fleet.
+    const tailPl = queuing ? s.planets[chainTailNode(f) ?? ''] : undefined;
+    const from = tailPl ? tailPl.id : fleetNode(f);
+    const a: { x: number; y: number } = tailPl ? world(tailPl.position) : anchor;
     // For a lane target, route to the endpoint the army enters through, then a
     // final segment to the point on the road.
     const routeEndId = laneTarget && from ? laneAim(f, from, laneTarget).endId : targetId;
@@ -2235,7 +2803,7 @@ function drawAimPreview() {
     // travel-time estimate to this target for the first selected fleet (longer
     // route → more hours; the authoritative time is computed by the server).
     const f0 = s.fleets[ids[0]!];
-    const from = f0 ? fleetNode(f0) : null;
+    const from = f0 ? (queuing ? (chainTailNode(f0) ?? fleetNode(f0)) : fleetNode(f0)) : null;
     let hrs: number | null = null;
     if (f0 && from) {
       if (laneTarget) hrs = laneAim(f0, from, laneTarget).hrs;
@@ -2272,79 +2840,18 @@ const bgx = bg.getContext('2d') as CanvasRenderingContext2D;
 let bgContent = ''; // viewport + ownership signature (camera-independent)
 let bgCam = { x: 0, y: 0, scale: 1 }; // camera the static layer was last baked at
 
+/** The owner of node `id` AS THE VIEWER MAY KNOW IT: live when identified (or fog
+ *  off), last-known from memory when only remembered, unknown otherwise. The
+ *  political fill and its cache signature both read THIS, never the raw truth —
+ *  the map must not repaint a hidden capture (an intel leak the fog exists to stop). */
+function knownOwner(id: string): string | null {
+  if (known(id)) return s.planets[id]?.owner ?? null;
+  return memory.get(id)?.owner ?? null;
+}
 function ownersSig(): string {
   let out = '';
-  for (const n of MAP) out += (s.planets[n.id]?.owner ?? '·') + ',';
+  for (const n of MAP) out += (knownOwner(n.id) ?? '·') + ',';
   return out;
-}
-
-/** Clip a convex polygon to the half-plane a*x + b*y + c ≤ 0 (Sutherland–Hodgman).
- *  Used to carve the weighted-Voronoi (power-diagram) province cells. */
-function clipHalfPlane(
-  poly: Array<[number, number]>,
-  a: number,
-  b: number,
-  c: number,
-): Array<[number, number]> {
-  const out: Array<[number, number]> = [];
-  for (let i = 0; i < poly.length; i++) {
-    const cur = poly[i]!;
-    const nxt = poly[(i + 1) % poly.length]!;
-    const dc = a * cur[0] + b * cur[1] + c;
-    const dn = a * nxt[0] + b * nxt[1] + c;
-    if (dc <= 0) out.push(cur);
-    if (dc < 0 !== dn < 0) {
-      const t = dc / (dc - dn);
-      out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-    }
-  }
-  return out;
-}
-
-/** Sentinel edge-tag: this province edge sits on the map boundary, not a neighbour. */
-const BOUNDARY = -1;
-
-/** Like {@link clipHalfPlane}, but carries a per-edge tag so the political map can
- *  colour each border by what lies across it. `tags[k]` is what borders the edge
- *  `poly[k]→poly[k+1]`: a neighbour seed index (≥0) or BOUNDARY. The newly-cut edge
- *  (along the clip line) is tagged `clipTag` (the seed we clipped against); surviving
- *  original edges keep their tag. Lets same-owner borders draw as faint hairlines
- *  (the empire reads as one field) and owner-vs-owner borders as a bright frontier. */
-function clipHalfPlaneTagged(
-  poly: Array<[number, number]>,
-  tags: number[],
-  a: number,
-  b: number,
-  c: number,
-  clipTag: number,
-): { poly: Array<[number, number]>; tags: number[] } {
-  const out: Array<[number, number]> = [];
-  const outT: number[] = [];
-  const n = poly.length;
-  for (let i = 0; i < n; i++) {
-    const cur = poly[i]!;
-    const nxt = poly[(i + 1) % n]!;
-    const tag = tags[i]!;
-    const dc = a * cur[0] + b * cur[1] + c;
-    const dn = a * nxt[0] + b * nxt[1] + c;
-    const cross = dc < 0 !== dn < 0;
-    if (dc <= 0) {
-      out.push(cur);
-      if (cross) {
-        const t = dc / (dc - dn);
-        out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-        outT.push(tag); // cur → intersection: surviving part of the original edge
-        outT.push(clipTag); // intersection → next: along the new clip line (this neighbour)
-      } else {
-        outT.push(tag); // wholly-inside original edge keeps its tag
-      }
-    } else if (cross) {
-      const t = dc / (dc - dn);
-      out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-      outT.push(tag); // intersection → nxt: re-entering part of the original edge
-    }
-  }
-  return { poly: out, tags: outT };
 }
 
 /** Rebuild the cached province map when the camera/ownership/viewport moves. */
@@ -2414,11 +2921,8 @@ function buildStaticLayer(): void {
     const p = s.planets[n.id];
     if (!p) continue;
     const c = world(n);
-    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: p.owner ?? null, kind: n.sector });
+    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: knownOwner(n.id), kind: n.sector });
   }
-  // Keep the power diagram valid: clamp the weight spread so a heavier neighbour can
-  // never swallow a close smaller node's cell (which left it with no province border).
-  clampPowerWeights(seeds);
   // Clip cells to the MAP boundary (province bounding box + padding), not the
   // viewport — otherwise the outermost provinces stretch to the screen edge. This
   // gives the map a defined edge that pans/zooms with the camera.
@@ -2431,104 +2935,18 @@ function buildStaticLayer(): void {
     [br.x, br.y],
     [tl.x, br.y],
   ];
-  const trace = (poly: Array<[number, number]>): void => {
-    g.beginPath();
-    g.moveTo(poly[0]![0], poly[0]![1]);
-    for (let k = 1; k < poly.length; k++) g.lineTo(poly[k]![0], poly[k]![1]);
-    g.closePath();
-  };
-  // Pass 1 — bake every province cell (tagged power-diagram polygon) and its fill.
-  // Same owner ⇒ same colour, so a captured cluster paints as ONE political field.
-  const cells: Array<{
-    poly: Array<[number, number]>;
-    tags: number[];
-    owner: string | null;
-    idx: number;
-  }> = [];
-  for (let i = 0; i < seeds.length; i++) {
-    const si = seeds[i]!;
-    let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
-    let tags: number[] = clip.map(() => BOUNDARY);
-    for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
-      if (i === j) continue;
-      const sj = seeds[j]!;
-      // power-diagram half-plane: keep |x-ci|² - wi ≤ |x-cj|² - wj
-      const a = 2 * (sj.x - si.x);
-      const b = 2 * (sj.y - si.y);
-      const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
-      ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
-    }
-    if (poly.length < 3) continue;
-    // Unified territory fill. Owned land is painted STRONGLY in its owner colour so
-    // who-holds-what reads at a glance — your worlds clearly green, each rival its hue
-    // — and it ignores fog on purpose: a province an enemy has captured keeps showing
-    // its owner colour even when you can't see the garrison (last-known control map,
-    // Bytro/HoI-style). Neutral stays a faint wash.
-    trace(poly);
-    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.58 : 0.1);
-    g.fill();
-    // faint terrain/kind accent — each province still reads as its own kind of place
-    // (nebula slows fleets, gas-giant boosts output, …)
-    const accent = SECTOR_TYPES[si.kind]?.color;
-    if (accent) {
-      trace(poly);
-      g.fillStyle = rgba(accent, 0.16); // province-type tint reads through the owner fill
-      g.fill();
-    }
-    cells.push({ poly, tags, owner: si.owner, idx: i });
-  }
-
-  // Pass 2 — classify every cell edge by what's across it. Same-owner borders are
-  // thin INNER hairlines (so an empire stays one colour field with subtle province
-  // divisions); owner-vs-(other owner / neutral / void) borders are a glowing
-  // FRONTIER in the owner's colour. That contrast is the "merged territory, thinly
-  // outlined provinces" look.
-  type Seg = [number, number, number, number];
-  const ownedFront = new Map<string, Seg[]>();
-  const ownedInner = new Map<string, Seg[]>();
-  const neutralEdge: Seg[] = [];
-  const bucket = (m: Map<string, Seg[]>, key: string): Seg[] => {
-    let arr = m.get(key);
-    if (!arr) m.set(key, (arr = []));
-    return arr;
-  };
-  for (const cell of cells) {
-    const { poly, tags, owner, idx } = cell;
-    const m = poly.length;
-    for (let k = 0; k < m; k++) {
-      const t = tags[k]!;
-      const p0 = poly[k]!;
-      const p1 = poly[(k + 1) % m]!;
-      const seg: Seg = [p0[0], p0[1], p1[0], p1[1]];
-      const neigh = t >= 0 ? seeds[t]!.owner : undefined; // undefined ⇒ map boundary
-      if (t >= 0 && owner !== null && neigh === owner) {
-        if (idx < t) bucket(ownedInner, ownerColor(owner)).push(seg); // same empire, draw once
-      } else if (owner !== null) {
-        bucket(ownedFront, ownerColor(owner)).push(seg); // empire frontier (each side glows)
-      } else if (t === BOUNDARY || idx < t) {
-        neutralEdge.push(seg); // neutral province division (faint, drawn once)
-      }
-    }
-  }
-  const strokeSegs = (segs: Seg[], style: string, width: number): void => {
-    if (segs.length === 0) return;
-    g.strokeStyle = style;
-    g.lineWidth = width;
-    g.beginPath();
-    for (const sg of segs) {
-      g.moveTo(sg[0], sg[1]);
-      g.lineTo(sg[2], sg[3]);
-    }
-    g.stroke();
-  };
-  g.save();
-  g.lineJoin = 'round';
-  g.lineCap = 'round';
-  for (const [col, segs] of ownedInner) strokeSegs(segs, rgba(col, 0.18), 0.65); // inner hairlines
-  strokeSegs(neutralEdge, 'rgba(67,98,110,0.34)', 1); // neutral divisions
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.14), 5.5); // frontier glow
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.9), 1.6); // frontier crisp
-  g.restore();
+  // Weighted-Voronoi political fill + classified borders — the shared @void/client
+  // territory renderer clamps the weights (so no cell is swallowed), tessellates the
+  // power diagram, fills each province in its owner's colour, and draws same-owner
+  // inner hairlines vs glowing owner frontiers. Fog is honoured upstream: each seed
+  // carries the owner AS THE VIEWER KNOWS IT (knownOwner), so a hidden capture never
+  // repaints the map. Owned land is painted strongly (who-holds-what at a glance);
+  // neutral stays a faint wash; a faint terrain tint reads through per sector kind.
+  drawTerritory(g, seeds, clip, {
+    ownerColor,
+    neutralFill: COLOR.null!,
+    kindAccent: (kind) => SECTOR_TYPES[kind]?.color,
+  });
 
   // PATH NETWORK — thin roads between adjacent provinces (the visible "пути").
   // Movement runs along these; an army marches province-to-adjacent-province and
@@ -2628,6 +3046,7 @@ function render(now: number) {
   drawRadarCoverage(); // my sensor reach (radar arrays + ships)
 
   drawFleetRoutes();
+  drawChainPlans(); // queued chains: numbered waypoints + dim dashed plan legs
 
   // battles — pulsing red contact ring at the actual clash point (an engaged
   // fleet's position, so a mid-lane intercept shows where it really happens) with a
@@ -2639,15 +3058,57 @@ function render(now: number) {
     if (!anchor) continue;
     const c = world(anchor);
     if (!visible(c, 120)) continue;
-    drawBattlePulse(c.x, c.y, wave);
+    drawBattlePulse(c.x, c.y, wave, b.phase);
     if (typeof b.nextRoundAt === 'number') {
       cx.save();
       cx.font = '700 10px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
-      cx.fillStyle = '#ff8a7d';
-      cx.fillText(`⚔ ${timeLeft(b.nextRoundAt)}`, c.x, c.y - 28);
+      cx.fillStyle = b.phase === 'ground' ? '#f5cf6b' : '#ff8a7d';
+      cx.fillText(
+        `${b.phase === 'ground' ? '⚒ десант' : '⚔ орбита'} · ${timeLeft(b.nextRoundAt)}`,
+        c.x,
+        c.y - 28,
+      );
       cx.restore();
     }
+  }
+
+  // orbital-AA flak (H2): a dashed ground-to-orbit tracer with a burst at the
+  // target end, fading out — a fleet under AA fire no longer melts silently.
+  if (aaShots.length) {
+    const nowMs = performance.now();
+    cx.save();
+    for (let i = aaShots.length - 1; i >= 0; i--) {
+      const shot = aaShots[i]!;
+      const age = nowMs - shot.at;
+      if (age > 700) {
+        aaShots.splice(i, 1);
+        continue;
+      }
+      const a = world(shot.from);
+      const b = world(shot.to);
+      if (!visible(a, 160) && !visible(b, 160)) continue;
+      const fade = 1 - age / 700;
+      // Two tiers, two looks: the hourly ORBITAL volley is a heavy orange lance;
+      // the 15-minute CLOSE flak is a thinner, paler stitch with a smaller burst.
+      const col = shot.close ? '#9adfe8' : '#ff8a3d';
+      cx.strokeStyle = rgba(col, (shot.close ? 0.55 : 0.7) * fade);
+      cx.lineWidth = shot.close ? 0.8 : 1.1;
+      cx.setLineDash(shot.close ? [2, 4] : [3, 5]);
+      cx.lineDashOffset = -age / 12; // the tracer visibly climbs from the surface
+      cx.shadowColor = col;
+      cx.shadowBlur = shot.close ? 5 : 8;
+      cx.beginPath();
+      cx.moveTo(a.x, a.y);
+      cx.lineTo(b.x, b.y);
+      cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle = rgba(shot.close ? '#d9f4f7' : '#ffd29b', 0.8 * fade);
+      cx.beginPath();
+      cx.arc(b.x, b.y, (shot.close ? 1.5 : 2) + (age / 700) * (shot.close ? 3 : 5), 0, TAU);
+      cx.fill();
+    }
+    cx.restore();
   }
 
   // selected sector: its radar detection radius (a physical circle in map space →
@@ -2716,17 +3177,49 @@ function render(now: number) {
       continue;
     }
 
-    // province-type badge: a small kind glyph above the node so the type reads at a
-    // glance, regardless of the bespoke art below it (planet / asteroid / nebula / …).
+    // province-type badge — a holographic type icon that HOVERS above the province:
+    // a projected hologram (soft glow halo + holo capsule ring + a faint projector
+    // tether down to the node), gently bobbing in the sector-type colour so the type
+    // reads at a glance regardless of the bespoke art below (planet / asteroid / …).
     if (KIND_ICON[n.sector]) {
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd';
+      const bob = Math.sin(now / 700 + n.x * 0.021 + n.y * 0.017) * 2.4;
+      const brad = 11;
+      const bx = c.x;
+      const by = c.y - R - 6 - brad - 6 + bob; // badge centre floats above, softly bobbing
       cx.save();
-      cx.font = '13px ui-monospace,Menlo,monospace';
+      blitGlow(kc, bx, by, brad + 9, 0.5); // holographic bloom (cached disc)
+      // projector tether — a faint dashed beam from the node up to the badge
+      cx.strokeStyle = rgba(kc, 0.16);
+      cx.setLineDash([2, 3]);
+      cx.lineWidth = 1;
+      cx.beginPath();
+      cx.moveTo(bx, c.y - R);
+      cx.lineTo(bx, by + brad);
+      cx.stroke();
+      cx.setLineDash([]);
+      // holo capsule: translucent disc + bright rim + inner scanline ring
+      cx.fillStyle = rgba(kc, 0.12);
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.fill();
+      cx.strokeStyle = rgba(kc, 0.6);
+      cx.lineWidth = 1.2;
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.stroke();
+      cx.strokeStyle = rgba(kc, 0.26);
+      cx.beginPath();
+      cx.arc(bx, by, brad - 3, 0, TAU);
+      cx.stroke();
+      // the type glyph, glowing in the sector colour
+      cx.font = '700 15px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
       cx.textBaseline = 'middle';
-      cx.shadowColor = 'rgba(0,0,0,0.85)';
-      cx.shadowBlur = 3;
-      cx.fillStyle = rgba(SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd', 1);
-      cx.fillText(KIND_ICON[n.sector]!, c.x, c.y - 18);
+      cx.shadowColor = kc;
+      cx.shadowBlur = 5;
+      cx.fillStyle = rgba(kc, 0.95);
+      cx.fillText(KIND_ICON[n.sector]!, bx, by + 0.5);
       cx.restore();
     }
 
@@ -2792,12 +3285,23 @@ function render(now: number) {
       cx.save();
       cx.shadowColor = 'rgba(0,0,0,0.85)';
       cx.shadowBlur = 3;
-      cx.fillStyle = p.owner ? col : '#9fc9c4';
-      cx.font = '700 11px ui-monospace,Menlo,monospace';
-      cx.fillText(n.id, c.x + 16, c.y - 1);
-      cx.fillStyle = 'rgba(150,210,205,0.55)';
-      cx.font = '9px ui-monospace,Menlo,monospace';
-      cx.fillText(fort ? 'void fortress ✦' : 'asteroid field', c.x + 16, c.y + 11);
+      if (fort) {
+        // a fortress stays a prominent, special designation (unchanged)
+        cx.fillStyle = p.owner ? col : '#9fc9c4';
+        cx.font = '700 11px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.55)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('void fortress ✦', c.x + 16, c.y + 11);
+      } else {
+        // a plain asteroid field is a minor sector — de-emphasised (dim, smaller)
+        cx.fillStyle = p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)';
+        cx.font = '600 10px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.38)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('asteroid field', c.x + 16, c.y + 11);
+      }
       cx.restore();
       continue;
     }
@@ -2877,21 +3381,33 @@ function render(now: number) {
 
     if (selPlanet === n.id) targetBrackets(c.x, c.y, R + 10, now);
 
-    // callout: id + garrison/buildings, monospace (fogged → no telemetry)
+    // callout: id + garrison/buildings, monospace. Worlds (planets — the capturable
+    // prize) get a BRIGHT designation; every other sector is de-emphasised to a dim,
+    // smaller coordinate so the map reads "worlds first" (fogged → no telemetry).
+    const isWorld = n.sector === 'planet';
     cx.save();
     cx.shadowColor = 'rgba(0,0,0,0.85)';
     cx.shadowBlur = 3;
-    cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
-    cx.font = '700 12px ui-monospace,Menlo,monospace';
+    if (isWorld) {
+      cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
+      cx.font = '700 12px ui-monospace,Menlo,monospace';
+    } else {
+      cx.fillStyle = kn ? (p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)') : 'rgba(120,140,150,0.4)';
+      cx.font = '600 10px ui-monospace,Menlo,monospace';
+    }
     cx.fillText(n.id, c.x + R + 12, c.y - 1);
-    cx.font = '10px ui-monospace,Menlo,monospace';
     if (kn) {
       const g = p.garrison.reduce((a, st) => a + st.count, 0);
-      cx.fillStyle = 'rgba(150,210,205,0.6)';
       const icons = p.buildings.map((b) => BUILD_ICON[b.type] ?? '▪').join('');
-      cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + 12);
+      // worlds always show telemetry; a quiet sector only when it holds something
+      if (isWorld || g > 0 || p.buildings.length) {
+        cx.fillStyle = rgba('#96d2cd', isWorld ? 0.6 : 0.42);
+        cx.font = isWorld ? '10px ui-monospace,Menlo,monospace' : '9px ui-monospace,Menlo,monospace';
+        cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + (isWorld ? 12 : 11));
+      }
     } else {
       cx.fillStyle = 'rgba(110,130,140,0.5)';
+      cx.font = '10px ui-monospace,Menlo,monospace';
       cx.fillText('· no telemetry', c.x + R + 12, c.y + 12);
     }
     cx.restore();
@@ -2902,7 +3418,7 @@ function render(now: number) {
   const stationed: Record<string, Fleet[]> = {};
   for (const f of Object.values(s.fleets))
     if (f.location && !f.movement) {
-      if (f.owner !== ME && !known(f.location)) continue; // hidden enemy orbit
+      if (!fleetSeen(f)) continue; // hidden enemy orbit (no identify, no intel window)
       (stationed[f.location] ??= []).push(f);
     }
   for (const pid of Object.keys(stationed)) {
@@ -2934,13 +3450,10 @@ function render(now: number) {
   for (const d of Object.values(divisionsOf(s)))
     if (d.carriedBy) carriedDivCount[d.carriedBy] = (carriedDivCount[d.carriedBy] ?? 0) + 1;
   for (const f of Object.values(s.fleets)) {
-    if (f.owner !== ME) {
-      const fn = fleetNode(f);
-      if (!known(fn)) {
-        // not identified: a radar contact is shown only as a swept signature
-        // (drawRadarContacts), painted by the arm and remembered — never live here.
-        continue;
-      }
+    if (!fleetSeen(f)) {
+      // not identified and no intel window: a radar contact is shown only as a
+      // swept signature (drawRadarContacts), painted by the arm — never live here.
+      continue;
     }
     const A = fleetAnchor(f);
     if (!A || !visible(A, 120)) continue;
@@ -3007,14 +3520,15 @@ function render(now: number) {
     const yBase = A.y; // baseline of the bottom (widest) row
     const apexTop = yBase - rows.length * TH;
     cx.save();
-    // While in transit, point the ship pyramid along its heading ("нос по курсу"): the
-    // apex (drawn toward -y / up) rotates onto A.ang. Only the triangles turn — the cargo
-    // pips and the ship-count text below stay upright and readable.
-    if (f.movement) {
-      cx.translate(A.x, A.y);
-      cx.rotate(A.ang + Math.PI / 2);
-      cx.translate(-A.x, -A.y);
-    }
+    // Point the ship pyramid along its heading ("нос по курсу"): the apex (drawn toward
+    // -y / up) rotates onto A.ang — the travel lane while in transit, or the orbital
+    // tangent while stationed on the ring (both supplied by fleetAnchor). Previously this
+    // was gated on `f.movement`, so an orbiting fleet kept its default apex-up pose and
+    // appeared frozen pointing straight up. Only the triangles turn — the cargo pips and
+    // ship-count text below stay upright and readable.
+    cx.translate(A.x, A.y);
+    cx.rotate(A.ang + Math.PI / 2);
+    cx.translate(-A.x, -A.y);
     cx.shadowColor = col;
     cx.shadowBlur = 6 + 6 * engine;
     cx.fillStyle = rgba(col, 0.16 + 0.12 * engine);
@@ -3136,6 +3650,17 @@ function render(now: number) {
     cx.fillStyle = rgba(col, 0.95);
     cx.font = '700 9px ui-monospace,Menlo,monospace';
     cx.fillText(String(ships), A.x, A.y + 18);
+
+    // plan badge: ▸N = a queued chain of N steps rides this fleet; ⚠ = it paused on
+    // a failed step and waits for you (readable without opening the card).
+    if (f.owner === ME) {
+      const chain = fleetQueueOf(f.id);
+      if (chain.length) {
+        const bad = chain[0]?.blocked !== undefined;
+        cx.fillStyle = bad ? 'rgba(255,122,58,.95)' : rgba(LOCK, 0.9);
+        cx.fillText(bad ? '⚠' : `▸${chain.length}`, A.x + 17, A.y - 10);
+      }
+    }
   }
 
   drawRadarContacts(now); // swept enemy signatures — last-known ghosts until repainted
@@ -3156,6 +3681,28 @@ function render(now: number) {
   }
   drawPings(now); // ally ping markers (coalition), with screen hit-boxes for taps
   drawAimPreview();
+
+  // Build mode is a MODE — it owns the taps, so it announces itself on screen, not
+  // only via a button label inside a (possibly closed) fleet card.
+  if (queuing) {
+    const ids = selectedFleetIds();
+    const q = ids.length ? fleetQueueOf(ids[0]!) : [];
+    const txt = `● СТРОЮ ПЛАН — тапайте миры · шагов: ${q.length}${ids.length > 1 ? ` · флотов: ${ids.length}` : ''}`;
+    cx.save();
+    cx.font = '700 11px ui-monospace,Menlo,monospace';
+    const w = cx.measureText(txt).width + 24;
+    const bx = VW / 2;
+    const by = TOP + 18;
+    cx.fillStyle = 'rgba(3,12,16,.82)';
+    cx.strokeStyle = rgba(LOCK, 0.75);
+    cx.lineWidth = 1;
+    cx.fillRect(bx - w / 2, by - 12, w, 24);
+    cx.strokeRect(bx - w / 2, by - 12, w, 24);
+    cx.fillStyle = rgba(LOCK, 0.95);
+    cx.textAlign = 'center';
+    cx.fillText(txt, bx, by + 4);
+    cx.restore();
+  }
 }
 
 // --- side panel --------------------------------------------------------------
@@ -3242,6 +3789,24 @@ function panelHtml(): string {
       `${group.length} fleets · ${ships} ships · ${troops} troops`,
     );
     h += `<div class="hint">Press <b>Move</b>, then tap a destination to send all selected fleets (they route and stop). Press <b>Merge</b> to fuse the group into one (distant fleets fly in first). Shift-drag selects a group; Ctrl/⌘-click adds a fleet.</div>`;
+    // Chain building fans out over the whole group (enqueueStep takes every selected
+    // fleet), so the group card offers the same plan blocks as a single fleet.
+    const planned = group.filter((f) => fleetQueueOf(f.id).length > 0);
+    h += `<div class="sec">Очередь приказов — на всю группу${planned.length ? ` · план у ${planned.length}` : ''}</div>`;
+    h += `<div class="row">`;
+    h += btn('qmode', '', queuing ? '● тапай миры' : '➕ строить', true);
+    h += btn('qassault', '', '⚔ штурм', true);
+    h += btn('qbomb', '', '☄ обстрел', true);
+    h += `</div><div class="row">`;
+    h += btn('qload', '', '▲ погрузка', true);
+    h += btn('qunload', '', '▼ выгрузка', true);
+    h += btn('qwait', '6', '⏸ 6ч', true);
+    h += btn('qwait', '12', '⏸ 12ч', true);
+    h += btn('qwait', '24', '⏸ 24ч', true);
+    h += `</div><div class="row">`;
+    h += btn('qundo', '', '↩ последний', planned.length > 0);
+    h += btn('qclear', '', '✕ очистить', planned.length > 0);
+    h += `</div>`;
     for (const f of group) {
       const loc =
         f.location ??
@@ -3320,11 +3885,128 @@ function panelHtml(): string {
         h += `<div class="hint">Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.</div>`;
       }
 
+      // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
+      // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
+      // refuses to take the whole stack), so an all-fighter fleet just flies itself.
+      if (f.owner === ME && fleetHasSquadron(f)) {
+        const wing = squadronTake(f).reduce((n, u) => n + u.count, 0);
+        h += `<div class="sec">Авиагруппа</div><div class="row">`;
+        h += btn('launchsquad', '', `🛩 Запустить эскадрилью (${wing})`, fleetCanLaunchSquadron(f));
+        h += `</div>`;
+        h += `<div class="hint">Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.</div>`;
+
+        // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing.
+        const scrambling = patrols.has(f.id);
+        const pt = patrols.get(f.id);
+        h += `<div class="row">`;
+        h += btn('qscramble', '', scrambling ? '🛩 дежурный вылет: ВКЛ' : '🛩 дежурный вылет: выкл', !NET);
+        h += `</div>`;
+        if (scrambling && pt) {
+          const status = pt.sortie.rearming > 0 ? `перезарядка ${pt.sortie.rearming}` : `топливо ${pt.sortie.fuel}`;
+          h += `<div class="row dim">радиус ${Math.round(pt.radius)} · ${status}</div>`;
+        }
+        h += NET
+          ? `<div class="hint">Дежурный вылет пока работает только в одиночной игре.</div>`
+          : `<div class="hint">Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.</div>`;
+      }
+
       // The player's projection hero rides here → name it and flag its fleet aura.
       if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
         const hero = Object.values(s.heroes ?? {}).find((x) => x.owner === f.owner);
         const heroName = hero?.name ?? s.players[f.owner]?.name ?? f.owner;
         h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">— projection · +5% attack/defense to this fleet</span></div>`;
+      }
+
+      // Order chain — the fleet's multi-step plan: status first, then editable steps
+      // with per-step ETA and their own ✕ (CC-4.1 + CC-5.2 minimum).
+      if (f.owner === ME) {
+        const q = fleetQueueOf(f.id); // server chain in NET, local plan in single-player
+        const eta = chainEta(f, q);
+        const total =
+          q.length === 0
+            ? ''
+            : eta.loops
+              ? ` · 🔁 цикл${eta.total !== null && eta.total > 0 ? ` ≈${fmtHrs(eta.total)}` : ''}`
+              : eta.total !== null && eta.total > 0
+                ? ` · весь план ≈${fmtHrs(eta.total)}`
+                : '';
+        h += `<div class="sec">Очередь приказов${q.length ? ` · ${q.length} шаг.` : ''}${total}</div>`;
+        const head = q[0];
+        if (head?.blocked !== undefined) {
+          // The chain paused on a failed step — say why, and offer the two exits.
+          h += `<div class="row"><b>⚠ план прерван: ${esc(head.blocked.replace(/^E_/, '').toLowerCase().replace(/_/g, ' '))}</b></div>`;
+          h += `<div class="row">${btn('qretry', '', '▶ пробовать снова', true)}${btn('qstep', '0', '✕ убрать шаг', true)}</div>`;
+        } else if (q.length) {
+          const doing = f.movement
+            ? '▶ шаг исполняется: флот в пути'
+            : f.battleId
+              ? '⏸ бой — план ждёт исхода'
+              : head?.kind === 'wait' && head.until !== undefined
+                ? `⏸ выжидаем ещё ~${fmtHrs(Math.max(0, (head.until - s.time) / HOUR))}`
+                : '▶ следующий шаг на очереди';
+          h += `<div class="row dim">${doing}</div>`;
+        }
+        h += `<div class="row">`;
+        h += btn('qmode', '', queuing ? '● тапай миры' : '➕ строить', true);
+        h += btn('qassault', '', '⚔ штурм', true);
+        h += btn('qbomb', '', '☄ обстрел', true);
+        h += `</div><div class="row">`;
+        h += btn('qload', '', '▲ погрузка', true);
+        h += btn('qunload', '', '▼ выгрузка', true);
+        // Delayed orders: insert a timed hold so the next step fires N game-hours later.
+        h += btn('qwait', '6', '⏸ 6ч', true);
+        h += btn('qwait', '12', '⏸ 12ч', true);
+        h += btn('qwait', '24', '⏸ 24ч', true);
+        h += `</div><div class="row">`;
+        h += btn('qrepeat', '', q.some((st) => st.kind === 'repeat') ? '🔁 по кругу: ВКЛ' : '🔁 по кругу', true);
+        h += btn('qundo', '', '↩ последний', q.length > 0);
+        h += btn('qclear', '', '✕ очистить', q.length > 0);
+        h += `</div>`;
+        if (q.length) {
+          const label = (st: QStep): string =>
+            st.kind === 'move'
+              ? '→ ' + esc(st.to)
+              : st.kind === 'assault'
+                ? '⚔ штурм'
+                : st.kind === 'load'
+                  ? '▲ погрузка'
+                  : st.kind === 'unload'
+                    ? '▼ выгрузка'
+                    : st.kind === 'bombard'
+                      ? '☄ обстрел'
+                      : st.kind === 'repeat'
+                        ? '🔁 повторять сначала'
+                        : st.kind === 'wait'
+                          ? `⏸ ждать ${st.until !== undefined ? Math.max(0, Math.ceil((st.until - s.time) / HOUR)) : st.hours}ч`
+                          : '🛰 орбита';
+          // One row per step: number, label, its ETA share, a war-needed badge for a
+          // leg crossing PEACE territory (validated NOW, not hours later) — and its ✕.
+          let fromNode = f.movement ? ((f.movement.destination ?? f.movement.to) as string) : fleetNode(f);
+          for (let i = 0; i < q.length; i++) {
+            const st = q[i]!;
+            let warn = '';
+            if (st.kind === 'move') {
+              const wb = peaceBlockers(fromNode, st.to);
+              if (wb.length) warn = ` <b>⚔ нужна война: ${esc(wb.map(blockerName).join(', '))}</b>`;
+              fromNode = st.to;
+            }
+            const hEta = eta.per[i];
+            const etaTxt = hEta !== null && hEta !== undefined && hEta > 0 ? ` <span class="dim">+${fmtHrs(hEta)}</span>` : '';
+            const mark = st.blocked !== undefined ? ' <b>⚠</b>' : '';
+            h += `<div class="row">${i + 1}. ${label(st)}${etaTxt}${mark}${warn} ${btn('qstep', String(i), '✕', true)}</div>`;
+          }
+        }
+        h += `<div class="hint">«Строить» + тапы по мирам собирают план: переходы, «штурм», «обстрел», «погрузка»/«выгрузка», «ждать N ч». «🔁 по кругу» гоняет план до отмены (патруль). ✕ у шага правит план точечно; живой приказ (Move/Stop/штурм) снимает план целиком. Если шаг сорвался — план встаёт на паузу и ждёт вас, а не рушится молча.</div>`;
+
+        // CC-2 standing order — auto-storm stance (independent of the chain above).
+        // Honest in NET: the client driver can't act for a server-owned fleet yet.
+        const auto = autoAssault.has(f.id);
+        h += `<div class="sec">Дежурный режим</div><div class="row">`;
+        h += btn('qauto', '', auto ? '⚔ авто-штурм: ВКЛ' : '⚔ авто-штурм: выкл', !NET);
+        h += `</div>`;
+        h += NET
+          ? `<div class="hint">Авто-штурм пока работает только в одиночной игре.</div>`
+          : `<div class="hint">Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.</div>`;
       }
 
       if (f.movement) {
@@ -3342,17 +4024,34 @@ function panelHtml(): string {
 
       const here = planet(f.location);
       const docked = !!here && !f.movement && !f.battleId;
+      if (f.battleId) {
+        // The battle card (framework-agnostic view-model from @void/client): both
+        // sides, hull bars, phase, live round countdown — and the one action, retreat.
+        const bm = createBattleModel(s, f.battleId, ME, data);
+        if (bm.ok) {
+          const bar = (v: { current: number; max: number } | undefined, glyph: string): string =>
+            v && v.max > 0 ? ` · ${glyph} ${kfmt(v.current)}/${kfmt(v.max)}` : '';
+          const sideRow = (sv: BattleSideView, tag: string): string => {
+            const troops = sv.units.map((u) => `${u.count}× ${u.unit}`).join(', ') || '—';
+            return `<div class="row${sv.mine ? '' : ' dim'}">${sv.mine ? '▶' : '·'} <b>${esc(sv.ownerName)}</b> (${tag}, ${
+              sv.kind === 'garrison' ? 'гарнизон' : sv.kind === 'landing' ? 'десант' : 'флот'
+            }): ${esc(troops)}${bar(sv.hull, '♥')}${bar(sv.shield, '◈')}</div>`;
+          };
+          h += `<div class="sec">⚔ Бой — ${bm.phase === 'ground' ? 'высадка' : 'орбита'} · раунд ${bm.round}</div>`;
+          h += sideRow(bm.attacker, 'атака') + sideRow(bm.defender, 'оборона');
+          if (bm.nextRoundAt != null)
+            h += `<div class="row">следующий раунд через <span class="pn-timer" data-at="${bm.nextRoundAt}">…</span></div>`;
+          h += `<div class="row">${btn('retreat', '', '⤺ Отступить', bm.retreatFleetId === f.id)}</div>`;
+          h += `<div class="hint">Отход стоит −40% ТЕКУЩЕГО корпуса и щита (израненный флот теряет 40% остатка — отход не добивает) и даёт рывок скорости для бегства. Десант в высадке отступить не может; с орбиты вне боя корабль уходит свободно.</div>`;
+        }
+      }
       if (!docked) {
-        const engaged = f.battleId ? s.battles[f.battleId] : undefined;
-        h += `<div class="hint">${
-          f.battleId
-            ? engaged?.nextRoundAt !== undefined
-              ? `Engaged — next damage round in <span class="pn-timer" data-at="${engaged.nextRoundAt}">…</span>.`
-              : 'Engaged — orbital battle in progress.'
-            : f.edge
+        if (!f.battleId)
+          h += `<div class="hint">${
+            f.edge
               ? 'Parked on a lane — press Move to march on (it routes from here).'
               : 'In transit — routing along the lanes. Collisions trigger an orbital battle.'
-        }</div>`;
+          }</div>`;
       } else {
         // enemy/neutral world you can act on — empty space is pass-through only
         const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
@@ -3413,12 +4112,20 @@ function panelHtml(): string {
         mem.buildings
           .map((b) => `${BUILD_ICON[b.type] ?? '▪'} ${data.buildings[b.type]?.name ?? b.type} L${b.level}`)
           .join(', ') || 'none seen';
+      // Espionage from memory: you know WHOSE world this was — an agent can reveal
+      // its live contents without flying there. Wrong/stale owner → the kernel
+      // rejects the attempt (bad target), which is honest: intel decays.
+      const spyRow =
+        mem.owner && mem.owner !== ME
+          ? `<div class="row">${btn('spyplanet', mem.owner, `🕵 Разведать мир · ${SPY_COST}¤`, afford({ credits: SPY_COST }))}</div>`
+          : '';
       return (
         cardHeader(ownerColor(mem.owner), p.id, 'LAST KNOWN ✦') +
         `<div class="row dim">Out of sensor range — last scan (may be stale).</div>` +
         `<div class="row">Owner: <b>${mem.owner ? NAME[mem.owner] : 'Neutral'}</b></div>` +
         `<div class="row">Garrison when seen: <b>${mem.garrison}</b></div>` +
         `<div class="row">Structures: ${icons}</div>` +
+        spyRow +
         `<div class="hint">Re-scan with a fleet or radar to refresh.</div>` +
         btn('cancel', '', 'Deselect', true)
       );
@@ -3438,11 +4145,12 @@ function panelHtml(): string {
   const kindName = SECTOR_TYPES[SECTOR_OF[p.id]]?.name ?? SECTOR_OF[p.id] ?? '—';
   const ground = p.garrison.filter((st) => isGround(st.unit));
   const ships = p.garrison.filter((st) => isShip(st.unit));
+  const wing = p.garrison.filter((st) => isSquadron(st.unit));
   const gcount = sumUnits(p.garrison);
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : 'Neutral'} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>◆ ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} garrison</span><span>${unitIcon('infantry')} ${sumUnits(ground)} ground</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ships</span><span>▣ ${p.buildings.length} built</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -3460,11 +4168,25 @@ function panelHtml(): string {
     }
   }
 
+  // Tactical ping — mark this province and share it (coalition chat, or a player's DM).
+  h += `<div class="row">${btn('ping', '', '📍 Пинг — отметить и отправить…', true)}</div>`;
+
+  // Espionage: steal a 24h intel window on this enemy world (SPY-1). While a
+  // window lives its countdown replaces the button — the node stays identified.
+  if (!mine && p.owner) {
+    const live = myIntel().find((g) => g.kind === 'planet' && g.target === p.id);
+    h += `<div class="row">${
+      live
+        ? `<b style="color:var(--cyan)">🕵 Окно разведки</b> <span class="dim">ещё ${fmtEta(Math.max(0, live.until - s.time) / HOUR)}</span>`
+        : btn('spyplanet', p.owner, `🕵 Разведать мир · ${SPY_COST}¤`, afford({ credits: SPY_COST }))
+    }</div>`;
+  }
+
   h += `<div class="ptabs">${tabButton('ground', 'Ground', ground.length)}${tabButton(
     'ships',
     'Ships',
     ships.length + here.length,
-  )}${tabButton('buildings', 'Buildings', p.buildings.length)}</div>`;
+  )}${tabButton('squadron', 'Wings', wing.length)}${tabButton('buildings', 'Buildings', p.buildings.length)}</div>`;
 
   // Tab content is split into self-contained blocks; on desktop they flow into
   // side-by-side columns (filling the wide panel), on phones they stack vertically.
@@ -3509,6 +4231,21 @@ function panelHtml(): string {
     }
     cols.push(
       `<div class="hint">Built spacecraft join the garrison first; launch creates a mobile fleet.</div>`,
+    );
+  } else if (planetTab === 'squadron') {
+    if (wing.length) {
+      cols.push(`<div class="sec">Авиагруппа в гарнизоне</div>` + unitRows(wing));
+    }
+    if (mine) {
+      const wingBuilds = BUILD_UNITS.filter((u) => isSquadron(u));
+      cols.push(
+        `<div class="sec">Верфь авиагруппы</div>` +
+          conveyorHtml(p.id, 'units') +
+          buildButtons(p.id, wingBuilds, 'unit'),
+      );
+    }
+    cols.push(
+      `<div class="hint">Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».</div>`,
     );
   } else {
     cols.push(
@@ -3592,6 +4329,11 @@ function buildingDossier(id: string, level: number): Dossier | null {
         name: def.name,
         body: `Автономная крепость, вмороженная в астероидное поле: ${hl(pct(lv.defenseBonus ?? 0))} к обороне и ${hl(lv.hp)} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.`,
       };
+    case 'orbital_aa':
+      return {
+        name: def.name,
+        body: `Стационарная зенитная батарея — неподвижное сооружение, ${hl(lv.aaDamage ?? 0)} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.`,
+      };
     case 'metal_station':
       return {
         name: def.name,
@@ -3627,10 +4369,15 @@ function unitDossier(id: string): Dossier | null {
         name: 'Siege Platform',
         body: `Тяжёлая осадная платформа: ${hl(st.attack)} урона с дистанции ${hl(st.range ?? 0)}, но тонкая броня (${hl(st.defense)} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.`,
       };
-    case 'orbital_aa':
+    case 'strike_carrier':
       return {
-        name: 'Orbital AA',
-        body: `Стационарная зенитная батарея — неподвижна, но выдаёт ${hl(st.aaDamage ?? 0)} урона по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой.`,
+        name: 'Strike Carrier',
+        body: `Медленный бронированный носитель (${hl(st.hp)} корпуса, трюм на ${hl(st.cargoCapacity ?? 0)}) — своих пушек почти нет, вся его сила в эскадрильях, что он несёт. Держите его позади и запускайте авиагруппу по цели кнопкой «🛩 Запустить эскадрилью».`,
+      };
+    case 'fighter_squadron':
+      return {
+        name: 'Fighter Squadron',
+        body: `Палубная эскадрилья: стремительная (ход ${hl(st.speed)}) и больно бьёт (${hl(st.attack)} атаки), но брони почти нет (${hl(st.hp)} корпуса). Отделяется от носителя в отдельный быстрый флот и наносит удар с дистанции ${hl(st.strikeRange ?? 0)}. Контрится орбитальным ПВО — не гоните её на прикрытую ПВО планету.`,
       };
     case 'hero':
       return {
@@ -3674,6 +4421,7 @@ function codexHtml(kind: string, id: string): string {
       .join(', ');
     if (prod) rows.push(cxRow('Produces', prod));
     if ((lv.defenseBonus ?? 0) > 0.01) rows.push(cxRow('Garrison defense', `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
+    if ((lv.aaDamage ?? 0) > 0) rows.push(cxRow('Anti-air', String(lv.aaDamage)));
     if ((lv.radarRange ?? 0) > 0) rows.push(cxRow('Radar reach', String(lv.radarRange)));
     if ((def.scoreValue ?? 0) > 0) rows.push(cxRow('Victory points', `${def.scoreValue} / level`));
     rows.push(cxRow('Tiers', maxLvl > 1 ? `${maxLvl} (upgradeable)` : '1'));
@@ -3768,7 +4516,6 @@ const STANCE_COLOR: Record<DiplomaticStance, string> = {
 };
 // Friendliness rank: war (hostile) < peace < pact < alliance (closest). Warming the
 // relation up a rank needs the other side's consent; cooling it down is unilateral.
-const STANCE_RANK: Record<DiplomaticStance, number> = { war: 0, peace: 1, pact: 2, alliance: 3 };
 const STANCES: DiplomaticStance[] = ['war', 'peace', 'pact', 'alliance'];
 
 function worldsOf(id: string): number {
@@ -3779,7 +4526,10 @@ function worldsOf(id: string): number {
 /** A seat the AI drives. Everyone else (ME, or another human in net play) is human —
  *  this drives the roster's human/AI icon and whether a proposal is auto-decided. */
 function isAiSeat(id: string): boolean {
-  return AI_PLAYERS.has(id);
+  // The authoritative flag lives in state (Player.ai, seeded by newGame). The local
+  // AI_PLAYERS set stays only as a local-mode fallback for installed scenarios; in
+  // NET play the server state is the single source — a human-claimed seat is human.
+  return s.players[id]?.ai === true || (!NET && AI_PLAYERS.has(id));
 }
 /** Seats taking part in the match, in the fixed seat order. */
 function diploSeats(): string[] {
@@ -3814,11 +4564,33 @@ function aiAcceptsStance(target: string, to: DiplomaticStance): boolean {
     case 'pact':
       return mine * 4 >= theirs * 3; // mine ≥ 0.75× theirs — a respectable partner
     case 'alliance':
-      return mine >= theirs; // ally only an equal-or-stronger power
+      return false; // боты не вступают в коалиции — правило, не сила
   }
 }
 
 /** Append a line to the session log (bounded). Patches the feed if it's on screen. */
+/** Unread social events (war declarations, stance shifts) — badge on the ✉ rail. */
+let unreadMsgs = 0;
+/** Snapshots carry no domain events, so a NET client would never hear a war being
+ *  declared on it. Diff the stance map of consecutive snapshots for pairs with ME
+ *  and surface the change through the normal note/DM path. */
+function diffNetDiplomacy(prev: GameState, next: GameState): void {
+  const keys = new Set([...Object.keys(prev.diplomacy ?? {}), ...Object.keys(next.diplomacy ?? {})]);
+  for (const key of keys) {
+    if (!pairHas(key, ME)) continue;
+    const before = prev.diplomacy?.[key] ?? 'war';
+    const after = next.diplomacy?.[key] ?? 'war';
+    if (before === after) continue;
+    const [a, b] = key.split('|');
+    const other = a === ME ? b! : a!;
+    const who = NAME[other] ?? other;
+    if (after === 'war') note(`⚔ ${who} объявил вам войну!`);
+    else note(`🕊 ${who}: отношения → ${STANCE_RU[after]}`);
+    pushMsg(other, `Стойка изменена: ${STANCE_RU[after]}`, true, other);
+    unreadMsgs++;
+  }
+}
+
 function pushMsg(to: string, text: string, sys: boolean, from = ME, ping?: string): void {
   sessionMessages.push({ at: s.time, from, to, text, sys, ping, realAt: Date.now() });
   if (sessionMessages.length > 300) sessionMessages.shift();
@@ -3834,6 +4606,10 @@ function proposeStance(target: string, to: DiplomaticStance): void {
   const from = getStance(s, ME, target);
   if (from === to) return;
   if (STANCE_RANK[to] > STANCE_RANK[from]) {
+    if (to === 'alliance' && isAiSeat(target)) {
+      note('Боты не вступают в коалиции');
+      return;
+    }
     if (!isAiSeat(target)) {
       note('переговоры с другими игроками — позже (нужен сервер)');
       return;
@@ -3876,6 +4652,49 @@ function diploPasses(id: string): boolean {
   if (diploTypeFilter.size && !diploTypeFilter.has(isAiSeat(id) ? 'ai' : 'human')) return false;
   return true;
 }
+/** A bot's approval-of-you meter (game.ts botDiplomacyModule). A bot only ever sits at
+ *  ≤ FAVOUR_BASE, so a full bar = its passive-friendly baseline; your aggression drains it
+ *  past the embargo tick (won't trade on the market) and then the war tick (declares war).
+ *  Only shown for AI seats — humans have no favour meter. */
+function favourBarHtml(bot: string): string {
+  const f = botFavour(s, bot, ME);
+  const pct = clamp(f / FAVOUR_BASE, 0, 1) * 100;
+  const embPct = (FAVOUR_EMBARGO / FAVOUR_BASE) * 100;
+  const warPct = (FAVOUR_WAR / FAVOUR_BASE) * 100;
+  const tier = f < FAVOUR_WAR ? 'war' : f < FAVOUR_EMBARGO ? 'embargo' : 'ok';
+  const label = tier === 'war' ? 'на грани войны' : tier === 'embargo' ? 'эмбарго' : 'дружелюбно';
+  return (
+    `<div class="dp-fav ${tier}" title="Одобрение бота: ${Math.round(f)}/${FAVOUR_BASE} — ${label}. ` +
+    `Ниже ${FAVOUR_EMBARGO} бот вводит эмбарго на рынке, ниже ${FAVOUR_WAR} — объявляет войну.">` +
+    `<span class="dp-fav-cap">☺</span>` +
+    `<div class="dp-fav-track"><div class="dp-fav-fill" style="width:${pct.toFixed(1)}%"></div>` +
+    `<span class="dp-fav-tick emb" style="left:${embPct.toFixed(1)}%"></span>` +
+    `<span class="dp-fav-tick war" style="left:${warPct.toFixed(1)}%"></span></div>` +
+    `<span class="dp-fav-lbl">${label}</span></div>`
+  );
+}
+/** Live stolen-intel readout for one seat (under its expanded actions): the
+ *  treasury window prints the victim's actual resources, a fleets window says the
+ *  map shows them, planet windows list the scanned worlds. Empty when nothing lives. */
+function intelRowHtml(target: string): string {
+  const bits: string[] = [];
+  for (const g of myIntel()) {
+    const left = fmtEta(Math.max(0, g.until - s.time) / HOUR);
+    if (g.kind === 'treasury' && g.target === target) {
+      const r = s.players[target]?.resources ?? {};
+      const bag = Object.entries(r)
+        .map(([k, v]) => `${TECH_CUR[k] ?? k}${Math.floor(v as number)}`)
+        .join(' ');
+      bits.push(`казна: <b>${bag || '—'}</b> <em>${left}</em>`);
+    } else if (g.kind === 'fleets' && g.target === target) {
+      bits.push(`флоты видны на карте <em>${left}</em>`);
+    } else if (g.kind === 'planet' && s.planets[g.target]?.owner === target) {
+      bits.push(`мир <b>${esc(g.target)}</b> раскрыт <em>${left}</em>`);
+    }
+  }
+  if (!bits.length) return '';
+  return `<div class="dp-intel">🕵 ${bits.join(' · ')}</div>`;
+}
 function diploRowsHtml(): string {
   const others = diploSeats().filter((id) => id !== ME);
   const byName = (a: string, b: string) => (NAME[a] ?? a).localeCompare(NAME[b] ?? b);
@@ -3901,14 +4720,19 @@ function diploRowsHtml(): string {
       const stanceTag = isMe
         ? `<span class="dp-tag">ВЫ</span>`
         : `<span class="dp-stance" style="color:${STANCE_COLOR[st!]};border-color:${STANCE_COLOR[st!]}">${STANCE_RU[st!]}</span>`;
+      // Bots (AI seats) carry a favour meter toward you; humans/you don't.
+      const favBar = !isMe && isAiSeat(id) ? favourBarHtml(id) : '';
       const expanded = diploExpanded === id && !isMe;
       const actions = expanded
         ? `<div class="dp-actions">` +
-          STANCES.map(
-            (t) =>
-              `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}">${STANCE_RU[t]}</button>`,
-          ).join('') +
-          `<button class="dp-msg" data-msgseat="${id}">✉</button></div>`
+          STANCES.map((t) => {
+            const barred = t === 'alliance' && isAiSeat(id); // боты не вступают в коалиции
+            return `<button class="dp-act${t === st ? ' on' : ''}" data-stance="${t}" data-seat="${id}" style="--sc:${STANCE_COLOR[t]}"${barred ? ' disabled title="Боты не вступают в коалиции"' : ''}>${STANCE_RU[t]}</button>`;
+          }).join('') +
+          `<button class="dp-spy" data-spy="treasury" data-seat="${id}" title="Украсть данные казны · ${SPY_COST}¤ · шанс ~60% · окно 24ч (плата сгорает и при провале)">🕵 казна</button>` +
+          `<button class="dp-spy" data-spy="fleets" data-seat="${id}" title="Украсть данные о флотах · ${SPY_COST}¤ · шанс ~60% · окно 24ч (плата сгорает и при провале)">🕵 флоты</button>` +
+          `<button class="dp-msg" data-msgseat="${id}">✉</button></div>` +
+          intelRowHtml(id)
         : '';
       return (
         `<div class="dp-row${expanded ? ' open' : ''}${isMe ? ' me' : ''}"${isMe ? '' : ` data-seat="${id}"`}>` +
@@ -3916,6 +4740,7 @@ function diploRowsHtml(): string {
         `<span class="dp-name">${esc(NAME[id] ?? id)} <em>${bdg.tag}</em></span>` +
         `<span class="dp-w" title="провинций">⬣ ${w}</span>` +
         stanceTag +
+        favBar +
         `</div>` +
         actions
       );
@@ -4000,11 +4825,16 @@ function convoThreadHtml(): string {
   const pingBtn = isCoal
     ? `<button class="dp-ping" title="Отметить выбранную провинцию пингом">📍</button>`
     : '';
+  // NET: the text composer is a placebo (messages never leave this browser) — show
+  // the truth and keep the one thing that IS networked, the 📍 ping.
+  const compose = NET
+    ? `<div class="dp-compose dp-off">${pingBtn}<span class="dp-offtxt">Сетевой чат ещё не подключён — используйте пинги 📍</span></div>`
+    : `<div class="dp-compose">${pingBtn}<input id="dp-text" maxlength="160" placeholder="Сообщение…" autocomplete="off"><button class="dp-send">▶</button></div>`;
   return (
     `<div class="dp-thread">` +
     `<div class="dp-thhead">${title}</div>` +
     `<div class="dp-feed" id="dp-feed">${convoFeedInnerHtml(convoOpen)}</div>` +
-    `<div class="dp-compose">${pingBtn}<input id="dp-text" maxlength="160" placeholder="Сообщение…" autocomplete="off"><button class="dp-send">▶</button></div>` +
+    compose +
     `</div>`
   );
 }
@@ -4114,12 +4944,27 @@ function renderObjDesc(): void {
   pane.innerHTML = html;
 }
 
+let sheetWasOpen = false;
 function renderPanel() {
   // While arming a merge target, collapse the panel so the map (and the fleet to
   // merge with) is fully tappable — important on phones where the sheet covers it.
   const open = !merging && (selFleet !== null || selPlanet !== null || selFleets.size > 0);
   side.style.display = open ? 'flex' : 'none';
   document.body.classList.toggle('sheet-open', open); // mobile: hide log/comms under the sheet
+  // Phone: the bottom sheet covers ~50vh — when it OPENS, pan the camera so the
+  // selected object is not the one thing the panel talks about yet hides.
+  if (open && !sheetWasOpen && MOBILE) {
+    const anchor = selFleet
+      ? (s.fleets[selFleet] && fleetAnchor(s.fleets[selFleet]!)) || null
+      : selPlanet && s.planets[selPlanet]
+        ? world(s.planets[selPlanet]!.position)
+        : null;
+    if (anchor && anchor.y > VH * 0.42) {
+      cam.y -= anchor.y - VH * 0.3; // lift it into the visible upper half
+      clampCam();
+    }
+  }
+  sheetWasOpen = open;
   if (!open) {
     lastPanelHtml = '';
     lastObjDescHtml = '';
@@ -4337,7 +5182,7 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'selfleet') {
     setFleetSelection([arg]);
   } else if (act === 'tab') {
-    if (arg === 'ground' || arg === 'ships' || arg === 'buildings') {
+    if (arg === 'ground' || arg === 'ships' || arg === 'squadron' || arg === 'buildings') {
       planetTab = arg;
     }
   } else if (act === 'build') {
@@ -4356,14 +5201,122 @@ side.addEventListener('click', (ev) => {
     playerOrder(setDivisionTemplate(ME, ti!, si!, next));
   } else if (act === 'mobilize') {
     playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
+  } else if (act === 'spyplanet') {
+    playerOrder(spyOn(ME, arg, 'planet', selPlanet!)); // arg = the world's (last known) owner
   } else if (act === 'capital') {
     playerOrder(designateCapital(ME, selPlanet!));
+  } else if (act === 'ping') {
+    openPingMenu();
   } else if (act === 'bombard') {
+    if (arg === 'on') dropChains([selFleet!], 'обстрел'); // a live strike beats the old plan
     playerOrder(bombardFleet(ME, selFleet!, arg === 'on'));
   } else if (act === 'barragemode') {
     playerOrder(barrageModeFleet(ME, selFleet!, arg));
   } else if (act === 'assault') {
+    dropChains([selFleet!], 'штурм');
     playerOrder(assaultFleet(ME, selFleet!));
+  } else if (act === 'retreat') {
+    dropChains([selFleet!], 'отступление');
+    playerOrder(retreatFleet(ME, selFleet!));
+  } else if (act === 'qmode') {
+    queuing = !queuing; // arm/disarm queue-append; taps now build the chain
+    if (queuing) {
+      aiming = false;
+      merging = false;
+      barrageAim = false;
+      note('➕ строю план: тапайте миры — каждый тап добавляет переход');
+    }
+  } else if (act === 'qassault') {
+    enqueueStep(selectedFleetIds(), { kind: 'assault' });
+    note('➕ шаг: ⚔ штурм по прибытии');
+  } else if (act === 'qload') {
+    enqueueStep(selectedFleetIds(), { kind: 'load' });
+    note('➕ шаг: ▲ погрузка гарнизона');
+  } else if (act === 'qunload') {
+    enqueueStep(selectedFleetIds(), { kind: 'unload' });
+    note('➕ шаг: ▼ выгрузка десанта');
+  } else if (act === 'qbomb') {
+    enqueueStep(selectedFleetIds(), { kind: 'bombard' });
+    note('➕ шаг: ☄ обстрел с орбиты');
+  } else if (act === 'qwait') {
+    enqueueStep(selectedFleetIds(), { kind: 'wait', hours: Number(arg) });
+    note(`➕ шаг: ⏸ ждать ${arg}ч`);
+  } else if (act === 'qrepeat') {
+    // Toggle the 🔁 loop marker: present → remove it; absent → append (chain patrols).
+    for (const id of selectedFleetIds()) {
+      const q = fleetQueueOf(id);
+      const at = q.findIndex((st) => st.kind === 'repeat');
+      if (at >= 0) removeChainStep(id, at);
+      else enqueueStep([id], { kind: 'repeat' });
+    }
+    note('🔁 повтор плана переключён');
+  } else if (act === 'qundo') {
+    for (const id of selectedFleetIds()) {
+      const q = fleetQueueOf(id);
+      if (q.length) removeChainStep(id, q.length - 1);
+    }
+    note('↩ последний шаг убран');
+  } else if (act === 'qstep') {
+    // ✕ on one step of the list — surgical plan editing (the index rides in arg).
+    for (const id of selectedFleetIds()) removeChainStep(id, Number(arg));
+  } else if (act === 'qretry') {
+    for (const id of selectedFleetIds()) {
+      if (NET) playerOrder(orderRetry(ME, id));
+      else {
+        const head = fleetQueueOf(id)[0];
+        if (head?.blocked !== undefined) delete head.blocked;
+      }
+    }
+    note('▶ пробую шаг снова');
+  } else if (act === 'qauto') {
+    if (NET) {
+      note('⚠ авто-штурм пока только в одиночной игре'); // the client driver can't run for a server-owned fleet
+    } else
+      for (const id of selectedFleetIds()) {
+        if (autoAssault.has(id)) autoAssault.delete(id);
+        else autoAssault.add(id);
+      }
+  } else if (act === 'qclear') {
+    for (const id of selectedFleetIds()) {
+      if (NET) playerOrder(orderClear(ME, id)); // drop the authoritative server chain
+      else fleetQueues.delete(id);
+    }
+  } else if (act === 'launchsquad') {
+    // Split the squadron stack off into its own fast strike fleet (SQ-1.1).
+    const f = selFleet ? s.fleets[selFleet] : undefined;
+    if (fleetCanLaunchSquadron(f)) {
+      playerOrder(splitFleet(ME, f!.id, squadronTake(f!)));
+      note('🛩 эскадрилья запущена — ведите её на цель');
+    }
+  } else if (act === 'qscramble') {
+    // CC-4: toggle "дежурный вылет" — stand (or stand down) a reactive auto-strike patrol
+    // on each selected squadron fleet, centred on its current node with its strike radius.
+    if (NET) {
+      note('⚠ дежурный вылет пока только в одиночной игре');
+      lastPanelHtml = '';
+      renderPanel();
+      return;
+    }
+    for (const id of selectedFleetIds()) {
+      const f = s.fleets[id];
+      if (!f || !fleetHasSquadron(f)) continue;
+      if (patrols.has(id)) {
+        patrols.delete(id);
+        continue;
+      }
+      const pos = f.location ? s.planets[f.location]?.position : undefined;
+      if (!pos) {
+        note('🛩 дежурный вылет — только со стоянки в узле');
+        continue;
+      }
+      if (patrols.size === 0) lastPatrolTick = s.time; // start the rearm cadence from now
+      patrols.set(id, {
+        center: { x: pos.x, y: pos.y },
+        radius: squadronStrikeRange(f),
+        sortie: freshSortie(sortieSpec(f).maxFuel),
+      });
+      note('🛩 дежурный вылет включён — эскадрилья бьёт врага в радиусе');
+    }
   } else if (act === 'load') {
     beginLoad(selFleet!, arg); // ~1h timed load (animated in the marker)
   } else if (act === 'unload') {
@@ -4408,6 +5361,7 @@ cmdbar.addEventListener('click', (ev) => {
   const ids = selectedFleetIds();
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
+  queuing = false; // a command-bar order is immediate — leave queue-build mode
   if (cmd === 'move') {
     aiming = !aiming; // arm / disarm the move order
   } else if (cmd === 'merge') {
@@ -4418,8 +5372,11 @@ cmdbar.addEventListener('click', (ev) => {
       if (merging) note('⛬ pick a fleet to merge with');
     }
   } else if (cmd === 'stop') {
+    // Stop means STOP: the chain goes too, or it would re-steer the fleet next frame.
+    dropChains(ids, 'стоп');
     for (const id of ids) if (s.fleets[id]?.movement) playerOrder(stopFleet(ME, id));
   } else if (cmd === 'attack') {
+    dropChains(ids, 'штурм'); // a live assault beats the old plan
     for (const id of ids) if (s.fleets[id]?.orbit === 'near') playerOrder(assaultFleet(ME, id));
     aiming = false;
   } else if (cmd === 'split') {
@@ -4447,20 +5404,23 @@ cmdbar.addEventListener('click', (ev) => {
 // Tap/click selection at a screen point (drag-aware — see the pointer handlers).
 function selectAt(mx: number, my: number) {
   closePingPop(); // any map tap dismisses an open ping popup (a marker tap reopens below)
+  // Hit radii: widened for a finger (44px-target rule); nearest-in-radius wins, so
+  // clustered objects resolve to what the player aimed at, not iteration order.
+  const rFleet = tapByTouch ? 24 : 16;
+  const rPing = tapByTouch ? 18 : 12;
+  const rNode = tapByTouch ? 30 : 24;
   // Merge armed: the next tap on a friendly fleet (not itself in the selection) is
   // the anchor — the selected fleet(s) fly to it and fuse. Any other tap cancels.
   if (merging) {
     const movers = selectedFleetIds();
-    for (const f of Object.values(s.fleets)) {
-      if (f.owner !== ME || movers.includes(f.id)) continue;
-      const a = fleetAnchor(f);
-      if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
-        orderMerge(movers, f.id);
-        merging = false;
-        lastPanelHtml = '';
-        return;
-      }
-    }
+    const anchor = nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner === ME && !movers.includes(f.id)),
+      fleetAnchor,
+      mx,
+      my,
+      rFleet,
+    );
+    if (anchor) orderMerge(movers, anchor.id);
     merging = false;
     lastPanelHtml = '';
     return;
@@ -4470,15 +5430,14 @@ function selectAt(mx: number, my: number) {
   // auto-targeting the nearest hostile in range. A mis-aimed/peace target is
   // rejected server-side (surfaced as a log note).
   if (barrageAim) {
-    let targetId: string | null = null;
-    for (const f of Object.values(s.fleets)) {
-      if (f.owner === ME) continue;
-      const a = fleetAnchor(f);
-      if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
-        targetId = f.id;
-        break;
-      }
-    }
+    const target = nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner !== ME),
+      fleetAnchor,
+      mx,
+      my,
+      rFleet,
+    );
+    const targetId: string | null = target?.id ?? null;
     for (const id of selectedFleetIds()) {
       if (fleetHasArtillery(s.fleets[id])) playerOrder(barrageFleet(ME, id, targetId));
     }
@@ -4492,28 +5451,61 @@ function selectAt(mx: number, my: number) {
   // fleet selection never blocks picking a planet (and vice versa).
   // A tap on an ally ping marker opens its description popup (takes priority over
   // selection, since markers float above the node they mark).
-  if (!aiming) {
-    for (const h of pingHits) {
-      if (Math.hypot(mx - h.x, my - h.y) < 12) {
-        openPingPop(h.loc);
-        return;
-      }
+  // While BUILDING a chain (queuing), pings and fleets don't swallow taps either —
+  // otherwise a world under one of your fleets could never become a step.
+  if (!aiming && !queuing) {
+    const ping = nearestHit(pingHits, (h) => h, mx, my, rPing);
+    if (ping) {
+      openPingPop(ping.loc);
+      return;
     }
   }
-  if (!aiming) {
-    for (const f of Object.values(s.fleets)) {
-      if (f.owner !== ME) continue;
-      const a = fleetAnchor(f);
-      if (a && Math.hypot(mx - a.x, my - a.y) < 16) {
-        if (additive) toggleFleetInSelection(f.id); // Ctrl/⌘ → extend the group
-        else setFleetSelection([f.id]); // (clears any selected planet)
-        return;
-      }
+  if (!aiming && !queuing) {
+    const mine = nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner === ME),
+      fleetAnchor,
+      mx,
+      my,
+      rFleet,
+    );
+    if (mine) {
+      if (additive) toggleFleetInSelection(mine.id); // Ctrl/⌘ → extend the group
+      else setFleetSelection([mine.id]); // (clears any selected planet)
+      return;
     }
   }
-  for (const n of MAP) {
-    const c = world(n);
-    if (Math.hypot(mx - c.x, my - c.y) < 24) {
+  {
+    const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
+    if (n) {
+      if (queuing) {
+        // Queue-append armed → this world becomes the next step in the fleet's chain,
+        // not an immediate move. Stays armed so you can tap several worlds in a row.
+        const ids = selectedFleetIds();
+        // Validate the leg NOW, not hours later: a route crossing PEACE territory is
+        // accepted but flagged, so the plan carries an honest «⚔ нужна война» badge.
+        const blockers = new Set<string>();
+        for (const id of ids) {
+          const f = s.fleets[id];
+          if (!f) continue;
+          for (const b of peaceBlockers(chainTailNode(f), n.id)) blockers.add(b);
+        }
+        const before = ids.length ? fleetQueueOf(ids[0]!).length : 0;
+        enqueueStep(ids, { kind: 'move', to: n.id });
+        const f0 = ids.length ? s.fleets[ids[0]!] : undefined;
+        if (f0) {
+          // In NET the authoritative queue lands with the next broadcast — preview the
+          // appended plan locally so the toast's step number + ETA are already right.
+          const cur = fleetQueueOf(f0.id);
+          const preview = cur.length > before ? cur : [...cur, { kind: 'move', to: n.id } as QStep];
+          const eta = chainEta(f0, preview);
+          const tail = eta.total !== null && eta.total > 0 ? ` · весь план ≈${fmtHrs(eta.total)}` : '';
+          note(`➕ шаг ${preview.length}: → ${n.id}${tail}`);
+          if (blockers.size)
+            note(`⚔ маршрут через ${[...blockers].map(blockerName).join(', ')} — потребует объявить войну`);
+        }
+        lastPanelHtml = ''; // refresh the queue list in the panel
+        return;
+      }
       if (aiming) {
         // Move armed → send the selected fleet(s) here; they route along the lanes to
         // this world and stop. Keep them selected for follow-up orders. A route through
@@ -4547,9 +5539,48 @@ function selectAt(mx: number, my: number) {
 
 // --- camera control: drag-pan, pinch-zoom, wheel-zoom, tap-select ------------
 
+/** A finger wobbles more than a mouse: the pan-vs-tap threshold widens on touch. */
+function tapSlop(ev: PointerEvent): number {
+  return ev.pointerType === 'touch' ? 11 : 6;
+}
+/** Set per tap: hit radii in selectAt widen for a finger (44px-target rule). */
+let tapByTouch = false;
+/** Nearest candidate within `r` of the tap — NOT the first in iteration order, so
+ *  overlapping objects (an orbit ring of fleets) resolve to what the player aimed at. */
+function nearestHit<T>(
+  items: Iterable<T>,
+  pos: (t: T) => { x: number; y: number } | null,
+  mx: number,
+  my: number,
+  r: number,
+): T | null {
+  let best: T | null = null;
+  let bd = r;
+  for (const it of items) {
+    const c = pos(it);
+    if (!c) continue;
+    const d = Math.hypot(mx - c.x, my - c.y);
+    if (d < bd) {
+      bd = d;
+      best = it;
+    }
+  }
+  return best;
+}
+
 const pointers = new Map<number, { x: number; y: number }>();
 let dragStart: { x: number; y: number } | null = null;
 let dragged = false;
+// Long-press (touch): ~350ms still finger = additive fleet pick on a fleet, or a
+// box-select anywhere else — the touch stand-ins for Ctrl-click and Shift-drag.
+let longPressTimer: number | null = null;
+let longPressFired = false;
+function cancelLongPress(): void {
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
 let pinchDist = 0;
 let boxSelecting = false;
 const ptXY = (ev: PointerEvent) => {
@@ -4562,11 +5593,46 @@ canvas.addEventListener('pointerdown', (ev) => {
   pointers.set(ev.pointerId, p);
   if (pointers.size === 1) {
     dragStart = p;
+    tapByTouch = ev.pointerType === 'touch'; // preview + commit share the snap radius
+    longPressFired = false;
     boxSelecting = ev.shiftKey;
     additive = ev.ctrlKey || ev.metaKey; // Ctrl/⌘-click → add to the fleet selection
     selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
+    if (aiming || queuing) aimPointer = p; // the aim/leg preview starts under the finger at once
+    // Touch long-press: a still finger for ~350ms picks a fleet ADDITIVELY (the
+    // Ctrl-click of phones) or opens a BOX-SELECT from empty space (the Shift-drag).
+    // Not while an armed mode (move/merge/barrage/chain-build) owns the taps.
+    if (ev.pointerType === 'touch' && !aiming && !merging && !barrageAim && !queuing) {
+      cancelLongPress();
+      longPressTimer = window.setTimeout(() => {
+        longPressTimer = null;
+        if (pointers.size !== 1 || dragged) return;
+        longPressFired = true;
+        navigator.vibrate?.(25);
+        const mine = nearestHit(
+          Object.values(s.fleets).filter((f) => f.owner === ME),
+          fleetAnchor,
+          p.x,
+          p.y,
+          24,
+        );
+        if (mine) {
+          toggleFleetInSelection(mine.id); // add / drop from the group
+        } else {
+          boxSelecting = true; // drag now stretches the selection box
+          selectionBox = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+        }
+      }, 350);
+    }
   } else if (pointers.size === 2) {
+    cancelLongPress();
+    if (aiming) {
+      // Second finger = cancel the armed move (the audit's escape hatch).
+      aiming = false;
+      lastPanelHtml = '';
+      note('прицеливание отменено');
+    }
     const [a, b] = [...pointers.values()];
     pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
   }
@@ -4576,20 +5642,27 @@ canvas.addEventListener('pointermove', (ev) => {
   if (!prev) return;
   const p = ptXY(ev);
   pointers.set(ev.pointerId, p);
+  const moved = dragStart && Math.hypot(p.x - dragStart.x, p.y - dragStart.y) > tapSlop(ev);
+  if (moved) cancelLongPress(); // a moving finger is a drag, not a long-press
   if (pointers.size >= 2) {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
     if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
     pinchDist = d;
     dragged = true;
+  } else if (aiming) {
+    // Move is armed: the finger DRAGS THE AIM (live preview via aimPointer), the
+    // camera stays put — releasing commits. Panning used to hijack this drag and
+    // silently swallow the order (the audit's blind-order finding).
+    void 0;
   } else if (boxSelecting && dragStart) {
     selectionBox = { x1: dragStart.x, y1: dragStart.y, x2: p.x, y2: p.y };
-    if (Math.hypot(p.x - dragStart.x, p.y - dragStart.y) > 6) dragged = true;
+    if (moved) dragged = true;
   } else {
     cam.x += p.x - prev.x;
     cam.y += p.y - prev.y;
     clampCam(); // keep the map from being dragged entirely off-screen
-    if (dragStart && Math.hypot(p.x - dragStart.x, p.y - dragStart.y) > 6) dragged = true;
+    if (moved) dragged = true;
   }
 });
 function endPointer(ev: PointerEvent) {
@@ -4617,10 +5690,22 @@ function endPointer(ev: PointerEvent) {
   }
   pointers.delete(ev.pointerId);
   if (pointers.size < 2) pinchDist = 0;
-  if (single && !dragged && p) selectAt(p.x, p.y);
+  cancelLongPress();
+  if (longPressFired) {
+    longPressFired = false; // the long-press already acted; this release is spent
+    return;
+  }
+  if (single && p && (aiming || !dragged)) {
+    // While aiming, a DRAGGED release still commits — the finger was steering the
+    // aim preview, and letting go is the confirmation.
+    tapByTouch = ev.pointerType === 'touch';
+    selectAt(p.x, p.y);
+  }
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', (ev) => {
+  cancelLongPress();
+  longPressFired = false;
   pointers.delete(ev.pointerId);
   pinchDist = 0;
   selectionBox = null;
@@ -4652,12 +5737,18 @@ for (const b of Array.from(document.querySelectorAll('[data-speed]'))) {
       x.classList.toggle('on', Number((x as HTMLElement).dataset.speed) === speed);
   });
 }
+// Pace chips (×1/×10/×50): retune the play/fast pair mid-match and start running at
+// the new multiplier — the same mapping the setup screen launches with.
+for (const b of Array.from(document.querySelectorAll('[data-mult]'))) {
+  b.addEventListener('click', () => applyTimeSpeed(Number((b as HTMLElement).dataset.mult)));
+}
 
 // Map a setup time-flow multiplier (×1/×2/×5/×10) onto the speedbar and start running at
-// it. The multiplier IS the play speed in game-hours per real second (×1 = a calm 1 h/s,
-// ×5 = 5 h/s, …); fast-forward (▶▶) runs at 3× the chosen play. The play/fast buttons carry
-// the live values so pause→resume returns to the chosen pace, not the default.
-const PLAY_BASE = 1; // game-hours per real second at ×1 (the calm baseline pace)
+// it. ×1 is true wall-clock — 1 game-hour per real hour — matching the real-time MMO
+// design; each higher multiplier accelerates from there (×5 = 5 game-hours per real hour,
+// …), and fast-forward (▶▶) runs at 3× the chosen play. The play/fast buttons carry the
+// live values so pause→resume returns to the chosen pace, not the default.
+const PLAY_BASE = 1 / 3600; // game-hours per real second; 1/3600 ⇒ 1 game-hour per real hour (×1 = wall-clock)
 function applyTimeSpeed(mult: number): void {
   const play = PLAY_BASE * mult;
   const playBtn = $('spd-play');
@@ -4667,6 +5758,8 @@ function applyTimeSpeed(mult: number): void {
   speed = play;
   for (const x of Array.from(document.querySelectorAll('[data-speed]')))
     x.classList.toggle('on', Number((x as HTMLElement).dataset.speed) === speed);
+  for (const x of Array.from(document.querySelectorAll('[data-mult]')))
+    x.classList.toggle('on', Number((x as HTMLElement).dataset.mult) === mult);
 }
 
 // Restart → back to the skirmish setup (bot selection). The speedbar button serves the
@@ -4709,6 +5802,7 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'ground', label: 'Земля' },
   { key: 'squadron', label: 'Эскадрильи' },
   { key: 'missile', label: 'Ракеты' },
+  { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
@@ -4717,17 +5811,20 @@ function renderTech(): void {
   const me = s.players[ME];
   const techs = data.technologies;
   const done = new Set(me?.technologies?.completed ?? []);
-  const active = me?.technologies?.active;
+  // Research now runs in CONCURRENT slots (core: technologies.active is a list), so
+  // normalise to an array and show a progress banner per active slot.
+  const activeRaw = me?.technologies?.active;
+  const activeList = Array.isArray(activeRaw) ? activeRaw : activeRaw ? [activeRaw] : [];
   const res = (me?.resources ?? {}) as Record<string, number>;
   const started = s.startedAt ?? 0;
   let html = '';
-  if (active) {
-    const def = techs[active.technology];
-    const total = active.completesAt - active.startedAt;
-    const prog = total > 0 ? clamp((s.time - active.startedAt) / total, 0, 1) : 1;
-    const etaH = Math.max(0, Math.ceil((active.completesAt - s.time) / HOUR));
+  for (const a of activeList) {
+    const def = techs[a.technology];
+    const total = a.completesAt - a.startedAt;
+    const prog = total > 0 ? clamp((s.time - a.startedAt) / total, 0, 1) : 1;
+    const etaH = Math.max(0, Math.ceil((a.completesAt - s.time) / HOUR));
     html +=
-      `<div class="tw-active"><div class="tw-an">⚛ Исследуется: ${esc(def?.name ?? active.technology)}</div>` +
+      `<div class="tw-active"><div class="tw-an">⚛ Исследуется: ${esc(def?.name ?? a.technology)}</div>` +
       `<div class="tw-bar"><div class="tw-fill" style="width:${Math.round(prog * 100)}%"></div></div>` +
       `<div class="tw-eta">≈ ${etaH} ч осталось</div></div>`;
   }
@@ -4739,7 +5836,7 @@ function renderTech(): void {
     html += `<div class="tw-branch">${br.label}</div>`;
     for (const id of ids) {
       const t = techs[id]!;
-      const isActive = active?.technology === id;
+      const isActive = activeList.some((a) => a.technology === id);
       const prereqMissing = (t.prerequisites ?? []).filter((p) => !done.has(p));
       const dayGate = t.dayGate ?? 0;
       const gatedByDay = dayGate > 0 && s.time - started < dayGate * DAY;
@@ -4758,7 +5855,9 @@ function renderTech(): void {
         cls = 'locked';
         action = `<span class="tw-badge wait">🔒 с дня ${dayGate}</span>`;
       } else {
-        const dis = !!active || !affordable;
+        // Concurrent slots: don't block on "something is researching" — the core
+        // rejects (with a note) if every research slot is already full.
+        const dis = !affordable;
         action = `<button class="tw-go" data-tech="${id}"${dis ? ' disabled' : ''}>Исследовать</button>`;
       }
       html +=
@@ -4786,6 +5885,88 @@ techWin.addEventListener('click', (e) => {
     playerOrder(researchTech(ME, id));
     renderTech();
   }
+});
+
+// --- steward («Хранитель»): hand the seat to the AI while you sleep ----------
+// Delegate control to a defensive AI until a game-time deadline; it holds the line and
+// returns control on time (stewardModule). Gated by the Steward tech (researched via the
+// «Командование» branch, day 15, scientist Куратор). A "morning report" note fires on expiry.
+const stewWin = $('steward');
+let lastStewAt = 0;
+const STEW_DURATIONS = [4, 8, 12]; // game-hours a single delegation can run
+// Snapshot of my standing at delegation time, diffed on expiry for the morning report.
+let stewSnapshot: { planets: number; metal: number; credits: number } | null = null;
+function stewMetrics(): { planets: number; metal: number; credits: number } {
+  let planets = 0;
+  for (const pl of Object.values(s.planets)) if (pl.owner === ME) planets += 1;
+  const r = (s.players[ME]?.resources ?? {}) as Record<string, number>;
+  return { planets, metal: Math.round(r.metal ?? 0), credits: Math.round(r.credits ?? 0) };
+}
+function stewFmtDur(ms: number): string {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(mins / 60);
+  return h > 0 ? `${h}ч ${mins % 60}м` : `${mins}м`;
+}
+function stewardTechDone(): boolean {
+  return s.players[ME]?.technologies?.completed.includes('ai_stewardship') ?? false;
+}
+function renderSteward(): void {
+  const body = $('stewardbody');
+  const posture = stewardActive(s, ME, s.time); // null unless a live delegation
+  const cur = s.players[ME]?.steward;
+  let html = '';
+  if (posture && cur) {
+    html +=
+      `<div class="st-status on">🤖 <b>Хранитель ведёт оборону.</b><br>` +
+      `Управление вернётся через <b>${stewFmtDur(cur.until - s.time)}</b>.<br>` +
+      `Пока вы спите: держит рубежи и отбивает атаки, застраивает очередь и торгует — без наступлений.</div>` +
+      `<div class="st-row"><button class="st-btn warn" data-stew="recall">Вернуть управление</button></div>` +
+      `<div class="st-note">«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.</div>`;
+  } else if (!stewardTechDone()) {
+    const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY);
+    html +=
+      `<div class="st-status locked">🔒 <b>«Протокол Хранитель» ещё не изучен.</b><br>` +
+      `Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день ${day}).<br>` +
+      `Изучите его в окне технологий — затем сможете передать место ИИ на время сна.</div>` +
+      `<div class="st-row"><button class="st-btn" data-stew="tech">Открыть технологии</button></div>`;
+  } else {
+    html +=
+      `<div class="st-status">😴 <b>Хранитель готов.</b><br>` +
+      `Передайте место доверенному ИИ (поза «Оборона»), пока вы офлайн — он удержит рубежи и вернёт управление к сроку.</div>` +
+      `<div class="st-h">Передать на</div><div class="st-row">` +
+      STEW_DURATIONS.map(
+        (h) => `<button class="st-btn" data-stew="go" data-h="${h}">${h} ч</button>`,
+      ).join('') +
+      `</div>` +
+      `<div class="st-note">Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.</div>`;
+  }
+  body.innerHTML = html;
+}
+document.getElementById('rail-steward')?.addEventListener('click', () => {
+  stewWin.classList.add('show');
+  renderSteward();
+});
+stewWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.id === 'steward' || tg.classList.contains('tw-close')) {
+    stewWin.classList.remove('show');
+    return;
+  }
+  const btn = tg.closest('[data-stew]') as HTMLElement | null;
+  if (!btn) return;
+  const kind = btn.dataset.stew;
+  if (kind === 'go') {
+    const h = Number(btn.dataset.h) || 8;
+    playerOrder(delegateSteward(ME, s.time + h * HOUR));
+  } else if (kind === 'recall') {
+    playerOrder(recallSteward(ME));
+  } else if (kind === 'tech') {
+    stewWin.classList.remove('show');
+    techWin.classList.add('show');
+    renderTech();
+    return;
+  }
+  renderSteward();
 });
 
 // --- session market: a two-sided order book, one tab per tradeable good -------
@@ -5041,6 +6222,38 @@ for (const t of Array.from(document.querySelectorAll('#hp-more .hub-tile[data-mo
   });
 }
 
+// --- settings overlay (hub → «Ещё» → Настройки) -----------------------------
+// Client-only display preferences (localStorage), never sent to the server. One control
+// for now: the radar sweep's visual opacity — 0% hides the rotating arm, anything between
+// just dims it. Purely cosmetic; the radar mechanic (contact detection) is unaffected.
+const settingsEl = $('settings');
+function renderSettings(): void {
+  const pct = Math.round(sweepOpacity * 100);
+  settingsEl.innerHTML =
+    `<div class="setbox">` +
+    `<div class="pc-head"><span class="pc-dia" style="background:var(--cyan)"></span><b>НАСТРОЙКИ</b><span class="pc-tag">интерфейс</span></div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">Радарная развёртка<span class="set-sub">вращающийся луч на карте — только вид, не влияет на обнаружение</span></div>` +
+    `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="Прозрачность радарной развёртки"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
+    `</div>` +
+    `<button class="pc-close" id="set-close" type="button">ГОТОВО</button>` +
+    `</div>`;
+  const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
+  const val = document.getElementById('set-sweep-val');
+  slider?.addEventListener('input', () => {
+    setSweepOpacity(Number(slider.value) / 100);
+    if (val) val.textContent = `${Math.round(sweepOpacity * 100)}%`; // 0% reads as hidden
+  });
+  document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
+}
+$('hub-settings').addEventListener('click', () => {
+  renderSettings();
+  settingsEl.classList.add('show');
+});
+settingsEl.addEventListener('click', (e) => {
+  if (e.target === settingsEl) settingsEl.classList.remove('show'); // tap the backdrop → close
+});
+
 // First-run gate: a returning commander (a saved callsign) skips the identity card
 // and boots straight into the hub — the raw "Новый командир / войти" screen is only
 // for a genuinely new device. "Сменить командира" in the hub goes back to identity.
@@ -5160,7 +6373,11 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
-  setupSpeed = 1; // default to normal time flow each time the setup opens
+  // A lively default: ×1 wall-clock reads as a FROZEN screen to a newcomer, so the
+  // setup opens on the last chosen multiplier (first launch: ×10). True real time
+  // stays one tap away — the ×1 chip.
+  const savedSpeed = Number(localStorage.getItem('void.setupSpeed'));
+  setupSpeed = SETUP_SPEEDS.includes(savedSpeed) ? savedSpeed : 10;
   showConnect(false);
   setupEl.style.display = 'flex';
   $('setup-start').style.display = '';
@@ -5193,6 +6410,30 @@ function buildSetupConfig(): SetupConfig {
 // Install a ready GameState as the live match: reset all interaction state, queues,
 // camera and log, then hide the setup overlay. `aiPlayers` are the seats the local
 // sim drives. Shared by the normal skirmish and (via a hook) the dev test mode.
+// Tap a resource chip → what the number means: stock and hourly net flow.
+purse.addEventListener('click', (ev) => {
+  const el = (ev.target as Element).closest('[data-res]') as HTMLElement | null;
+  if (!el) return;
+  const key = el.dataset.res!;
+  const stock = Math.round(s.players[ME]?.resources?.[key] ?? 0);
+  const flow = Math.round(netIncome(s, ME)[key] ?? 0);
+  note(
+    `${TECH_CUR[key] ?? ''} ${el.title}: ${kfmt(stock)} в казне · ${flow >= 0 ? '+' : ''}${kfmt(flow)}/ч (производство минус содержание войск)`,
+  );
+});
+
+// Tap the ✦ score chip → a plain-words breakdown of how the score is built and how
+// the match ends (the victory rule is otherwise invisible mid-match).
+devlineEl.addEventListener('click', (ev) => {
+  if (!(ev.target as Element).closest('.dstat')) return;
+  const mine = Object.values(s.planets).filter((p) => p.owner === ME);
+  const worlds = mine.filter((p) => (p.kind ?? 'planet') === 'planet').length;
+  const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
+  note(
+    `✦ ${score}/${SCORE_LIMIT}: мир — 50, прочий сектор — 10, здания добавляют по уровню (у вас ${worlds} миров, ${mine.length - worlds} секторов). Победа: ✦ ${SCORE_LIMIT}, уничтожение соперников или доминирование.`,
+  );
+});
+
 function installMatch(state: GameState, aiPlayers: Set<string>): void {
   s = state;
   ME = 'p1';
@@ -5210,6 +6451,10 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   splitState = null;
   killStats = { destroyed: 0, lost: 0 };
   myBattleLocs.clear();
+  memory.clear(); // fog memory belongs to the OLD match — stale intel must not carry over
+  radarMemory.clear();
+  battleLosses.clear();
+  aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
@@ -5222,9 +6467,32 @@ function startMatch(setup: SetupConfig): void {
 }
 
 setupMapEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-cand]');
-  if (!t) return;
-  setupStart = t.getAttribute('data-cand')!;
+  const direct = (ev.target as Element).closest('[data-cand]');
+  let pick: string | null = direct?.getAttribute('data-cand') ?? null;
+  if (!pick) {
+    // The candidate circles are ~8px on a phone — a near miss still counts. Map the
+    // tap into viewBox space (preserveAspectRatio=meet: uniform scale, centred) and
+    // snap to the nearest start world within a generous reach.
+    const r = setupMapEl.getBoundingClientRect();
+    const vb = (setupMapEl as unknown as SVGSVGElement).viewBox.baseVal;
+    if (vb.width > 0 && r.width > 0) {
+      const scale = Math.min(r.width / vb.width, r.height / vb.height);
+      const x = vb.x + (ev.clientX - r.left - (r.width - vb.width * scale) / 2) / scale;
+      const y = vb.y + (ev.clientY - r.top - (r.height - vb.height * scale) / 2) / scale;
+      let best = 90; // viewBox units — roughly three candidate radii
+      for (const id of START_CANDIDATES) {
+        const n = MAP.find((m) => m.id === id);
+        if (!n) continue;
+        const d = Math.hypot(n.x - x, n.y - y);
+        if (d < best) {
+          best = d;
+          pick = id;
+        }
+      }
+    }
+  }
+  if (!pick) return;
+  setupStart = pick;
   renderSetup();
 });
 setupSlotsEl.addEventListener('click', (ev) => {
@@ -5238,6 +6506,7 @@ setupSpeedEl.addEventListener('click', (ev) => {
   const t = (ev.target as Element).closest('[data-spd]');
   if (!t) return;
   setupSpeed = Number(t.getAttribute('data-spd'));
+  localStorage.setItem('void.setupSpeed', String(setupSpeed));
   renderSetup();
 });
 setupGoEl.addEventListener('click', () => startMatch(buildSetupConfig()));
@@ -5295,6 +6564,7 @@ function connect(): void {
           pingTimer = setInterval(() => client.ping(performance.now()), 2000);
           client.ping(performance.now()); // seed an RTT reading immediately
         }
+        if (admitted && s !== snap.state) diffNetDiplomacy(s, snap.state);
         s = snap.state;
         if (snap.playerId) ME = snap.playerId;
         // Desync check (M0): the server tags each snapshot with hashState(view); we
@@ -5503,13 +6773,22 @@ async function toggleArchive(id: string, restore: boolean): Promise<void> {
 
 function renderMatches(): void {
   const el = $('mlist');
+  // Never a dead end: whatever the server says (unreachable / empty list), the
+  // browser always offers the path that ALWAYS works — a solo skirmish offline.
+  const soloCard = (msg: string): void => {
+    el.innerHTML =
+      `<div class="mempty">${msg}</div>` +
+      '<div class="msolo"><button class="mbtn" id="msolo-go">▶ Начать одиночный скирмиш</button>' +
+      '<div class="msolo-sub">Сервер не нужен — свободные места займут боты.</div></div>';
+    document.getElementById('msolo-go')?.addEventListener('click', () => openSetup('hub'));
+  };
   if (!matchLists) {
-    el.innerHTML = '<div class="mempty">нажмите «Обновить список»</div>';
+    soloCard(statusEl.textContent === 'сервер недоступен' ? 'сервер недоступен' : 'нажмите «Обновить список»');
     return;
   }
   const rows = matchLists[activeTab] ?? [];
   if (rows.length === 0) {
-    el.innerHTML = '<div class="mempty">пусто</div>';
+    soloCard('здесь пусто');
     return;
   }
   el.textContent = '';
@@ -5588,9 +6867,23 @@ const lobbyEl = $('lobby');
 const lrosterEl = $('lroster');
 const lactionsEl = $('lactions');
 let lastLobbyHtml = '';
-// One delegated handler: the host's Start button asks the server to begin.
+// Leave the lobby BEFORE the match starts: your seat isn't committed yet, so this
+// releases the slot (the server frees a pre-start slot on disconnect) and returns to
+// the hub. Once the match has started the lobby is gone and the in-game "⌂ В меню"
+// leave hands your committed seat to the AI instead — you can't free it, only step away.
+function leaveLobby(): void {
+  userClosed = true; // intentional — no auto-reconnect
+  NET = false;
+  if (netSock) netSock.close();
+  lobbyInfo = null;
+  lobbyEl.style.display = 'none';
+  openHub();
+}
+// One delegated handler: the host's Start button begins; either side can leave.
 lactionsEl.addEventListener('click', (e) => {
-  if ((e.target as HTMLElement | null)?.id === 'lstart') netClient?.start();
+  const id = (e.target as HTMLElement | null)?.id;
+  if (id === 'lstart') netClient?.start();
+  else if (id === 'lleave') leaveLobby();
 });
 function renderLobby(): void {
   const info = lobbyInfo;
@@ -5612,9 +6905,10 @@ function renderLobby(): void {
     })
     .join('');
   const actionsHtml =
-    ME === info.host
-      ? '<button id="lstart" class="lbtn">▶ START MATCH</button>'
-      : '<div class="lwait">Waiting for the host to start…</div>';
+    (ME === info.host
+      ? '<button id="lstart" class="lbtn">▶ НАЧАТЬ МАТЧ</button>'
+      : '<div class="lwait">Ждём, пока хост начнёт…</div>') +
+    '<button id="lleave" class="lbtn ghost">Покинуть лобби</button>';
   const html = rosterHtml + '|' + actionsHtml;
   if (html !== lastLobbyHtml) {
     lrosterEl.innerHTML = rosterHtml;
@@ -5638,7 +6932,115 @@ const BUILD_TAG = (() => {
   const b = currentBuild();
   return b ? buildLabel(b) : '';
 })();
+// --- Android Back = close the top UI layer (APK convenience) ------------------
+// The APK's WebView maps the hardware Back to history.back(). While ANY closable
+// layer is open we keep ONE sentinel entry pushed: Back then pops the sentinel
+// (popstate), we close the topmost layer and re-arm. With nothing left to close
+// the sentinel stays un-armed, so the NEXT Back is the system's (exit) — after a
+// hint toast, the standard Android double-back pattern. Browser Back gets the
+// same behaviour for free.
+let backArmed = false;
+
+/** Is any layer open that the Back button should close (probe only)? */
+function topLayerOpen(): boolean {
+  return Boolean(
+    aiming ||
+      merging ||
+      barrageAim ||
+      pingMenuLoc !== null ||
+      pingPopEl?.classList.contains('show') ||
+      splitState !== null ||
+      codexEl?.classList.contains('show') ||
+      logWin?.classList.contains('show') ||
+      techWin.classList.contains('show') ||
+      marketWin.classList.contains('show') ||
+      diploOpen ||
+      chatOpen ||
+      setupEl.style.display !== 'none' ||
+      selFleet !== null ||
+      selPlanet !== null ||
+      selFleets.size > 0,
+  );
+}
+
+/** Close the TOPMOST open layer; returns false when nothing was open. The order
+ *  mirrors visual stacking: armed order modes → popups → windows → menus →
+ *  the selection sheet → the setup screen. */
+function closeTopLayer(): boolean {
+  if (aiming || merging || barrageAim || queuing) {
+    aiming = false;
+    merging = false;
+    barrageAim = false;
+    queuing = false; // Back leaves chain-build mode first, like every armed mode
+    lastPanelHtml = '';
+    return true;
+  }
+  if (pingMenuLoc !== null) {
+    closePingMenu();
+    return true;
+  }
+  if (pingPopEl?.classList.contains('show')) {
+    closePingPop();
+    return true;
+  }
+  if (splitState !== null) {
+    splitState = null;
+    lastPanelHtml = '';
+    return true;
+  }
+  if (codexEl?.classList.contains('show')) {
+    codexEl.classList.remove('show');
+    return true;
+  }
+  if (logWin?.classList.contains('show')) {
+    logWin.classList.remove('show');
+    return true;
+  }
+  if (techWin.classList.contains('show')) {
+    techWin.classList.remove('show');
+    return true;
+  }
+  if (marketWin.classList.contains('show')) {
+    marketWin.classList.remove('show');
+    return true;
+  }
+  if (diploOpen) {
+    closeDiplo();
+    return true;
+  }
+  if (chatOpen) {
+    closeChat();
+    return true;
+  }
+  if (selFleet !== null || selPlanet !== null || selFleets.size > 0) {
+    clearSelection();
+    return true;
+  }
+  if (setupEl.style.display !== 'none') {
+    ($('setupcancel') as HTMLButtonElement | null)?.click(); // its own Back path (hub/welcome)
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener('popstate', () => {
+  backArmed = false;
+  if (closeTopLayer()) {
+    if (topLayerOpen()) armBack(); // more layers underneath — stay resident
+  } else {
+    note('Ещё раз «Назад» — выход');
+  }
+});
+function armBack(): void {
+  if (backArmed) return;
+  history.pushState({ layer: true }, '');
+  backArmed = true;
+}
+
 function frame(nowReal: number) {
+  // Keep the Back sentinel armed exactly while something closable is open — the
+  // frame loop sees every open path without instrumenting each one.
+  if (!backArmed && topLayerOpen()) armBack();
   const dt = nowReal - lastReal;
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane
@@ -5651,6 +7053,8 @@ function frame(nowReal: number) {
     apply(advance(s, target));
     autoEngage();
     checkFleetClashes();
+    driveQueues(); // CC-1: advance each fleet's queued order chain when it falls idle
+    drivePatrols(); // CC-4: squadrons on дежурный вылет auto-strike contacts in range
     runAI();
     pumpBuildQueues();
     closeIdleRallies(); // drop the 'rally' tag once a world's build pipeline empties
@@ -5680,11 +7084,12 @@ function frame(nowReal: number) {
   const statusHtml =
     `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
     `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ WIN' : ' · ' + need + ' to win'}</span>` +
-    `<span class="dl-donate" title="Суверены — donate currency"><i>◆</i>${kfmt(SOVEREIGNS)}</span>`;
+    `<span class="dl-donate" title="Суверены — донат-валюта"><i>◆</i>${kfmt(SOVEREIGNS)}</span>`;
   if (statusHtml !== lastClockText) {
     devlineEl.innerHTML = statusHtml;
     lastClockText = statusHtml;
   }
+
   // Dev net overlay (M0): FPS always; when connected, append round-trip latency and
   // a desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
   let fpsText = `${Math.round(fpsEma)} FPS`;
@@ -5704,24 +7109,50 @@ function frame(nowReal: number) {
   const r = s.players[ME]?.resources ?? {};
   // Monochrome line glyphs from the console's own icon family (no emoji variants, so
   // they render as text, not colour emoji). Name in `title` for hover/long-press.
-  const chip = (icon: string, val: string, name: string) =>
-    `<span class="res" title="${name}"><i>${icon}</i><b>${val}</b></span>`;
+  // Flow under the stock: the tested netIncome() (production − upkeep, per hour)
+  // finally shown to the player. A resource with no stock AND no flow is dimmed —
+  // it plays no part in the current match yet.
+  const inc = netIncome(s, ME);
+  const chip = (icon: string, key: string, name: string) => {
+    const stock = r[key] ?? 0;
+    const flow = Math.round(inc[key] ?? 0);
+    const flowTxt =
+      flow !== 0 ? `<em class="${flow > 0 ? 'up' : 'dn'}">${flow > 0 ? '+' : ''}${kfmt(flow)}/ч</em>` : '';
+    const dead = stock === 0 && flow === 0 ? ' dead' : '';
+    return `<span class="res${dead}" title="${name}" data-res="${key}"><i>${icon}</i><span class="rv"><b>${kfmt(stock)}</b>${flowTxt}</span></span>`;
+  };
   const hudHtml =
-    chip('¤', kfmt(r.credits ?? 0), 'Credits') +
-    chip('❖', kfmt(r.food ?? 0), 'Food') +
-    chip('⬢', kfmt(r.metal ?? 0), 'Metal') +
-    chip('↯', kfmt(r.energy ?? 0), 'Energy') +
-    chip('▦', kfmt(r.microelectronics ?? 0), 'Microelectronics');
+    chip('¤', 'credits', 'Credits') +
+    chip('❖', 'food', 'Food') +
+    chip('⬢', 'metal', 'Metal') +
+    chip('↯', 'energy', 'Energy') +
+    chip('▦', 'microelectronics', 'Microelectronics');
   if (hudHtml !== lastHudHtml) {
     purse.innerHTML = hudHtml;
     lastHudHtml = hudHtml;
   }
-  const battles = Object.keys(s.battles).length;
+  const msgBadge = document.getElementById('msgbadge');
+  if (msgBadge) {
+    msgBadge.style.display = unreadMsgs > 0 ? '' : 'none';
+    msgBadge.textContent = String(unreadMsgs);
+  }
+  const battles = Object.values(s.battles).filter(
+    (b) => b.attacker.owner === ME || b.defender.owner === ME || known(b.location),
+  ).length;
   const alertText = String(battles);
   if (alertText !== lastAlertText) {
     alertBadge.style.display = battles > 0 ? 'grid' : 'none';
     alertBadge.textContent = alertText;
     lastAlertText = alertText;
+  }
+  // collapsed rail mirrors unread/battle attention onto the hamburger, so notifications
+  // still surface while the tool panel (with its per-tool badges) is closed.
+  const attn = battles + unreadMsgs;
+  const railAlertText = attn > 0 && !railEl.classList.contains('open') ? String(attn) : '';
+  if (railAlertText !== lastRailAlert) {
+    railAlert.style.display = railAlertText ? 'grid' : 'none';
+    if (railAlertText) railAlert.textContent = railAlertText;
+    lastRailAlert = railAlertText;
   }
   const logHtml = logLines.map((l) => `<div>${esc(l)}</div>`).join('');
   if (logHtml !== lastLogHtml) {
@@ -5754,6 +7185,11 @@ function frame(nowReal: number) {
     lastTechAt = nowReal;
     renderTech();
   }
+  // Keep the steward window live while open (countdown to control returning), throttled.
+  if (stewWin.classList.contains('show') && nowReal - lastStewAt > 500) {
+    lastStewAt = nowReal;
+    renderSteward();
+  }
   requestAnimationFrame(frame);
 }
 
@@ -5778,7 +7214,47 @@ if (codexEl) {
 
 // Player card: tap the top-left crest to open your session dossier (faction, worlds,
 // fleets, score, treasury); tap the backdrop or CLOSE to dismiss.
+// the left crest (emblem + title) opens the player dossier
 document.querySelector('.crest')?.addEventListener('click', () => openPlayerCard());
+
+// mirror the chosen emblem into the top-left corner + the hub avatar
+applyEmblem();
+
+// collapsible rail — the hamburger toggles the tool panel; picking a tool closes it.
+function setRailOpen(open: boolean): void {
+  railEl.classList.toggle('open', open);
+  railGlyph.textContent = open ? '✕' : '☰';
+  railToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+railToggle.addEventListener('click', () => setRailOpen(!railEl.classList.contains('open')));
+document.getElementById('railtools')?.addEventListener('click', () => setRailOpen(false));
+
+// emblem picker — the hub avatar opens a glyph grid; picking one persists + applies it.
+const emblemPick = document.getElementById('emblempick');
+const epGrid = document.getElementById('ep-grid');
+function openEmblemPick(): void {
+  if (!emblemPick || !epGrid) return;
+  const cur = playerEmblem();
+  epGrid.innerHTML = EMBLEMS.map(
+    (g) => `<button type="button" class="ep-cell${g === cur ? ' sel' : ''}" data-emblem="${g}">${g}</button>`,
+  ).join('');
+  emblemPick.classList.add('show');
+}
+document.getElementById('hubav')?.addEventListener('click', openEmblemPick);
+document.getElementById('ep-close')?.addEventListener('click', () => emblemPick?.classList.remove('show'));
+emblemPick?.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.id === 'emblempick') {
+    emblemPick.classList.remove('show'); // backdrop tap closes
+    return;
+  }
+  const cell = t.closest('.ep-cell') as HTMLElement | null;
+  if (cell?.dataset.emblem) {
+    setPlayerEmblem(cell.dataset.emblem);
+    emblemPick.classList.remove('show');
+  }
+});
+
 const playerCardEl = document.getElementById('playercard');
 if (playerCardEl) {
   playerCardEl.addEventListener('click', (e) => {
@@ -5816,7 +7292,10 @@ if (pingPopEl) {
 
 // Session menu: the rail's Diplomacy / Dispatches buttons open the roster / message log.
 document.getElementById('rail-diplo')?.addEventListener('click', () => openDiplo('diplo'));
-document.getElementById('rail-msgs')?.addEventListener('click', () => openDiplo('msgs'));
+document.getElementById('rail-msgs')?.addEventListener('click', () => {
+  unreadMsgs = 0; // reading the tab clears the badge
+  openDiplo('msgs');
+});
 
 // === floating chat window (desktop only) =====================================
 // A naive profanity scrub for the optional censor toggle — whole-word match, the
@@ -6000,10 +7479,11 @@ function closeChat(): void {
   renderChat();
 }
 function sendChatMsg(): void {
+  if (NET) return note('сетевой чат ещё не подключён — используйте пинги 📍');
   const input = document.getElementById('cw-text') as HTMLInputElement | null;
   const text = input?.value.trim();
   if (!text) return;
-  pushMsg(chatTab, text, false); // to the open channel / DM (net play would broadcast)
+  pushMsg(chatTab, text, false); // local sessions only — the net relay is a next brick
   if (input) {
     input.value = '';
     input.focus?.();
@@ -6183,10 +7663,11 @@ function toggleSet<T>(set: Set<T>, v: T): void {
   else set.add(v);
 }
 function sendDiploMsg(): void {
+  if (NET) return note('сетевой чат ещё не подключён — используйте пинги 📍');
   const input = document.getElementById('dp-text') as HTMLInputElement | null;
   const text = input?.value.trim();
   if (!text) return;
-  pushMsg(convoOpen, text, false); // to the open conversation (in net play this would broadcast)
+  pushMsg(convoOpen, text, false); // local sessions only — the net relay is a next brick
   if (input) {
     input.value = '';
     input.focus();
@@ -6212,6 +7693,70 @@ function pingSelected(): void {
     input.value = '';
     input.focus();
   }
+}
+
+// --- province ping composer (tap a province → choose where the ping goes) --------
+// A ping marks a province and shares it. Destination is either the coalition channel
+// (a shared on-map marker every ally sees) or a single player's DM (a private jump-to
+// pointer in that thread). Opened from the province panel's 📍 button.
+function openPingMenu(): void {
+  if (!selPlanet || !s.planets[selPlanet]) {
+    note('Сначала выберите провинцию');
+    return;
+  }
+  pingMenuLoc = selPlanet;
+  renderPingMenu();
+  document.getElementById('pingmenu')?.classList.add('show');
+  (document.getElementById('pm-text') as HTMLInputElement | null)?.focus();
+}
+function closePingMenu(): void {
+  pingMenuLoc = null;
+  document.getElementById('pingmenu')?.classList.remove('show');
+}
+function renderPingMenu(): void {
+  const el = document.getElementById('pingmenu');
+  if (!el || !pingMenuLoc) return;
+  const loc = pingMenuLoc;
+  const dstBtn = (dest: string, color: string, ic: string, name: string, tag: string, cls = ''): string =>
+    `<button class="pm-dst${cls}" data-pmdest="${esc(dest)}">` +
+    `<span class="pm-ic" style="color:${color}">${ic}</span>${esc(name)}` +
+    (tag ? `<em>${esc(tag)}</em>` : '') +
+    `</button>`;
+  const coal = dstBtn(COALITION, 'var(--amber)', '⚡', 'Коалиция', `${coalitionMembers().length} уч.`, ' coal');
+  const dms = diploSeats()
+    .filter((id) => id !== ME)
+    .map((id) => dstBtn(id, ownerColor(id), seatBadge(id).icon, NAME[id] ?? id, seatBadge(id).tag))
+    .join('');
+  el.innerHTML =
+    `<div class="pm-box">` +
+    `<div class="pm-head">📍 Пинг · <b>${esc(loc)}</b></div>` +
+    `<div class="pm-sub">Отметьте провинцию и отправьте — метка станет кликабельной (↪ камера).</div>` +
+    `<input id="pm-text" class="pm-text" maxlength="80" placeholder="Описание метки (необязательно)…" autocomplete="off">` +
+    `<div class="pm-lbl">В чат коалиции</div>${coal}` +
+    (dms ? `<div class="pm-lbl">В ЛС игроку</div>${dms}` : '') +
+    `<button class="pm-cancel" data-pmcancel>Отмена</button>` +
+    `</div>`;
+}
+/** Place the pending province ping toward `dest`: the coalition channel (shared on-map
+ *  marker) or a player's DM (private jump-to pointer). Composer text = the description. */
+function createPingTo(dest: string): void {
+  const loc = pingMenuLoc;
+  if (!loc || !s.planets[loc]) {
+    closePingMenu();
+    return;
+  }
+  const input = document.getElementById('pm-text') as HTMLInputElement | null;
+  const desc = (input?.value.trim() ?? '').slice(0, 80);
+  if (dest === COALITION) {
+    // Same path as the coalition composer's 📍: net → server-stamped marker; solo → local line.
+    if (NET && netClient) netClient.placePing({ kind: 'mark', target: { node: loc }, label: desc });
+    else pushMsg(COALITION, desc || `метка ${loc}`, false, ME, loc);
+    note('📍 Пинг → Коалиция');
+  } else {
+    pushMsg(dest, desc || `метка ${loc}`, false, ME, loc);
+    note(`📍 Пинг → ${NAME[dest] ?? dest}`);
+  }
+  closePingMenu();
 }
 /** Active coalition pings, one marker per province (the latest ping there wins). The
  *  coalition chat log and the map markers share this single source. */
@@ -6342,6 +7887,12 @@ if (diploEl) {
       renderDiplo();
       return;
     }
+    const spyBtn = tg.closest('.dp-spy') as HTMLElement | null;
+    if (spyBtn) {
+      playerOrder(spyOn(ME, spyBtn.dataset.seat!, spyBtn.dataset.spy as 'treasury' | 'fleets'));
+      renderDiplo(); // the intel row (or the rejection note) reflects the outcome
+      return;
+    }
     const msgseat = (tg.closest('.dp-msg') as HTMLElement | null)?.dataset.msgseat;
     if (msgseat) {
       convoOpen = msgseat;
@@ -6377,9 +7928,27 @@ if (diploEl) {
   });
 }
 
-note(
-  'Welcome, Commander. A wide frontier of provinces separates you from CRIMSON — the worlds among them score 50, every other sector 10. Reach 600 points or take the enemy capital.',
-);
+// Province ping composer: a destination button places the ping; the backdrop or Отмена
+// closes it; Enter in the note field defaults to the coalition channel.
+const pingMenuEl = document.getElementById('pingmenu');
+if (pingMenuEl) {
+  pingMenuEl.addEventListener('click', (e) => {
+    const tg = e.target as HTMLElement;
+    const dest = (tg.closest('.pm-dst') as HTMLElement | null)?.dataset.pmdest;
+    if (dest) return createPingTo(dest);
+    if (tg.closest('[data-pmcancel]') || tg === pingMenuEl) closePingMenu();
+  });
+  pingMenuEl.addEventListener('keydown', (e) => {
+    const ke = e as KeyboardEvent;
+    if (ke.key === 'Enter' && (ke.target as HTMLElement).id === 'pm-text') {
+      e.preventDefault();
+      createPingTo(COALITION);
+    } else if (ke.key === 'Escape') {
+      closePingMenu();
+    }
+  });
+}
+
 requestAnimationFrame(frame);
 
 // --- in-app APK auto-update -------------------------------------------------
@@ -6465,3 +8034,303 @@ requestAnimationFrame(frame);
     if (navigator.onLine !== false) void runCheck(false);
   }
 }
+
+// --- corporation cabinet (mock meta-shell screen) ---------------------------
+// A UI prototype of the cross-session alliance ("corporation") management
+// screen designed in docs/corporation-ui.md. Everything here is LOCAL MOCK
+// data — there is no server, accounts, or meta-layer yet (metagame.md Контур 2).
+// The real screen would read server projections and send intents; this exists
+// to visualise the layout and interactions ahead of that work.
+type CorpRole = 'leader' | 'officer' | 'member';
+type CorpPresence = 'online' | 'match' | 'offline';
+interface CorpMember {
+  name: string;
+  role: CorpRole;
+  presence: CorpPresence;
+  influence: number; // lifetime influence contributed
+  joined: string;
+  me?: boolean;
+}
+interface CorpHolding {
+  sector: string;
+  bonus: string;
+  since: string;
+  threat: 'low' | 'med' | 'high';
+}
+interface CorpWar {
+  foe: string;
+  sector: string;
+  when: string;
+  status: 'scheduled' | 'incoming' | 'active';
+  signed: number;
+}
+interface CorpLedger {
+  kind: 'gain' | 'spend';
+  text: string;
+  amount: string;
+  when: string;
+}
+interface CorpMsg {
+  who: string;
+  text: string;
+  when: string;
+  pinned?: boolean;
+  audit?: boolean;
+}
+interface CorpData {
+  name: string;
+  tag: string;
+  motto: string;
+  influence: number;
+  supply: number;
+  cap: number;
+  rank: number;
+  myRole: CorpRole;
+  bonuses: string[];
+  members: CorpMember[];
+  holdings: CorpHolding[];
+  wars: CorpWar[];
+  ledger: CorpLedger[];
+  chat: CorpMsg[];
+}
+
+const MOCK_CORP: CorpData = {
+  name: 'Obsidian Vanguard',
+  tag: 'OBSV',
+  motto: 'Hold the void, take the dawn.',
+  influence: 48250,
+  supply: 1240,
+  rank: 7,
+  cap: 50,
+  myRole: 'officer',
+  bonuses: ['+5% добыча металла (сектор HELIOS-3)', '+3% скорость постройки (сектор AEGIS)'],
+  members: [
+    { name: 'Nyx', role: 'leader', presence: 'online', influence: 12400, joined: 'Day 12' },
+    { name: 'Max', role: 'officer', presence: 'online', influence: 9100, joined: 'Day 14', me: true },
+    { name: 'Corvus', role: 'officer', presence: 'match', influence: 8600, joined: 'Day 15' },
+    { name: 'Vega', role: 'member', presence: 'offline', influence: 6200, joined: 'Day 21' },
+    { name: 'Rhea', role: 'member', presence: 'online', influence: 5400, joined: 'Day 28' },
+    { name: 'Drax', role: 'member', presence: 'offline', influence: 3300, joined: 'Day 33' },
+    { name: 'Io', role: 'member', presence: 'match', influence: 3250, joined: 'Day 40' },
+  ],
+  holdings: [
+    { sector: 'HELIOS-3', bonus: '+5% добыча металла', since: 'Day 22', threat: 'med' },
+    { sector: 'AEGIS', bonus: '+3% скорость постройки', since: 'Day 31', threat: 'low' },
+    { sector: 'NULLPORT', bonus: '+2% доход кредитов', since: 'Day 44', threat: 'high' },
+  ],
+  wars: [
+    { foe: 'Crimson Syndicate', sector: 'VEIL-9', when: 'через 6ч', status: 'scheduled', signed: 8 },
+    { foe: 'Ashen Concord', sector: 'NULLPORT', when: 'через 2д', status: 'incoming', signed: 3 },
+    { foe: 'Pale Horizon', sector: 'HARBOR', when: 'идёт бой', status: 'active', signed: 11 },
+  ],
+  ledger: [
+    { kind: 'gain', text: 'Nyx — итог сессии skirmish-7', amount: '+1 850 ⟡', when: '1ч назад' },
+    { kind: 'spend', text: 'Объявлена AvA за VEIL-9', amount: '−12 000 ⟡', when: '3ч назад' },
+    { kind: 'gain', text: 'Corvus — итог сессии skirmish-6', amount: '+1 200 ⟡', when: '5ч назад' },
+    { kind: 'spend', text: 'Аренда флагмана «Nyx-класса» (Io)', amount: '−240 ◈', when: '8ч назад' },
+    { kind: 'gain', text: 'Rhea — итог сессии skirmish-5', amount: '+980 ⟡', when: '1д назад' },
+  ],
+  chat: [
+    { who: 'система', text: 'AvA за VEIL-9 назначена на через 6ч — заявляйтесь во вкладке «Войны».', when: '3ч', audit: true, pinned: true },
+    { who: 'Nyx', text: 'Собираем состав на VEIL-9. Нужны 2 генерала и адмирал.', when: '2ч' },
+    { who: 'Corvus', text: 'Беру адмирала. Арендую флагман из казны.', when: '2ч' },
+    { who: 'система', text: 'Corvus получил роль «офицер».', when: '2ч', audit: true },
+    { who: 'Rhea', text: 'Могу генералом, качаю десант.', when: '1ч' },
+  ],
+};
+
+const CORP_TABS: { id: string; label: string }[] = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'members', label: 'Участники' },
+  { id: 'treasury', label: 'Казна' },
+  { id: 'holdings', label: 'Владения' },
+  { id: 'wars', label: 'Войны' },
+  { id: 'comms', label: 'Чат / Лог' },
+];
+const CORP_ROLE_LABEL: Record<CorpRole, string> = {
+  leader: 'Глава',
+  officer: 'Офицер',
+  member: 'Участник',
+};
+const CORP_PRESENCE: Record<CorpPresence, { c: string; t: string }> = {
+  online: { c: 'var(--grn)', t: 'онлайн' },
+  match: { c: 'var(--amber)', t: 'в матче' },
+  offline: { c: 'var(--dim)', t: 'оффлайн' },
+};
+
+const corpEl = $('corp');
+const corpHdEl = $('corphd');
+const corpTabsEl = $('corptabs');
+const corpBodyEl = $('corpbody');
+let corpTab = 'overview';
+const nfmt = (n: number): string => n.toLocaleString('ru-RU');
+
+function corpOverviewHtml(c: CorpData): string {
+  const bonuses = c.bonuses.map((b) => `<li>${esc(b)}</li>`).join('');
+  const feed = c.ledger
+    .slice(0, 4)
+    .map((l) => `<div class="cline"><span>${esc(l.text)}</span><em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`)
+    .join('');
+  const nextWar = c.wars.find((w) => w.status !== 'active');
+  const nextWarHtml = nextWar
+    ? `<div class="cwarn">⚔ AvA за ${esc(nextWar.sector)} vs ${esc(nextWar.foe)} — ${esc(nextWar.when)}</div>`
+    : '';
+  return (
+    `${nextWarHtml}` +
+    `<div class="ccols">` +
+    `<section class="ccard"><h4>Пассивные бонусы</h4><ul class="clist">${bonuses}</ul>` +
+    `<p class="chint">Применяются снапшотом при старте матча (gdd §5.2), не «на лету».</p></section>` +
+    `<section class="ccard"><h4>Лента</h4>${feed}</section>` +
+    `</div>`
+  );
+}
+
+function corpMembersHtml(c: CorpData): string {
+  const canManage = c.myRole === 'leader' || c.myRole === 'officer';
+  const rows = c.members
+    .map((m) => {
+      const p = CORP_PRESENCE[m.presence];
+      const manage =
+        canManage && m.role === 'member'
+          ? `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.name)}">↑ роль</button>` +
+            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.name)}">✖</button>`
+          : '';
+      return (
+        `<div class="crow2${m.me ? ' me' : ''}">` +
+        `<span class="cdot" style="color:${p.c}"></span>` +
+        `<span class="cnm">${esc(m.name)}${m.me ? ' <i>(вы)</i>' : ''}</span>` +
+        `<span class="crole">${CORP_ROLE_LABEL[m.role]}</span>` +
+        `<span class="cinf">${nfmt(m.influence)} ⟡</span>` +
+        `<span class="cpres">${p.t}</span>` +
+        `<span class="cman">${manage}</span>` +
+        `</div>`
+      );
+    })
+    .join('');
+  const invite = canManage
+    ? `<button class="cbtn2 wide" data-corpact="invite">+ Пригласить участника</button>`
+    : '';
+  return `<div class="ctable">${rows}</div>${invite}`;
+}
+
+function corpTreasuryHtml(c: CorpData): string {
+  const rows = c.ledger
+    .map(
+      (l) =>
+        `<div class="cline"><span>${esc(l.text)} <b class="cwhen">· ${esc(l.when)}</b></span>` +
+        `<em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`,
+    )
+    .join('');
+  const canSpend = c.myRole === 'leader';
+  const spend = canSpend
+    ? `<button class="cbtn2 wide" data-corpact="declare">⚔ Объявить AvA (−12 000 ⟡)</button>`
+    : `<p class="chint">Трата влияния (объявление AvA) — только глава.</p>`;
+  return (
+    `<div class="cbig"><div><span>Влияние</span><b>${nfmt(c.influence)} ⟡</b></div>` +
+    `<div><span>Снабжение</span><b>${nfmt(c.supply)} ◈</b></div></div>` +
+    `<h4>История</h4><div class="cledger">${rows}</div>${spend}`
+  );
+}
+
+function corpHoldingsHtml(c: CorpData): string {
+  const rows = c.holdings
+    .map(
+      (h) =>
+        `<div class="crow2"><span class="cnm">▦ ${esc(h.sector)}</span>` +
+        `<span class="cbonus">${esc(h.bonus)}</span>` +
+        `<span class="cwhen">${esc(h.since)}</span>` +
+        `<span class="cthreat t-${h.threat}">${h.threat === 'low' ? 'спокойно' : h.threat === 'med' ? 'угроза' : 'под ударом'}</span></div>`,
+    )
+    .join('');
+  return `<div class="ctable">${rows}</div><p class="chint">Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.</p>`;
+}
+
+function corpWarsHtml(c: CorpData): string {
+  const rows = c.wars
+    .map((w) => {
+      const st = w.status === 'active' ? 'идёт' : w.status === 'incoming' ? 'входящий вызов' : 'назначено';
+      const act =
+        w.status === 'incoming' && c.myRole === 'leader'
+          ? `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(w.foe)}">Принять</button>`
+          : `<button class="cbtn2" data-corpact="signup" data-corparg="${esc(w.sector)}">Заявиться</button>`;
+      return (
+        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(w.sector)}</b><span class="cst st-${w.status}">${st}</span></div>` +
+        `<div class="cwmid">vs ${esc(w.foe)} · ${esc(w.when)} · состав ${w.signed}</div>` +
+        `<div class="cwact">${act}</div></div>`
+      );
+    })
+    .join('');
+  return `<div class="cwars">${rows}</div>`;
+}
+
+function corpCommsHtml(c: CorpData): string {
+  const msgs = c.chat
+    .map((m) => {
+      const cls = m.audit ? 'cmsg audit' : 'cmsg';
+      const pin = m.pinned ? '<span class="cpin">📌</span>' : '';
+      return `<div class="${cls}">${pin}<b>${esc(m.who)}</b> <span class="cwhen">${esc(m.when)}</span><p>${esc(m.text)}</p></div>`;
+    })
+    .join('');
+  return `<div class="cchat">${msgs}</div><div class="cinput"><input id="corpmsg" placeholder="Сообщение в корп-чат…" maxlength="240"><button class="cbtn2" data-corpact="send">Отправить</button></div>`;
+}
+
+function renderCorp(): void {
+  const c = MOCK_CORP;
+  corpHdEl.innerHTML =
+    `<div class="chrow"><span class="cemblem">⬢</span>` +
+    `<div class="cident"><b>${esc(c.name)}</b> <span class="ctag">[${esc(c.tag)}]</span><div class="cmotto">${esc(c.motto)}</div></div>` +
+    `<button id="corpclose" class="cx" title="Закрыть">✕</button></div>` +
+    `<div class="cmetrics">` +
+    `<span>влияние <b>${nfmt(c.influence)} ⟡</b></span>` +
+    `<span>снабжение <b>${nfmt(c.supply)} ◈</b></span>` +
+    `<span>секторов <b>${c.holdings.length} ▦</b></span>` +
+    `<span>участников <b>${c.members.length}/${c.cap} ♟</b></span>` +
+    `<span>ранг <b>#${c.rank}</b></span>` +
+    `<span>роль <b>${CORP_ROLE_LABEL[c.myRole]}</b></span>` +
+    `</div>`;
+  corpTabsEl.innerHTML = CORP_TABS.map(
+    (t) => `<button class="ctab${t.id === corpTab ? ' on' : ''}" data-corptab="${t.id}">${t.label}</button>`,
+  ).join('');
+  let body = '';
+  if (corpTab === 'overview') body = corpOverviewHtml(c);
+  else if (corpTab === 'members') body = corpMembersHtml(c);
+  else if (corpTab === 'treasury') body = corpTreasuryHtml(c);
+  else if (corpTab === 'holdings') body = corpHoldingsHtml(c);
+  else if (corpTab === 'wars') body = corpWarsHtml(c);
+  else if (corpTab === 'comms') body = corpCommsHtml(c);
+  corpBodyEl.innerHTML = body;
+}
+
+function openCorp(): void {
+  renderCorp();
+  corpEl.style.display = 'flex';
+}
+function closeCorp(): void {
+  corpEl.style.display = 'none';
+}
+
+corpTabsEl.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement | null)?.closest('[data-corptab]') as HTMLElement | null;
+  if (!b) return;
+  corpTab = b.dataset.corptab ?? 'overview';
+  renderCorp();
+});
+corpEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement | null;
+  if (!t) return;
+  if (t.id === 'corpclose' || t.id === 'corp') {
+    closeCorp();
+    return;
+  }
+  const act = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corpact;
+  if (act) {
+    // Mock: no server yet — surface the intent as an in-game dispatch note so the
+    // interaction is visible. The real screen would send an authoritative intent.
+    const arg = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corparg ?? '';
+    note(`[corp mock] intent: ${act}${arg ? ' → ' + arg : ''}`);
+  }
+});
+const corpEntry = $('ccorp');
+corpEntry.addEventListener('click', openCorp);
+const corpRail = $('railcorp');
+corpRail.addEventListener('click', openCorp);

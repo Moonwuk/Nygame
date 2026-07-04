@@ -1,5 +1,6 @@
 import { buildingLevel, type GameData } from '../data/schemas';
 import { deepClone } from '../util/clone';
+import { offerInvolves } from './diplomacy';
 import type { Fleet, GameState, PlanetId, PlayerId, ScheduledEvent } from './gameState';
 
 /** A scheduled event belongs to a player when it clearly references their own planet,
@@ -120,7 +121,12 @@ function withinRadiusAt(
     if (dx * dx + dy * dy <= r2) out.add(planet.id);
   }
 }
-function withinRadius(state: GameState, originId: PlanetId, radius: number, out: Set<PlanetId>): void {
+function withinRadius(
+  state: GameState,
+  originId: PlanetId,
+  radius: number,
+  out: Set<PlanetId>,
+): void {
   const origin = state.planets[originId]?.position;
   if (origin) withinRadiusAt(state, origin, radius, out);
 }
@@ -168,6 +174,19 @@ function fleetNode(state: GameState, fleet: Fleet): PlanetId | null {
   return null;
 }
 
+/** Viewer-wide radar-reach multiplier: ×(1 + Σ completed-tech `radarRangeBonus`
+ *  + faction passive `radarRangeBonus`) — how technologies and factions extend
+ *  every radar the player fields (A2). Data-driven; no data → ×1. */
+function radarMultiplier(state: GameState, viewerId: PlayerId, data: GameData): number {
+  const player = state.players[viewerId];
+  if (!player) return 1;
+  let bonus = data.factions[player.faction]?.passives.radarRangeBonus ?? 0;
+  for (const id of player.technologies?.completed ?? []) {
+    bonus += data.technologies[id]?.effects.radarRangeBonus ?? 0;
+  }
+  return Math.max(0, 1 + bonus); // a (mis)configured negative pile-up darkens, never inverts
+}
+
 interface Coverage {
   identify: Set<PlanetId>;
   radar: Set<PlanetId>;
@@ -177,6 +196,7 @@ interface Coverage {
 function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Coverage {
   const identify = new Set<PlanetId>();
   const radar = new Set<PlanetId>();
+  const mult = radarMultiplier(state, viewerId, data);
   for (const planet of Object.values(state.planets)) {
     if (planet.owner !== viewerId) continue;
     flood(state, planet.id, IDENTIFY_HOPS, identify);
@@ -185,6 +205,7 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
       const def = data.buildings[b.type];
       if (def) reach = Math.max(reach, buildingLevel(def, b.level).radarRange);
     }
+    reach *= mult;
     if (reach > 0) {
       withinRadius(state, planet.id, reach, radar); // signatures (outer)
       withinRadius(state, planet.id, reach * IDENTIFY_REACH_FRACTION, identify); // full reveal (inner)
@@ -195,7 +216,7 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
     const node = fleetNode(state, fleet);
     if (node === null) continue;
     flood(state, node, FLEET_IDENTIFY_HOPS, identify); // own node only — ships are near-blind
-    const reach = fleetRadar(fleet, data);
+    const reach = fleetRadar(fleet, data) * mult;
     if (reach > 0) {
       // Radar is a physical signal from the SHIP — centre it on the fleet's actual
       // continuous position, not the node it is heading to.
@@ -212,8 +233,43 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
 
 /** The set of nodes `viewerId` currently identifies (full detail). Exported so
  *  `visibilityModule` snapshots exactly what the projection treats as live. */
-export function identifiedNodes(state: GameState, viewerId: PlayerId, data: GameData): Set<PlanetId> {
+export function identifiedNodes(
+  state: GameState,
+  viewerId: PlayerId,
+  data: GameData,
+): Set<PlanetId> {
   return coverageFor(state, viewerId, data).identify;
+}
+
+/** Ad-hoc query (A4): can `viewerId` see this object at IDENTIFY detail right
+ *  now? Exactly the rule `visibleState` projects by — own objects always, others
+ *  when their node is currently identified. A radar-only contact answers false
+ *  (detected is not seen), remembered fog answers false (stale is not now), and
+ *  an unknown id answers false (fail-secure). Fog is opt-in: a host that does
+ *  not enforce it simply never consults this and everything stays visible.
+ *
+ *  Computing coverage is the expensive part — a caller checking MANY objects for
+ *  one viewer should hoist `identifiedNodes(state, viewerId, data)` once and pass
+ *  it as `identified` (the matchRoom event-filter pattern); each call is then a
+ *  set lookup. Omitted, the coverage is computed per call. */
+export function isVisibleTo(
+  state: GameState,
+  viewerId: PlayerId,
+  target: { planetId: PlanetId } | { fleetId: string },
+  data: GameData,
+  identified?: Set<PlanetId>,
+): boolean {
+  if ('planetId' in target) {
+    const planet = state.planets[target.planetId];
+    if (!planet) return false;
+    if (planet.owner === viewerId) return true;
+    return (identified ?? identifiedNodes(state, viewerId, data)).has(target.planetId);
+  }
+  const fleet = state.fleets[target.fleetId];
+  if (!fleet) return false;
+  if (fleet.owner === viewerId) return true;
+  const node = fleetNode(state, fleet);
+  return node !== null && (identified ?? identifiedNodes(state, viewerId, data)).has(node);
 }
 
 /**
@@ -223,14 +279,48 @@ export function identifiedNodes(state: GameState, viewerId: PlayerId, data: Game
  * (it leaks future intent); radar-only enemy fleets become coarse signatures.
  */
 export function visibleState(state: GameState, viewerId: PlayerId, data: GameData): VisibleState {
+  return visibleView(state, viewerId, data).view;
+}
+
+/** A player's projection plus the identify set it was computed from. */
+export interface VisibleView {
+  view: VisibleState;
+  /** Nodes the viewer currently identifies — the same set `identifiedNodes` returns. */
+  identified: Set<PlanetId>;
+}
+
+/**
+ * `visibleState` plus the identify set behind it, from ONE coverage pass.
+ * The broadcast path needs both (the view to diff, the set to fog-filter
+ * events); computing them together halves the per-player coverage work.
+ */
+export function visibleView(state: GameState, viewerId: PlayerId, data: GameData): VisibleView {
+  const coverage = coverageFor(state, viewerId, data);
+  return { view: project(state, viewerId, data, coverage), identified: coverage.identify };
+}
+
+/** The projection body, over a precomputed coverage (see `visibleView`). */
+function project(
+  state: GameState,
+  viewerId: PlayerId,
+  data: GameData,
+  { identify, radar }: Coverage,
+): VisibleState {
   const view = deepClone(state) as VisibleState;
-  const { identify, radar } = coverageFor(state, viewerId, data);
+
+  // Stolen intel windows (espionage): the viewer's LIVE grants open narrow holes in
+  // the fog below. Expired grants open nothing — expiry is enforced HERE, at the
+  // security boundary, not only by the module's housekeeping.
+  const grants = (state.intel?.[viewerId] ?? []).filter((g) => g.until > state.time);
+  const spiedTreasury = new Set(grants.filter((g) => g.kind === 'treasury').map((g) => g.target));
+  const spiedPlanets = new Set(grants.filter((g) => g.kind === 'planet').map((g) => g.target));
+  const spiedFleets = new Set(grants.filter((g) => g.kind === 'fleets').map((g) => g.target));
 
   // Other players' private data: keep identity, drop treasury and research (incl. the
   // chosen research leader — its branch focus / +slot is strategic, not public).
   for (const player of Object.values(view.players)) {
     if (player.id === viewerId) continue;
-    player.resources = {};
+    if (!spiedTreasury.has(player.id)) player.resources = {};
     delete player.technologies;
     delete player.scientist;
   }
@@ -243,12 +333,40 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
     const own = view.match.scores[viewerId];
     view.match.scores = own ? { [viewerId]: own } : {};
   }
+  // Stolen intel is the thief's secret: strip everyone else's grants (and the key
+  // entirely when the viewer has none — no empty-map blip in third-party deltas).
+  if (view.intel) {
+    const own = view.intel[viewerId];
+    if (own?.length) view.intel = { [viewerId]: own };
+    else delete view.intel;
+  }
+  // Diplomatic OFFERS are private to the two negotiating parties (the committed
+  // stances themselves are public): a third party must not see who is suing for
+  // peace with whom. Keep only offers the viewer sends or receives; a map left
+  // EMPTY after the strip is removed entirely — otherwise the undefined→{} flip
+  // rides a third party's delta and leaks "someone made the match's first offer".
+  if (view.diplomacyOffers) {
+    for (const key of Object.keys(view.diplomacyOffers)) {
+      if (!offerInvolves(key, viewerId)) delete view.diplomacyOffers[key];
+    }
+    if (Object.keys(view.diplomacyOffers).length === 0) delete view.diplomacyOffers;
+  }
   // Heroes are private: a viewer sees only their own (position + cooldowns). Temp
   // lanes stay — they are public map topology (real `links`), visible to everyone.
   if (view.heroes) {
     for (const id of Object.keys(view.heroes)) {
       if (view.heroes[id]?.owner !== viewerId) delete view.heroes[id];
     }
+  }
+  // Order chains (host extensions like the prototype's `orders`) are future intent —
+  // exactly what `scheduled` is stripped for below. Keep only the chains of the
+  // viewer's OWN fleets; a map left empty is removed (same delta hygiene as offers).
+  const chains = (view as { orders?: Record<string, unknown> }).orders;
+  if (chains) {
+    for (const fleetId of Object.keys(chains)) {
+      if (state.fleets[fleetId]?.owner !== viewerId) delete chains[fleetId];
+    }
+    if (Object.keys(chains).length === 0) delete (view as { orders?: unknown }).orders;
   }
 
   // Planets: keep topology (id/position/links) but strip contents you can't see.
@@ -257,7 +375,8 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const remembered: PlanetId[] = [];
   const memory = state.fog?.[viewerId];
   for (const planet of Object.values(view.planets)) {
-    if (planet.owner === viewerId || identify.has(planet.id)) continue;
+    if (planet.owner === viewerId || identify.has(planet.id) || spiedPlanets.has(planet.id))
+      continue;
     const snap = memory?.[planet.id];
     if (snap) {
       planet.owner = snap.owner;
@@ -290,7 +409,7 @@ export function visibleState(state: GameState, viewerId: PlayerId, data: GameDat
   const signatures: SignatureContact[] = [];
   for (const id of Object.keys(view.fleets).sort()) {
     const fleet = view.fleets[id];
-    if (!fleet || fleet.owner === viewerId) continue;
+    if (!fleet || fleet.owner === viewerId || spiedFleets.has(fleet.owner)) continue;
     const node = fleetNode(view, fleet);
     if (node !== null && identify.has(node)) continue; // fully identified
     if (node !== null && radar.has(node)) {

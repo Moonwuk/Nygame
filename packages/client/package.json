@@ -3,11 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "React Native/mobile client package (Stage 4) with a minimal multiplayer transport adapter.",
+  "description": "PWA-first web client (Stage 4): framework-agnostic view-models + a Vite app shell consuming @void/shared-core.",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build --base=./",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@void/shared-core": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^6.3.6"
   }
 }

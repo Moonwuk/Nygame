@@ -197,7 +197,14 @@ export class Kernel {
 
     for (;;) {
       if (++guard > MAX_ADVANCE_STEPS) {
-        return { ok: false, code: 'E_ADVANCE_OVERFLOW' };
+        // Hit the per-call work bound before reaching `now`. Rather than discard the
+        // (fully deterministic) progress made so far and wedge the room on every
+        // retry, YIELD it as a partial advance: `committed` holds exactly the first
+        // MAX_ADVANCE_STEPS steps in (at, seq) order, and the caller continues from
+        // `committed.time`. A genuine same-instant runaway leaves `committed.time`
+        // unmoved, which the caller detects (no progress) and surfaces — the kernel
+        // just refuses to hang or to lose work.
+        return { ok: true, state: committed, events, failures, partial: true };
       }
 
       const next = earliestDue(committed.scheduled, ctx.now);

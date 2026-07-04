@@ -75,17 +75,6 @@
     "cost": { "metal": 140, "credits": 40 },
     "upkeep": { "credits": 4 }
   },
-  "orbital_aa": {
-    "faction": "vanguard",
-    "domain": "ground",
-    "stats": { "attack": 4, "defense": 14, "speed": 0, "hp": 30, "aaDamage": 14, "cargoSize": 2 },
-    "line": "rear",
-    "traits": [],
-    "abilities": [],
-    "signature": 2,
-    "cost": { "metal": 120, "credits": 40 },
-    "upkeep": { "credits": 3 }
-  },
   "hero": {
     "faction": "vanguard",
     "stats": { "attack": 12, "defense": 12, "speed": 6, "hp": 120, "shield": 40 },
@@ -95,5 +84,25 @@
     "signature": 6,
     "cost": { "metal": 400, "credits": 200 },
     "upkeep": { "credits": 10 }
+  },
+  "fighter_squadron": {
+    "faction": "vanguard",
+    "stats": { "attack": 14, "defense": 3, "speed": 14, "hp": 10, "cargoSize": 1, "strikeRange": 180, "fuel": 3, "rearmRounds": 2 },
+    "line": "front",
+    "traits": ["squadron"],
+    "abilities": [],
+    "signature": 2,
+    "cost": { "metal": 90, "credits": 40 },
+    "upkeep": { "credits": 4 }
+  },
+  "strike_carrier": {
+    "faction": "vanguard",
+    "stats": { "attack": 4, "defense": 10, "speed": 5, "hp": 70, "shield": 20, "cargoCapacity": 6 },
+    "line": "front",
+    "traits": ["carrier"],
+    "abilities": [],
+    "signature": 7,
+    "cost": { "metal": 320, "credits": 160 },
+    "upkeep": { "credits": 12 }
   }
 }

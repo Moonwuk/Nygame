@@ -16,15 +16,25 @@ Monorepo (pnpm workspaces):
 
 - `packages/shared-core` — the deterministic, data-driven simulation. Built first,
   in isolation (no server, no DB, no network) — the foundation the rest builds on.
-- `packages/server` — authoritative server (Stage 3, in progress). Working in-memory WS slice:
-  `MatchRoom` (advance → applyAction → **per-player fog deltas**), durable+bounded+rate-limited
-  receipts, a Postgres match/receipt store, a **v1 offline scheduler**, and a **multi-match registry**
-  with a match-browser read-model (`GET /matches`) — all wired in the prototype host,
-  `prototype/netserver.ts`. Not yet: auth/JWT, `@void/action-layer` wiring.
+- `packages/action-layer` — the action gate in front of the reducer (Stage 2, done):
+  envelope validation → per-type zod payload schemas → session authorization →
+  idempotency receipts → strict per-session `clientSeq` sequence gate; stable `E_*` codes.
+- `packages/server` — authoritative server (Stage 3; the critical path to an online session
+  is closed). `MatchRoom` (advance → applyAction → **per-player fog deltas**),
+  durable+bounded+rate-limited receipts, strict commit-before-broadcast persistence over a
+  Postgres match/receipt store, a **v1 offline scheduler** (`clockDriver.ts`), a
+  **multi-match registry** with hibernation (`LazyRoomRegistry`) and a match-browser
+  read-model (`GET /matches`), JWT join-token auth + Origin allowlist (`auth.ts`), and the
+  `@void/action-layer` gate — auth/gate switched by env (`AUTH_JWT_SECRET`, `GATE=1`,
+  `ALLOWED_ORIGINS`). Hosted by `packages/server/src/main.ts`; the prototype host
+  (`prototype/netserver.ts`) carries the same slice for playtests. Not yet: OIDC identity,
+  an envelope-sending client (`action.v1`), multi-process scale (pg-boss).
 - `packages/client` — client (Stage 4). Direction is a **PWA-first web client** (TWA Android +
   Capacitor iOS), not React Native — see `docs/cross-platform-roadmap.md` (decision record). Holds
-  the `MultiplayerClient` transport adapter plus a framework-agnostic welcome-screen view-model +
-  theme tokens (`welcomeScreen.ts`/`theme.ts`); the rendered app shell is still a placeholder.
+  the `MultiplayerClient` transport adapter plus framework-agnostic view-models + theme tokens
+  (`welcomeScreen.ts` — welcome screen; `matchHud.ts` — status bar / fleet selection / battle
+  panel; `theme.ts`); the rendered app shell is still a placeholder. `mobile/` is the thin
+  Capacitor wrapper (APK).
 - `data/` — game content as JSON. `docs/` — design docs.
 
 ## Commands
@@ -39,11 +49,12 @@ pnpm run format       # Prettier --write
 ```
 
 Run the gate locally before committing — `pnpm run check` = lint + typecheck + test
-(+ `pnpm audit --audit-level=high`). CI mirrors it on every push: `.github/workflows/security.yml`
-runs `pnpm run check` + `pnpm audit` alongside a diverse scanner set (Semgrep, CodeQL, Trivy, OSV,
-Gitleaks, TruffleHog, zizmor), and `.github/workflows/android.yml` builds the Android APK. The
-security pipeline is **informational / non-blocking** — no branch protection makes the gate a
-required check yet, so a red push can still merge; keep it green yourself.
+(CI additionally runs `pnpm audit --audit-level=high`). CI mirrors it on every push:
+`.github/workflows/ci.yml` runs the gate + audit against a service Postgres (so the
+durable-store tests run too), `.github/workflows/security.yml` runs the gate + audit alongside
+a diverse scanner set (Semgrep, CodeQL, Trivy, OSV, Gitleaks, TruffleHog, zizmor), and
+`.github/workflows/android.yml` builds the Android APK. `main` is protected — changes land
+via PR with green CI (see `CONTRIBUTING.md`); keep the gate green before pushing.
 
 ## Non-negotiable invariants
 
@@ -69,8 +80,8 @@ These come straight from the design docs. Breaking them is a bug, not a style ch
    leaks to the caller (details belong in server logs). `h.reject(code)` is the
    intended path; unexpected throws become `E_INTERNAL`.
 5. **Server-authority.** The client sends intent, never state. Validation/authorization/
-   idempotency live in the action layer (Stage 2, not built yet); the core reducer
-   assumes an action already cleared those gates.
+   idempotency live in the action layer (`@void/action-layer`, wired in front of the reducer
+   on gated servers); the core reducer assumes an action already cleared those gates.
 6. **Determinism of module order.** Module execution order = their order in the array
    passed to `createKernel`, recorded in `kernel.manifest` and versioned per match.
    Don't introduce order-dependent behavior that isn't driven by that fixed order.

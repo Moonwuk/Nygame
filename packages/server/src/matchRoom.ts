@@ -8,7 +8,8 @@ import type {
   PlayerId,
   SignatureContact,
 } from '@void/shared-core';
-import { diffState, hashState, identifiedNodes, visibleState } from '@void/shared-core';
+import { diffState, hashState, identifiedNodes, visibleView } from '@void/shared-core';
+import type { AcceptedAction, ActionGate } from '@void/action-layer';
 import {
   parseClientMessage,
   serializeServerMessage,
@@ -18,6 +19,7 @@ import {
   type ServerMessage,
   type ServerRejectionMessage,
 } from './protocol';
+import type { MatchSnapshot, StoredReceipt } from './store';
 import { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 
 export interface RoomPeer {
@@ -74,6 +76,36 @@ export interface MatchRoomOptions {
   /** Seed the idempotency receipts (e.g. rehydrated from a ReceiptStore on restart),
    *  so an action deduped before a crash stays deduped after it. */
   initialReceipts?: ActionReceipt[];
+  /** Resume the action counter (e.g. from a persisted `MatchSnapshot.seq`). Without
+   *  it a restarted room restarts `seq` at 0, and an optimistic-by-seq store would
+   *  drop its post-restart saves until the counter climbed back past the stored one.
+   *  Default 0 (a fresh match). */
+  initialSeq?: number;
+  /** STRICT commit-before-broadcast (risk14). When set, a player action is routed
+   *  through an async, per-room-serialized path that AWAITS this durable write of the
+   *  new snapshot + receipt BEFORE committing state or broadcasting the delta — so a
+   *  peer never sees state the store hasn't accepted, and a crash can't lose an acked
+   *  action. A rejecting/throwing write commits nothing and the action is retriable.
+   *  Omit ⇒ the current synchronous path (broadcast then persist-after via `observe`),
+   *  which every existing test and the tick/driver path keep using unchanged. */
+  persist?: (snapshot: MatchSnapshot, receipt: StoredReceipt) => Promise<void>;
+  /** Opt-in `@void/action-layer` front-door (SV-1.1). When set, this room accepts
+   *  gated `action.v1` envelope messages and refuses bare `action` messages: every
+   *  action is validated → authorized → sequence-checked → deduped BEFORE the reducer,
+   *  yielding stable `E_*` codes with no internal leak. `receive` must be passed the
+   *  connection's `sessionId` (the transport binds it at handshake). Omit ⇒ the current
+   *  bare-action path (no envelope), which every existing caller keeps using unchanged.
+   *  Combining `gate` with `persist` routes an accepted action through the durable
+   *  commit-before-broadcast path (serialized in the mailbox so the sequence reservation
+   *  and the persist are atomic); without `persist`, the gated apply is synchronous. A
+   *  server-issued `sessionId` (never client-chosen — it keys the sequence cursor and
+   *  authorizes the envelope, SV-1.1-live-A) must reach `receive`. The gate's in-memory
+   *  stores are bounded (SV-1.1-live-B: FIFO receipts + LRU cursors) and need NO
+   *  cross-restart durability: they are keyed by the per-connection `sessionId`, so a
+   *  restart or hibernation drops them exactly when the sessions they track also end — a
+   *  reconnect mints a fresh `sessionId` → a fresh cursor and a fresh `actionId` namespace,
+   *  so no post-loss action can hit a lost entry (verified). */
+  gate?: ActionGate;
   /** Cap on retained idempotency receipts; past it the oldest are evicted (FIFO).
    *  Bounds memory for a long match — a retried action older than the last N is no
    *  longer deduped (idempotency is needed for minutes, not forever). Default 10000. */
@@ -113,7 +145,13 @@ export type RoomObservation =
       seq: number;
       code?: string;
     }
-  | { kind: 'end'; winner: PlayerId | null; reason?: string };
+  | { kind: 'end'; winner: PlayerId | null; reason?: string }
+  /** The world clock could not fully reach `now` in one `advance` call. `reason`
+   *  distinguishes an enormous-but-legitimate catch-up that was throttled to bound
+   *  work (`throttled` — it will finish on the next advance) from a same-instant
+   *  runaway where the clock stopped progressing (`stalled` — a content/module bug
+   *  that needs attention). Ops should alert on `stalled`. */
+  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' };
 
 export interface SubmitResult {
   ok: boolean;
@@ -122,14 +160,41 @@ export interface SubmitResult {
   code?: string;
 }
 
+/** The durable verdict of a committed apply (`commitApply`). `durable:false` marks a
+ *  TRANSIENT failure (the store was unreachable) that the gated path must NOT cache in the
+ *  ActionGate — the action stays retriable, exactly like the room's own transient rejects. */
+type CommitVerdict =
+  | { ok: true }
+  | { ok: false; code: string; durable: true }
+  | { ok: false; code: string; durable: false };
+const TRANSIENT_VERDICT: CommitVerdict = { ok: false, code: 'E_UNAVAILABLE', durable: false };
+
 const OPEN = 1;
 /** Backpressure cap: drop a peer whose unflushed outbound buffer exceeds this (it
  *  isn't draining — a fast sender outrunning a slow receiver). Deltas are KB-sized,
  *  so 1 MiB is hundreds of un-acked updates — a genuinely stuck client, not a blip. */
 const MAX_BUFFERED_BYTES = 1_048_576;
 
+/** Max partial-advance chunks one `advance` call will chain before returning. Each
+ *  chunk is up to the kernel's `MAX_ADVANCE_STEPS` of work, so this bounds the
+ *  synchronous work of a single catch-up (an enormous-but-legit backlog finishes
+ *  across several calls; a same-instant runaway is caught after one non-progressing
+ *  chunk). Keeps the event loop responsive instead of hanging on a huge advance. */
+const MAX_CATCHUP_CHUNKS = 10;
+
 function canSend(peer: RoomPeer): boolean {
   return peer.readyState === undefined || peer.readyState === OPEN;
+}
+
+/** Best-effort actionId from a raw envelope, for correlating a gate rejection back to the
+ *  client's action. A malformed payload may carry none — then `''`, and the client
+ *  correlates by its own clientSeq instead. */
+function envelopeActionId(envelope: unknown): string {
+  if (envelope !== null && typeof envelope === 'object') {
+    const id = (envelope as { actionId?: unknown }).actionId;
+    if (typeof id === 'string') return id;
+  }
+  return '';
 }
 
 /** Ally-ping tuning (ephemeral, server-side; never part of the deterministic core). */
@@ -164,6 +229,22 @@ export class MatchRoom {
   private readonly emitStateHash: boolean;
   private readonly singlePeerPerPlayer: boolean;
   private readonly observe?: (event: RoomObservation) => void;
+  /** Durable write for strict commit-before-broadcast (see options.persist). */
+  private readonly persist?: (snapshot: MatchSnapshot, receipt: StoredReceipt) => Promise<void>;
+  /** Opt-in action-layer front-door (see options.gate). */
+  private readonly gate?: ActionGate;
+  /** The actor mailbox (SV-0.2): serializes state-touching operations whose critical
+   *  section spans an `await` — a committed submit (its persist) and a lobby `start`
+   *  — so one runs fully before the next, and neither interleaves with the other's
+   *  broadcast. Synchronous ops (the no-persist `submitAction`, `tick`) can't interleave
+   *  anyway; `tick` uses the `committing` flag rather than the mailbox (skip ≡ defer for
+   *  a recomputable advance, and skip is cheaper). */
+  private mailbox: Promise<void> = Promise.resolve();
+  /** True during a committed submit's critical section (incl. its persist await) so a
+   *  concurrent `tick()` skips instead of mutating the world under the submit, and
+   *  `msUntilNextEvent()` reports null so a wakeup driver idles (rather than firing skipped
+   *  ticks that look overdue). The submit re-arms the driver when it commits. */
+  private committing = false;
   private endObserved = false; // 'end' is reported once
   private readonly peers = new Map<PlayerId, Set<RoomPeer>>();
   private readonly receipts = new Map<string, ActionReceipt>();
@@ -214,6 +295,9 @@ export class MatchRoom {
     this.emitStateHash = options.emitStateHash ?? false;
     this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
     this.observe = options.observe;
+    this.persist = options.persist;
+    this.gate = options.gate;
+    if (options.initialSeq && options.initialSeq > 0) this.seq = options.initialSeq;
     this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
     this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
     this.actionRateWindowMs = options.actionRateWindowMs ?? ACTION_RATE_WINDOW_MS_DEFAULT;
@@ -321,11 +405,19 @@ export class MatchRoom {
     return this.started;
   }
 
+  /** Number of connected sockets across all seats — 0 means the match is unwatched
+   *  and a lifecycle registry may hibernate it (persist + evict). */
+  get peerCount(): number {
+    let n = 0;
+    for (const set of this.peers.values()) n += set.size;
+    return n;
+  }
+
   hasPlayer(playerId: PlayerId): boolean {
     return this.stateValue.players[playerId] !== undefined;
   }
 
-  addPeer(playerId: PlayerId, peer: RoomPeer): boolean {
+  addPeer(playerId: PlayerId, peer: RoomPeer, sessionId?: string): boolean {
     if (!this.hasPlayer(playerId)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_UNKNOWN_PLAYER' });
       peer.close?.(1008, 'unknown player');
@@ -355,6 +447,7 @@ export class MatchRoom {
       state: view.base,
       signatures: view.signatures,
       remembered: view.remembered,
+      ...(sessionId !== undefined ? { sessionId } : {}),
       ...this.hashField(view.base),
       ...this.lobbyField(),
     });
@@ -366,14 +459,17 @@ export class MatchRoom {
   }
 
   /** What `playerId` may see right now: a clean visible `GameState` baseline
-   *  (fog applied, internal memory stripped) plus the fog extras for the wire. */
+   *  (fog applied, internal memory stripped), the fog extras for the wire, and
+   *  the identify set behind them (one coverage pass serves view + event fog). */
   private viewFor(playerId: PlayerId): {
     base: GameState;
     signatures: SignatureContact[];
     remembered: string[];
+    identified: Set<string>;
   } {
-    const { signatures, remembered, ...base } = visibleState(this.stateValue, playerId, this.data);
-    return { base: base as GameState, signatures, remembered };
+    const { view, identified } = visibleView(this.stateValue, playerId, this.data);
+    const { signatures, remembered, ...base } = view;
+    return { base: base as GameState, signatures, remembered, identified };
   }
 
   removePeer(playerId: PlayerId, peer: RoomPeer): void {
@@ -395,7 +491,12 @@ export class MatchRoom {
     if (this.syncLobbyClock() || (this.manualStart && !this.started)) this.broadcastState([]);
   }
 
-  async receive(playerId: PlayerId, peer: RoomPeer, raw: string): Promise<void> {
+  async receive(
+    playerId: PlayerId,
+    peer: RoomPeer,
+    raw: string,
+    sessionId?: string,
+  ): Promise<void> {
     if (raw.length > this.maxPayloadBytes) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_PAYLOAD_TOO_LARGE' });
       return;
@@ -419,7 +520,11 @@ export class MatchRoom {
       return;
     }
     if (message.type === 'start') {
-      this.start(playerId); // host-only; ignored otherwise
+      // Serialize the lobby release through the mailbox in committed mode, so its
+      // broadcast can't interleave with an in-flight action's persist await. (`start`
+      // itself is synchronous and host-only; ignored otherwise.)
+      if (this.persist) await this.enqueue(() => this.start(playerId));
+      else this.start(playerId);
       return;
     }
     if (message.type === 'ping.place') {
@@ -430,7 +535,124 @@ export class MatchRoom {
       await this.handlePingClear(playerId, message.pingId);
       return;
     }
-    this.submitAction(playerId, message.action, peer);
+    if (message.type === 'action.v1') {
+      // Gated envelope path (SV-1.1). Requires a configured gate AND the connection's
+      // sessionId (bound by the transport at handshake) — without both there is nothing
+      // to authorize against, so it is an unroutable message.
+      if (this.gate && sessionId !== undefined) {
+        await this.admitEnvelope(playerId, peer, message.envelope, sessionId);
+      } else {
+        this.send(peer, { type: 'error', matchId: this.id, code: 'E_BAD_MESSAGE' });
+      }
+      return;
+    }
+    // Bare-action path. A gated room refuses it: a bare action would bypass envelope
+    // validation, authorization and the sequence gate.
+    if (this.gate) {
+      this.send(peer, { type: 'error', matchId: this.id, code: 'E_BAD_MESSAGE' });
+      return;
+    }
+    if (this.persist) {
+      await this.submitActionCommitted(playerId, message.action, peer);
+    } else {
+      this.submitAction(playerId, message.action, peer);
+    }
+  }
+
+  /**
+   * The `@void/action-layer` front door (SV-1.1): validate → authorize → sequence →
+   * dedup an incoming envelope, then apply an accepted action through the sync reducer
+   * core and record the verdict in the gate for idempotent replay. Every failure is a
+   * stable `E_*` code with no internal detail (fail-secure, OWASP A10).
+   */
+  private async admitEnvelope(
+    playerId: PlayerId,
+    peer: RoomPeer,
+    envelope: unknown,
+    sessionId: string,
+  ): Promise<void> {
+    // Durable committed path: serialize the WHOLE admit+commit through the actor mailbox,
+    // so the ActionGate's sequence reservation and the async durable apply are one atomic
+    // step. Otherwise a later action's admit could advance the cursor past an earlier one
+    // whose persist is still in flight, making that earlier one's transient failure
+    // un-retriable (E_REPLAY). The sync path can't interleave, so it needs no mailbox.
+    if (this.persist) {
+      await this.enqueue(() =>
+        this.admitCommitted(playerId, peer, envelope, sessionId).catch(() => {
+          try {
+            this.sendReject(peer, envelopeActionId(envelope), 'E_INTERNAL');
+          } catch {
+            /* peer gone */
+          }
+        }),
+      );
+      return;
+    }
+    const accepted = this.admitDecision(playerId, peer, envelope, sessionId);
+    if (!accepted) return;
+    // Apply through the shared SYNC reducer core — no re-dedup / re-rate-limit /
+    // re-ownership (the gate + the rate-limit above already enforced them).
+    const result = this.applyAndBroadcast(playerId, accepted.action, peer);
+    this.gate!.commit(
+      accepted.envelope,
+      result.ok ? { ok: true } : { ok: false, code: result.code ?? 'E_INTERNAL' },
+    );
+  }
+
+  /** Gated committed apply (runs inside the mailbox): admit, then push an accepted action
+   *  through the durable `commitApply`, recording the durable verdict in the ActionGate. A
+   *  transient (non-durable) failure is NOT cached, so the action stays retriable. */
+  private async admitCommitted(
+    playerId: PlayerId,
+    peer: RoomPeer,
+    envelope: unknown,
+    sessionId: string,
+  ): Promise<void> {
+    const accepted = this.admitDecision(playerId, peer, envelope, sessionId);
+    if (!accepted) return;
+    const verdict = await this.commitApply(playerId, accepted.action, peer);
+    if (verdict.ok) {
+      this.gate!.commit(accepted.envelope, { ok: true });
+    } else if (verdict.durable) {
+      this.gate!.commit(accepted.envelope, { ok: false, code: verdict.code });
+    } else {
+      // Transient failure (store down): release the sequence reservation so a backoff-retry
+      // of the same clientSeq is admitted again instead of hitting E_REPLAY. Safe because
+      // this admit→commit ran serialized in the mailbox — nothing reserved past it.
+      this.gate!.rollback(accepted.envelope);
+    }
+  }
+
+  /** The shared front of the gated path (both sync and committed): rate-limit → gate.admit,
+   *  handling a duplicate replay or a rejection inline. Returns the accepted action to apply,
+   *  or null when it was already handled (rejected / replayed). */
+  private admitDecision(
+    playerId: PlayerId,
+    peer: RoomPeer,
+    envelope: unknown,
+    sessionId: string,
+  ): AcceptedAction | null {
+    // Rate-limit BEFORE the sequence-reserving admit: a throttled action must not reserve
+    // its clientSeq, or a legitimate backoff-retry of the same seq would hit E_REPLAY. This
+    // is the fine-grained per-player limit (the connection-level flood guard is in wsServer).
+    if (this.rateLimited(playerId)) {
+      this.sendReject(peer, envelopeActionId(envelope), 'E_RATE_LIMIT');
+      return null;
+    }
+    const admission = this.gate!.admit(envelope, { matchId: this.id, playerId, sessionId });
+    if (!admission.ok) {
+      this.sendReject(peer, envelopeActionId(envelope), admission.code);
+      return null;
+    }
+    const value = admission.value;
+    if (value.status === 'duplicate') {
+      // Idempotent replay — mirror the bare path's dedup response: a full resync for an
+      // action that succeeded, the cached rejection otherwise. No re-apply.
+      if (value.receipt.ok) this.send(peer, this.stateMessageFor(playerId));
+      else this.sendReject(peer, value.receipt.actionId, value.receipt.code ?? 'E_INTERNAL');
+      return null;
+    }
+    return value;
   }
 
   submitAction(playerId: PlayerId, action: Action, peer?: RoomPeer): SubmitResult {
@@ -446,11 +668,7 @@ export class MatchRoom {
     // Rate limit (F-03): cap submits per player per window. A flood past the cap is
     // rejected TRANSIENTLY — no receipt is recorded, so a genuine retry after backoff
     // still lands (idempotency must never turn a rate-limit into a permanent reject).
-    const rateNow = this.now();
-    const recent = (this.actionTimes.get(playerId) ?? []).filter(
-      (t) => rateNow - t < this.actionRateWindowMs,
-    );
-    if (recent.length >= this.actionRateMax) {
+    if (this.rateLimited(playerId)) {
       if (peer) {
         this.send(peer, {
           type: 'rejection',
@@ -462,8 +680,6 @@ export class MatchRoom {
       }
       return { ok: false, seq: this.seq, events: [], code: 'E_RATE_LIMIT' };
     }
-    recent.push(rateNow);
-    this.actionTimes.set(playerId, recent);
 
     if (action.playerId !== playerId || !this.hasPlayer(playerId)) {
       const receipt = this.recordReceipt(action, playerId, false, 'E_FORBIDDEN');
@@ -471,6 +687,16 @@ export class MatchRoom {
       return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
     }
 
+    return this.applyAndBroadcast(playerId, action, peer);
+  }
+
+  /**
+   * The reducer core, AFTER the front gates (dedup, rate-limit, ownership): catch the
+   * world up to now, apply the action, commit + broadcast. Shared by the bare
+   * `submitAction` and the gated `admitEnvelope` (which pre-clears the gates via the
+   * ActionGate), so neither re-runs a gate the other already applied.
+   */
+  private applyAndBroadcast(playerId: PlayerId, action: Action, peer?: RoomPeer): SubmitResult {
     const serverNow = this.clock();
     const advanced = this.advance(serverNow);
     if (!advanced.ok) {
@@ -500,18 +726,41 @@ export class MatchRoom {
     return { ok: true, seq: receipt.seq, events };
   }
 
+  /** Per-player action rate limit (F-03): true if `playerId` is over `actionRateMax`
+   *  submits in the trailing `actionRateWindowMs`. When under, records this submit's
+   *  timestamp and returns false. Shared by every action path so the cap is per-player,
+   *  not per-path. Pure check-and-record — the caller sends the transient reject. */
+  private rateLimited(playerId: PlayerId): boolean {
+    const rateNow = this.now();
+    const recent = (this.actionTimes.get(playerId) ?? []).filter(
+      (t) => rateNow - t < this.actionRateWindowMs,
+    );
+    if (recent.length >= this.actionRateMax) return true;
+    recent.push(rateNow);
+    this.actionTimes.set(playerId, recent);
+    return false;
+  }
+
   /** Advance the world to the current clock and broadcast what changed — the
    *  offline heartbeat. It fires due scheduled events (arrivals, battles,
    *  captures) with NO player action, so the world keeps running 24/7 while
    *  everyone is away. A wakeup driver calls this when `msUntilNextEvent` elapses.
    *  No-op while the clock is frozen (lobby) or when nothing is due yet. */
-  tick(): void {
-    if (this.waiting) return;
+  tick(): boolean {
+    // Skip while a committed submit holds the world: its catch-up is computed but not yet
+    // committed to `stateValue` (commit-before-broadcast), so advancing here would race
+    // the submit's pending commit. `msUntilNextEvent` reports null while committing, so a
+    // driver idles rather than firing skipped ticks; the submit re-arms it on commit.
+    if (this.waiting || this.committing) return false;
+    const before = this.stateValue.time;
     const advanced = this.advance(this.clock());
     if (advanced.ok && advanced.events.length > 0) {
       this.broadcastState(advanced.events);
       this.observeEndIfNeeded();
     }
+    // Whether the world clock moved forward — a wakeup driver uses this to tell a
+    // legit (progressing) catch-up from a same-instant runaway (stalled) and back off.
+    return this.stateValue.time > before;
   }
 
   /** Wall-ms until the soonest scheduled event comes due — what an offline wakeup
@@ -520,7 +769,11 @@ export class MatchRoom {
    *  advances 1:1 with wall-time, so the game-ms gap to the event IS the wall-ms
    *  to sleep; clamped at 0 for an already-overdue event. */
   msUntilNextEvent(): number | null {
-    if (this.waiting) return null;
+    // While a committed submit owns the world, its catch-up isn't committed to
+    // `stateValue` yet, so the still-pending events read as overdue (ms 0). Report
+    // "nothing to wake for" so a driver idles instead of spinning on skipped ticks and
+    // tripping its stall guard — the submit re-arms the driver when it commits.
+    if (this.waiting || this.committing) return null;
     const scheduled = this.stateValue.scheduled;
     if (scheduled.length === 0) return null;
     let soonest = Infinity;
@@ -548,12 +801,47 @@ export class MatchRoom {
     };
   }
 
+  /** Advance `this.stateValue` to `now`, committing the catch-up in place. Thin wrapper
+   *  over the pure `computeAdvance` — used by the sync `submitAction` and `tick`. */
   private advance(now: number): { ok: true; events: DomainEvent[] } | { ok: false; code: string } {
-    if (now <= this.stateValue.time) return { ok: true, events: [] };
-    const result = this.kernel.advanceTo(this.stateValue, this.context(now));
-    if (!result.ok) return { ok: false, code: result.code };
-    this.stateValue = result.state;
-    return { ok: true, events: result.events };
+    const r = this.computeAdvance(this.stateValue, now);
+    if (!r.ok) return { ok: false, code: r.code };
+    this.stateValue = r.state;
+    return { ok: true, events: r.events };
+  }
+
+  /**
+   * Pure world catch-up from `from` to `now` — returns the advanced state WITHOUT
+   * mutating `this.stateValue`, so the committed path can compute the advance, persist
+   * it, and only THEN expose it (a mid-persist read / new-peer welcome must not see a
+   * not-yet-durable world). The kernel bounds each `advanceTo` and returns a `partial`
+   * advance rather than discarding it; chain a bounded number of chunks so an
+   * enormous-but-legit backlog finishes without hanging the event loop, and a
+   * same-instant runaway (clock stops progressing) is surfaced instead of looping.
+   */
+  private computeAdvance(
+    from: GameState,
+    now: number,
+  ): { ok: true; state: GameState; events: DomainEvent[] } | { ok: false; code: string } {
+    if (now <= from.time) return { ok: true, state: from, events: [] };
+    let state = from;
+    const events: DomainEvent[] = [];
+    for (let chunk = 0; chunk < MAX_CATCHUP_CHUNKS; chunk++) {
+      const before = state.time;
+      const result = this.kernel.advanceTo(state, this.context(now));
+      if (!result.ok) return { ok: false, code: result.code };
+      state = result.state;
+      events.push(...result.events);
+      if (!result.partial) return { ok: true, state, events }; // reached `now`
+      if (state.time <= before) {
+        // Clock did not move despite work being done → a same-instant runaway. Stop.
+        this.observe?.({ kind: 'advance_overflow', reachedTime: state.time, targetTime: now, reason: 'stalled' });
+        return { ok: true, state, events };
+      }
+    }
+    // Made forward progress but ran out of chunks — a genuinely huge backlog. Yield.
+    this.observe?.({ kind: 'advance_overflow', reachedTime: state.time, targetTime: now, reason: 'throttled' });
+    return { ok: true, state, events };
   }
 
   private context(now: number): Context {
@@ -571,7 +859,19 @@ export class MatchRoom {
       code === undefined
         ? { actionId: action.id, playerId, seq: this.seq, ok }
         : { actionId: action.id, playerId, seq: this.seq, ok, code };
-    this.receipts.set(action.id, receipt);
+    // Sync path: not inside a `committing` window, so emitting the observation now is safe
+    // (a driver reschedule sees the committed clock). The committed path retains + observes
+    // separately so it can defer the observation past its `committing` window.
+    this.retainReceipt(receipt);
+    this.observeAction(receipt, action.type);
+    return receipt;
+  }
+
+  /** Retain a receipt in the in-memory idempotency map (FIFO-capped). No side effects
+   *  beyond the map, so the committed path can retain during its `committing` window and
+   *  emit the observation only after it clears. */
+  private retainReceipt(receipt: ActionReceipt): void {
+    this.receipts.set(receipt.actionId, receipt);
     // Bound memory (F-04): idempotency is needed for the retry window (minutes), not
     // forever — evict the oldest receipts past the cap (Map preserves insertion order).
     while (this.receipts.size > this.maxReceipts) {
@@ -579,16 +879,216 @@ export class MatchRoom {
       if (oldest === undefined) break;
       this.receipts.delete(oldest);
     }
+  }
+
+  /** Emit the `action` observation (metrics + the driver re-arm). MUST be called with
+   *  `committing` false: a driver's `reschedule` reads `msUntilNextEvent`, which reports
+   *  null while committing — so emitting mid-commit would leave the driver un-armed and
+   *  the 24/7 world stalled for connected players until their next action. */
+  private observeAction(receipt: ActionReceipt, actionType: string): void {
     this.observe?.({
       kind: 'action',
-      actionId: action.id,
-      playerId,
-      type: action.type,
-      ok,
-      seq: this.seq,
-      ...(code ? { code } : {}),
+      actionId: receipt.actionId,
+      playerId: receipt.playerId,
+      type: actionType,
+      ok: receipt.ok,
+      seq: receipt.seq,
+      ...(receipt.code ? { code: receipt.code } : {}),
     });
+  }
+
+  /** Builds a durable snapshot of a specific `(state, seq)` — used by the committed
+   *  path to persist a prospective result BEFORE committing it. */
+  private snapshot(state: GameState, seq: number): MatchSnapshot {
+    return {
+      matchId: this.id,
+      dataVersion: state.version.data,
+      seq,
+      status: state.match.status === 'ended' ? 'ended' : 'ongoing',
+      state,
+    };
+  }
+
+  /** Append a task to the actor mailbox — it runs after any in-flight one, so their
+   *  critical sections (incl. awaits) never interleave. The stored link must NEVER be a
+   *  rejected promise: `.then` on a rejected upstream skips its callback, which would
+   *  silently stop EVERY future task on this room. Tasks own their error handling; this
+   *  is the backstop. */
+  private enqueue(task: () => void | Promise<void>): Promise<void> {
+    const run = this.mailbox.then(task);
+    this.mailbox = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Strict commit-before-broadcast action path (options.persist). Serialized per room
+   * via the actor mailbox, so the async persist await can never let a second action (or
+   * a lobby start) race the reducer. The tail (advance → apply → persist → commit →
+   * broadcast) runs with `committing` set so a concurrent `tick()` skips. An unexpected
+   * throw is contained (transient reject) and never wedges the mailbox.
+   */
+  private submitActionCommitted(playerId: PlayerId, action: Action, peer?: RoomPeer): Promise<void> {
+    return this.enqueue(() =>
+      this.doCommittedSubmit(playerId, action, peer).catch(() => {
+        // Last-resort: report and swallow. The `send` itself must not throw (a dead
+        // socket would otherwise reject the task), so guard it too.
+        try {
+          if (peer) this.sendReject(peer, action.id, 'E_INTERNAL');
+        } catch {
+          /* peer gone */
+        }
+      }),
+    );
+  }
+
+  private async doCommittedSubmit(
+    playerId: PlayerId,
+    action: Action,
+    peer?: RoomPeer,
+  ): Promise<void> {
+    // Idempotent replay of a prior result (dedup) — mirrors submitAction, sync/no-await.
+    const cached = this.receipts.get(action.id);
+    if (cached) {
+      if (peer) {
+        if (cached.ok) this.send(peer, this.stateMessageFor(playerId));
+        else this.sendRejection(peer, cached);
+      }
+      return;
+    }
+    // Rate limit — transient reject, NO receipt (a genuine retry after backoff lands).
+    if (this.rateLimited(playerId)) {
+      if (peer) this.sendReject(peer, action.id, 'E_RATE_LIMIT');
+      return;
+    }
+    await this.commitApply(playerId, action, peer);
+  }
+
+  /**
+   * The durable commit-before-broadcast CORE (advance → apply → persist → commit →
+   * broadcast), AFTER the front gates (dedup, rate-limit — and, on the gated path, the
+   * ActionGate's authorize/sequence). Runs with `committing` set so a concurrent `tick()`
+   * skips. Returns the durable verdict so the gated path can record it in the ActionGate;
+   * a `durable:false` verdict is a transient failure (persist down) that must NOT be
+   * cached (the action stays retriable). Shared by the bare committed path and the gated
+   * committed path.
+   */
+  private async commitApply(
+    playerId: PlayerId,
+    action: Action,
+    peer?: RoomPeer,
+  ): Promise<CommitVerdict> {
+    this.committing = true;
+    // Deferred to the `finally` (after `committing` clears): emitting the `action`
+    // observation re-arms the clock driver, which reads `msUntilNextEvent` — null while
+    // committing. Emitting mid-commit would leave the driver un-armed and stall the 24/7
+    // world for connected players until their next action.
+    let observeCommitted: (() => void) | undefined;
+    try {
+      // Authorization — a durable failure receipt (no state change).
+      if (action.playerId !== playerId || !this.hasPlayer(playerId)) {
+        const receipt = await this.commitReject(playerId, action, 'E_FORBIDDEN', peer);
+        if (!receipt) return TRANSIENT_VERDICT;
+        observeCommitted = () => this.observeAction(receipt, action.type);
+        return { ok: false, code: 'E_FORBIDDEN', durable: true };
+      }
+
+      // Catch the world up PURELY — without touching `this.stateValue` — so an external
+      // read during the persist await (a new peer's `welcome`, a ping handler) never sees
+      // a not-yet-durable world. We commit the advance only after the write acks.
+      const serverNow = this.clock();
+      const advanced = this.computeAdvance(this.stateValue, serverNow);
+      if (!advanced.ok) {
+        const receipt = await this.commitReject(playerId, action, advanced.code, peer);
+        if (!receipt) return TRANSIENT_VERDICT;
+        observeCommitted = () => this.observeAction(receipt, action.type);
+        return { ok: false, code: advanced.code, durable: true };
+      }
+
+      const context = this.context(Math.max(serverNow, advanced.state.time));
+      const result = this.kernel.applyAction(advanced.state, action, context);
+      const seq = this.seq + 1;
+
+      if (!result.ok) {
+        // Reject-but-advanced: persist the advanced state + failure receipt, and only on a
+        // durable ack commit the recomputable catch-up and broadcast its events (SRV-1). A
+        // failed write commits nothing → the retry re-derives and re-broadcasts the advance.
+        const receipt: ActionReceipt = { actionId: action.id, playerId, seq, ok: false, code: result.code };
+        if (!(await this.persistGuarded(this.snapshot(advanced.state, seq), receipt, action.id, peer))) {
+          return TRANSIENT_VERDICT;
+        }
+        this.stateValue = advanced.state;
+        this.seq = seq;
+        this.retainReceipt(receipt);
+        observeCommitted = () => this.observeAction(receipt, action.type);
+        if (advanced.events.length > 0) this.broadcastState(advanced.events);
+        if (peer) this.sendRejection(peer, receipt);
+        return { ok: false, code: result.code, durable: true };
+      }
+
+      // Success: persist the final state + receipt, and ONLY on a durable ack commit the
+      // new state, the receipt and the broadcast. A failed write commits nothing.
+      const receipt: ActionReceipt = { actionId: action.id, playerId, seq, ok: true };
+      if (!(await this.persistGuarded(this.snapshot(result.state, seq), receipt, action.id, peer))) {
+        return TRANSIENT_VERDICT;
+      }
+      this.stateValue = result.state;
+      this.seq = seq;
+      this.retainReceipt(receipt);
+      observeCommitted = () => this.observeAction(receipt, action.type);
+      this.broadcastState([...advanced.events, ...result.events]);
+      this.observeEndIfNeeded();
+      return { ok: true };
+    } finally {
+      this.committing = false;
+      observeCommitted?.(); // now that committing is false, the driver re-arm sees the real next event
+    }
+  }
+
+  /** Persist a failure receipt (state unchanged) before acking the rejection, so a
+   *  retry after a restart stays deduped. A failed write ⇒ transient reject, no commit.
+   *  Returns the committed receipt (for the caller's deferred observation) or null on a
+   *  transient failure. Retains the receipt but does NOT observe — the caller emits the
+   *  observation after its `committing` window (see commitApply). */
+  private async commitReject(
+    playerId: PlayerId,
+    action: Action,
+    code: string,
+    peer?: RoomPeer,
+  ): Promise<ActionReceipt | null> {
+    const seq = this.seq + 1;
+    const receipt: ActionReceipt = { actionId: action.id, playerId, seq, ok: false, code };
+    if (!(await this.persistGuarded(this.snapshot(this.stateValue, seq), receipt, action.id, peer))) {
+      return null;
+    }
+    this.seq = seq;
+    this.retainReceipt(receipt);
+    if (peer) this.sendRejection(peer, receipt);
     return receipt;
+  }
+
+  /** Awaits the durable write. On reject/throw: commit nothing, send a TRANSIENT reject
+   *  (no receipt) so the client's retry lands once the store recovers. Returns success. */
+  private async persistGuarded(
+    snapshot: MatchSnapshot,
+    receipt: StoredReceipt,
+    actionId: string,
+    peer?: RoomPeer,
+  ): Promise<boolean> {
+    try {
+      await this.persist!(snapshot, receipt);
+      return true;
+    } catch {
+      if (peer) this.sendReject(peer, actionId, 'E_UNAVAILABLE');
+      return false;
+    }
+  }
+
+  /** Send a rejection that records NO room receipt. Whether the action is retriable is
+   *  per-code and the client's call: transient (E_RATE_LIMIT / E_UNAVAILABLE / E_INTERNAL)
+   *  vs. permanent (E_FORBIDDEN / E_BAD_PAYLOAD / a sequence code). Used by both the bare
+   *  committed path and the action-layer gate front door. */
+  private sendReject(peer: RoomPeer, actionId: string, code: string): void {
+    this.send(peer, { type: 'rejection', matchId: this.id, seq: this.seq, actionId, code });
   }
 
   private broadcastState(events: DomainEvent[]): void {
@@ -598,23 +1098,32 @@ export class MatchRoom {
     const now = this.clock();
     const lobby = this.lobbyField();
     for (const [playerId, playerPeers] of this.peers) {
-      const view = this.viewFor(playerId);
-      const baseline = this.lastVisible.get(playerId) ?? view.base;
-      const identify = identifiedNodes(this.stateValue, playerId, this.data);
-      const message: ServerMessage = {
-        type: 'delta',
-        matchId: this.id,
-        seq: this.seq,
-        serverTime: now,
-        delta: diffState(baseline, view.base),
-        events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
-        signatures: view.signatures,
-        remembered: view.remembered,
-        ...this.hashField(view.base),
-        ...lobby,
-      };
-      this.lastVisible.set(playerId, view.base);
-      for (const peer of playerPeers) this.send(peer, message);
+      // Broadcast is BEST-EFFORT and per-player isolated: computing one player's fogged
+      // view (viewFor/diffState/identifiedNodes) must never abort delivery to the others,
+      // and must never escape into the action path — a delivery slip can't undo an
+      // already-committed, already-persisted action (the client resyncs on reconnect). The
+      // durable commit is the source of truth; this is just how we tell peers about it.
+      try {
+        const view = this.viewFor(playerId);
+        const baseline = this.lastVisible.get(playerId) ?? view.base;
+        const identify = view.identified;
+        const message: ServerMessage = {
+          type: 'delta',
+          matchId: this.id,
+          seq: this.seq,
+          serverTime: now,
+          delta: diffState(baseline, view.base),
+          events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
+          signatures: view.signatures,
+          remembered: view.remembered,
+          ...this.hashField(view.base),
+          ...lobby,
+        };
+        this.lastVisible.set(playerId, view.base);
+        for (const peer of playerPeers) this.send(peer, message);
+      } catch {
+        /* skip this player's delta this round; a reconnect gets a fresh welcome */
+      }
     }
   }
 
@@ -791,6 +1300,13 @@ export class MatchRoom {
       peer.close?.(1013, 'backpressure');
       return;
     }
-    peer.send(serializeServerMessage(message));
+    // A socket that went OPEN→CLOSING after `canSend` (TOCTOU) throws synchronously from
+    // `ws.send`. Never let a dead peer throw into room logic — it would abort a broadcast
+    // loop or, on the committed path, escape into the commit queue. Drop the peer instead.
+    try {
+      peer.send(serializeServerMessage(message));
+    } catch {
+      peer.close?.();
+    }
   }
 }

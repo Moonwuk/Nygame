@@ -63,30 +63,73 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 .who{line-height:1.1;min-width:0;}
 .who b{display:block;color:#eafffb;font-weight:700;font-size:12px;letter-spacing:2px;white-space:nowrap;}
 .who span{color:var(--cyan-dim);font-size:9px;letter-spacing:2.5px;white-space:nowrap;}
-/* the six currencies always fit the bar — no scroll. Chips share the width and shrink
-   together (flex:1 1 0; min-width:0) so the row scales down instead of overflowing. */
-#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow:hidden;height:100%;margin:0 4px;
-  border-left:1px solid var(--line);border-right:1px solid var(--line);}
-.res{display:flex;align-items:center;justify-content:center;gap:4px;padding:0 4px;height:100%;flex:1 1 0;min-width:0;}
-.res i{flex:0 0 auto;text-align:center;font-style:normal;font-size:13px;line-height:1;
-  color:var(--cyan);font-variant-emoji:text;text-shadow:0 0 6px rgba(53,214,230,.4);}
+/* the five currencies always fit the bar — no scroll. Chips share the width and shrink
+   together (flex:1 1 0; min-width:0) so the row scales down instead of overflowing. Each
+   chip = a small coin-icon + tabular amount + flow, divided by a faint hairline. */
+#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow:hidden;height:100%;margin:0 2px 0 4px;
+  border-left:1px solid var(--line);}
+.res{display:flex;align-items:center;justify-content:center;gap:5px;padding:0 7px;height:100%;flex:1 1 0;min-width:0;
+  position:relative;overflow:hidden;}
+.res + .res::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:1px;height:20px;
+  background:linear-gradient(180deg,transparent,rgba(53,214,230,.20),transparent);}
+/* amount + flow share one "value line" (.rv); the amount owns the room (flex:0 0 auto),
+   the flow rate clips first. On phones the chip stacks the icon OVER this value line. */
+.rv{display:flex;align-items:baseline;justify-content:center;gap:3px;min-width:0;overflow:hidden;flex:0 1 auto;}
+.res em{font:9px ui-monospace,monospace;font-style:normal;white-space:nowrap;
+  flex:0 1 auto;min-width:0;overflow:hidden;}
+.res em.up{color:var(--grn,#5ff0a8);}
+.res em.dn{color:var(--red,#ff5a4d);}
+.res.dead{opacity:.34;}
+.res i{flex:0 0 auto;width:20px;height:20px;display:grid;place-items:center;border-radius:6px;
+  font-style:normal;font-size:12px;line-height:1;color:var(--cyan);font-variant-emoji:text;
+  background:rgba(53,214,230,.08);box-shadow:inset 0 0 0 1px rgba(53,214,230,.14);
+  text-shadow:0 0 6px rgba(53,214,230,.35);}
+.res.dead i{background:rgba(120,140,150,.05);box-shadow:inset 0 0 0 1px rgba(120,140,150,.14);
+  color:var(--dim);text-shadow:none;}
 .res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-/* donate/premium currency (Суверены): gold accent — moved out of the resource bar onto
-   the status line right under it (#devline .dl-donate), pushed to the right end. */
-#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:4px;color:#ffe6a3;font-weight:700;}
-#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 7px rgba(255,212,94,.5);font-style:normal;}
+  white-space:nowrap;flex:0 0 auto;}
+/* player emblem — a console crest the player picks in the main menu (hub), worn in the
+   TOP-LEFT corner. Tap → player dossier (bubbles to the .crest handler). */
+#crestmark{width:32px;height:32px;border-radius:9px;flex:0 0 auto;cursor:pointer;padding:0;
+  display:grid;place-items:center;font-size:17px;color:var(--cyan);font-variant-emoji:text;
+  background:rgba(3,12,16,.7);border:1px solid var(--line-hi);
+  box-shadow:inset 0 0 10px rgba(53,214,230,.14),0 0 10px rgba(53,214,230,.12);
+  text-shadow:0 0 8px rgba(53,214,230,.5);}
+#crestmark:hover,#crestmark:active{background:rgba(53,214,230,.16);}
+/* donate currency (Суверены ◆, gold) sits UNDER the resource bar on the status line,
+   pushed to the right end — so the resource chips get the full top-bar width for numbers. */
+#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:5px;
+  padding:2px 9px;border-radius:11px;color:#fff2cf;font-weight:800;font-size:12px;line-height:1;
+  letter-spacing:.3px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,206,92,.20),rgba(240,170,40,.10));border:1px solid rgba(255,208,96,.55);
+  box-shadow:0 0 12px rgba(255,198,72,.30),inset 0 0 6px rgba(255,214,120,.16);
+  animation:donatePulse 2.8s ease-in-out infinite;white-space:nowrap;}
+#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 9px rgba(255,212,94,.85);font-style:normal;font-size:14px;}
+@keyframes donatePulse{
+  0%,100%{box-shadow:0 0 10px rgba(255,198,72,.30),inset 0 0 7px rgba(255,214,120,.16);}
+  50%{box-shadow:0 0 22px rgba(255,205,90,.7),inset 0 0 9px rgba(255,220,130,.30);}}
+#toasts{position:fixed;left:50%;top:96px;transform:translateX(-50%);z-index:40;display:flex;
+  flex-direction:column;align-items:center;gap:6px;pointer-events:none;max-width:min(92vw,520px);}
+#toasts .toast{pointer-events:auto;cursor:pointer;background:rgba(3,14,18,.88);border:1px solid var(--line-hi);
+  border-radius:3px;padding:7px 12px;font:12px ui-monospace,Menlo,monospace;color:var(--fg);
+  box-shadow:0 0 14px rgba(40,200,210,.14);animation:toast-in .18s ease-out;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#toasts .toast.jump{border-color:var(--cyan);}
+#toasts .toast.out{opacity:0;transform:translateY(-6px);transition:opacity .4s ease,transform .4s ease;}
+@keyframes toast-in{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:none;}}
 #speedbar{position:fixed;right:14px;bottom:14px;z-index:24;display:flex;align-items:center;gap:4px;
   padding:5px 7px;background:rgba(3,12,16,.78);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 16px rgba(40,200,210,.10);transition:bottom .2s ease;}
 body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
-#fps{position:fixed;top:70px;right:10px;z-index:25;pointer-events:none;
+#fps{position:fixed;top:82px;right:10px;z-index:25;pointer-events:none;
   font:700 10px ui-monospace,Menlo,monospace;color:var(--grn);opacity:.72;letter-spacing:.5px;
   text-shadow:0 0 6px rgba(0,0,0,.85);}
-@media (max-width:720px){#fps{top:68px;}}
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){#fps{top:78px;}}
 .spd button{min-width:30px;height:26px;padding:0 5px;border-radius:2px;cursor:pointer;font:11px ui-monospace,monospace;
   background:transparent;color:var(--cyan-dim);border:1px solid var(--line-hi);}
 .spd button.on{background:rgba(53,214,230,.16);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 10px rgba(53,214,230,.4);}
+.spd .spddiv{width:1px;height:18px;background:var(--line-hi);margin:0 2px;}
+.spd .spdmini{min-width:26px;font-size:10px;opacity:.9;}
 .spd .sep{width:1px;height:18px;background:var(--line-hi);margin:0 4px;flex:0 0 auto;}
 #cmdbar{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:26;display:none;align-items:center;
   gap:6px;padding:6px 8px;background:rgba(3,12,16,.88);border:1px solid var(--line-hi);border-radius:3px;
@@ -154,6 +197,19 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pc-close{margin-top:10px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
 
+/* settings overlay (hub → «Ещё» → Настройки) — client-only display prefs */
+#settings{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#settings.show{display:flex;}
+#settings .setbox{width:min(380px,92vw);max-height:86vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+.set-row{display:flex;flex-direction:column;gap:9px;padding:6px 0 2px;}
+.set-lbl{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink);}
+.set-lbl .set-sub{font-size:10px;color:var(--dim);letter-spacing:.2px;}
+.set-ctl{display:flex;align-items:center;gap:10px;}
+.set-ctl input[type=range]{flex:1;accent-color:var(--cyan);height:22px;cursor:pointer;}
+.set-val{min-width:42px;text-align:right;font-variant-numeric:tabular-nums;color:var(--cyan);font-weight:700;}
+
 /* war prompt — confirm before a move declares war on a player you're at peace with */
 #warprompt{position:fixed;inset:0;z-index:48;display:none;align-items:center;justify-content:center;padding:18px;
   background:rgba(20,2,1,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
@@ -200,7 +256,7 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .dp-fclear{margin-left:auto;padding:3px 9px;border-radius:6px;border:1px solid var(--line);background:transparent;
   color:var(--dim);font:600 10px ui-monospace,monospace;cursor:pointer;}
 .dp-list{overflow:auto;padding:6px;display:flex;flex-direction:column;gap:4px;}
-.dp-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:7px;border:1px solid var(--line);
+.dp-row{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:9px 10px;border-radius:7px;border:1px solid var(--line);
   background:rgba(8,28,32,.5);cursor:pointer;}
 .dp-row.me{cursor:default;border-color:var(--cyan-dim);background:rgba(53,214,230,.07);}
 .dp-row.open{border-color:var(--cyan-dim);}
@@ -211,10 +267,31 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .dp-w{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;flex:0 0 auto;}
 .dp-stance{font-size:9px;letter-spacing:1px;border:1px solid;border-radius:3px;padding:2px 6px;flex:0 0 auto;font-weight:700;}
 .dp-tag{font-size:9px;letter-spacing:1px;color:var(--cyan-dim);flex:0 0 auto;}
+/* bot favour (approval) meter — a second line on AI rows: cap ☺ + threshold-ticked bar + tier word */
+.dp-fav{flex:1 0 100%;display:flex;align-items:center;gap:7px;margin-top:1px;cursor:help;}
+.dp-fav-cap{font-size:11px;color:var(--dim);flex:0 0 auto;font-variant-emoji:text;}
+.dp-fav-track{position:relative;flex:1;height:6px;border-radius:3px;background:rgba(120,140,150,.16);
+  border:1px solid var(--line);overflow:hidden;min-width:60px;}
+.dp-fav-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;transition:width .3s;}
+.dp-fav-tick{position:absolute;top:-1px;bottom:-1px;width:1px;z-index:2;}
+.dp-fav-tick.emb{background:rgba(232,178,74,.85);}
+.dp-fav-tick.war{background:rgba(229,72,77,.9);}
+.dp-fav.ok .dp-fav-fill{background:linear-gradient(90deg,rgba(53,214,230,.5),var(--cyan));}
+.dp-fav.embargo .dp-fav-fill{background:#e8b24a;}
+.dp-fav.war .dp-fav-fill{background:#e5484d;}
+.dp-fav-lbl{font-size:8px;letter-spacing:.6px;text-transform:uppercase;flex:0 0 auto;color:var(--dim);}
+.dp-fav.embargo .dp-fav-lbl{color:#e8b24a;}
+.dp-fav.war .dp-fav-lbl{color:#e5484d;}
 .dp-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 10px 9px 39px;}
 .dp-act{padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);
   font:700 11px ui-monospace,monospace;cursor:pointer;}
 .dp-act.on{color:var(--sc);border-color:var(--sc);background:rgba(53,214,230,.08);}
+.dp-spy{padding:6px 10px;border-radius:6px;border:1px solid var(--amber-dim,#8a6a2f);background:transparent;
+  color:var(--amber);font:700 11px ui-monospace,monospace;cursor:pointer;}
+.dp-spy:hover{border-color:var(--amber);background:rgba(255,180,58,.1);}
+.dp-intel{padding:2px 10px 9px 39px;font-size:11px;color:var(--cyan);}
+.dp-intel b{color:#eafffb;}
+.dp-intel em{font-style:normal;color:var(--dim);font-size:9px;}
 .dp-msg{margin-left:auto;padding:6px 11px;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font-size:13px;cursor:pointer;}
 .dp-feed{overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:7px;flex:1;min-height:0;}
@@ -267,9 +344,32 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pp-act button{flex:1;padding:5px 6px;border-radius:5px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:700 10px ui-monospace,monospace;cursor:pointer;}
 .pp-act .pp-del{border-color:#7a221c;background:rgba(255,90,77,.12);color:var(--red);}
+/* province ping composer: pick a destination (coalition chat / a player's DM) for a
+   map ping on the selected province. Centered modal, like #splitdlg. */
+#pingmenu{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;
+  padding:18px;background:rgba(2,8,11,.62);backdrop-filter:blur(2px);}
+#pingmenu.show{display:flex;}
+#pingmenu .pm-box{width:min(360px,92vw);background:var(--glass);border:1px solid var(--amber);
+  border-radius:12px;padding:16px 16px 14px;box-shadow:0 0 30px rgba(0,0,0,.6);}
+#pingmenu .pm-head{font-size:13px;letter-spacing:1px;color:var(--amber);font-variant-emoji:text;margin-bottom:3px;}
+#pingmenu .pm-head b{color:#eafffb;}
+#pingmenu .pm-sub{color:var(--dim);font-size:11px;line-height:1.5;margin-bottom:11px;}
+#pingmenu .pm-text{width:100%;box-sizing:border-box;margin-bottom:12px;padding:8px 10px;border-radius:6px;
+  border:1px solid var(--cyan-dim);background:rgba(4,14,18,.7);color:#eafffb;font:inherit;font-size:12px;}
+#pingmenu .pm-lbl{color:var(--cyan-dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;margin:2px 0 6px;}
+#pingmenu .pm-dst{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;margin-bottom:6px;
+  padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);background:rgba(53,214,230,.06);
+  color:var(--ink);font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;font-variant-emoji:text;}
+#pingmenu .pm-dst:hover{background:rgba(53,214,230,.14);border-color:var(--cyan);}
+#pingmenu .pm-dst.coal{border-color:var(--amber);background:rgba(255,196,90,.08);}
+#pingmenu .pm-dst .pm-ic{flex:0 0 auto;}
+#pingmenu .pm-dst em{margin-left:auto;color:var(--dim);font-weight:400;font-style:normal;font-size:10px;}
+#pingmenu .pm-cancel{display:block;width:100%;margin-top:8px;padding:9px;border-radius:7px;
+  border:1px solid var(--line-hi);background:transparent;color:var(--dim);font:inherit;font-size:12px;cursor:pointer;}
+#pingmenu .pm-cancel:hover{color:var(--ink);border-color:var(--cyan-dim);}
 
 /* status strip below the top bar: day/time + victory progress */
-#devline{position:fixed;top:46px;left:0;right:0;height:20px;z-index:24;display:flex;align-items:center;gap:14px;
+#devline{position:fixed;top:46px;left:0;right:0;height:28px;z-index:24;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:rgba(2,8,11,.55);color:var(--cyan-dim);font-size:11px;letter-spacing:.6px;
   white-space:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid rgba(14,59,64,.5);}
 #devline::-webkit-scrollbar{display:none;}
@@ -277,15 +377,27 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #devline .dstat{flex:0 0 auto;}
 #devline .dstat.win{color:var(--up);font-weight:700;}
 
-/* slim icon rail in the bottom-left corner (just the wired tools); each icon opens a
-   window. column-reverse + bottom anchor → it grows UPWARD as more tools get wired,
-   with the primary icon nearest the thumb. Short, so the map around it stays tappable. */
-#rail{position:fixed;left:8px;bottom:14px;top:auto;width:42px;z-index:26;display:flex;flex-direction:column-reverse;gap:4px;
-  padding:4px;background:rgba(3,12,16,.72);border:1px solid var(--line-hi);border-radius:9px;
-  box-shadow:0 0 16px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
-#rail button{position:relative;width:34px;height:34px;background:transparent;border:0;cursor:pointer;
-  font-size:17px;color:var(--cyan-dim);border-radius:6px;font-variant-emoji:text;}
-#rail button:hover,#rail button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
+/* left-corner tool rail — collapsed to a single hamburger by default; tapping it expands
+   the wired tools UPWARD (primary icon nearest the thumb). The tools live in their own
+   panel that sizes to its buttons, so nothing overflows the rail. */
+#rail{position:fixed;left:10px;bottom:14px;top:auto;z-index:26;display:flex;flex-direction:column;
+  align-items:flex-start;gap:8px;}
+#railtools{display:none;flex-direction:column;gap:5px;padding:6px;background:rgba(3,12,16,.82);
+  border:1px solid var(--line-hi);border-radius:12px;box-shadow:0 0 16px rgba(0,0,0,.5);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#rail.open #railtools{display:flex;}
+#railtools button{position:relative;width:38px;height:38px;background:transparent;border:0;cursor:pointer;
+  font-size:18px;color:var(--cyan-dim);border-radius:8px;font-variant-emoji:text;display:grid;place-items:center;}
+#railtools button:hover,#railtools button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
+#railtoggle{width:44px;height:44px;display:grid;place-items:center;cursor:pointer;font-size:20px;font-variant-emoji:text;
+  color:var(--cyan);background:rgba(3,12,16,.85);border:1px solid var(--line-hi);border-radius:12px;
+  box-shadow:0 0 16px rgba(0,0,0,.5);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#railtoggle:hover,#rail.open #railtoggle{background:rgba(53,214,230,.16);text-shadow:0 0 8px rgba(53,214,230,.6);}
+#rail .railbadge{position:absolute;top:2px;right:2px;min-width:14px;height:14px;border-radius:7px;
+  background:var(--amber,#f0b429);color:#08131a;font:700 9px ui-monospace,monospace;
+  display:grid;place-items:center;padding:0 3px;}
+.dp-compose.dp-off{align-items:center;gap:8px;}
+.dp-compose .dp-offtxt{color:var(--dim);font-size:11px;}
 #rail .badge{position:absolute;right:5px;top:4px;min-width:15px;height:15px;border-radius:8px;
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
@@ -404,15 +516,25 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   font:11px/1.6 ui-monospace,Menlo,monospace;color:#73b6a2;scrollbar-width:thin;}
 #log div::before{content:"> ";color:var(--grn-dim);}
 
-/* technologies window (modal, mirrors #logwin) */
-#tech{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
+/* technologies + steward windows (modal, mirror #logwin) */
+#tech,#steward{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
-#tech.show{display:flex;}
-#tech .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
+#tech.show,#steward.show{display:flex;}
+#tech .twbox,#steward .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
   background:var(--glass);border:1px solid var(--cyan);border-radius:10px;
   box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
 .tw-close{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
-#techbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:12px 14px;}
+#techbody,#stewardbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:12px 14px;}
+/* Steward («Хранитель») delegate panel */
+#stewardbody .st-status{padding:11px 13px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);font-size:12px;color:var(--cyan);line-height:1.55;}
+#stewardbody .st-status.locked{border-color:var(--line);background:rgba(255,255,255,.03);color:var(--dim);}
+#stewardbody .st-status.on{border-color:#7df0d0;background:rgba(125,240,208,.10);color:#9ff0da;}
+#stewardbody .st-h{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:14px 0 8px;}
+#stewardbody .st-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+#stewardbody .st-btn{flex:1;min-width:92px;padding:9px 10px;border-radius:8px;border:1px solid var(--cyan);background:rgba(53,214,230,.10);color:var(--cyan);cursor:pointer;font-size:12px;}
+#stewardbody .st-btn:disabled{opacity:.4;cursor:not-allowed;}
+#stewardbody .st-btn.warn{border-color:#e2a15a;color:#e2a15a;background:rgba(226,161,90,.10);}
+#stewardbody .st-note{margin-top:12px;font-size:11px;color:var(--dim);line-height:1.55;}
 .tw-active{margin:0 0 14px;padding:10px 12px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);}
 .tw-active .tw-an{font-size:12px;color:var(--cyan);letter-spacing:.5px;}
 .tw-active .tw-bar{margin-top:8px;height:6px;border-radius:4px;background:rgba(53,214,230,.14);overflow:hidden;}
@@ -475,7 +597,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 
 /* === FLOATING CHAT (desktop) — sized/positioned/opacity inline by renderChat() === */
 .desk-only{} /* shown by default; the media query below hides it on phones */
-@media (max-width:720px){.desk-only{display:none!important;}}
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){.desk-only{display:none!important;}}
 /* border-color + background alpha are set inline by applyChatGeom() so the
    transparency slider fades the frame too, not just the fill */
 #chatwin{position:fixed;z-index:27;display:none;flex-direction:column;overflow:visible;
@@ -539,11 +661,21 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   font:700 13px ui-monospace,monospace;}
 #banner .bn-btn:hover{background:rgba(53,214,230,.26);box-shadow:0 0 12px rgba(53,214,230,.4);}
 
-@media (max-width:720px){
+@media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){
   #top{height:44px;}
   .who{display:none;}
-  .crest{padding:0 10px;}
+  /* phones: the left crest is just the player emblem (title hidden) */
+  .crest{padding:0 8px;}
+  #crestmark{width:30px;height:30px;font-size:16px;}
   #devline{top:44px;}
+  /* the chips get the full bar now (donate moved under it) — tighten just a touch */
+  /* APK / phones: stack the icon OVER the number so each value gets the full chip width */
+  .res{flex-direction:column;gap:1px;padding:0 3px;}
+  .res i{width:20px;height:20px;font-size:12px;}
+  .res b{font-size:13px;}
+  /* the value line sizes to its content on the stacked layout so the flow rate shows */
+  .rv{flex:none;gap:2px;overflow:visible;}
+  #devline .dl-donate{font-size:11px;padding:2px 8px;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
@@ -568,15 +700,25 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   body.sheet-open #speedbar{display:none;}
 
   #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
-  button.b{padding:9px 12px;font-size:12px;min-height:40px;}
-  #cmdbar{bottom:10px;gap:5px;}
+  /* finger-first targets: everything tappable grows to the 44px rule (hud-inmatch.md) */
+  button.b{padding:9px 12px;font-size:12px;min-height:44px;}
+  #railtools button{width:46px;height:46px;}
+  #railtoggle{width:50px;height:50px;font-size:22px;}
+  .spd button{min-width:38px;height:40px;font-size:12px;}
+  .spd .spdmini{min-width:34px;}
+  .pclose{width:44px;height:44px;font-size:14px;}
+  .ptab{min-height:42px;}
+  /* notched phones: controls step inside the safe area instead of under the notch */
+  #top{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+  #rail{padding-bottom:env(safe-area-inset-bottom);}
+  #speedbar{bottom:calc(12px + env(safe-area-inset-bottom));}
+  #cmdbar{bottom:calc(10px + env(safe-area-inset-bottom));gap:5px;
+    left:8px;right:8px;transform:none;justify-content:center;flex-wrap:wrap;row-gap:5px;}
+  #cmdbar button .cl{font-size:10px;}
   #cmdbar .cmdlabel{display:none;}
   #cmdbar button{min-width:56px;height:52px;}
   #cmdbar button .ci{font-size:20px;}
   body.sheet-open #cmdbar{bottom:calc(50vh + 8px);}
-}
-@media (max-width:430px){
-  .res .rv em{display:none;}
 }
 /* connect overlay — entry screen (single-player vs join a live session) */
 #connect{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
@@ -603,7 +745,10 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   color:var(--dim);font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;}
 #connect .mtab.active{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.10);}
 #connect .mlist{margin-top:10px;max-height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;}
-#connect .mempty{padding:18px 8px;text-align:center;color:var(--dim);font-size:12px;}
+#connect .mempty{padding:18px 8px 8px;text-align:center;color:var(--dim);font-size:12px;}
+#connect .msolo{padding:6px 8px 16px;text-align:center;}
+#connect .msolo .mbtn{font-size:13px;padding:10px 18px;}
+#connect .msolo-sub{margin-top:6px;color:var(--dim);font-size:11px;}
 #connect .mrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-hi);
   border-radius:8px;background:rgba(255,255,255,.02);}
 #connect .minfo{flex:1;min-width:0;}
@@ -669,7 +814,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #lobby .lbtn{width:100%;padding:13px 10px;border-radius:8px;border:1px solid var(--cyan);
   background:rgba(53,214,230,.14);color:var(--cyan);font:13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
 #lobby .lbtn:disabled{opacity:.4;cursor:not-allowed;}
-#lobby .lwait{text-align:center;color:var(--dim);font-size:12px;}
+#lobby .lbtn.ghost{margin-top:8px;border-color:var(--line-hi);background:transparent;color:var(--dim);}
+#lobby .lwait{text-align:center;color:var(--dim);font-size:12px;margin-bottom:8px;}
 #setup{position:fixed;inset:0;z-index:58;display:none;align-items:center;justify-content:center;
   background:rgba(2,8,11,.72);}
 #setup .sbox{width:min(560px,95vw);max-height:92vh;overflow:auto;background:var(--glass);
@@ -691,7 +837,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .srow .stog{font:11px ui-monospace,monospace;letter-spacing:1px;border:1px solid var(--line-hi);
   border-radius:6px;padding:6px 12px;min-width:64px;cursor:pointer;background:transparent;color:var(--dim);}
 #setup .srow .stog.ai{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.12);}
-#setup .sspeedlabel{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:0 0 8px;}
+#setup .sspeedlabel{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:0 0 4px;}
+#setup .sspeedhint{font-size:11px;color:var(--dim);margin:0 0 8px;line-height:1.45;}
 #setup .sspeed{display:flex;gap:8px;margin-bottom:16px;}
 #setup .sspeed .spdchip{flex:1;padding:10px 6px;border-radius:8px;border:1px solid var(--line-hi);background:transparent;
   color:var(--dim);font:13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
@@ -849,8 +996,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   /* a floating card on the right whose HEIGHT fits its content (grows as rows are
      added, shrinks for a sparse fleet) instead of a fixed full-height column — only
      caps at the viewport, so ordinary panels never need an inner scrollbar */
-  #side{left:auto;right:12px;top:66px;bottom:auto;width:min(380px,40vw);height:auto;
-    max-height:calc(100vh - 80px);flex-direction:column;clip-path:none;
+  #side{left:auto;right:12px;top:74px;bottom:auto;width:min(380px,40vw);height:auto;
+    max-height:calc(100vh - 88px);flex-direction:column;clip-path:none;
     border:1px solid var(--cyan);border-radius:12px;
     box-shadow:-8px 0 30px rgba(0,0,0,.55),inset 0 0 30px rgba(53,214,230,.04);}
   /* content stacks: list on top, hovered-object dossier pinned below. While the card
@@ -868,7 +1015,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 /* --- short viewports (landscape phones, split-screen): overlays scroll instead of
    clipping off-screen; the welcome card compacts and stacks its chip/footer in-flow --- */
 @media (max-height:680px){
-  #connect,#setup,#codex,#playercard,#warprompt,#diplo,#splitdlg{
+  #connect,#setup,#codex,#playercard,#settings,#warprompt,#diplo,#splitdlg,#pingmenu{
     align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   #connect{padding:14px 18px;}
   #connect .cwrap{display:flex;flex-direction:column;margin:auto;}
@@ -897,7 +1044,28 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   text-shadow:0 0 14px rgba(53,214,230,.45);}
 #hub .hub-id{flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);}
 #hub .hub-av{width:42px;height:42px;border-radius:50%;border:1px solid var(--line-hi);background:rgba(3,12,16,.8);
-  display:grid;place-items:center;color:var(--cyan);font-size:17px;flex:0 0 auto;box-shadow:inset 0 0 10px rgba(53,214,230,.1);}
+  display:grid;place-items:center;color:var(--cyan);font-size:17px;flex:0 0 auto;box-shadow:inset 0 0 10px rgba(53,214,230,.1);
+  cursor:pointer;position:relative;font-variant-emoji:text;}
+#hub .hub-av:hover{border-color:var(--cyan);box-shadow:inset 0 0 12px rgba(53,214,230,.22),0 0 12px rgba(53,214,230,.2);}
+/* a tiny pencil badge hints the avatar is editable (pick your emblem) */
+#hub .hub-av::after{content:"✎";position:absolute;right:-3px;bottom:-3px;width:16px;height:16px;border-radius:50%;
+  background:var(--cyan);color:#04141c;font-size:9px;display:grid;place-items:center;box-shadow:0 0 8px rgba(53,214,230,.6);}
+/* emblem picker — a small console modal opened from the hub avatar */
+#emblempick{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(1,5,9,.72);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);padding:20px;}
+#emblempick.show{display:flex;}
+#emblempick .ep-box{width:min(340px,92vw);background:var(--glass);border:1px solid var(--line-hi);border-radius:14px;
+  box-shadow:0 0 30px rgba(0,0,0,.6),inset 0 0 30px rgba(53,214,230,.05);overflow:hidden;}
+#emblempick .ep-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;
+  border-bottom:1px solid var(--line);color:var(--cyan);letter-spacing:2px;font:700 13px ui-monospace,monospace;}
+#emblempick .ep-head button{background:transparent;border:0;color:var(--dim);font-size:16px;cursor:pointer;}
+#emblempick .ep-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px;}
+#emblempick .ep-cell{aspect-ratio:1;display:grid;place-items:center;font-size:24px;cursor:pointer;font-variant-emoji:text;
+  color:var(--cyan);background:rgba(3,12,16,.6);border:1px solid var(--line-hi);border-radius:10px;
+  text-shadow:0 0 8px rgba(53,214,230,.4);transition:background .12s,border-color .12s;}
+#emblempick .ep-cell:hover{background:rgba(53,214,230,.12);}
+#emblempick .ep-cell.sel{border-color:var(--cyan);background:rgba(53,214,230,.18);
+  box-shadow:inset 0 0 12px rgba(53,214,230,.25),0 0 10px rgba(53,214,230,.3);}
 #hub .hub-who{flex:1;min-width:0;}
 #hub .hub-name{font-size:15px;color:#eafffb;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #hub .hub-st{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);margin-top:3px;}
@@ -944,16 +1112,100 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #hub .hub-tab .hn-ic{font-size:18px;line-height:1;}
 #hub .hub-tab.active{color:var(--cyan);}
 #hub .hub-tab.active .hn-ic{text-shadow:0 0 8px rgba(53,214,230,.6);}
+
+/* corporation cabinet — cross-session alliance management (mock, see docs/corporation-ui.md) */
+#corp{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(2,8,11,.72);padding:16px;}
+#corp .corpbox{width:min(760px,96vw);max-height:92vh;display:flex;flex-direction:column;
+  background:var(--glass);border:1px solid var(--line-hi);border-radius:14px;overflow:hidden;
+  box-shadow:0 0 44px rgba(0,0,0,.65),inset 0 0 40px rgba(40,200,210,.05);}
+#corp .corphd{padding:16px 18px 12px;border-bottom:1px solid var(--line);}
+#corp .chrow{display:flex;align-items:center;gap:12px;}
+#corp .cemblem{width:40px;height:40px;display:grid;place-items:center;flex:none;font-size:22px;color:var(--cyan);
+  border:1px solid var(--line-hi);border-radius:9px;background:rgba(53,214,230,.08);box-shadow:0 0 12px rgba(53,214,230,.15);}
+#corp .cident{flex:1;min-width:0;}
+#corp .cident>b{font-size:17px;letter-spacing:1px;color:var(--ink);}
+#corp .ctag{color:var(--cyan);font-size:12px;letter-spacing:1px;}
+#corp .cmotto{color:var(--dim);font-size:11px;margin-top:2px;font-style:italic;}
+#corp .cx{flex:none;width:32px;height:32px;border-radius:8px;border:1px solid var(--line-hi);background:transparent;
+  color:var(--dim);font-size:14px;cursor:pointer;}
+#corp .cx:active{background:rgba(255,90,77,.15);color:var(--red);}
+#corp .cmetrics{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:11px;color:var(--dim);letter-spacing:.5px;}
+#corp .cmetrics b{color:var(--cyan);font-size:12px;}
+#corp .corptabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);overflow-x:auto;}
+#corp .ctab{padding:9px 13px;border:none;border-bottom:2px solid transparent;background:transparent;
+  color:var(--dim);font:600 12px ui-monospace,monospace;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
+#corp .ctab.on{color:var(--cyan);border-bottom-color:var(--cyan);}
+#corp .corpbody{padding:16px 18px;overflow-y:auto;}
+#corp .ccols{display:flex;gap:14px;flex-wrap:wrap;}
+#corp .ccard{flex:1;min-width:230px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .ccard h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .clist{margin:0;padding-left:16px;color:var(--ink);font-size:12px;line-height:1.7;}
+#corp .chint{margin:10px 0 0;color:var(--dim);font-size:10px;line-height:1.5;font-style:italic;}
+#corp .cwarn{margin:0 0 14px;padding:9px 12px;border:1px solid var(--amber);border-radius:8px;
+  background:rgba(255,180,58,.08);color:var(--amber);font-size:12px;}
+#corp .cline{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px;}
+#corp .cline:last-child{border-bottom:none;}
+#corp .cline em{font-style:normal;}
+#corp .up{color:var(--up);}
+#corp .dn{color:var(--dn);}
+#corp .cwhen{color:var(--dim);font-weight:400;font-size:10px;}
+#corp .ctable{display:flex;flex-direction:column;gap:6px;}
+#corp .crow2{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  font-size:12px;flex-wrap:wrap;}
+#corp .crow2.me{border-color:var(--cyan-dim);background:rgba(53,214,230,.06);}
+#corp .cdot{width:9px;height:9px;border-radius:50%;flex:none;background:currentColor;box-shadow:0 0 7px currentColor;}
+#corp .cnm{flex:1;min-width:120px;color:var(--ink);}
+#corp .cnm i{color:var(--cyan);font-style:normal;font-size:10px;}
+#corp .crole{color:var(--dim);width:70px;}
+#corp .cinf{color:var(--grn);width:92px;text-align:right;}
+#corp .cpres{color:var(--dim);width:64px;}
+#corp .cman{display:flex;gap:5px;}
+#corp .cbonus{flex:1;min-width:140px;color:var(--grn);}
+#corp .cthreat{font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--line-hi);}
+#corp .cthreat.t-low{color:var(--grn);}
+#corp .cthreat.t-med{color:var(--amber);}
+#corp .cthreat.t-high{color:var(--red);border-color:var(--red);}
+#corp .cbtn2{padding:7px 11px;border-radius:7px;border:1px solid var(--cyan);background:rgba(53,214,230,.1);
+  color:var(--cyan);font:600 11px ui-monospace,monospace;cursor:pointer;}
+#corp .cbtn2:active{background:rgba(53,214,230,.24);}
+#corp .cbtn2.danger{border-color:var(--red);color:var(--red);background:rgba(255,90,77,.08);}
+#corp .cbtn2.wide{width:100%;margin-top:12px;}
+#corp .cbig{display:flex;gap:14px;margin-bottom:14px;}
+#corp .cbig>div{flex:1;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+#corp .cbig span{display:block;color:var(--dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+#corp .cbig b{color:var(--cyan);font-size:18px;}
+#corp .corpbody h4{margin:0 0 8px;color:var(--cyan);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;}
+#corp .cledger{margin-bottom:12px;}
+#corp .cwars{display:flex;flex-direction:column;gap:10px;}
+#corp .cwar{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
+#corp .cwtop{display:flex;justify-content:space-between;align-items:center;}
+#corp .cwtop b{color:var(--ink);}
+#corp .cst{font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--line-hi);color:var(--dim);}
+#corp .cst.st-active{color:var(--red);border-color:var(--red);}
+#corp .cst.st-incoming{color:var(--amber);border-color:var(--amber);}
+#corp .cwmid{color:var(--dim);font-size:11px;margin:6px 0 9px;}
+#corp .cchat{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+#corp .cmsg{border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;}
+#corp .cmsg.audit{border-style:dashed;color:var(--dim);}
+#corp .cmsg b{color:var(--cyan);}
+#corp .cmsg p{margin:4px 0 0;color:var(--ink);}
+#corp .cpin{float:right;}
+#corp .cinput{display:flex;gap:8px;}
+#corp .cinput input{flex:1;padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);
+  background:rgba(2,10,13,.7);color:var(--ink);font:12px ui-monospace,monospace;}
+#corp .cinput input:focus{outline:none;border-color:var(--cyan);}
 `;
 
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Void Dominion — Sector Command</title><style>${css}</style></head>
 <body>
 <canvas id="map"></canvas>
 <header id="top">
-  <div class="crest"><span class="dia"></span>
+  <div class="crest">
+    <button id="crestmark" title="Ваш профиль" type="button">◆</button>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>
@@ -962,33 +1214,43 @@ const html = `<!doctype html>
 <!-- slim left rail: only the wired tools (each opens its window). More icons land here as
      features get wired. -->
 <nav id="rail">
-  <button id="rail-diplo" title="Дипломатия">⬡</button>
-  <button id="rail-msgs" title="Сообщения">✉</button>
-  <button id="rail-tech" title="Технологии">⚛</button>
-  <button id="rail-market" title="Рынок">⇄</button>
-  <button id="rail-chat" title="Чат" class="desk-only">🗨</button>
-  <button id="rail-log" title="Сводки">≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+  <div id="railtools">
+    <button id="rail-diplo" title="Дипломатия">⬡</button>
+    <button id="rail-msgs" title="Сообщения">✉<b id="msgbadge" class="railbadge" style="display:none"></b></button>
+    <button id="rail-tech" title="Технологии">⚛</button>
+    <button id="rail-steward" title="Хранитель — передать ИИ на сон">😴</button>
+    <button id="rail-market" title="Рынок">⇄</button>
+    <button id="railcorp" title="Корпорация">⬢</button>
+    <button id="rail-chat" title="Чат" class="desk-only">🗨</button>
+    <button id="rail-log" title="Сводки">≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+  </div>
+  <button id="railtoggle" title="Инструменты" type="button" aria-expanded="false"><span id="railglyph">☰</span><span class="badge" id="railalert" style="display:none">0</span></button>
 </nav>
 <!-- floating chat window (desktop only) — content rendered by renderChat() in main.ts -->
 <div id="chatwin" class="desk-only"></div>
 <div id="logwin"><div class="lwbox"><div class="lw-head"><b>СВОДКИ</b><button class="lw-close">✕</button></div><div id="log"></div></div></div>
 <!-- technologies window — content rendered by renderTech() in main.ts -->
 <div id="tech"><div class="twbox"><div class="lw-head"><b>ТЕХНОЛОГИИ</b><button class="tw-close">✕</button></div><div id="techbody"></div></div></div>
+<!-- steward («Хранитель») window — content rendered by renderSteward() in main.ts -->
+<div id="steward"><div class="twbox"><div class="lw-head"><b>ХРАНИТЕЛЬ · ИИ НА СОН</b><button class="tw-close">✕</button></div><div id="stewardbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
 <aside id="side"></aside>
+<div id="toasts"></div>
 <div id="speedbar" class="spd">
-  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button>
+  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время">×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button>
   <span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" style="display:none">⟳</button>
   <span class="sep"></span><button id="tomenu" title="Выход в меню">⌂</button>
 </div>
 <div id="cmdbar"></div>
 <div id="codex"></div>
 <div id="playercard"></div>
+<div id="settings"></div>
 <div id="warprompt"></div>
 <div id="diplo"></div>
 <div id="pingpop"></div>
 <div id="splitdlg"></div>
+<div id="pingmenu"></div>
 <div id="fps"></div>
 <div id="banner"></div>
 <div id="connect">
@@ -1061,7 +1323,7 @@ const html = `<!doctype html>
     <div class="hub-bt">VOID DOMINION</div>
   </div>
   <div class="hub-id">
-    <div class="hub-av">◆</div>
+    <div class="hub-av" id="hubav" title="Сменить эмблему">◆</div>
     <div class="hub-who">
       <div class="hub-name" id="hub-name">Командир</div>
       <div class="hub-st">в сети</div>
@@ -1087,9 +1349,11 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-ally" style="display:none">
       <div class="hub-empty"><span class="he-ic">⚑</span>Альянсы — скоро<br><span style="font-size:11px;color:var(--cyan-dim)">корпорации · общие AvA-битвы · влияние</span></div>
+      <button id="ccorp" class="hub-solo" type="button">⬢ Кабинет корпорации (макет)</button>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
+        <button class="hub-tile" id="hub-settings" type="button"><span class="ht-ic">⚙</span>Настройки</button>
         <button class="hub-tile" data-more="Аккаунт" type="button"><span class="ht-ic">◉</span>Аккаунт</button>
         <button class="hub-tile" data-more="Сообщество" type="button"><span class="ht-ic">◍</span>Сообщество</button>
         <button class="hub-tile" data-more="Поддержка" type="button"><span class="ht-ic">⚠</span>Поддержка</button>
@@ -1107,6 +1371,19 @@ const html = `<!doctype html>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span>Альянсы</button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span>Ещё</button>
   </nav>
+</div>
+<div id="emblempick">
+  <div class="ep-box">
+    <div class="ep-head"><b>ВЫБОР ЭМБЛЕМЫ</b><button id="ep-close" type="button" aria-label="Закрыть">✕</button></div>
+    <div class="ep-grid" id="ep-grid"></div>
+  </div>
+</div>
+<div id="corp">
+  <div class="corpbox">
+    <div id="corphd" class="corphd"></div>
+    <div id="corptabs" class="corptabs"></div>
+    <div id="corpbody" class="corpbody"></div>
+  </div>
 </div>
 <div id="lobby">
   <div class="lbox">
@@ -1127,11 +1404,13 @@ const html = `<!doctype html>
       <p class="smaphint" id="setuphint">Tap a glowing world to choose your start</p>
       <div id="setupslots" class="sslots"></div>
       <div class="sspeedlabel">Скорость времени</div>
+      <p class="sspeedhint">×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×50.</p>
       <div id="setupspeed" class="sspeed">
-        <button class="spdchip on" type="button" data-spd="1">×1</button>
+        <button class="spdchip" type="button" data-spd="1">×1</button>
         <button class="spdchip" type="button" data-spd="2">×2</button>
         <button class="spdchip" type="button" data-spd="5">×5</button>
         <button class="spdchip" type="button" data-spd="10">×10</button>
+        <button class="spdchip" type="button" data-spd="50">×50</button>
       </div>
     </div>
     <button id="setupgo" class="sgo" disabled>LAUNCH</button>

@@ -5,11 +5,14 @@ export type {
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
+  UserRecord,
+  UserStore,
 } from './types';
-export { MemoryAccountStore, MemoryMatchStore, MemoryReceiptStore } from './memory';
+export { MemoryAccountStore, MemoryMatchStore, MemoryReceiptStore, MemoryUserStore } from './memory';
 export {
   migrate,
   PostgresAccountStore,
   PostgresMatchStore,
   PostgresReceiptStore,
+  PostgresUserStore,
 } from './postgres';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deepClone, deepFreeze } from './clone';
+import { deepClone, deepEqual, deepFreeze } from './clone';
 
 describe('deepClone', () => {
   it('produces an equal but fully independent copy', () => {
@@ -27,6 +27,46 @@ describe('deepClone', () => {
     const copy = deepClone(src);
     copy[0]!.x = 99;
     expect(src[0]!.x).toBe(1);
+  });
+});
+
+describe('deepEqual', () => {
+  it('compares primitives and null strictly', () => {
+    expect(deepEqual(1, 1)).toBe(true);
+    expect(deepEqual('a', 'a')).toBe(true);
+    expect(deepEqual(null, null)).toBe(true);
+    expect(deepEqual(1, '1')).toBe(false);
+    expect(deepEqual(null, {})).toBe(false);
+    expect(deepEqual(0, -0)).toBe(true); // === semantics, like the stringify it replaces
+  });
+
+  it('compares nested structures and short-circuits on any difference', () => {
+    const a = { p: { x: 1, list: [{ unit: 'cruiser', count: 2 }] } };
+    expect(deepEqual(a, { p: { x: 1, list: [{ unit: 'cruiser', count: 2 }] } })).toBe(true);
+    expect(deepEqual(a, { p: { x: 1, list: [{ unit: 'cruiser', count: 3 }] } })).toBe(false);
+    expect(deepEqual(a, { p: { x: 1, list: [] } })).toBe(false);
+  });
+
+  it('ignores object key order (logical equality, matching hashState)', () => {
+    expect(deepEqual({ a: 1, b: 2 }, { b: 2, a: 1 })).toBe(true);
+  });
+
+  it('treats an undefined-valued key as absent (JSON semantics)', () => {
+    expect(deepEqual({ a: 1, hp: undefined }, { a: 1 })).toBe(true);
+    expect(deepEqual({ a: 1 }, { a: 1, hp: undefined })).toBe(true);
+    expect(deepEqual({ a: 1, hp: 0 }, { a: 1 })).toBe(false);
+  });
+
+  it('keeps array order significant and distinguishes arrays from objects', () => {
+    expect(deepEqual([1, 2], [2, 1])).toBe(false);
+    expect(deepEqual([1, 2], [1, 2])).toBe(true);
+    expect(deepEqual([], {})).toBe(false);
+    expect(deepEqual({}, [])).toBe(false);
+  });
+
+  it('never matches a key through the prototype chain', () => {
+    expect(deepEqual({ constructor: 'x' }, {})).toBe(false);
+    expect(deepEqual({}, { constructor: 'x' })).toBe(false);
   });
 });
 

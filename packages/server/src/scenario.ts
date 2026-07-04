@@ -1,17 +1,21 @@
 import { readFileSync } from 'node:fs';
 import {
   armyModule,
+  artilleryModule,
   captureOnArrivalModule,
   combatModule,
   constructionModule,
   createInitialState,
   createKernel,
+  diplomacyModule,
   economyModule,
   factionModule,
   heroModule,
+  interceptModule,
   marketModule,
   movementModule,
-  parseGameData,
+  loadGameData,
+  orbitalModule,
   planetTypeModule,
   scientistModule,
   sectorModule,
@@ -28,7 +32,9 @@ import {
   type Planet,
   type Player,
 } from '@void/shared-core';
-import { MatchRoom } from './matchRoom';
+import type { ActionGate } from '@void/action-layer';
+import { MatchRoom, type ActionReceipt, type RoomObservation } from './matchRoom';
+import type { MatchSnapshot, StoredReceipt } from './store';
 
 /**
  * A runnable dev match on the *real* simulation core — the smallest faithful
@@ -37,26 +43,12 @@ import { MatchRoom } from './matchRoom';
  * connect → authoritative `applyAction` → delta broadcast to every peer.
  */
 
-/** The shipped game-content bundle, composed and validated exactly like the
- *  loader in `shared-core`'s `schemas.test.ts` (A05/A08: validate before use). */
+/** The shipped game-content bundle, composed + validated by the shared `loadGameData`
+ *  (CP0.3 — one composer for server/tests/client); we only inject the Node file reader. */
 export function loadShippedData(): GameData {
-  const readJson = (name: string): unknown =>
-    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8'));
-  const manifest = readJson('manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-    modules: readJson('modules.json'),
-  });
+  return loadGameData((name) =>
+    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8')),
+  );
 }
 
 /** Full base-module manifest, in a fixed order (invariant #6: execution order =
@@ -67,7 +59,15 @@ export const DEV_MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // per-player hero: redeploy, temp public lanes, planet annihilation
-  combatModule,
+  diplomacyModule, // declarations + consent offers + the `diplomacy` capability combat consults
+  // The combat family, split along the bus seams. Order matters (invariant #6):
+  // `orbital` stamps orbit on `fleet.arrived` BEFORE `combat` engages, and runs
+  // its AA/bombard span BEFORE `artillery`'s standoff span — the exact sequence
+  // the old single module had internally.
+  orbitalModule, // the single near-orbit: stationing, AA fire, bombardment
+  combatModule, // melee battles: engage / tick / assault / retreat / capture
+  artilleryModule, // standoff fire accrual + barrage orders
+  interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)
@@ -95,6 +95,25 @@ export interface DevMatchOptions {
   /** Ruleset for this match (time scale + victory conditions). Defaults in `MatchRoom`
    *  to `{ timeScale: 1 }`; the match browser shows it as the match's "rules". */
   config?: MatchConfig;
+  /** Observation stream (persistence / metrics wiring — see `main.ts` F8). */
+  observe?: (event: RoomObservation) => void;
+  /** Resume from a durable snapshot instead of seeding a fresh match: the passed
+   *  state replaces the freshly-seeded one (the seed still runs, cheaply, and is
+   *  discarded). The clock keeps running from `state.time`. */
+  initialState?: GameState;
+  /** Rehydrate idempotency receipts on resume (see `MatchRoom.initialReceipts`),
+   *  so an action deduped before a restart stays deduped after it. */
+  initialReceipts?: ActionReceipt[];
+  /** Resume the action counter from a persisted snapshot (see `MatchRoom.initialSeq`). */
+  initialSeq?: number;
+  /** Strict commit-before-broadcast durable write (see `MatchRoom.persist`). */
+  persist?: (snapshot: MatchSnapshot, receipt: StoredReceipt) => Promise<void>;
+  /** Opt-in `@void/action-layer` front-door (see `MatchRoom.gate`). */
+  gate?: ActionGate;
+  /** Per-player action rate limit (see `MatchRoom.actionRateMax` / `actionRateWindowMs`);
+   *  pinned in tests to exercise throttling deterministically. */
+  actionRateMax?: number;
+  actionRateWindowMs?: number;
 }
 
 function player(id: string, name: string, faction: string): Player {
@@ -181,13 +200,20 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
     const heroId = `hero:${id}`;
     heroes[heroId] = { id: heroId, owner: id, location: `home_${id}`, cooldowns: {} };
   });
-  const state: GameState = { ...base, players, planets, fleets, heroes };
+  const state: GameState = options.initialState ?? { ...base, players, planets, fleets, heroes };
   return new MatchRoom({
     id: options.id ?? 'dev',
     initialState: state,
     kernel: createKernel(DEV_MODULES),
     data,
     now: options.now,
+    observe: options.observe,
+    initialReceipts: options.initialReceipts,
+    initialSeq: options.initialSeq,
+    persist: options.persist,
+    gate: options.gate,
+    actionRateMax: options.actionRateMax,
+    actionRateWindowMs: options.actionRateWindowMs,
     ...(options.config ? { config: options.config } : {}),
   });
 }

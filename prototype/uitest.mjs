@@ -10,7 +10,7 @@ function mkEl(id) {
     id,
     style: {},
     dataset: {},
-    classList: { toggle() {}, add() {}, remove() {} },
+    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     _children: [],
     set innerHTML(v) {
       this._html = v;
@@ -23,6 +23,21 @@ function mkEl(id) {
       const m = listeners.get(this) ?? {};
       (m[type] ??= []).push(fn);
       listeners.set(this, m);
+    },
+    appendChild(child) {
+      this._children.push(child);
+      return child;
+    },
+    removeChild(child) {
+      this._children = this._children.filter((c) => c !== child);
+      return child;
+    },
+    remove() {},
+    get children() {
+      return this._children;
+    },
+    get firstElementChild() {
+      return this._children[0] ?? null;
     },
     closest() {
       return null;
@@ -71,6 +86,20 @@ let t = 0;
 globalThis.performance = { now: () => (t += 16) };
 // Net-mode reads localStorage for the saved server URL; stub it (no persistence).
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+// resize() probes coarse-pointer media to spot phones; the fake DOM is a desktop.
+globalThis.matchMedia = () => ({ matches: false });
+// The APK Back integration wires popstate/history straight on window at module
+// load — give the fake DOM a minimal window + history so init runs headless.
+globalThis.window = {
+  innerWidth: 900,
+  innerHeight: 600,
+  devicePixelRatio: 1,
+  addEventListener() {},
+  matchMedia: globalThis.matchMedia,
+  setTimeout,
+  clearTimeout,
+};
+globalThis.history = { pushState() {}, back() {} };
 globalThis.location = { protocol: 'file:', host: '', hostname: '', href: 'file:///', search: '' };
 const rafCbs = [];
 globalThis.requestAnimationFrame = (cb) => {
