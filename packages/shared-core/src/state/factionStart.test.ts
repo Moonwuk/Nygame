@@ -2,23 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData } from '../data/schemas';
+import { loadGameData } from '../data/loadGameData';
 import { factionStart } from './factionStart';
 
 const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../data');
 const readJson = (name: string): unknown => JSON.parse(readFileSync(path.join(dataDir, name), 'utf8'));
-const data = parseGameData({
-  version: (readJson('manifest.json') as { version: string }).version,
-  resources: readJson('resources.json'),
-  units: readJson('units.json'),
-  factions: readJson('factions.json'),
-  buildings: readJson('buildings.json'),
-  events: readJson('events.json'),
-  sectors: readJson('sectors.json'),
-  sectorKinds: readJson('sectorKinds.json'),
-  planetTypes: readJson('planetTypes.json'),
-  technologies: readJson('technologies.json'),
-});
+const data = loadGameData(readJson);
 
 describe('factionStart — match-start assembly by faction (B3 / CR-1.3)', () => {
   it('resolves the vanguard loadout into concrete pieces (building hp from data)', () => {

@@ -173,6 +173,7 @@ export {
   type TechnologyUnlocks,
   type UnitStats,
 } from './data/schemas';
+export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loadGameData';
 
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';

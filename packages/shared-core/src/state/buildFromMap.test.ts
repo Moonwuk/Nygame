@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData, type GameData } from '../data/schemas';
+import type { GameData } from '../data/schemas';
+import { loadGameData } from '../data/loadGameData';
 import { parseMatchMap, type MatchMap } from '../data/mapSchema';
 import { buildStateFromMap, validateMatchMap } from './buildFromMap';
 
@@ -10,20 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const readJson = (p: string): unknown => JSON.parse(readFileSync(path.join(repoRoot, p), 'utf8'));
 
 function shippedData(): GameData {
-  const manifest = readJson('data/manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('data/resources.json'),
-    units: readJson('data/units.json'),
-    factions: readJson('data/factions.json'),
-    buildings: readJson('data/buildings.json'),
-    events: readJson('data/events.json'),
-    sectors: readJson('data/sectors.json'),
-    sectorKinds: readJson('data/sectorKinds.json'),
-    planetTypes: readJson('data/planetTypes.json'),
-    technologies: readJson('data/technologies.json'),
-    scientists: readJson('data/scientists.json'),
-  });
+  return loadGameData((name) => readJson('data/' + name));
 }
 
 const data = shippedData();

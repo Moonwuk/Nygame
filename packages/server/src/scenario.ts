@@ -14,8 +14,8 @@ import {
   interceptModule,
   marketModule,
   movementModule,
+  loadGameData,
   orbitalModule,
-  parseGameData,
   planetTypeModule,
   scientistModule,
   sectorModule,
@@ -43,25 +43,12 @@ import type { MatchSnapshot, StoredReceipt } from './store';
  * connect → authoritative `applyAction` → delta broadcast to every peer.
  */
 
-/** The shipped game-content bundle, composed and validated exactly like the
- *  loader in `shared-core`'s `schemas.test.ts` (A05/A08: validate before use). */
+/** The shipped game-content bundle, composed + validated by the shared `loadGameData`
+ *  (CP0.3 — one composer for server/tests/client); we only inject the Node file reader. */
 export function loadShippedData(): GameData {
-  const readJson = (name: string): unknown =>
-    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8'));
-  const manifest = readJson('manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-  });
+  return loadGameData((name) =>
+    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8')),
+  );
 }
 
 /** Full base-module manifest, in a fixed order (invariant #6: execution order =

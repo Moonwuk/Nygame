@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseGameData, safeParseGameData, buildingLevel, buildingMaxLevel } from './schemas';
+import { composeGameDataBundle } from './loadGameData';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const dataDir = path.join(repoRoot, 'data');
@@ -11,22 +12,10 @@ function readJson(name: string): unknown {
   return JSON.parse(readFileSync(path.join(dataDir, name), 'utf8'));
 }
 
-/** Composes the shipped data fragments into one bundle, the way a loader would. */
+/** Composes the shipped data fragments into one bundle via the shared composer (CP0.3),
+ *  injecting the Node file reader — the fragment list now lives in one place. */
 function loadShippedBundle(): Record<string, unknown> {
-  const manifest = readJson('manifest.json') as { version: string };
-  return {
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-  };
+  return composeGameDataBundle(readJson);
 }
 
 describe('game data schema (docs/architecture.md §2)', () => {
