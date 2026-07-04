@@ -127,8 +127,10 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slot_b: { playerId: 'p2' },
       },
     });
-    expect(state.players.p1!.scientist).toEqual({ id: 'void_admiral', level: 3 });
-    expect(state.players.p2!.scientist).toBeUndefined(); // no leader chosen
+    // Legacy single `scientist` input is seated as a one-leader council (`scientists`).
+    expect(state.players.p1!.scientists).toEqual([{ id: 'void_admiral', level: 3 }]);
+    expect(state.players.p1!.scientist).toBeUndefined(); // legacy field no longer written
+    expect(state.players.p2!.scientists).toBeUndefined(); // no leader chosen
   });
 
   it('rejects a slot assigning an unknown scientist (fail-secure at boot)', () => {
@@ -137,6 +139,42 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slots: { slot_a: { playerId: 'p1', scientist: 'ghost' }, slot_b: { playerId: 'p2' } },
       }),
     ).toThrow(/E_UNKNOWN_SCIENTIST/);
+  });
+
+  it('seats a 2-leader council; rejects a duplicate or a third leader (fail-secure)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        slot_a: {
+          playerId: 'p1',
+          scientists: [{ id: 'void_admiral', level: 3 }, { id: 'ground_marshal' }],
+        },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    expect(state.players.p1!.scientists).toEqual([
+      { id: 'void_admiral', level: 3 },
+      { id: 'ground_marshal', level: 1 }, // level defaults to 1
+    ]);
+    // Distinct + capped at two — fail-secure at boot.
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: {
+          slot_a: { playerId: 'p1', scientists: [{ id: 'void_admiral' }, { id: 'void_admiral' }] },
+          slot_b: { playerId: 'p2' },
+        },
+      }),
+    ).toThrow(/E_DUPLICATE_SCIENTIST/);
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: {
+          slot_a: {
+            playerId: 'p1',
+            scientists: [{ id: 'void_admiral' }, { id: 'ground_marshal' }, { id: 'polymath' }],
+          },
+          slot_b: { playerId: 'p2' },
+        },
+      }),
+    ).toThrow(/E_TOO_MANY_SCIENTISTS/);
   });
 
   it('grants pre-match technology picks as completed research (C3)', () => {

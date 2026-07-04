@@ -447,6 +447,7 @@ const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 // chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
+let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
 // Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
 // normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
 const SETUP_SPEEDS = [1, 2, 5, 10, 50];
@@ -5804,6 +5805,7 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'missile', label: 'Ракеты' },
   { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
+const branchLabel = (key: string): string => TECH_BRANCHES.find((b) => b.key === key)?.label ?? key;
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
 function renderTech(): void {
@@ -5818,6 +5820,21 @@ function renderTech(): void {
   const res = (me?.resources ?? {}) as Record<string, number>;
   const started = s.startedAt ?? 0;
   let html = '';
+  // Read-only council header: the 2 leaders chosen at setup (immutable) + the branches
+  // they open, so it's clear why the gated nodes below are reachable.
+  const council = me?.scientists ?? [];
+  if (council.length) {
+    html +=
+      `<div class="tw-council">🧪 Ваши учёные: ` +
+      council
+        .map((c) => {
+          const def = data.scientists[c.id];
+          const br = def?.branch ? ` <span class="tw-cb">${branchLabel(def.branch)}</span>` : '';
+          return `<b>${esc(def?.name ?? c.id)}</b>${br}`;
+        })
+        .join(' · ') +
+      `</div>`;
+  }
   for (const a of activeList) {
     const def = techs[a.technology];
     const total = a.completesAt - a.startedAt;
@@ -6369,10 +6386,92 @@ function renderSetup(): void {
 // Where the Setup screen's Back button returns to — the surface that opened it, so
 // arriving from the hub goes back to the hub, not the raw identity card.
 let setupReturn: 'welcome' | 'hub' = 'welcome';
+// --- scientist council picker: choose your 2 research leaders BEFORE the start-point ----
+// A start consecration (GDD §5.2): snapshotted into the match, immutable in-match. Empty
+// slots pulse to prompt the choice; each pick shows which tech-tree branch (and gated nodes)
+// it opens — the influence the player asked to see up front.
+const sciWin = $('scipick');
+function sciInfluence(id: string): string {
+  const def = data.scientists[id];
+  if (!def) return '';
+  if (!def.branch) return '+1 слот исследования (генералист, без фокуса ветки)';
+  const opens = Object.values(data.technologies)
+    .filter(
+      (t) =>
+        t.branch === def.branch && (t.conditions ?? []).some((c) => c.type === 'has_scientist'),
+    )
+    .map((t) => t.name);
+  const br = branchLabel(def.branch);
+  return opens.length ? `Открывает ветку «${br}»: ${opens.join(', ')}` : `Фокус ветки «${br}»`;
+}
+function renderSciPick(): void {
+  const chosen = setupScientists;
+  const slots = [0, 1]
+    .map((i) => {
+      const id = chosen[i];
+      if (!id) {
+        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">Выбрать учёного</div></div>`;
+      }
+      const def = data.scientists[id];
+      return (
+        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="убрать">✕</button>` +
+        `<div class="sp-sn">${esc(def?.name ?? id)}</div>` +
+        `<div class="sp-inf">${esc(sciInfluence(id))}</div></div>`
+      );
+    })
+    .join('');
+  const roster = Object.keys(data.scientists)
+    .map((id) => {
+      const def = data.scientists[id]!;
+      const placed = chosen.includes(id);
+      const dis = placed || (chosen.length >= 2 && !placed);
+      return (
+        `<button class="sp-card${placed ? ' picked' : ''}" data-spadd="${id}"${dis ? ' disabled' : ''}>` +
+        `<div class="sp-cn">${esc(def.name)}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
+        `<div class="sp-inf">${esc(sciInfluence(id))}</div></button>`
+      );
+    })
+    .join('');
+  const ready = chosen.length >= 2;
+  $('scipickbody').innerHTML =
+    `<div class="sp-slots">${slots}</div>` +
+    `<div class="sp-warn">⚠ Выбор учёных закрепляется на всю сессию — изменить в матче будет нельзя.</div>` +
+    `<div class="sp-h">Кандидаты · нажмите, чтобы занять слот</div>` +
+    `<div class="sp-roster">${roster}</div>` +
+    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? 'Закрепить и продолжить к выбору места →' : 'Выберите двух учёных'}</button>`;
+}
+function openSciPick(): void {
+  sciWin.classList.add('show');
+  renderSciPick();
+}
+sciWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.closest('.sp-cancel')) {
+    sciWin.classList.remove('show');
+    $('setupcancel').click(); // back out of setup entirely
+    return;
+  }
+  const add = tg.closest('[data-spadd]') as HTMLElement | null;
+  if (add && !add.hasAttribute('disabled')) {
+    const id = add.dataset.spadd ?? '';
+    if (id && !setupScientists.includes(id) && setupScientists.length < 2) setupScientists.push(id);
+    renderSciPick();
+    return;
+  }
+  const rm = tg.closest('[data-sprm]') as HTMLElement | null;
+  if (rm) {
+    setupScientists.splice(Number(rm.dataset.sprm), 1);
+    renderSciPick();
+    return;
+  }
+  if (tg.id === 'sp-go' && setupScientists.length >= 2) sciWin.classList.remove('show');
+});
+
 function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
+  setupScientists = []; // re-consecrate the council each time setup opens
   // A lively default: ×1 wall-clock reads as a FROZEN screen to a newcomer, so the
   // setup opens on the last chosen multiplier (first launch: ×10). True real time
   // stays one tap away — the ×1 chip.
@@ -6382,6 +6481,7 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupEl.style.display = 'flex';
   $('setup-start').style.display = '';
   renderSetup();
+  openSciPick(); // consecrate your 2 research leaders before picking the start point
 }
 
 function buildSetupConfig(): SetupConfig {
@@ -6401,6 +6501,7 @@ function buildSetupConfig(): SetupConfig {
   // Carry the player's division templates + hero roster into the match (deep-cloned).
   return {
     seats,
+    ...(setupScientists.length ? { scientists: [...setupScientists] } : {}),
     templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
     heroes: setupHeroes.map((h) => ({ name: heroName(h), grade: h.grade, abilities: [...h.abilities] })),
     ships: setupShips.map((l) => ({ hull: l.hull, modules: [...l.modules] })),

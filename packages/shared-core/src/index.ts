@@ -11,6 +11,7 @@ export { Rng, seedRng, type RngState } from './rng/rng';
 // State model
 export {
   createInitialState,
+  scientistsOf,
   type GameState,
   type GameVersion,
   type Player,

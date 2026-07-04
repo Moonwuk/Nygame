@@ -144,13 +144,40 @@ export const data: GameData = parseGameData({
       unlocks: { abilities: ['steward'] },
     },
   },
-  // Research leaders (scientistModule). The command-branch «Куратор» gates the Steward.
+  // Research leaders (scientistModule). Pick TWO at setup (before the start-point) — a
+  // council: `has_scientist` passes if either matches, `+slot` bonuses sum. The
+  // command-branch «Куратор» gates the Steward; «Полимат» trades a branch focus for +1 slot.
   scientists: {
     overseer: {
       name: 'Куратор',
       description:
         'Лидер ветки командования (C2): доктрины автоматизации и делегирования. Открывает «Протокол Хранитель» — передачу места ИИ на время сна.',
       branch: 'command',
+    },
+    void_admiral: {
+      name: 'Космоадмирал',
+      description: 'Лидер космической ветки: верфи, логистика, осадные доктрины.',
+      branch: 'space',
+    },
+    ground_marshal: {
+      name: 'Наземный маршал',
+      description: 'Лидер наземной ветки: крепости и оборона фронтира.',
+      branch: 'ground',
+    },
+    wing_commander: {
+      name: 'Командир крыла',
+      description: 'Лидер ветки эскадрилий: авианосные ударные крылья.',
+      branch: 'squadron',
+    },
+    missile_chief: {
+      name: 'Ракетный шеф',
+      description: 'Лидер ракетной ветки: дальнобойные системы.',
+      branch: 'missile',
+    },
+    polymath: {
+      name: 'Полимат',
+      description: 'Генералист без ветки: +1 слот исследования (2→3) вместо фокуса.',
+      slotBonus: 1,
     },
   },
   units: {
@@ -1070,6 +1097,10 @@ export interface SeatConfig {
 }
 export interface SetupConfig {
   seats: SeatConfig[];
+  /** The human player's chosen research-leader council — up to 2 scientist ids from
+   *  `data.scientists`, picked BEFORE the start-point at setup (a start consecration,
+   *  GDD §5.2). Absent → the command leader «overseer» by default. */
+  scientists?: string[];
   /** The player's 3 division templates, designed in the main menu and LOCKED for the
    *  session (mobilised in-match via `formation.mobilize`). Absent → DEFAULT_TEMPLATES. */
   templates?: FormationTemplate[];
@@ -1263,10 +1294,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { credits: 260, metal: 320, food: 120, energy: 90, microelectronics: 40 },
       seat.ai,
     );
-    // Every human seat starts as the command leader «Куратор», so the Steward line is
-    // reachable (its `has_scientist {branch:'command'}` gate is satisfied). A full
-    // scientist-choice UI is a follow-up; the day-15 + research gate is still enforced.
-    if (!seat.ai) players[seat.id]!.scientist = { id: 'overseer', level: 1 };
+    // Human seats get the research-leader council chosen at setup (before the start-point
+    // pick — a start consecration). Default to the command leader «Куратор» so the Steward
+    // line stays reachable when unset; the has_scientist + day-15 gates still apply.
+    if (!seat.ai) {
+      const ids = setup.scientists?.length ? setup.scientists.slice(0, 2) : ['overseer'];
+      players[seat.id]!.scientists = ids.map((id) => ({ id, level: 1 }));
+    }
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,
       seat.id,

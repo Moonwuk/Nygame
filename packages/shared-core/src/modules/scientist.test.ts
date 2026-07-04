@@ -83,4 +83,27 @@ describe('scientist module — research leader', () => {
     bad = ok(kernel.applyAction(bad, research('b'), ctx(0))).state;
     expect(err(kernel.applyAction(bad, research('c'), ctx(0)))).toBe('E_RESEARCH_SLOTS_FULL');
   });
+
+  it('sums +slot across a 2-leader council (reads scientists[], not just the legacy field)', () => {
+    const kernel = createKernel([technologyModule, scientistModule]);
+    const council = (list: Array<{ id: string; level: number }>): GameState => {
+      const s = stateWith();
+      (s.players.p1 as Player).scientists = list;
+      return s;
+    };
+    // Polymath (+1 slot) beside a focus leader (+0) → 3 slots: the third research fits.
+    let st = ok(
+      kernel.applyAction(
+        council([
+          { id: 'polymath', level: 1 },
+          { id: 'admiral', level: 1 },
+        ]),
+        research('a'),
+        ctx(0),
+      ),
+    ).state;
+    st = ok(kernel.applyAction(st, research('b'), ctx(0))).state;
+    st = ok(kernel.applyAction(st, research('c'), ctx(0))).state;
+    expect(st.players.p1?.technologies?.active?.length).toBe(3);
+  });
 });

@@ -535,6 +535,45 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #stewardbody .st-btn:disabled{opacity:.4;cursor:not-allowed;}
 #stewardbody .st-btn.warn{border-color:#e2a15a;color:#e2a15a;background:rgba(226,161,90,.10);}
 #stewardbody .st-note{margin-top:12px;font-size:11px;color:var(--dim);line-height:1.55;}
+/* read-only council header in the tech window */
+.tw-council{margin:0 0 12px;padding:9px 11px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.06);font-size:11.5px;color:var(--cyan);line-height:1.6;}
+.tw-council b{color:#eafffb;}
+.tw-council .tw-cb{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan-dim);}
+/* scientist council picker (setup-time, over the start-point screen) */
+#scipick{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(1,5,9,.74);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#scipick.show{display:flex;}
+#scipick .twbox{display:flex;flex-direction:column;width:min(560px,96vw);max-height:88vh;overflow:hidden;
+  background:var(--glass);border:1px solid var(--cyan);border-radius:12px;box-shadow:0 0 48px rgba(0,0,0,.7),inset 0 0 0 1px rgba(53,214,230,.06);}
+#scipick .lw-head{display:flex;align-items:center;justify-content:space-between;}
+#scipickbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:14px 15px;}
+.sp-cancel{background:transparent;border:1px solid var(--line-hi);color:var(--dim);border-radius:6px;padding:3px 9px;cursor:pointer;font:inherit;font-size:11px;}
+.sp-cancel:hover{border-color:var(--cyan-dim);color:var(--cyan);}
+.sp-slots{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+.sp-slot{min-height:96px;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:5px;position:relative;}
+.sp-slot.empty{border:1.5px dashed var(--cyan-dim);background:rgba(53,214,230,.03);align-items:center;justify-content:center;text-align:center;color:var(--cyan-dim);}
+.sp-slot.empty .sp-plus{font-size:22px;color:var(--cyan);line-height:1;}
+.sp-slot.empty .sp-hint{font-size:10.5px;letter-spacing:1px;}
+@media (prefers-reduced-motion:no-preference){.sp-slot.empty{animation:sppulse 1.5s ease-in-out infinite;}}
+@keyframes sppulse{0%,100%{border-color:var(--cyan-dim);box-shadow:0 0 0 0 rgba(53,214,230,0);}50%{border-color:var(--cyan);box-shadow:0 0 18px 1px rgba(53,214,230,.30);background:rgba(53,214,230,.08);}}
+.sp-slot.filled{border:1px solid var(--cyan);background:linear-gradient(180deg,rgba(53,214,230,.10),rgba(53,214,230,.03));}
+.sp-slot .sp-sn{font-weight:700;color:#eafffb;font-size:13px;}
+.sp-slot .sp-inf{font-size:10px;color:var(--dim);line-height:1.4;}
+.sp-rm{position:absolute;top:6px;right:7px;width:18px;height:18px;border-radius:5px;border:1px solid var(--line-hi);background:transparent;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;}
+.sp-rm:hover{border-color:var(--red);color:var(--red);}
+.sp-warn{margin-top:12px;display:flex;gap:8px;padding:10px 12px;border:1px solid #6a4a17;border-radius:9px;background:rgba(255,180,58,.09);color:#f4d199;font-size:11.5px;line-height:1.5;}
+.sp-h{margin:15px 0 8px;font-size:10.5px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);}
+.sp-roster{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.sp-card{text-align:left;cursor:pointer;border:1px solid var(--line-hi);border-radius:9px;padding:9px 10px;background:rgba(53,214,230,.04);color:var(--ink);font:inherit;display:flex;flex-direction:column;gap:3px;}
+.sp-card:hover:not(:disabled){border-color:var(--cyan);background:rgba(53,214,230,.11);box-shadow:0 0 12px rgba(53,214,230,.16);}
+.sp-card:disabled{opacity:.34;cursor:not-allowed;}
+.sp-card.picked{border-color:var(--cyan-dim);}
+.sp-card .sp-cn{display:flex;align-items:center;gap:6px;font-weight:700;font-size:12px;color:#eafffb;}
+.sp-card .sp-tick{margin-left:auto;color:var(--grn);font-size:11px;}
+.sp-card .sp-inf{font-size:9.5px;color:var(--dim);line-height:1.4;}
+.sp-go{margin-top:15px;width:100%;padding:12px;border-radius:9px;cursor:pointer;border:1px solid var(--cyan);background:rgba(53,214,230,.12);color:var(--cyan);font:inherit;font-weight:700;font-size:12.5px;letter-spacing:1px;text-transform:uppercase;}
+.sp-go:hover:not(:disabled){background:rgba(53,214,230,.2);box-shadow:0 0 16px rgba(53,214,230,.28);}
+.sp-go:disabled{opacity:.4;cursor:not-allowed;color:var(--dim);border-color:var(--line);}
 .tw-active{margin:0 0 14px;padding:10px 12px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);}
 .tw-active .tw-an{font-size:12px;color:var(--cyan);letter-spacing:.5px;}
 .tw-active .tw-bar{margin-top:8px;height:6px;border-radius:4px;background:rgba(53,214,230,.14);overflow:hidden;}
@@ -1233,6 +1272,8 @@ const html = `<!doctype html>
 <div id="tech"><div class="twbox"><div class="lw-head"><b>ТЕХНОЛОГИИ</b><button class="tw-close">✕</button></div><div id="techbody"></div></div></div>
 <!-- steward («Хранитель») window — content rendered by renderSteward() in main.ts -->
 <div id="steward"><div class="twbox"><div class="lw-head"><b>ХРАНИТЕЛЬ · ИИ НА СОН</b><button class="tw-close">✕</button></div><div id="stewardbody"></div></div></div>
+<!-- scientist council picker (setup-time, before the start-point) — rendered by renderSciPick() -->
+<div id="scipick"><div class="twbox"><div class="lw-head"><b>СОВЕТ УЧЁНЫХ · ВЫБОР НАВСЕГДА</b><button class="sp-cancel" type="button">↩ В меню</button></div><div id="scipickbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
 <aside id="side"></aside>

@@ -63,10 +63,13 @@ export interface Player {
   /** The player's treasury — production accrues here, upkeep/costs drain it. */
   resources: ResourceBag;
   technologies?: PlayerTechnologyState;
-  /** Chosen research leader (scientist), snapshotted at match start and immutable
-   *  (GDD §2/§5.2): `id` into `data.scientists`, `level` from the account meta
-   *  (supplied at match creation). Drives the `research.slots` hook and
-   *  `has_scientist` unlock gates. Absent = no leader chosen. */
+  /** Chosen research leaders (a council of up to 2), snapshotted at match start and
+   *  immutable (GDD §2/§5.2): each `id` into `data.scientists`, `level` from the account
+   *  meta. A `has_scientist` gate passes if ANY leader matches; `research.slots` bonuses
+   *  sum across them. Read via {@link scientistsOf}. Absent/empty = no leader chosen. */
+  scientists?: Array<{ id: string; level: number }>;
+  /** @deprecated Legacy single-leader field (snapshots from before the 2-slot council).
+   *  Never written now; still READ through {@link scientistsOf} for old persisted state. */
   scientist?: { id: string; level: number };
   /** Steward delegation ("hand the seat to the AI while I sleep"): while set and the
    *  world clock is before `until`, the server AI plays this seat with `posture`. The
@@ -81,6 +84,17 @@ export interface StewardState {
   posture: string;
   /** Game-time (ms) the delegation lapses at — control returns to the player then. */
   until: number;
+}
+
+/** The player's chosen research leaders (0–2). Reads the current `scientists` council and
+ *  falls back to the legacy single `scientist` (older snapshots) — the one accessor the
+ *  `+slot` bonus and `has_scientist` gate use, so both stay agnostic to the field shape. */
+export function scientistsOf(
+  player: Player | undefined,
+): ReadonlyArray<{ id: string; level: number }> {
+  if (!player) return [];
+  if (player.scientists) return player.scientists;
+  return player.scientist ? [player.scientist] : [];
 }
 
 export interface ActiveResearch {

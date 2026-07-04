@@ -11,6 +11,7 @@ import type {
   PlayerTechnologyState,
   UnitStack,
 } from '../state/gameState';
+import { scientistsOf } from '../state/gameState';
 import { canAfford, payCost } from '../util/treasury';
 
 interface ResearchPayload {
@@ -169,14 +170,15 @@ function conditionMet(
     case 'has_unit':
       return countUnit(state, playerId, cond.unit) >= cond.min;
     case 'has_scientist': {
-      // Branch-focus / capstone gate: the player's chosen scientist meets the level
-      // and (if specified) the branch. Its branch comes from the per-match-frozen
-      // catalog, so the id lookup is snapshot-safe.
-      const chosen = state.players[playerId]?.scientist;
-      if (!chosen || chosen.level < cond.minLevel) return false;
-      const def = data.scientists[chosen.id];
-      if (!def) return false; // a chosen id absent from the catalog satisfies nothing
-      return cond.branch === undefined || def.branch === cond.branch;
+      // Branch-focus / capstone gate: ANY of the player's chosen leaders (≤2) meets the
+      // level and (if specified) the branch. Branches come from the per-match-frozen
+      // catalog, so the id lookups are snapshot-safe.
+      return scientistsOf(state.players[playerId]).some((chosen) => {
+        if (chosen.level < cond.minLevel) return false;
+        const def = data.scientists[chosen.id];
+        if (!def) return false; // a chosen id absent from the catalog satisfies nothing
+        return cond.branch === undefined || def.branch === cond.branch;
+      });
     }
     default: {
       const _exhaustive: never = cond;
