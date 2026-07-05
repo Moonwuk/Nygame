@@ -1519,6 +1519,10 @@ type DivState = GameState & {
   /** CC-server: per-fleet command-chain, now AUTHORITATIVE STATE (was a client-only plan)
    *  so the server drives it and it runs offline in multiplayer. fleetId → queued steps. */
   orders?: Record<string, QStep[]>;
+  /** CC-6: seats with an active subscription (convenience-only perks — never combat
+   *  power, docs/main-menu.md). Stamped by the meta-layer at match creation / renewal;
+   *  nothing inside a match grants it. */
+  subscribers?: Record<string, true>;
 };
 export function divisionsOf(state: GameState): Record<string, Division> {
   const s = state as DivState;
@@ -2017,18 +2021,39 @@ export const orderQueueModule: GameModule = {
       return f;
     };
     api.onAction('order.enqueue', (action, h) => {
-      const p = action.payload as { fleetId?: unknown; step?: unknown };
+      // One enqueue = one player ORDER = 1..MAX_ORDER_STEPS compiled steps sharing a
+      // group stamp (CC-6): a one-tap capture arrives as [move, assault] and costs one
+      // slot of the order limit, exactly like a plain move.
+      const p = action.payload as { fleetId?: unknown; steps?: unknown };
       const f = ownedFleet(h, action.playerId, p?.fleetId);
       if (typeof f === 'string') return h.reject(f);
-      if (!isQStep(p.step)) return h.reject('E_BAD_PAYLOAD');
+      const raw = p.steps;
+      if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ORDER_STEPS) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      if (!raw.every(isQStep)) return h.reject('E_BAD_PAYLOAD');
+      const isRepeat = raw.some((st) => st.kind === 'repeat');
+      // The 🔁 marker is a lone plan property, never part of a step pattern.
+      if (isRepeat && raw.length > 1) return h.reject('E_BAD_PAYLOAD');
       const orders = ((h.state as DivState).orders ??= {});
       const q = (orders[f.id] ??= []);
-      if (q.length >= MAX_CHAIN_STEPS) return h.reject('E_QUEUE_FULL'); // bounded plans (CC-5.1)
-      // Runtime stamps (wait countdown, driver verdict) are never client-supplied.
-      const step = { ...p.step } as QStep & { until?: number };
-      delete step.until;
-      delete step.blocked;
-      q.push(step);
+      if (q.length + raw.length > MAX_CHAIN_STEPS) return h.reject('E_QUEUE_FULL'); // absolute step bound (CC-5.1)
+      if (isRepeat) {
+        if (q.some((st) => st.kind === 'repeat')) return h.reject('E_LIMIT'); // one 🔁 per chain
+      } else {
+        // The player-facing limit counts ORDERS; a subscription raises the base via the hook.
+        const limit = h.hook<number>('order.chainLimit', CHAIN_ORDERS_BASE, { playerId: action.playerId });
+        if (chainOrderCount(q) >= limit) return h.reject('E_QUEUE_FULL');
+      }
+      // Runtime stamps (wait countdown, driver verdict, group) are never client-supplied.
+      const group = nextChainGroup(q);
+      for (const st of raw) {
+        const step = { ...st } as QStep & { until?: number };
+        delete step.until;
+        delete step.blocked;
+        step.group = group;
+        q.push(step);
+      }
     });
     api.onAction('order.clear', (action, h) => {
       const p = action.payload as { fleetId?: unknown };
@@ -2049,7 +2074,9 @@ export const orderQueueModule: GameModule = {
       }
     });
     api.onAction('order.remove', (action, h) => {
-      // Edit one step of the plan (a mis-tap on step 3 of 6 must not cost the plan).
+      // Edit one ORDER of the plan (a mis-tap on order 3 of 5 must not cost the plan).
+      // The index addresses any step of the order; the whole group goes — half a
+      // capture (a move without its assault) is not something a player ever asked for.
       const p = action.payload as { fleetId?: unknown; index?: unknown };
       const f = ownedFleet(h, action.playerId, p?.fleetId);
       if (typeof f === 'string') return h.reject(f);
@@ -2058,8 +2085,10 @@ export const orderQueueModule: GameModule = {
       const orders = (h.state as DivState).orders;
       const q = orders?.[f.id];
       if (!q || i >= q.length) return h.reject('E_NO_STEP');
-      q.splice(i, 1);
-      if (q.length === 0) delete orders![f.id];
+      const group = q[i]!.group;
+      if (group === undefined) q.splice(i, 1); // legacy ungrouped step = its own order
+      else orders![f.id] = q.filter((st) => st.group !== group);
+      if (orders![f.id]!.length === 0) delete orders![f.id];
     });
     api.onAction('order.block', (action, h) => {
       // The DRIVER's verdict on a failed head step: pause the chain with its reason
@@ -2117,6 +2146,26 @@ export const orderQueueModule: GameModule = {
   },
 };
 
+/** Is this seat subscribed? (read by the client for its local plan limit + upsell row). */
+export function isSubscriber(state: GameState, playerId: string): boolean {
+  return (state as DivState).subscribers?.[playerId] === true;
+}
+
+// CC-6: subscription perks — convenience only, NEVER combat power (docs/main-menu.md).
+// A separate module so the queue logic stays subscription-blind: it asks the
+// `order.chainLimit` hook and this module (or its future meta-layer replacement)
+// answers. No module present → base limit, never a crash (designed degradation).
+export const subscriptionModule: GameModule = {
+  id: 'subscription',
+  version: '0.1.0',
+  setup(api) {
+    api.hook<number>('order.chainLimit', (base, args, h) => {
+      const playerId = (args as { playerId?: string }).playerId;
+      return playerId !== undefined && isSubscriber(h.state, playerId) ? CHAIN_ORDERS_PREMIUM : base;
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -2138,6 +2187,7 @@ export const MODULES: GameModule[] = [
   divisionModule, // ground divisions: mobilise from a template + daily restoration
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
   orderQueueModule, // CC-server: authoritative per-fleet command-chain (server-driven, offline-safe)
+  subscriptionModule, // CC-6: raises the order limit for subscribed seats (order.chainLimit hook)
 ];
 
 export const kernel = createKernel(MODULES);
@@ -2263,12 +2313,47 @@ export type QStep = (
   | { kind: 'bombard' } // start bombarding the world here (enters orbit first when needed)
   | { kind: 'wait'; hours: number; until?: number } // hold N game-hours, then continue (delayed order)
   | { kind: 'repeat' } // 🔁 loop marker: finished steps rotate to the tail — patrol until cleared
-) & { blocked?: string }; // set by the DRIVER when the step's order was rejected: the chain
-// pauses on the failed step with its E_* reason instead of silently skipping (CC-4.1 minimum)
+) & {
+  blocked?: string; // set by the DRIVER when the step's order was rejected: the chain
+  // pauses on the failed step with its E_* reason instead of silently skipping (CC-4.1 minimum)
+  /** The player ORDER this step belongs to (CC-6). One order may compile to several
+   *  steps (a one-tap capture = move + assault) — the chain LIMIT counts orders, not
+   *  steps, so an auto-generated pattern still costs one slot. Stamped by the server
+   *  on enqueue (never client-supplied); monotonic per fleet chain. */
+  group?: number;
+};
 
-/** Chain bounds (CC-5.1): steps per fleet and the longest single `wait` (game-hours). */
+/** Chain bounds (CC-5.1 / CC-6). The player-facing limit counts ORDERS (step groups):
+ *  `CHAIN_ORDERS_BASE` for everyone, `CHAIN_ORDERS_PREMIUM` once a subscription raises it
+ *  via the `order.chainLimit` hook. `MAX_ORDER_STEPS` bounds one order's compiled steps
+ *  (fail-secure payload cap); `MAX_CHAIN_STEPS` stays as the absolute per-fleet step
+ *  bound, and `MAX_WAIT_HOURS` bounds the longest single `wait` (game-hours). */
+export const CHAIN_ORDERS_BASE = 3;
+export const CHAIN_ORDERS_PREMIUM = 5;
+export const MAX_ORDER_STEPS = 4;
 export const MAX_CHAIN_STEPS = 32;
 export const MAX_WAIT_HOURS = 24 * 30;
+
+/** How many ORDERS a chain holds: distinct `group` stamps, skipping the 🔁 repeat marker
+ *  (a plan property, not an action — it must not eat a slot or a 3-order patrol dies).
+ *  Steps from before the group stamp each count as their own order (legacy chains). */
+export function chainOrderCount(steps: QStep[]): number {
+  const groups = new Set<number>();
+  let legacy = 0;
+  for (const st of steps) {
+    if (st.kind === 'repeat') continue;
+    if (st.group === undefined) legacy++;
+    else groups.add(st.group);
+  }
+  return groups.size + legacy;
+}
+
+/** The next order-group stamp for a chain (monotonic — survives removals in the middle). */
+export function nextChainGroup(steps: QStep[]): number {
+  let max = 0;
+  for (const st of steps) if (st.group !== undefined && st.group > max) max = st.group;
+  return max + 1;
+}
 
 /** A fleet may run its next queued step only when idle — not in transit, not locked in
  *  a battle. (A fleet parked on a lane counts as idle; its next move routes from there.) */
@@ -2529,9 +2614,11 @@ export function unloadHereActions(state: GameState, me: string, fleet: Fleet): A
 
 // --- CC-server: authoritative order-chain — actions + the server-side driver core -------
 
-/** Append one step to a fleet's authoritative order chain (CC-server). */
-export const orderEnqueue = (playerId: string, fleetId: string, step: QStep) =>
-  act(playerId, 'order.enqueue', { fleetId, step });
+/** Append one player ORDER to a fleet's authoritative chain (CC-server / CC-6): a single
+ *  step or an auto-compiled pattern (capture = [move, assault]) — either way ONE slot of
+ *  the order limit; the server stamps all its steps with one group. */
+export const orderEnqueue = (playerId: string, fleetId: string, steps: QStep | QStep[]) =>
+  act(playerId, 'order.enqueue', { fleetId, steps: Array.isArray(steps) ? steps : [steps] });
 /** Drop a fleet's whole order chain. */
 export const orderClear = (playerId: string, fleetId: string) =>
   act(playerId, 'order.clear', { fleetId });

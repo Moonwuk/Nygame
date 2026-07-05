@@ -385,6 +385,7 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   border-bottom:1px solid var(--line);padding-bottom:4px;}
 #side .row{margin:4px 0;}
 #side .dim{color:var(--dim);}
+#side .qgo{color:var(--cyan);text-decoration:underline dotted;text-underline-offset:2px;cursor:pointer;}
 #side b{color:#eafffb;}
 #side .hint{color:#74b0aa;font-size:11px;margin-top:9px;line-height:1.55;border-left:2px solid var(--line-hi);padding-left:8px;}
 .phead{display:flex;align-items:center;gap:10px;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid var(--line-hi);}

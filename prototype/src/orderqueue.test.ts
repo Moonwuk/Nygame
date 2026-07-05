@@ -3,6 +3,7 @@ import { createKernel, createInitialState } from '../../packages/shared-core/src
 import type { GameState, Fleet, Action, Context, ApplyResult } from '../../packages/shared-core/src/index';
 import {
   orderQueueModule,
+  subscriptionModule,
   orderEnqueue,
   orderClear,
   orderPop,
@@ -12,7 +13,10 @@ import {
   orderRetry,
   serverQueueActions,
   popChainStep,
-  MAX_CHAIN_STEPS,
+  chainOrderCount,
+  CHAIN_ORDERS_BASE,
+  CHAIN_ORDERS_PREMIUM,
+  MAX_ORDER_STEPS,
   MAX_WAIT_HOURS,
   data,
   type QStep,
@@ -46,16 +50,34 @@ const ordersOf = (s: GameState): Record<string, QStep[]> =>
   (s as { orders?: Record<string, QStep[]> }).orders ?? {};
 
 describe('orderQueueModule — authoritative order chain in state (CC-server)', () => {
-  it('order.enqueue appends a step to the owner fleet', () => {
+  it('order.enqueue appends a step to the owner fleet (stamped with its order group)', () => {
     const s = ok(kernel.applyAction(stateWith(fleet('F')), orderEnqueue('green', 'F', { kind: 'move', to: 'p7' }), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'move', to: 'p7' }]);
+    expect(ordersOf(s).F).toEqual([{ kind: 'move', to: 'p7', group: 1 }]);
   });
 
-  it('preserves chain order across enqueues', () => {
+  it('preserves chain order across enqueues — one enqueue = one order group', () => {
     let s = stateWith(fleet('F'));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'p2' }), ctx()));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'move', to: 'p2' }, { kind: 'assault' }]);
+    expect(ordersOf(s).F).toEqual([
+      { kind: 'move', to: 'p2', group: 1 },
+      { kind: 'assault', group: 2 },
+    ]);
+  });
+
+  it('a compiled pattern (capture = move + assault) shares ONE group — one limit slot', () => {
+    const s = ok(
+      kernel.applyAction(
+        stateWith(fleet('F')),
+        orderEnqueue('green', 'F', [{ kind: 'move', to: 'p7' }, { kind: 'assault' }]),
+        ctx(),
+      ),
+    );
+    expect(ordersOf(s).F).toEqual([
+      { kind: 'move', to: 'p7', group: 1 },
+      { kind: 'assault', group: 1 },
+    ]);
+    expect(chainOrderCount(ordersOf(s).F!)).toBe(1);
   });
 
   it('order.pop drops the head and removes the entry when the chain empties', () => {
@@ -63,7 +85,7 @@ describe('orderQueueModule — authoritative order chain in state (CC-server)', 
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
     s = ok(kernel.applyAction(s, orderPop('green', 'F'), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'assault' }]);
+    expect(ordersOf(s).F).toEqual([{ kind: 'assault', group: 2 }]);
     s = ok(kernel.applyAction(s, orderPop('green', 'F'), ctx()));
     expect(ordersOf(s).F).toBeUndefined();
   });
@@ -79,7 +101,7 @@ describe('orderQueueModule — authoritative order chain in state (CC-server)', 
     let s = stateWith(fleet('F'));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'wait', hours: 6 }), ctx()));
     s = ok(kernel.applyAction(s, orderHold('green', 'F', 99), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'wait', hours: 6, until: 99 }]);
+    expect(ordersOf(s).F).toEqual([{ kind: 'wait', hours: 6, until: 99, group: 1 }]);
     // hold on a non-wait head → rejected, chain untouched.
     let s2 = stateWith(fleet('G'));
     s2 = ok(kernel.applyAction(s2, orderEnqueue('green', 'G', { kind: 'orbit' }), ctx()));
@@ -90,8 +112,18 @@ describe('orderQueueModule — authoritative order chain in state (CC-server)', 
     const s = stateWith(fleet('F'), fleet('E', { owner: 'red' }));
     expect(rej(kernel.applyAction(s, orderEnqueue('green', 'ghost', { kind: 'orbit' }), ctx()))).toBe('E_NO_FLEET');
     expect(rej(kernel.applyAction(s, orderEnqueue('green', 'E', { kind: 'orbit' }), ctx()))).toBe('E_FORBIDDEN');
-    const bad: Action = { ...orderEnqueue('green', 'F', { kind: 'orbit' }), payload: { fleetId: 'F', step: { kind: 'bogus' } } };
+    const bad: Action = { ...orderEnqueue('green', 'F', { kind: 'orbit' }), payload: { fleetId: 'F', steps: [{ kind: 'bogus' }] } };
     expect(rej(kernel.applyAction(s, bad, ctx()))).toBe('E_BAD_PAYLOAD');
+    // A payload must be a non-empty steps array, bounded by MAX_ORDER_STEPS.
+    const legacy: Action = { ...bad, payload: { fleetId: 'F', step: { kind: 'orbit' } } };
+    expect(rej(kernel.applyAction(s, legacy, ctx()))).toBe('E_BAD_PAYLOAD');
+    const empty: Action = { ...bad, payload: { fleetId: 'F', steps: [] } };
+    expect(rej(kernel.applyAction(s, empty, ctx()))).toBe('E_BAD_PAYLOAD');
+    const fat: Action = {
+      ...bad,
+      payload: { fleetId: 'F', steps: Array.from({ length: MAX_ORDER_STEPS + 1 }, () => ({ kind: 'orbit' })) },
+    };
+    expect(rej(kernel.applyAction(s, fat, ctx()))).toBe('E_BAD_PAYLOAD');
   });
 
   it('does not mutate the input state (purity / immutability invariant)', () => {
@@ -101,13 +133,50 @@ describe('orderQueueModule — authoritative order chain in state (CC-server)', 
   });
 });
 
-describe('chain bounds, editing and verdicts (CC-4.1 / CC-5.1 minimum)', () => {
-  it('order.enqueue caps the chain (E_QUEUE_FULL) — bounded plans', () => {
+describe('chain bounds, editing and verdicts (CC-4.1 / CC-5.1 / CC-6)', () => {
+  it(`order.enqueue caps the chain at ${CHAIN_ORDERS_BASE} ORDERS (E_QUEUE_FULL)`, () => {
     let s = stateWith(fleet('F'));
-    for (let i = 0; i < MAX_CHAIN_STEPS; i++) {
-      s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    for (let i = 0; i < CHAIN_ORDERS_BASE; i++) {
+      // Each order is a two-step capture pattern — patterns must not eat extra slots.
+      s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', [{ kind: 'move', to: 'p' + i }, { kind: 'assault' }]), ctx()));
     }
+    expect(ordersOf(s).F).toHaveLength(CHAIN_ORDERS_BASE * 2);
+    expect(chainOrderCount(ordersOf(s).F!)).toBe(CHAIN_ORDERS_BASE);
     expect(rej(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()))).toBe('E_QUEUE_FULL');
+  });
+
+  it('the 🔁 marker rides outside the order limit (a full plan can still patrol) — but only one', () => {
+    let s = stateWith(fleet('F'));
+    for (let i = 0; i < CHAIN_ORDERS_BASE; i++) {
+      s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'p' + i }), ctx()));
+    }
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'repeat' }), ctx()));
+    expect(chainOrderCount(ordersOf(s).F!)).toBe(CHAIN_ORDERS_BASE);
+    expect(rej(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'repeat' }), ctx()))).toBe('E_LIMIT');
+    // …and it is a lone plan property, never part of a step pattern.
+    const mixed = orderEnqueue('green', 'F', [{ kind: 'orbit' }, { kind: 'repeat' }]);
+    expect(rej(kernel.applyAction(stateWith(fleet('F')), mixed, ctx()))).toBe('E_BAD_PAYLOAD');
+  });
+
+  it(`a subscription raises the limit to ${CHAIN_ORDERS_PREMIUM} via the order.chainLimit hook`, () => {
+    const subbed = createKernel([orderQueueModule, subscriptionModule]);
+    let s = { ...stateWith(fleet('F')), subscribers: { green: true } } as GameState;
+    for (let i = 0; i < CHAIN_ORDERS_PREMIUM; i++) {
+      s = ok(subbed.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'p' + i }), ctx()));
+    }
+    expect(rej(subbed.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()))).toBe('E_QUEUE_FULL');
+    // An unsubscribed seat in the same match stays at the base limit.
+    let s2 = { ...stateWith(fleet('F')), subscribers: { red: true } } as GameState;
+    for (let i = 0; i < CHAIN_ORDERS_BASE; i++) {
+      s2 = ok(subbed.applyAction(s2, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    }
+    expect(rej(subbed.applyAction(s2, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()))).toBe('E_QUEUE_FULL');
+    // No subscription module at all → base default, never a crash (graceful degradation).
+    let s3 = { ...stateWith(fleet('F')), subscribers: { green: true } } as GameState;
+    for (let i = 0; i < CHAIN_ORDERS_BASE; i++) {
+      s3 = ok(kernel.applyAction(s3, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    }
+    expect(rej(kernel.applyAction(s3, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()))).toBe('E_QUEUE_FULL');
   });
 
   it('wait hours must be finite and bounded (Infinity would wedge the chain + break JSON)', () => {
@@ -118,34 +187,46 @@ describe('chain bounds, editing and verdicts (CC-4.1 / CC-5.1 minimum)', () => {
     ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'wait', hours: MAX_WAIT_HOURS }), ctx()));
   });
 
-  it('order.enqueue strips client-supplied runtime stamps (until / blocked)', () => {
-    const sneaky = { kind: 'wait', hours: 1, until: 5, blocked: 'E_FAKE' } as QStep;
+  it('order.enqueue strips client-supplied runtime stamps (until / blocked / group)', () => {
+    const sneaky = { kind: 'wait', hours: 1, until: 5, blocked: 'E_FAKE', group: 99 } as QStep;
     const s = ok(kernel.applyAction(stateWith(fleet('F')), orderEnqueue('green', 'F', sneaky), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'wait', hours: 1 }]);
+    expect(ordersOf(s).F).toEqual([{ kind: 'wait', hours: 1, group: 1 }]);
   });
 
-  it('order.remove deletes one step by index (fail-secure on bad indexes)', () => {
+  it('order.remove deletes the WHOLE order the index points into (fail-secure on bad indexes)', () => {
     let s = stateWith(fleet('F'));
-    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'a' }), ctx()));
-    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
+    // Order 1 is a two-step capture; removing it via EITHER step's index drops both —
+    // half a capture (a move without its assault) is not a plan anyone asked for.
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', [{ kind: 'move', to: 'a' }, { kind: 'assault' }]), ctx()));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'load' }), ctx()));
     s = ok(kernel.applyAction(s, orderRemove('green', 'F', 1), ctx()));
-    expect(ordersOf(s).F).toEqual([{ kind: 'move', to: 'a' }, { kind: 'load' }]);
-    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 2), ctx()))).toBe('E_NO_STEP');
-    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 1.5), ctx()))).toBe('E_BAD_PAYLOAD');
-    s = ok(kernel.applyAction(s, orderRemove('green', 'F', 1), ctx()));
+    expect(ordersOf(s).F).toEqual([{ kind: 'load', group: 2 }]);
+    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 1), ctx()))).toBe('E_NO_STEP');
+    expect(rej(kernel.applyAction(s, orderRemove('green', 'F', 0.5), ctx()))).toBe('E_BAD_PAYLOAD');
     s = ok(kernel.applyAction(s, orderRemove('green', 'F', 0), ctx()));
     expect(ordersOf(s).F).toBeUndefined(); // emptied → entry dropped
+  });
+
+  it('removing an order frees its limit slot (and group stamps stay monotonic)', () => {
+    let s = stateWith(fleet('F'));
+    for (let i = 0; i < CHAIN_ORDERS_BASE; i++) {
+      s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'move', to: 'p' + i }), ctx()));
+    }
+    s = ok(kernel.applyAction(s, orderRemove('green', 'F', 0), ctx()));
+    s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'orbit' }), ctx()));
+    // The freed slot is usable again, and the new order got a FRESH group id.
+    expect(chainOrderCount(ordersOf(s).F!)).toBe(CHAIN_ORDERS_BASE);
+    expect(ordersOf(s).F!.at(-1)).toEqual({ kind: 'orbit', group: CHAIN_ORDERS_BASE + 1 });
   });
 
   it('order.block pauses the chain on the head with its reason; order.retry re-arms it', () => {
     let s = stateWith(fleet('F'));
     s = ok(kernel.applyAction(s, orderEnqueue('green', 'F', { kind: 'assault' }), ctx()));
     s = ok(kernel.applyAction(s, orderBlock('green', 'F', 'E_FORBIDDEN'), ctx()));
-    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault', blocked: 'E_FORBIDDEN' });
+    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault', blocked: 'E_FORBIDDEN', group: 1 });
     expect(serverQueueActions(s, 0)).toEqual([]); // the driver holds a blocked chain
     s = ok(kernel.applyAction(s, orderRetry('green', 'F'), ctx()));
-    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault' });
+    expect(ordersOf(s).F![0]).toEqual({ kind: 'assault', group: 1 });
     expect(serverQueueActions(s, 0)).toHaveLength(1); // …and it runs again
     expect(rej(kernel.applyAction(s, orderRetry('green', 'F'), ctx()))).toBe('E_NO_STEP');
     expect(rej(kernel.applyAction(s, orderBlock('green', 'F', 'not a code!'), ctx()))).toBe('E_BAD_PAYLOAD');
