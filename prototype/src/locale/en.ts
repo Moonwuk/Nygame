@@ -769,10 +769,6 @@ export const en: Record<string, string> = {
     '"Build" + taps on worlds assemble a plan. Tapping someone else\'s world queues a "⚔ capture": the flight and the assault as ONE order. Buttons add bombard, load/unload and "wait N h"; the limit is {base} orders ({prem} with a subscription). "🔁 loop" runs the plan until cancelled (patrol) and takes no slot. ✕ removes a whole order; a live order (Move/Stop/assault) drops the plan. If a step fails, the plan pauses and waits for you instead of silently breaking.',
   '⚒ десант': '⚒ ground',
   '⚔ орбита': '⚔ orbital',
-  'Дежурный вылет пока работает только в одиночной игре.': 'Standing patrol only works in single-player for now.',
-  'Авто-штурм пока работает только в одиночной игре.': 'Auto-assault only works in single-player for now.',
-  '⚠ дежурный вылет пока только в одиночной игре': '⚠ standing patrol only works in single-player',
-  '⚠ авто-штурм пока только в одиночной игре': '⚠ auto-assault only works in single-player',
   '⚔ {who} объявил вам войну!': '⚔ {who} declared war on you!',
 
   // --- bot favour meter / stolen intel readout ----------------------------------

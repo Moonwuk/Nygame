@@ -79,6 +79,8 @@ import {
   isSubscriber,
   CHAIN_ORDERS_BASE,
   CHAIN_ORDERS_PREMIUM,
+  orderAuto,
+  orderScramble,
   fleetIdle,
   loadHereActions,
   waitStatus,
@@ -2259,6 +2261,14 @@ function enqueueOrder(fleetIds: string[], steps: QStep[]): void {
 function fleetQueueOf(fleetId: string): QStep[] {
   return NET ? ((s as { orders?: Record<string, QStep[]> }).orders?.[fleetId] ?? []) : (fleetQueues.get(fleetId) ?? []);
 }
+/** The CC-2 auto-storm stance of a fleet — authoritative state in NET, local Set solo. */
+function isAutoAssault(fleetId: string): boolean {
+  return NET ? ((s as { autoAssault?: Record<string, true> }).autoAssault?.[fleetId] ?? false) : autoAssault.has(fleetId);
+}
+/** The CC-4 standing patrol of a fleet — authoritative state in NET, local Map solo. */
+function patrolOf(fleetId: string): Patrol | undefined {
+  return NET ? (s as { patrols?: Record<string, Patrol> }).patrols?.[fleetId] : patrols.get(fleetId);
+}
 /** Remove the whole ORDER the indexed step belongs to (NET: authoritative order.remove
  *  applies the same group rule) — half a capture is not a plan anyone asked for. */
 function removeChainStep(fleetId: string, index: number): void {
@@ -4113,19 +4123,17 @@ function panelHtml(): string {
         h += `</div>`;
         h += `<div class="hint">${t('Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.')}</div>`;
 
-        // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing.
-        const scrambling = patrols.has(f.id);
-        const pt = patrols.get(f.id);
+        // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing
+        // (authoritative server state in NET — the server flies it while you're offline).
+        const pt = patrolOf(f.id);
         h += `<div class="row">`;
-        h += btn('qscramble', '', scrambling ? t('🛩 дежурный вылет: ВКЛ') : t('🛩 дежурный вылет: выкл'), !NET);
+        h += btn('qscramble', '', pt ? t('🛩 дежурный вылет: ВКЛ') : t('🛩 дежурный вылет: выкл'), true);
         h += `</div>`;
-        if (scrambling && pt) {
+        if (pt) {
           const status = pt.sortie.rearming > 0 ? t('перезарядка {n}', { n: pt.sortie.rearming }) : t('топливо {n}', { n: pt.sortie.fuel });
           h += `<div class="row dim">${t('радиус {r}', { r: Math.round(pt.radius) })} · ${status}</div>`;
         }
-        h += NET
-          ? `<div class="hint">${t('Дежурный вылет пока работает только в одиночной игре.')}</div>`
-          : `<div class="hint">${t('Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.')}</div>`;
+        h += `<div class="hint">${t('Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.')}</div>`;
       }
 
       // The player's projection hero rides here → name it and flag its fleet aura.
@@ -4248,15 +4256,13 @@ function panelHtml(): string {
         }
         h += `<div class="hint">${t('«Строить» + тапы по мирам собирают план. Тап по чужому миру — «⚔ захват»: перелёт и штурм одним приказом. Кнопки добавляют обстрел, погрузку/выгрузку и «ждать N ч»; лимит — {base} приказа, с подпиской {prem}. «🔁 по кругу» гоняет план до отмены (патруль) и слот не занимает. ✕ убирает приказ целиком; живой приказ (Move/Stop/штурм) снимает план. Если шаг сорвался — план встаёт на паузу и ждёт вас, а не рушится молча.', { base: CHAIN_ORDERS_BASE, prem: CHAIN_ORDERS_PREMIUM })}</div>`;
 
-        // CC-2 standing order — auto-storm stance (independent of the chain above).
-        // Honest in NET: the client driver can't act for a server-owned fleet yet.
-        const auto = autoAssault.has(f.id);
+        // CC-2 standing order — auto-storm stance (independent of the chain above;
+        // authoritative server state in NET — the server presses it while you're offline).
+        const auto = isAutoAssault(f.id);
         h += `<div class="sec">${t('Дежурный режим')}</div><div class="row">`;
-        h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), !NET);
+        h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true);
         h += `</div>`;
-        h += NET
-          ? `<div class="hint">${t('Авто-штурм пока работает только в одиночной игре.')}</div>`
-          : `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
+        h += `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
       }
 
       if (f.movement) {
@@ -5538,13 +5544,13 @@ side.addEventListener('click', (ev) => {
     }
     note(t('▶ пробую шаг снова'));
   } else if (act === 'qauto') {
-    if (NET) {
-      note(t('⚠ авто-штурм пока только в одиночной игре')); // the client driver can't run for a server-owned fleet
-    } else
-      for (const id of selectedFleetIds()) {
-        if (autoAssault.has(id)) autoAssault.delete(id);
-        else autoAssault.add(id);
-      }
+    // CC-2 stance toggle: authoritative in NET (order.auto — the server presses the
+    // storm while you're offline), the local Set in solo (autoEngage drives it).
+    for (const id of selectedFleetIds()) {
+      if (NET) playerOrder(orderAuto(ME, id, !isAutoAssault(id)));
+      else if (autoAssault.has(id)) autoAssault.delete(id);
+      else autoAssault.add(id);
+    }
   } else if (act === 'qclear') {
     for (const id of selectedFleetIds()) {
       if (NET) playerOrder(orderClear(ME, id)); // drop the authoritative server chain
@@ -5560,17 +5566,14 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'qscramble') {
     // CC-4: toggle "дежурный вылет" — stand (or stand down) a reactive auto-strike patrol
     // on each selected squadron fleet, centred on its current node with its strike radius.
-    if (NET) {
-      note(t('⚠ дежурный вылет пока только в одиночной игре'));
-      lastPanelHtml = '';
-      renderPanel();
-      return;
-    }
+    // Authoritative in NET (order.scramble — the server computes the patrol and flies it
+    // while you're offline); the local Map + frame-loop driver in solo.
     for (const id of selectedFleetIds()) {
       const f = s.fleets[id];
       if (!f || !fleetHasSquadron(f)) continue;
-      if (patrols.has(id)) {
-        patrols.delete(id);
+      if (patrolOf(id)) {
+        if (NET) playerOrder(orderScramble(ME, id, false));
+        else patrols.delete(id);
         continue;
       }
       const pos = f.location ? s.planets[f.location]?.position : undefined;
@@ -5578,12 +5581,16 @@ side.addEventListener('click', (ev) => {
         note(t('🛩 дежурный вылет — только со стоянки в узле'));
         continue;
       }
-      if (patrols.size === 0) lastPatrolTick = s.time; // start the rearm cadence from now
-      patrols.set(id, {
-        center: { x: pos.x, y: pos.y },
-        radius: squadronStrikeRange(f),
-        sortie: freshSortie(sortieSpec(f).maxFuel),
-      });
+      if (NET) {
+        playerOrder(orderScramble(ME, id, true));
+      } else {
+        if (patrols.size === 0) lastPatrolTick = s.time; // start the rearm cadence from now
+        patrols.set(id, {
+          center: { x: pos.x, y: pos.y },
+          radius: squadronStrikeRange(f),
+          sortie: freshSortie(sortieSpec(f).maxFuel),
+        });
+      }
       note(t('🛩 дежурный вылет включён — эскадрилья бьёт врага в радиусе'));
     }
   } else if (act === 'load') {

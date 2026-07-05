@@ -145,6 +145,30 @@ describe('visibleState — order chains are the owner’s secret (future intent)
     state.orders = { 'enemy-near': [{ kind: 'assault' }] };
     expect('orders' in visibleState(state, 'p1', data)).toBe(false);
   });
+
+  it('standing orders (autoAssault / patrols) are stripped by the same rule', () => {
+    const state = scenario() as GameState & {
+      autoAssault?: Record<string, unknown>;
+      patrols?: Record<string, unknown>;
+    };
+    state.autoAssault = { 'mine-1': true, 'enemy-near': true };
+    state.patrols = {
+      'mine-1': { center: { x: 0, y: 0 }, radius: 5, sortie: { fuel: 2, rearming: 0 } },
+      'enemy-near': { center: { x: 9, y: 9 }, radius: 7, sortie: { fuel: 1, rearming: 0 } },
+    };
+    const view = visibleState(state, 'p1', data) as VisibleState & {
+      autoAssault?: Record<string, unknown>;
+      patrols?: Record<string, unknown>;
+    };
+    expect(view.autoAssault).toEqual({ 'mine-1': true });
+    expect(Object.keys(view.patrols ?? {})).toEqual(['mine-1']);
+    // With nothing of the viewer's left, the keys vanish entirely (delta hygiene).
+    state.autoAssault = { 'enemy-near': true };
+    state.patrols = { 'enemy-near': { center: { x: 9, y: 9 }, radius: 7, sortie: { fuel: 1, rearming: 0 } } };
+    const bare = visibleState(state, 'p1', data);
+    expect('autoAssault' in bare).toBe(false);
+    expect('patrols' in bare).toBe(false);
+  });
 });
 
 describe('visibleView (one coverage pass for the broadcast path)', () => {

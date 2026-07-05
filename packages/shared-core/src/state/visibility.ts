@@ -358,15 +358,18 @@ function project(
       if (view.heroes[id]?.owner !== viewerId) delete view.heroes[id];
     }
   }
-  // Order chains (host extensions like the prototype's `orders`) are future intent —
-  // exactly what `scheduled` is stripped for below. Keep only the chains of the
-  // viewer's OWN fleets; a map left empty is removed (same delta hygiene as offers).
-  const chains = (view as { orders?: Record<string, unknown> }).orders;
-  if (chains) {
-    for (const fleetId of Object.keys(chains)) {
-      if (state.fleets[fleetId]?.owner !== viewerId) delete chains[fleetId];
+  // Order chains and standing orders (host extensions like the prototype's `orders` /
+  // `autoAssault` / `patrols`) are future intent — exactly what `scheduled` is stripped
+  // for below. Keep only the entries of the viewer's OWN fleets; a map left empty is
+  // removed (same delta hygiene as offers).
+  for (const key of ['orders', 'autoAssault', 'patrols'] as const) {
+    const host = view as unknown as Record<string, Record<string, unknown> | undefined>;
+    const map = host[key];
+    if (!map) continue;
+    for (const fleetId of Object.keys(map)) {
+      if (state.fleets[fleetId]?.owner !== viewerId) delete map[fleetId];
     }
-    if (Object.keys(chains).length === 0) delete (view as { orders?: unknown }).orders;
+    if (Object.keys(map).length === 0) delete host[key];
   }
 
   // Planets: keep topology (id/position/links) but strip contents you can't see.

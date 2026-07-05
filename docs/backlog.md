@@ -233,6 +233,16 @@
   нумеруются по приказам. Соло зеркалит серверное правило (`enqueueOrder`); стаб
   подписки на плейтест — `localStorage['vd.premium']='1'`. +4 теста (46 в orderqueue);
   браузер-проверено RU/EN: 3/3 и 5/5, отказ 4-го/6-го, ссылки, апселл. Гейт 888 зелёный.
+- **CC-srv-2** ✅ Стоячие приказы серверно-авторитетны (CC-2 авто-штурм + CC-4 дежурный
+  вылет — было «только сингл», клиентские Set/Map): `standingOrdersModule`
+  (`order.auto`/`order.scramble`/`patrol.stamp` → `state.autoAssault`/`state.patrols`,
+  сервер сам считает патруль, sweep мёртвых флотов), чистые драйверы
+  `serverAutoAssaultActions`/`serverPatrolActions` (fog-честно: цели только из
+  `identifiedNodes` владельца; только при войне; перезарядка по меткам `rearmAt` — живёт
+  при редких пробуждениях), хост-цикл `runServerStanding` в netserver, fog-фильтр обоих
+  ключей в `visibility.project`. Клиент: кнопки работают в NET (шлют экшены, читают
+  состояние), сингл — на прежних локальных драйверах. +15 тестов (standingorders) +1
+  (visibility); e2e по WS: `order.auto` → флаг в broadcast. Гейт 904 зелёный.
 
 ## Блок ECON · Ядро: внутриматчевая экономика `[core]` `[data]`
 

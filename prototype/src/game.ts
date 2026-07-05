@@ -30,6 +30,7 @@ import {
   isBotPair,
   setStance,
   pairKey,
+  identifiedNodes,
   timeScaleOf,
   type DiplomaticStance,
   type GameData,
@@ -1523,6 +1524,13 @@ type DivState = GameState & {
    *  power, docs/main-menu.md). Stamped by the meta-layer at match creation / renewal;
    *  nothing inside a match grants it. */
   subscribers?: Record<string, true>;
+  /** CC-2 standing order, AUTHORITATIVE (was a client-only Set): fleets that auto-storm
+   *  the enemy world they arrive at. Driven server-side (serverAutoAssaultActions). */
+  autoAssault?: Record<string, true>;
+  /** CC-4 standing patrols, AUTHORITATIVE (was a client-only Map): fleetId → patrol
+   *  (center/radius/sortie + the next rearm-round due time). Driven server-side
+   *  (serverPatrolActions), so «дежурный вылет» works in NET and offline. */
+  patrols?: Record<string, Patrol & { rearmAt?: number }>;
 };
 export function divisionsOf(state: GameState): Record<string, Division> {
   const s = state as DivState;
@@ -2166,6 +2174,100 @@ export const subscriptionModule: GameModule = {
   },
 };
 
+// --- CC-server: standing orders (CC-2 auto-storm / CC-4 дежурный вылет) -------------
+// Promoted from client-only Set/Map to AUTHORITATIVE state so the server drives them —
+// like the order chains, they run in NET and while the owner is offline. The module only
+// STORES the standing order; the host driver (netserver.runServerStanding, mirroring
+// runServerQueues) reads the pure decision cores below and issues the orders through the
+// same authoritative room. Single-player keeps its local frame-loop drivers.
+export const standingOrdersModule: GameModule = {
+  id: 'standing-orders',
+  version: '0.1.0',
+  setup(api) {
+    const ownedFleet = (h: HandlerContext, playerId: string, fleetId: unknown): Fleet | string => {
+      if (typeof fleetId !== 'string') return 'E_BAD_PAYLOAD';
+      const f = h.state.fleets[fleetId];
+      if (!f) return 'E_NO_FLEET';
+      if (f.owner !== playerId) return 'E_FORBIDDEN';
+      return f;
+    };
+    api.onAction('order.auto', (action, h) => {
+      // CC-2: toggle the auto-storm stance on an owned fleet. Pure flag — the driver
+      // decides WHEN it fires (parked over a capturable enemy world, orbit clear).
+      const p = action.payload as { fleetId?: unknown; on?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      if (typeof p.on !== 'boolean') return h.reject('E_BAD_PAYLOAD');
+      const st = h.state as DivState;
+      if (p.on) (st.autoAssault ??= {})[f.id] = true;
+      else if (st.autoAssault) {
+        delete st.autoAssault[f.id];
+        if (Object.keys(st.autoAssault).length === 0) delete st.autoAssault;
+      }
+    });
+    api.onAction('order.scramble', (action, h) => {
+      // CC-4: stand (or stand down) a reactive patrol on an owned squadron fleet. The
+      // SERVER computes the patrol — center from the fleet's node, radius from its wing,
+      // a fresh sortie budget — nothing about it is client-supplied.
+      const p = action.payload as { fleetId?: unknown; on?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      if (typeof p.on !== 'boolean') return h.reject('E_BAD_PAYLOAD');
+      const st = h.state as DivState;
+      if (!p.on) {
+        if (st.patrols) {
+          delete st.patrols[f.id];
+          if (Object.keys(st.patrols).length === 0) delete st.patrols;
+        }
+        return;
+      }
+      if (!fleetHasSquadron(f)) return h.reject('E_NO_SHIPS');
+      const pos = f.location !== null ? h.state.planets[f.location]?.position : undefined;
+      if (!pos || !fleetIdle(f)) return h.reject('E_CONDITIONS_UNMET'); // patrols stand from a parked node
+      (st.patrols ??= {})[f.id] = {
+        center: { x: pos.x, y: pos.y },
+        radius: squadronStrikeRange(f),
+        sortie: freshSortie(sortieSpec(f).maxFuel),
+        rearmAt: h.ctx.now + HOUR, // rearm cadence: one round per game-hour from now
+      };
+    });
+    api.onAction('patrol.stamp', (action, h) => {
+      // The DRIVER's runtime stamp (burned fuel / ticked rearm / next cadence mark) —
+      // same trust shape as order.hold. Bounds-checked against the wing's own spec so
+      // a forged stamp can't mint fuel or park a patrol in an impossible state.
+      const p = action.payload as { fleetId?: unknown; sortie?: unknown; rearmAt?: unknown };
+      const f = ownedFleet(h, action.playerId, p?.fleetId);
+      if (typeof f === 'string') return h.reject(f);
+      const patrol = (h.state as DivState).patrols?.[f.id];
+      if (!patrol) return h.reject('E_NO_TARGET');
+      const s = p.sortie as { fuel?: unknown; rearming?: unknown } | undefined;
+      const spec = sortieSpec(f);
+      if (
+        typeof s?.fuel !== 'number' || !Number.isInteger(s.fuel) || s.fuel < 0 || s.fuel > spec.maxFuel ||
+        typeof s.rearming !== 'number' || !Number.isInteger(s.rearming) || s.rearming < 0 || s.rearming > spec.rearmRounds
+      ) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      if (p.rearmAt !== undefined && (typeof p.rearmAt !== 'number' || !Number.isFinite(p.rearmAt) || p.rearmAt < 0)) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      patrol.sortie = { fuel: s.fuel, rearming: s.rearming };
+      if (p.rearmAt !== undefined) patrol.rearmAt = p.rearmAt;
+    });
+    // Housekeeping: standing orders of dead fleets must not live in state (and every
+    // snapshot) forever. Same deterministic sweep as the order chains'.
+    api.on('time.advanced', (_ev, h) => {
+      const st = h.state as DivState;
+      for (const key of ['autoAssault', 'patrols'] as const) {
+        const map = st[key];
+        if (!map) continue;
+        for (const fid of Object.keys(map)) if (!h.state.fleets[fid]) delete map[fid];
+        if (Object.keys(map).length === 0) delete st[key];
+      }
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -2188,6 +2290,7 @@ export const MODULES: GameModule[] = [
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
   orderQueueModule, // CC-server: authoritative per-fleet command-chain (server-driven, offline-safe)
   subscriptionModule, // CC-6: raises the order limit for subscribed seats (order.chainLimit hook)
+  standingOrdersModule, // CC-2/CC-4 standing orders (auto-storm / дежурный вылет), server-driven
 ];
 
 export const kernel = createKernel(MODULES);
@@ -2486,6 +2589,11 @@ export function tickRearm(s: SortieState, maxFuel: number): SortieState {
 // launch / carrier node — the same distance model as radarRange. A carrier outside the
 // target's radius can't strike it. Pure.
 
+/** Does this fleet carry a launchable strike wing (squadron-trait ships)? */
+export function fleetHasSquadron(f: Fleet | undefined): boolean {
+  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('squadron') ?? false));
+}
+
 /** The wing's strike radius (map units) — the longest `strikeRange` among its live
  *  squadron ships. 0 = carries no strike wing. */
 export function squadronStrikeRange(fleet: Fleet): number {
@@ -2573,6 +2681,102 @@ export function scrambleOrder(
   return { action, sortie: spendSortie(patrol.sortie, rearmRounds) };
 }
 
+/** One tick of the SERVER-SIDE auto-storm driver (CC-2): every fleet flagged in
+ *  `state.autoAssault` that sits over someone else's capturable world with the orbit
+ *  clear gets its storm orders. Mirrors the client autoEngage() conditions exactly.
+ *  Pure — the host applies the actions; a rejection is simply skipped (a standing
+ *  stance has no chain to block). */
+export function serverAutoAssaultActions(
+  state: GameState,
+): Array<{ fleetId: string; owner: string; actions: Action[] }> {
+  const flagged = (state as DivState).autoAssault ?? {};
+  const out: Array<{ fleetId: string; owner: string; actions: Action[] }> = [];
+  for (const fid of Object.keys(flagged)) {
+    const f = state.fleets[fid];
+    if (!f || f.location === null || !fleetIdle(f)) continue;
+    const here = state.planets[f.location];
+    if (!here || !isCapturable(data, here) || here.owner === f.owner) continue;
+    const enemyHere = Object.values(state.fleets).some(
+      (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
+    );
+    if (enemyHere) continue; // let the orbital battle settle first
+    out.push({ fleetId: fid, owner: f.owner, actions: stepActions(f.owner, fid, { kind: 'assault' }, f) });
+  }
+  return out;
+}
+
+/** One tick of the SERVER-SIDE patrol driver (CC-4): tick each standing patrol's rearm
+ *  on its game-hour cadence, then — if the wing is parked and flight-ready — scramble at
+ *  the nearest identified, at-war contact inside the radius (the same pure scrambleOrder
+ *  the solo driver uses; vision comes from the owner's identify coverage, so the server
+ *  never lets a patrol see through the fog its owner has). Pure — the host applies the
+ *  strike `actions` and persists `patch` via patrol.stamp; `drop` retires a patrol whose
+ *  fleet lost its wing. */
+export function serverPatrolActions(
+  state: GameState,
+  now: number,
+): Array<{
+  fleetId: string;
+  owner: string;
+  actions: Action[];
+  patch?: { sortie: SortieState; rearmAt?: number };
+  drop?: boolean;
+}> {
+  const patrols = (state as DivState).patrols ?? {};
+  const out: Array<{
+    fleetId: string;
+    owner: string;
+    actions: Action[];
+    patch?: { sortie: SortieState; rearmAt?: number };
+    drop?: boolean;
+  }> = [];
+  const identify = new Map<string, Set<string>>(); // owner → identified nodes (hoisted per owner)
+  for (const [fid, p] of Object.entries(patrols)) {
+    const f = state.fleets[fid];
+    if (!f || !fleetHasSquadron(f)) {
+      out.push({ fleetId: fid, owner: f?.owner ?? '', actions: [], drop: true });
+      continue;
+    }
+    const spec = sortieSpec(f);
+    // Rearm cadence: one round per game-hour past `rearmAt` (absolute stamps — no
+    // wall-clock drift, works however rarely the offline room wakes).
+    let sortie = p.sortie;
+    let rearmAt = p.rearmAt ?? now + HOUR;
+    while (now >= rearmAt) {
+      sortie = tickRearm(sortie, spec.maxFuel);
+      rearmAt += HOUR;
+    }
+    let actions: Action[] = [];
+    if (fleetIdle(f)) {
+      let seen = identify.get(f.owner);
+      if (!seen) {
+        seen = identifiedNodes(state, f.owner, data);
+        identify.set(f.owner, seen);
+      }
+      const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
+      for (const g of Object.values(state.fleets)) {
+        if (g.owner === f.owner || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+        if (getStance(state, f.owner, g.owner) !== 'war') continue; // declared enemies only — never auto-war
+        if (!seen.has(g.location)) continue; // identified contacts only — fog-honest
+        const pos = state.planets[g.location]?.position;
+        if (pos) targets.push({ id: g.id, location: g.location, pos });
+      }
+      const res = scrambleOrder(f.owner, f, { ...p, sortie }, targets, spec.rearmRounds);
+      sortie = res.sortie;
+      if (res.action) actions = [res.action];
+    }
+    const changed =
+      sortie.fuel !== p.sortie.fuel || sortie.rearming !== p.sortie.rearming || rearmAt !== p.rearmAt;
+    out.push({
+      fleetId: fid,
+      owner: f.owner,
+      actions,
+      patch: changed ? { sortie, rearmAt } : undefined,
+    });
+  }
+  return out;
+}
+
 /**
  * Actions to re-embark the liftable garrison of the fleet's CURRENT world back into its
  * cargo — the "auto-load after capture" step. After a defended assault the storming
@@ -2637,6 +2841,16 @@ export const orderRetry = (playerId: string, fleetId: string) =>
 /** Stamp the head 'wait' step's resume time (set once when the step reaches the head). */
 export const orderHold = (playerId: string, fleetId: string, until: number) =>
   act(playerId, 'order.hold', { fleetId, until });
+/** Toggle the CC-2 auto-storm stance on an owned fleet (authoritative standing order). */
+export const orderAuto = (playerId: string, fleetId: string, on: boolean) =>
+  act(playerId, 'order.auto', { fleetId, on });
+/** Stand (or stand down) a CC-4 reactive patrol on an owned squadron fleet — the server
+ *  computes the patrol itself (center / radius / fresh sortie). */
+export const orderScramble = (playerId: string, fleetId: string, on: boolean) =>
+  act(playerId, 'order.scramble', { fleetId, on });
+/** The patrol driver's runtime stamp: burned fuel / ticked rearm / next cadence mark. */
+export const patrolStamp = (playerId: string, fleetId: string, sortie: SortieState, rearmAt?: number) =>
+  act(playerId, 'patrol.stamp', rearmAt === undefined ? { fleetId, sortie } : { fleetId, sortie, rearmAt });
 
 /** One tick of the SERVER-SIDE order-chain driver (CC-server): for every fleet whose
  *  authoritative chain is at the head and the fleet is IDLE, the actions to issue plus how
