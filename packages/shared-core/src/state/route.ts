@@ -1,5 +1,6 @@
 import type { Fleet, GameState, PlanetId } from './gameState';
 import type { GameData } from '../data/schemas';
+import { effectiveStats } from '../util/loadout';
 
 /**
  * Routing + travel-time over the lane graph (map-roadmap.md). The single source
@@ -30,8 +31,9 @@ export function fleetBaseSpeed(fleet: Fleet, data: GameData): number {
   for (const stack of fleet.units) {
     const def = data.units[stack.unit];
     if (!def) continue;
-    let s = def.stats.speed;
-    const maxHp = stack.count * def.stats.hp;
+    const eff = effectiveStats(def, stack, data);
+    let s = eff.speed ?? 0;
+    const maxHp = stack.count * (eff.hp ?? 0);
     if (stack.hp !== undefined && maxHp > 0) {
       const frac = stack.hp / maxHp;
       if (frac < 0.3) s *= Math.max(0.2, frac / 0.3); // limp below 30% hull

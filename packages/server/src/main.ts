@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import rateLimit from '@fastify/rate-limit';
 import { createDevMatch, loadShippedData } from './scenario';
 import { createMultiplayerServer } from './wsServer';
 import { startClockDriver, type ClockDriverHandle } from './clockDriver';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
-import { registerMatchApi, type MatchApiDeps } from './matchApi';
+import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
+import { registerAuthApi } from './authApi';
+import { MatchKeeper } from './matchFactory';
 import { LazyRoomRegistry, type LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
 import type { MatchSnapshot, StoredReceipt } from './store';
@@ -22,17 +25,20 @@ import type { MatchSnapshot, StoredReceipt } from './store';
  *   HOST=0.0.0.0 PORT=9000 pnpm dev:server       # reachable from other LAN devices
  *   AUTH_JWT_SECRET=… GATE=1  pnpm dev:server    # authenticated handshake + validated envelopes
  *
- * Still a dev harness for match CREATION: the `dev` match is seeded on boot. A real
- * authenticated create/list/join API is SV-2.4.
+ * With AUTH_JWT_SECRET set the server also exposes login+password accounts (SE-1.x):
+ * `POST /auth/register` / `POST /auth/login` mint a session token, and the create/join
+ * API requires it (`Authorization: Bearer`) — the session's login is the seat identity.
+ * The `dev` match is still seeded on boot for continuity.
  */
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8787);
 const bootTime = Date.now();
 
 // Security composition from the environment (all switches OFF by default → dev harness):
-// AUTH_JWT_SECRET (authenticated handshake + token minting), ALLOWED_ORIGINS (CSWSH),
-// GATE=1 (validated action.v1 envelopes). See serverConfig.ts.
-const { auth, allowedOrigins, signToken, gateFactory } = configFromEnv(process.env);
+// AUTH_JWT_SECRET (authenticated handshake + token minting + login/password accounts),
+// ALLOWED_ORIGINS (CSWSH), GATE=1 (validated action.v1 envelopes). See serverConfig.ts.
+const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory } =
+  configFromEnv(process.env);
 
 const data = loadShippedData();
 const stores = await createStores();
@@ -117,14 +123,24 @@ const matchApi: MatchApiDeps = {
     matchCount += 1;
     return { matchId, seats: Object.keys(seed.state.players) };
   },
-  join: async (matchId, nick) => {
+  join: async (matchId, nick, accountId) => {
     const snap = await stores.store.load(matchId);
     if (!snap) return { error: 'E_NO_MATCH' };
     if (!signToken) return { error: 'E_AUTH_DISABLED' }; // no token auth configured
     const seat = await accountStore.resolveSeat(matchId, nick, Object.keys(snap.state.players));
     if (!seat) return { error: 'E_MATCH_FULL' };
-    return { playerId: seat.playerId, token: await signToken(matchId, seat.playerId) };
+    return { playerId: seat.playerId, token: await signToken(matchId, seat.playerId, accountId) };
   },
+  // Identity gate (SE-1.x): create/join require a session from /auth/login — the
+  // session's login IS the seat nick, so nobody claims a seat as somebody else.
+  identify: verifySession
+    ? async (request) => {
+        const header = request.headers.authorization;
+        if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
+        const verified = await verifySession(header.slice('Bearer '.length).trim());
+        return verified.ok ? verified.claim : null;
+      }
+    : undefined,
 };
 
 if (auth && !allowedOrigins) {
@@ -134,36 +150,88 @@ if (auth && !allowedOrigins) {
   );
 }
 
+// Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
+// never empty — when one fills or ends, seed another. The open count is read from the
+// durable store, so a restart reconciles instead of over-creating. OPEN_MATCHES=0 off.
+const OPEN_MATCHES = Number(process.env.OPEN_MATCHES ?? '3') || 0;
+const MATCH_CAPACITY = 2; // createDevMatch seats green/red — a match is full at 2
+const keeper =
+  OPEN_MATCHES > 0
+    ? new MatchKeeper({
+        target: OPEN_MATCHES,
+        max: MAX_MATCHES,
+        capacity: MATCH_CAPACITY,
+        listOngoing: () => stores.store.ongoingMatchIds(),
+        occupiedSeats: (id) => accountStore.occupiedSeats(id),
+        create: async () => {
+          await matchApi.createMatch();
+        },
+        onError: (err) =>
+          process.stderr.write(
+            `match factory: seed failed — ${err instanceof Error ? err.message : String(err)}\n`,
+          ),
+      })
+    : null;
+
 const server = createMultiplayerServer({
   registry,
   host,
   port,
   logger: true, // structured pino logs for boot/shutdown (dev harness → prod entrypoint)
+  // Behind a TLS-terminating proxy (Caddy), set TRUST_PROXY=1 so request.ip (and the
+  // auth API's per-IP rate limit) sees the client, not the proxy.
+  trustProxy: process.env.TRUST_PROXY === '1',
   // /ready is red while the durable store is unreachable, so a load balancer stops
   // routing new traffic without failing liveness (/health).
   ready: () => stores.store.ping?.() ?? Promise.resolve(true),
   auth,
   allowedOrigins,
   accountStore, // dev ?nick= WS login (when auth is off)
-  // Only expose create/join when auth is on (it mints tokens); no auth ⇒ use ?player=.
-  httpRoutes: auth ? (app) => registerMatchApi(app, matchApi) : undefined,
+  httpRoutes: (app) => {
+    // The open-matches feed is PUBLIC and read-only — browsing joinable matches precedes
+    // login and works with or without auth. Joining still needs a session (SE-1.x).
+    registerOpenMatchesFeed(app, {
+      listOngoing: () => stores.store.ongoingMatchIds(),
+      occupiedSeats: (id) => accountStore.occupiedSeats(id),
+      capacity: MATCH_CAPACITY,
+    });
+    // The account + match WRITE surface only when auth is on (it mints tokens); no auth ⇒
+    // the insecure dev ?player= handshake only. It sits behind @fastify/rate-limit in an
+    // ENCAPSULATED scope so the coarse per-IP backstop covers only these write routes —
+    // liveness probes (/health, /ready) and the feed on the parent app stay unthrottled
+    // for load balancers. The route modules keep their own tighter, uniform-401-preserving
+    // per-endpoint budgets on top (defence in depth on the auth path).
+    if (auth && signSession) {
+      void app.register(async (scope) => {
+        await scope.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+        registerAuthApi(scope, { users: stores.userStore, signSession });
+        registerMatchApi(scope, matchApi);
+      });
+    }
+  },
 });
 
 const wsBase = await server.listen(); // ws://host:port/matches (multi-match → the base prefix)
 const httpUrl = wsBase.replace(/^ws/, 'http').replace(/\/matches.*$/, '');
+
+// Start the factory once the server is up: seed toward OPEN_MATCHES now, then reconcile
+// on an interval (a slow, cheap safety net; joins fill matches between ticks).
+keeper?.start(30_000);
 
 process.stdout.write(
   [
     'Void Dominion — server (real core, multi-match)',
     `  state  : ${stores.kind}${stores.kind === 'memory' ? ' (restart loses matches — set DATABASE_URL for durability)' : ' (durable — matches resume on restart)'}`,
     `  matches: lazy registry (load on connect, hibernate when idle, wake for events)`,
+    `  factory: ${keeper ? `keeps ${OPEN_MATCHES} open match(es) available · GET ${httpUrl}/matches/open` : 'off (OPEN_MATCHES=0)'}`,
     `  auth   : ${auth ? 'on (join token required — connect with ?token=<jwt>)' : 'off (insecure dev ?player=/?nick=)'}`,
     `  gate   : ${gateFactory ? 'ON (clients MUST send action.v1 envelopes echoing welcome.sessionId)' : 'off (bare actions)'}`,
     `  health : ${httpUrl}/health`,
     ...(auth
       ? [
-          `  join   : POST ${httpUrl}/matches  ·  GET ${httpUrl}/matches/dev/join?nick=<you>`,
-          `           (dev-grade: unauthenticated, seat claimed by nick — not an authz boundary)`,
+          `  account: POST ${httpUrl}/auth/register  ·  POST ${httpUrl}/auth/login  {login, password}`,
+          `  join   : POST ${httpUrl}/matches  ·  GET ${httpUrl}/matches/dev/join  (Authorization: Bearer <session>)`,
+          `           (the session's login is your nick; the seat is claimed for YOUR account)`,
         ]
       : [`  dev    : ${wsBase}/dev?player=green  ·  ${wsBase}/dev?player=red`]),
     host === '0.0.0.0'
@@ -177,6 +245,7 @@ let shuttingDown = false;
 const shutdown = (): void => {
   if (shuttingDown) return; // SIGINT + SIGTERM can both arrive
   shuttingDown = true;
+  keeper?.stop(); // stop reconciling before we drain
   // server.close() drains sockets and awaits registry.shutdown() (persist + stop every
   // live match's driver), so there is no separate driver to stop here.
   void server

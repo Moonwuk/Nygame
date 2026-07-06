@@ -11,6 +11,7 @@ export { Rng, seedRng, type RngState } from './rng/rng';
 // State model
 export {
   createInitialState,
+  scientistsOf,
   type GameState,
   type GameVersion,
   type Player,
@@ -31,6 +32,7 @@ export {
   type BuildingInstance,
   type ActiveResearch,
   type PlayerTechnologyState,
+  type StewardState,
   type ResourceBag,
   type PlayerId,
   type PlanetId,
@@ -38,6 +40,7 @@ export {
   type BattleId,
   type ResourceId,
   type UnitId,
+  type ModuleId,
   type BuildingId,
   type TechnologyId,
   type TraitId,
@@ -63,12 +66,7 @@ export {
   sectorAppearance,
 } from './state/sectorKind';
 export { factionStart, type FactionStart } from './state/factionStart';
-export {
-  planRoute,
-  routeDistance,
-  fleetBaseSpeed,
-  estimateTravelHours,
-} from './state/route';
+export { planRoute, routeDistance, fleetBaseSpeed, estimateTravelHours } from './state/route';
 export { isBombarded, bombardedPlanets } from './state/orbit';
 export {
   DEFAULT_STANCE,
@@ -158,8 +156,18 @@ export {
   TechnologyUnlocksSchema,
   ResourceBagSchema,
   UnitStatsSchema,
+  ModuleDefSchema,
+  ModuleEffectsSchema,
+  ModuleAllowedSchema,
+  ShipSlotsSchema,
+  ShipSlotTypeSchema,
+  SHIP_SLOT_TYPES,
   type GameData,
   type UnitDef,
+  type ModuleDef,
+  type ModuleEffects,
+  type ShipSlots,
+  type ShipSlotType,
   type FactionDef,
   type FactionLoadout,
   type FactionPassives,
@@ -178,17 +186,31 @@ export {
   type TechnologyUnlocks,
   type UnitStats,
 } from './data/schemas';
+export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loadGameData';
 
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';
 export { MS_PER_HOUR, MS_PER_DAY } from './util/time';
 export { findHealthyStack, addUnits, sumUnitStat } from './util/stacks';
+export {
+  effectiveStats,
+  slotUsage,
+  moduleAllowed,
+  canEquip,
+  validateLoadout,
+  loadoutCost,
+  hullSlotTypes,
+  type SlotCounts,
+} from './util/loadout';
 export { requireOwnedIdleFleet, type IdleFleet } from './util/fleet';
 
 // Base modules (plugins) — opt-in via the manifest passed to createKernel.
 export { economyModule, BROWNOUT } from './modules/economy';
 export { movementModule } from './modules/movement';
 export { combatModule } from './modules/combat';
+export { orbitalModule } from './modules/orbital';
+export { artilleryModule } from './modules/artillery';
+export { interceptModule } from './modules/intercept';
 export { captureOnArrivalModule } from './modules/captureOnArrival';
 export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
@@ -201,6 +223,12 @@ export { armyModule } from './modules/army';
 export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
 export { heroModule } from './modules/hero';
+export {
+  stewardModule,
+  stewardActive,
+  STEWARD_POSTURES,
+  type StewardPosture,
+} from './modules/steward';
 export { marketModule } from './modules/market';
 export { espionageModule } from './modules/espionage';
 export { diplomacyModule } from './modules/diplomacy';

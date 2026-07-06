@@ -1,0 +1,50 @@
+{
+  "cargo_bay": {
+    "name": "Грузовой отсек",
+    "slot": "utility",
+    "tag": "horizontal",
+    "effects": { "stats": { "cargoCapacity": 6 } },
+    "cost": { "metal": 45 },
+    "allowed": { "domain": "space" }
+  },
+  "radar_module": {
+    "name": "Радар-модуль",
+    "slot": "utility",
+    "tag": "horizontal",
+    "effects": { "stats": { "radarRange": 300 } },
+    "cost": { "metal": 55 },
+    "allowed": { "domain": "space" }
+  },
+  "ion_engine": {
+    "name": "Ионный двигатель",
+    "slot": "utility",
+    "tag": "vertical",
+    "effects": { "stats": { "speed": 2 } },
+    "cost": { "metal": 40 },
+    "allowed": { "domain": "space" }
+  },
+  "targeting_array": {
+    "name": "Система наведения",
+    "slot": "weapon",
+    "tag": "vertical",
+    "effects": { "stats": { "attack": 4 } },
+    "cost": { "metal": 60 },
+    "allowed": { "domain": "space" }
+  },
+  "ablative_plating": {
+    "name": "Броневые плиты",
+    "slot": "defense",
+    "tag": "vertical",
+    "effects": { "stats": { "hp": 12 } },
+    "cost": { "metal": 50 },
+    "allowed": { "domain": "space" }
+  },
+  "shield_booster": {
+    "name": "Тяжёлый щит",
+    "slot": "defense",
+    "tag": "vertical",
+    "effects": { "stats": { "shield": 15 } },
+    "cost": { "metal": 80 },
+    "allowed": { "domain": "space" }
+  }
+}

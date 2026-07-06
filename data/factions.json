@@ -21,11 +21,10 @@
     "description": "A ravenous bio-collective that converts captured worlds into biomass and breeds infected hulls.",
     "traits": ["consume_biomass"],
     "abilities": [],
-    "uniqueUnits": ["infected_cruiser"],
+    "uniqueUnits": [],
     "startingLoadout": {
       "resources": { "credits": 200, "metal": 200, "food": 150, "energy": 60 },
       "fleet": [
-        { "unit": "infected_cruiser", "count": 2 },
         { "unit": "scout_drone", "count": 1 }
       ],
       "garrison": [{ "unit": "militia", "count": 2 }],

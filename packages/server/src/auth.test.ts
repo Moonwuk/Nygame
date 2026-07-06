@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { SignJWT } from 'jose';
-import { hmacSecret, signJoinToken, verifyJoinToken, type JoinClaim } from './auth';
+import {
+  hmacSecret,
+  signJoinToken,
+  signSessionToken,
+  verifyJoinToken,
+  verifySessionToken,
+  type JoinClaim,
+} from './auth';
 
 // SE-2.1 — the join-token trust anchor. These pin the security contract: a valid token
 // yields the claim; EVERY abuse (none-alg, algorithm confusion, expired, wrong iss/aud,
@@ -126,5 +133,38 @@ describe('SE-2.1 · verifyJoinToken', () => {
       .setAudience('match')
       .sign(secret); // no setExpirationTime
     expect(await verifyJoinToken(token, verifyCfg)).toEqual({ ok: false, code: 'E_AUTH' });
+  });
+});
+
+describe('SE-1.x · session tokens (typ/audience separation from join tokens)', () => {
+  const sessionSign = { key: secret, algorithm: 'HS256', issuer: 'void', audience: 'session' };
+  const sessionVerify = { key: secret, algorithms: ['HS256'], issuer: 'void', audience: 'session' };
+
+  it('round-trips a session claim', async () => {
+    const token = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
+      ttlSeconds: 3600,
+    });
+    const result = await verifySessionToken(token, sessionVerify);
+    expect(result).toEqual({ ok: true, claim: { accountId: 'acct-1', login: 'Vasya' } });
+  });
+
+  it('a JOIN token can never pass as a session token (typ+aud pinned), nor vice versa', async () => {
+    // Same secret, same issuer — the realistic key-reuse scenario the pins exist for.
+    const join = await signJoinToken(claim, signCfg, { ttlSeconds: 3600 });
+    expect(await verifySessionToken(join, sessionVerify)).toEqual({ ok: false, code: 'E_AUTH' });
+
+    const session = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
+      ttlSeconds: 3600,
+    });
+    expect(await verifyJoinToken(session, verifyCfg)).toEqual({ ok: false, code: 'E_AUTH' });
+  });
+
+  it('rejects an expired session with a stable E_AUTH', async () => {
+    const past = Date.now() - 7_200_000; // minted two hours ago
+    const token = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
+      ttlSeconds: 3600,
+      now: () => past,
+    });
+    expect(await verifySessionToken(token, sessionVerify)).toEqual({ ok: false, code: 'E_AUTH' });
   });
 });

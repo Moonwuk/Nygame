@@ -448,6 +448,7 @@ export class MatchRoom {
       signatures: view.signatures,
       remembered: view.remembered,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(this.gate ? { gated: true } : {}), // tell the client to send action.v1 envelopes
       ...this.hashField(view.base),
       ...this.lobbyField(),
     });

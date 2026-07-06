@@ -115,3 +115,65 @@ export function signJoinToken(
 export function hmacSecret(secret: string): Uint8Array {
   return new TextEncoder().encode(secret);
 }
+
+// ---------------------------------------------------------------------------
+// Session tokens (SE-1.x, login+password accounts). A session token is the
+// "who you are" credential the HTTP API trusts between login and join; the join
+// token stays the narrow per-match capability. Same key infrastructure, but a
+// DIFFERENT pinned `typ` and a different audience — so neither token kind can
+// ever be replayed as the other, even under one shared secret.
+// ---------------------------------------------------------------------------
+
+/** JWT `typ` pinned on every session token (mirrors JOIN_TOKEN_TYP's key-reuse guard). */
+const SESSION_TOKEN_TYP = 'session+jwt';
+
+/** What a verified session token grants: an authenticated account. */
+export interface SessionClaim {
+  accountId: string;
+  login: string;
+}
+
+export type SessionTokenResult = { ok: true; claim: SessionClaim } | { ok: false; code: 'E_AUTH' };
+
+/** Verify + decode a session token — same fail-secure contract as `verifyJoinToken`:
+ *  a stable `E_AUTH` for ANY failure, the reason stays server-side. */
+export async function verifySessionToken(
+  token: string,
+  config: JoinTokenVerifyConfig,
+): Promise<SessionTokenResult> {
+  try {
+    const { payload } = await jwtVerify(token, config.key, {
+      algorithms: config.algorithms,
+      issuer: config.issuer,
+      audience: config.audience,
+      typ: SESSION_TOKEN_TYP, // a join token (typ join+jwt) can never pass as a session
+      clockTolerance: 0,
+      requiredClaims: ['exp'],
+      ...(config.maxTokenAgeSec !== undefined ? { maxTokenAge: config.maxTokenAgeSec } : {}),
+    });
+    const accountId = payload.sub;
+    const login = payload.login;
+    if (typeof accountId !== 'string' || accountId === '') return { ok: false, code: 'E_AUTH' };
+    if (typeof login !== 'string' || login === '') return { ok: false, code: 'E_AUTH' };
+    return { ok: true, claim: { accountId, login } };
+  } catch {
+    return { ok: false, code: 'E_AUTH' };
+  }
+}
+
+/** Mint a session token (the /auth/login and /auth/register endpoints' job). */
+export function signSessionToken(
+  claim: SessionClaim,
+  config: JoinTokenSignConfig,
+  opts: { ttlSeconds: number; now?: () => number },
+): Promise<string> {
+  const nowSec = Math.floor((opts.now?.() ?? Date.now()) / 1000);
+  return new SignJWT({ login: claim.login })
+    .setProtectedHeader({ alg: config.algorithm, typ: SESSION_TOKEN_TYP })
+    .setSubject(claim.accountId)
+    .setIssuer(config.issuer)
+    .setAudience(config.audience)
+    .setIssuedAt(nowSec)
+    .setExpirationTime(nowSec + opts.ttlSeconds)
+    .sign(config.key);
+}

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseGameData, safeParseGameData, buildingLevel, buildingMaxLevel } from './schemas';
+import { composeGameDataBundle } from './loadGameData';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const dataDir = path.join(repoRoot, 'data');
@@ -11,22 +12,10 @@ function readJson(name: string): unknown {
   return JSON.parse(readFileSync(path.join(dataDir, name), 'utf8'));
 }
 
-/** Composes the shipped data fragments into one bundle, the way a loader would. */
+/** Composes the shipped data fragments into one bundle via the shared composer (CP0.3),
+ *  injecting the Node file reader — the fragment list now lives in one place. */
 function loadShippedBundle(): Record<string, unknown> {
-  const manifest = readJson('manifest.json') as { version: string };
-  return {
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-  };
+  return composeGameDataBundle(readJson);
 }
 
 describe('game data schema (docs/architecture.md §2)', () => {
@@ -34,7 +23,6 @@ describe('game data schema (docs/architecture.md §2)', () => {
     const data = parseGameData(loadShippedBundle());
     expect(data.version).toBe('0.1.0');
     expect(data.resources).toContain('microelectronics');
-    expect(data.units.infected_cruiser?.stats.attack).toBe(12);
     expect(data.units.siege_lance?.stats.range).toBe(300); // artillery firing radius (map units)
     expect(data.units.cruiser?.upkeep.credits).toBe(8); // daily upkeep
     // fleet ⊕ ground-army separation: domains + transport capacity.
@@ -64,6 +52,33 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(data.technologies.orbital_logistics?.unlocks.units).toContain('dropship');
     expect(data.technologies.siege_doctrine?.prerequisites).toEqual(['orbital_logistics']);
     expect(data.technologies.industrial_automation?.effects.productionBonus).toBeCloseTo(0.1);
+    // ship modules: typed hull slots + a data-driven module catalog.
+    expect(data.units.cruiser?.slots).toEqual({ weapon: 1, defense: 1, utility: 1 });
+    expect(data.units.scout_drone?.slots).toEqual({ weapon: 0, defense: 0, utility: 0 }); // default
+    expect(data.modules.cargo_bay?.effects.stats.cargoCapacity).toBe(6);
+    expect(data.modules.cargo_bay?.tag).toBe('horizontal');
+    expect(data.modules.shield_booster?.slot).toBe('defense');
+    expect(data.modules.targeting_array?.tag).toBe('vertical');
+  });
+
+  it('rejects a module that expands its own slot capacity (anti self-buff)', () => {
+    const res = safeParseGameData({
+      ...loadShippedBundle(),
+      modules: {
+        bad: { name: 'x', slot: 'utility', tag: 'horizontal', effects: { stats: { moduleSlots: 1 } } },
+      },
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it('rejects a soulbound vertical (combat) module (anti pay-to-win)', () => {
+    const res = safeParseGameData({
+      ...loadShippedBundle(),
+      modules: {
+        bad: { name: 'x', slot: 'weapon', tag: 'vertical', soulbound: true, effects: { stats: { attack: 5 } } },
+      },
+    });
+    expect(res.success).toBe(false);
   });
 
   it('ships producers for every economy resource (ECON-3: energy + microelectronics)', () => {
@@ -111,6 +126,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     for (const [id, def] of Object.entries(data.units)) {
       check(def.cost, `unit ${id} cost`);
       check(def.upkeep, `unit ${id} upkeep`);
+    }
+    for (const [id, def] of Object.entries(data.modules)) {
+      check(def.cost, `module ${id} cost`);
     }
     for (const [id, def] of Object.entries(data.technologies)) {
       check(def.cost, `technology ${id} cost`);

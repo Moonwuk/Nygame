@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { MAP, newGame, clampPowerWeights } from './game';
+import { MAP, newGame } from './game';
+import { clampPowerWeights } from '../../packages/client/src/territory';
 
 // The province map is a weighted Voronoi (power diagram) over the sector centres,
 // weighted by planet `size` (main.ts buildStaticLayer, W = 9000 in base space). A site

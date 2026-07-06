@@ -116,11 +116,14 @@ export interface SlotAssignment {
   name?: string;
   /** Faction tag — legacy/dormant field on `Player`; defaults to ''. */
   faction?: string;
-  /** Chosen research leader (scientist) id from `data.scientists`, snapshotted onto
-   *  the seated player. Omit for no leader. */
+  /** Chosen research leaders (a council of up to 2) — ids from `data.scientists` + an
+   *  optional meta level (default 1), snapshotted onto the seated player. Distinct ids;
+   *  unknown / duplicate / more-than-two fail the boot (fail-secure). */
+  scientists?: Array<{ id: string; level?: number }>;
+  /** @deprecated Legacy single-leader id — seated as a one-leader council when
+   *  `scientists` is omitted. */
   scientist?: string;
-  /** The scientist's meta level (from the account meta; supplied at seating).
-   *  Defaults to 1. */
+  /** @deprecated Meta level for the legacy single `scientist`. Defaults to 1. */
   scientistLevel?: number;
   /** Pre-match technology picks (C3): ids from `data.technologies` granted as already
    *  COMPLETED at match start — their hook bonuses and unlocks apply from second one.
@@ -139,6 +142,24 @@ export interface BuildFromMapOptions {
   /** Slot id → the player seated there. Required for every slot referenced as an
    *  `owner`; a slot-based (AvA) map is inert data until these are supplied. */
   slots?: Record<string, SlotAssignment>;
+}
+
+/** Normalizes a slot's scientist council (new `scientists`, else the legacy single
+ *  `scientist`) into ≤2 distinct, catalog-known leaders. Fail-secure at boot:
+ *  `E_UNKNOWN_SCIENTIST` / `E_DUPLICATE_SCIENTIST` / `E_TOO_MANY_SCIENTISTS`. */
+function resolveScientists(
+  a: SlotAssignment,
+  data: GameData,
+): Array<{ id: string; level: number }> {
+  const raw = a.scientists ?? (a.scientist ? [{ id: a.scientist, level: a.scientistLevel }] : []);
+  if (raw.length > 2) throw new Error('E_TOO_MANY_SCIENTISTS');
+  const seen = new Set<string>();
+  return raw.map((s) => {
+    if (!data.scientists[s.id]) throw new Error(`E_UNKNOWN_SCIENTIST: ${s.id}`);
+    if (seen.has(s.id)) throw new Error(`E_DUPLICATE_SCIENTIST: ${s.id}`);
+    seen.add(s.id);
+    return { id: s.id, level: s.level ?? 1 };
+  });
 }
 
 /** Build a `GameState` from a validated map. Throws `E_INVALID_MAP` listing the
@@ -215,9 +236,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       // the offer-fog participant check (see `pairKey`). Fail-secure at boot.
       throw new Error(`E_BAD_PLAYER_ID: ${a.playerId}`);
     }
-    if (a.scientist && !data.scientists[a.scientist]) {
-      throw new Error(`E_UNKNOWN_SCIENTIST: ${a.scientist}`); // fail-secure at boot
-    }
+    const scientists = resolveScientists(a, data); // fail-secure: unknown / duplicate / >2
     for (const t of a.technologies ?? []) {
       if (!data.technologies[t]) throw new Error(`E_UNKNOWN_TECHNOLOGY: ${t}`); // fail-secure at boot
     }
@@ -228,7 +247,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       status: 'active',
       resources: { ...slot.resources },
       ...(a.ai ? { ai: true } : {}),
-      ...(a.scientist ? { scientist: { id: a.scientist, level: a.scientistLevel ?? 1 } } : {}),
+      ...(scientists.length ? { scientists } : {}),
       ...(a.technologies?.length ? { technologies: { completed: [...new Set(a.technologies)] } } : {}),
     };
   }

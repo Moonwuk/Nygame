@@ -16,6 +16,7 @@ export type FleetId = string;
 export type BattleId = string;
 export type ResourceId = string;
 export type UnitId = string;
+export type ModuleId = string;
 export type BuildingId = string;
 export type TechnologyId = string;
 export type TraitId = string;
@@ -34,6 +35,11 @@ export interface UnitStack {
    *  damage before `hp`; a ship still dies only when its HULL (`hp`) hits 0.
    *  Undefined = full shield (shields-roadmap SH-0.1). */
   shieldHp?: number;
+  /** Installed ship modules (the loadout), chosen at BUILD time and LOCKED after
+   *  — there is no refit action. Ids → `data.modules`; effect applies ×count.
+   *  Part of the stack's merge identity: stacks with different loadouts never
+   *  merge (ship-modules-roadmap.md SM-0.3). Absent = no modules. */
+  modules?: ModuleId[];
 }
 
 /** A constructed building on a planet. Buildings are leveled (1..maxLevel) and
@@ -63,11 +69,38 @@ export interface Player {
    *  owner (stripped from other players' views like the treasury itself). */
   arrears?: string[];
   technologies?: PlayerTechnologyState;
-  /** Chosen research leader (scientist), snapshotted at match start and immutable
-   *  (GDD §2/§5.2): `id` into `data.scientists`, `level` from the account meta
-   *  (supplied at match creation). Drives the `research.slots` hook and
-   *  `has_scientist` unlock gates. Absent = no leader chosen. */
+  /** Chosen research leaders (a council of up to 2), snapshotted at match start and
+   *  immutable (GDD §2/§5.2): each `id` into `data.scientists`, `level` from the account
+   *  meta. A `has_scientist` gate passes if ANY leader matches; `research.slots` bonuses
+   *  sum across them. Read via {@link scientistsOf}. Absent/empty = no leader chosen. */
+  scientists?: Array<{ id: string; level: number }>;
+  /** @deprecated Legacy single-leader field (snapshots from before the 2-slot council).
+   *  Never written now; still READ through {@link scientistsOf} for old persisted state. */
   scientist?: { id: string; level: number };
+  /** Steward delegation ("hand the seat to the AI while I sleep"): while set and the
+   *  world clock is before `until`, the server AI plays this seat with `posture`. The
+   *  server-side driver reads it via `stewardActive`; it auto-expires on the clock
+   *  crossing `until` (stewardModule). Absent = the player commands the seat. */
+  steward?: StewardState;
+}
+
+/** A live Steward delegation on a player (see `Player.steward`). */
+export interface StewardState {
+  /** Behaviour profile the AI follows (see `STEWARD_POSTURES`). */
+  posture: string;
+  /** Game-time (ms) the delegation lapses at — control returns to the player then. */
+  until: number;
+}
+
+/** The player's chosen research leaders (0–2). Reads the current `scientists` council and
+ *  falls back to the legacy single `scientist` (older snapshots) — the one accessor the
+ *  `+slot` bonus and `has_scientist` gate use, so both stay agnostic to the field shape. */
+export function scientistsOf(
+  player: Player | undefined,
+): ReadonlyArray<{ id: string; level: number }> {
+  if (!player) return [];
+  if (player.scientists) return player.scientists;
+  return player.scientist ? [player.scientist] : [];
 }
 
 export interface ActiveResearch {

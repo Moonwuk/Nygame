@@ -19,6 +19,9 @@ import {
   movementModule,
   heroModule,
   combatModule,
+  orbitalModule,
+  artilleryModule,
+  interceptModule,
   captureOnArrivalModule,
   sectorModule,
   planetTypeModule,
@@ -27,6 +30,9 @@ import {
   victoryModule,
   technologyModule,
   espionageModule,
+  stewardModule,
+  stewardActive,
+  STEWARD_POSTURES,
   getStance,
   isBotPair,
   setStance,
@@ -47,6 +53,7 @@ import {
   type Context,
   type DomainEvent,
   type Battle,
+  type StewardPosture,
 } from '../../packages/shared-core/src/index';
 import { canAfford, payCost } from '../../packages/shared-core/src/util/treasury';
 import { sumUnitStat } from '../../packages/shared-core/src/util/stacks';
@@ -123,6 +130,57 @@ export const data: GameData = parseGameData({
       prerequisites: ['industrial_automation'],
       effects: { productionBonus: 0.05 },
     },
+    // «Хранитель» — the automation pillar. Strong, so it's gated behind choosing the
+    // command scientist (Куратор) AND a mid-session day-gate (day 15). Unlocks the
+    // `steward` ability, which `stewardModule` requires before `steward.delegate` works.
+    ai_stewardship: {
+      name: 'Steward Protocol',
+      description:
+        'Автоматизация командования: доверенному ИИ можно передать место, пока вы офлайн (спите) — он держит оборону и возвращает управление к сроку. Сильная — потому открывается выбором учёного-Куратора и лишь к середине сессии (день 15).',
+      branch: 'command',
+      tier: 3,
+      cost: { credits: 400, metal: 260 },
+      researchTimeHours: 14,
+      dayGate: 15,
+      conditions: [{ type: 'has_scientist', branch: 'command' }],
+      unlocks: { abilities: ['steward'] },
+    },
+  },
+  // Research leaders (scientistModule). Pick TWO at setup (before the start-point) — a
+  // council: `has_scientist` passes if either matches, `+slot` bonuses sum. The
+  // command-branch «Куратор» gates the Steward; «Полимат» trades a branch focus for +1 slot.
+  scientists: {
+    overseer: {
+      name: 'Куратор',
+      description:
+        'Лидер ветки командования (C2): доктрины автоматизации и делегирования. Открывает «Протокол Хранитель» — передачу места ИИ на время сна.',
+      branch: 'command',
+    },
+    void_admiral: {
+      name: 'Космоадмирал',
+      description: 'Лидер космической ветки: верфи, логистика, осадные доктрины.',
+      branch: 'space',
+    },
+    ground_marshal: {
+      name: 'Наземный маршал',
+      description: 'Лидер наземной ветки: крепости и оборона фронтира.',
+      branch: 'ground',
+    },
+    wing_commander: {
+      name: 'Командир крыла',
+      description: 'Лидер ветки эскадрилий: авианосные ударные крылья.',
+      branch: 'squadron',
+    },
+    missile_chief: {
+      name: 'Ракетный шеф',
+      description: 'Лидер ракетной ветки: дальнобойные системы.',
+      branch: 'missile',
+    },
+    polymath: {
+      name: 'Полимат',
+      description: 'Генералист без ветки: +1 слот исследования (2→3) вместо фокуса.',
+      slotBonus: 1,
+    },
   },
   units: {
     scout: {
@@ -169,7 +227,15 @@ export const data: GameData = parseGameData({
       // Carrier-borne strike wing (squadrons-roadmap SQ-0.1): very fast + hard-hitting
       // but paper-thin — launch it ahead to strike, orbital AA (orbital_aa) is its counter.
       faction: 'blue',
-      stats: { attack: 14, defense: 3, speed: 92, hp: 10, strikeRange: 180, fuel: 3, rearmRounds: 2 },
+      stats: {
+        attack: 14,
+        defense: 3,
+        speed: 92,
+        hp: 10,
+        strikeRange: 180,
+        fuel: 3,
+        rearmRounds: 2,
+      },
       traits: ['squadron'],
       signature: 2,
       cost: { metal: 90, credits: 40, microelectronics: 10 },
@@ -213,29 +279,6 @@ export const data: GameData = parseGameData({
       cost: { metal: 120, credits: 30 },
       buildTimeHours: 4,
       upkeep: { credits: 4, food: 2 },
-    },
-    // Бомбардировщик — rear-line striker: big attack, paper armour; hits structures.
-    bomber: {
-      faction: 'blue',
-      stats: { attack: 26, defense: 4, speed: 60, hp: 18, cargoSize: 2 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 3,
-      cost: { metal: 90, credits: 50 },
-      buildTimeHours: 3,
-      upkeep: { credits: 5, food: 2 },
-    },
-    // ПВО — anti-air specialist: shreds bombers, weak on the ground. (Flat stats here
-    // are the designer's rough preview; the per-type matrix in groundcombat is combat law.)
-    aa: {
-      faction: 'blue',
-      stats: { attack: 6, defense: 9, speed: 44, hp: 20, cargoSize: 2 },
-      domain: 'ground',
-      traits: ['ground'],
-      signature: 2,
-      cost: { metal: 80, credits: 40 },
-      buildTimeHours: 3,
-      upkeep: { credits: 4, food: 1 },
     },
     // The player's projection hero — cruiser-tier guns but TRIPLE the hull, and the
     // +5% attack/defense aura it grants its fleet (heroModule). Seeded, not built.
@@ -447,7 +490,14 @@ export const data: GameData = parseGameData({
     debris_field: { name: 'Debris Field', capturable: false, buildable: false, orbit: false },
     // a destroyed planet — re-claimable + metal-rich, but worth only the flat 10; the
     // salvage rig is the one thing buildable there. (Annihilation = a future hero.)
-    dead_world: { name: 'Dead World', scoreValue: 10, capturable: true, buildable: true, orbit: true, allowedBuildings: ['metal_station'] },
+    dead_world: {
+      name: 'Dead World',
+      scoreValue: 10,
+      capturable: true,
+      buildable: true,
+      orbit: true,
+      allowedBuildings: ['metal_station'],
+    },
   },
   planetTypes: {
     terran: { name: 'Terran', productionBonus: 0, defenseBonus: 0.1 },
@@ -460,7 +510,12 @@ export const data: GameData = parseGameData({
     relic_world: { name: 'Relic World', productionBonus: 0.05, defenseBonus: 0 },
     irradiated: { name: 'Irradiated', productionBonus: 0.2, defenseBonus: 0.15 },
     ringworld: { name: 'Ringworld', productionBonus: 0.3, defenseBonus: 0.1 },
-    dead_world: { name: 'Dead World', productionBonus: 0, productionByResource: { metal: 0.3 }, defenseBonus: 0 },
+    dead_world: {
+      name: 'Dead World',
+      productionBonus: 0,
+      productionByResource: { metal: 0.3 },
+      defenseBonus: 0,
+    },
   },
 });
 
@@ -488,19 +543,91 @@ export interface SectorType {
   allowedBuildings?: string[];
 }
 export const SECTOR_TYPES: Record<string, SectorType> = {
-  planet: { name: 'Planet', core: 'empty_space', capturable: true, buildable: true, orbit: true, color: '#5fd0ff' },
-  nebula: { name: 'Nebula', core: 'nebula', capturable: true, buildable: true, orbit: true, color: '#8f6dff' },
-  asteroid: { name: 'Asteroid Field', core: 'asteroid_field', capturable: true, buildable: true, orbit: false, color: '#d6a645', allowedBuildings: ['starfort'] },
-  empty: { name: 'Empty Space', core: 'empty_space', capturable: false, buildable: false, orbit: false, color: '#46606e' },
+  planet: {
+    name: 'Planet',
+    core: 'empty_space',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#5fd0ff',
+  },
+  nebula: {
+    name: 'Nebula',
+    core: 'nebula',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#8f6dff',
+  },
+  asteroid: {
+    name: 'Asteroid Field',
+    core: 'asteroid_field',
+    capturable: true,
+    buildable: true,
+    orbit: false,
+    color: '#d6a645',
+    allowedBuildings: ['starfort'],
+  },
+  empty: {
+    name: 'Empty Space',
+    core: 'empty_space',
+    capturable: false,
+    buildable: false,
+    orbit: false,
+    color: '#46606e',
+  },
   // new terrains — each maps to a core `data.sectors` entry for its speed/HP bonus
-  ion_storm: { name: 'Ion Storm', core: 'ion_storm', capturable: true, buildable: true, orbit: true, color: '#6fe3ff' },
-  dense_nebula: { name: 'Dense Nebula', core: 'dense_nebula', capturable: true, buildable: true, orbit: true, color: '#a78bff' },
-  solar_flare: { name: 'Solar Flare Zone', core: 'solar_flare_zone', capturable: true, buildable: true, orbit: true, color: '#ff9f3a' },
-  graveyard: { name: 'Derelict Graveyard', core: 'derelict_graveyard', capturable: true, buildable: true, orbit: false, color: '#9fb0a8' },
+  ion_storm: {
+    name: 'Ion Storm',
+    core: 'ion_storm',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#6fe3ff',
+  },
+  dense_nebula: {
+    name: 'Dense Nebula',
+    core: 'dense_nebula',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#a78bff',
+  },
+  solar_flare: {
+    name: 'Solar Flare Zone',
+    core: 'solar_flare_zone',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#ff9f3a',
+  },
+  graveyard: {
+    name: 'Derelict Graveyard',
+    core: 'derelict_graveyard',
+    capturable: true,
+    buildable: true,
+    orbit: false,
+    color: '#9fb0a8',
+  },
   // debris field — a fast but UN-capturable corridor (kind `debris_field` in sectorKinds)
-  debris_field: { name: 'Debris Field', core: 'deep_void', capturable: false, buildable: false, orbit: false, color: '#2f4a59' },
+  debris_field: {
+    name: 'Debris Field',
+    core: 'deep_void',
+    capturable: false,
+    buildable: false,
+    orbit: false,
+    color: '#2f4a59',
+  },
   // dead world — a destroyed planet (future hero ability); re-claimable, only the salvage rig builds here
-  dead_world: { name: 'Dead World', core: 'deep_void', capturable: true, buildable: true, orbit: true, color: '#5a4a4a', allowedBuildings: ['metal_station'] },
+  dead_world: {
+    name: 'Dead World',
+    core: 'deep_void',
+    capturable: true,
+    buildable: true,
+    orbit: true,
+    color: '#5a4a4a',
+    allowedBuildings: ['metal_station'],
+  },
 };
 
 // --- the map -----------------------------------------------------------------
@@ -529,8 +656,24 @@ type KeyNode = Omit<MapNode, 'links'>;
 // owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
 // reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
 const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
-const NON_PLANET_KINDS = ['asteroid', 'nebula', 'graveyard', 'ion_storm', 'dense_nebula', 'solar_flare'];
-const NEUTRAL_PLANET_TYPES = ['oceanic', 'volcanic', 'fortress_world', 'relic_world', 'gas_giant', 'irradiated', 'ringworld', 'crystalline'];
+const NON_PLANET_KINDS = [
+  'asteroid',
+  'nebula',
+  'graveyard',
+  'ion_storm',
+  'dense_nebula',
+  'solar_flare',
+];
+const NEUTRAL_PLANET_TYPES = [
+  'oceanic',
+  'volcanic',
+  'fortress_world',
+  'relic_world',
+  'gas_giant',
+  'irradiated',
+  'ringworld',
+  'crystalline',
+];
 // 4 start candidates — one per corner region (inset), spread wide so starts don't crowd.
 const START_CELLS = ['1,1', '5,1', '1,5', '5,5'];
 // 8 neutral 'planet' worlds, spread through the middle.
@@ -556,16 +699,33 @@ function buildField(): KeyNode[] {
   for (let row = 0; row < FIELD.rows; row += 1) {
     for (let col = 0; col < FIELD.cols; col += 1) {
       const cell = `${col},${row}`;
-      const x = Math.round(FIELD.x0 + col * FIELD.dx + (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx);
-      const y = Math.round(FIELD.y0 + row * FIELD.dy + (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy);
+      const x = Math.round(
+        FIELD.x0 + col * FIELD.dx + (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx,
+      );
+      const y = Math.round(
+        FIELD.y0 + row * FIELD.dy + (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy,
+      );
       i += 1;
       const id = cellId(cell);
       if (starts.has(cell)) {
         nodes.push({ id, owner: null, x, y, sector: 'planet', type: 'terran' });
       } else if (neutralP.has(cell)) {
-        nodes.push({ id, owner: null, x, y, sector: 'planet', type: NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length] });
+        nodes.push({
+          id,
+          owner: null,
+          x,
+          y,
+          sector: 'planet',
+          type: NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length],
+        });
       } else {
-        nodes.push({ id, owner: null, x, y, sector: NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]! });
+        nodes.push({
+          id,
+          owner: null,
+          x,
+          y,
+          sector: NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]!,
+        });
       }
     }
   }
@@ -604,40 +764,6 @@ function withNeighborLinks(nodes: KeyNode[]): MapNode[] {
 // to their neighbours by shared border (relative-neighbourhood graph). Movement is
 // province-to-adjacent; the links ARE the visible path network.
 export const MAP: MapNode[] = withNeighborLinks(KEY);
-
-/** Clamp the spread of power-diagram (weighted-Voronoi) weights so no province cell is
- *  ever swallowed by a heavier neighbour. In a power diagram a site keeps a non-empty
- *  cell iff `w_j - w_i ≤ d_ij²` for every other site `j`; the binding case is the
- *  closest pair, so capping the total weight RANGE strictly below the minimum squared
- *  inter-seed distance keeps EVERY cell non-empty. Size ordering is preserved (a bigger
- *  world still claims a little more land) — just never enough to erase a close neighbour
- *  (which left that neighbour with no cell and no border). Mutates `w` in place; a no-op
- *  for <2 seeds or coincident points. */
-export function clampPowerWeights(seeds: Array<{ x: number; y: number; w: number }>): void {
-  const n = seeds.length;
-  if (n < 2) return;
-  let minD2 = Infinity;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = seeds[i]!.x - seeds[j]!.x;
-      const dy = seeds[i]!.y - seeds[j]!.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < minD2) minD2 = d2;
-    }
-  }
-  if (!Number.isFinite(minD2) || minD2 <= 0) return;
-  let wmin = Infinity;
-  let wmax = -Infinity;
-  for (const s of seeds) {
-    if (s.w < wmin) wmin = s.w;
-    if (s.w > wmax) wmax = s.w;
-  }
-  const range = wmax - wmin;
-  const cap = minD2 * 0.9; // strictly below the swallow threshold (d_ij² ≥ minD2 for all pairs)
-  if (range <= cap || range <= 0) return;
-  const k = cap / range;
-  for (const s of seeds) s.w = wmin + (s.w - wmin) * k;
-}
 
 // Shared stance vocabulary — main.ts routes propose-vs-declare by the same ranks
 // the core module enforces (one table, no drift).
@@ -820,8 +946,17 @@ export const fleetLaunchModule: GameModule = {
     // orbit lack the tag, so a new build never silently merges into them. Ground units
     // (and immobile emplacements) stay in the garrison as before.
     api.on('unit.built', (event, h) => {
-      const p = event.payload as { planetId?: string; unit?: string; count?: number; owner?: string };
-      if (typeof p?.planetId !== 'string' || typeof p?.unit !== 'string' || typeof p?.owner !== 'string') {
+      const p = event.payload as {
+        planetId?: string;
+        unit?: string;
+        count?: number;
+        owner?: string;
+      };
+      if (
+        typeof p?.planetId !== 'string' ||
+        typeof p?.unit !== 'string' ||
+        typeof p?.owner !== 'string'
+      ) {
         return;
       }
       const def = h.ctx.data.units[p.unit];
@@ -1027,6 +1162,10 @@ export interface SeatConfig {
 }
 export interface SetupConfig {
   seats: SeatConfig[];
+  /** The human player's chosen research-leader council — up to 2 scientist ids from
+   *  `data.scientists`, picked BEFORE the start-point at setup (a start consecration,
+   *  GDD §5.2). Absent → the command leader «overseer» by default. */
+  scientists?: string[];
   /** The player's 3 division templates, designed in the main menu and LOCKED for the
    *  session (mobilised in-match via `formation.mobilize`). Absent → DEFAULT_TEMPLATES. */
   templates?: FormationTemplate[];
@@ -1045,7 +1184,7 @@ export interface SetupConfig {
 // menu and frozen for the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
-export const FORMATION_UNITS = ['infantry', 'tank', 'bomber', 'aa'] as const;
+export const FORMATION_UNITS = ['infantry', 'tank'] as const;
 export type FormationUnit = (typeof FORMATION_UNITS)[number];
 /** Slots per template, and templates per player. */
 export const FORMATION_SLOTS = 6;
@@ -1059,9 +1198,9 @@ export interface FormationTemplate {
 
 /** The three starter templates a player gets before customising them. */
 export const DEFAULT_TEMPLATES: FormationTemplate[] = [
-  { name: 'Линия', slots: ['infantry', 'infantry', 'infantry', 'infantry', 'tank', 'bomber'] },
-  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'infantry', 'infantry', 'bomber'] },
-  { name: 'Налёт', slots: ['bomber', 'bomber', 'tank', 'infantry', 'infantry', null] },
+  { name: 'Линия', slots: ['infantry', 'infantry', 'infantry', 'infantry', 'tank', 'tank'] },
+  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'infantry', 'infantry', 'infantry'] },
+  { name: 'Клин', slots: ['tank', 'tank', 'tank', 'tank', 'infantry', null] },
 ];
 
 /** An active composition synergy (a doctrine bonus the template's mix unlocks). */
@@ -1086,7 +1225,7 @@ export interface FormationStats {
  *  (combined-arms / entrenched / armour / air-support). Pure + deterministic; used by
  *  the menu preview and (later) by mobilisation. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
-  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0, bomber: 0, aa: 0 };
+  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0 };
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -1101,42 +1240,30 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
-  const count = byType.infantry + byType.tank + byType.bomber + byType.aa;
+  const count = byType.infantry + byType.tank;
   // Composition synergies — additive multipliers on attack / defense.
   let atkMul = 1;
   let defMul = 1;
   const synergies: FormationSynergy[] = [];
-  if (byType.infantry > 0 && byType.tank > 0 && byType.bomber > 0) {
+  if (byType.infantry > 0 && byType.tank > 0) {
     atkMul += 0.15;
     defMul += 0.15;
     synergies.push({
       key: 'combined',
       name: 'Комбинированные войска',
-      desc: '+15% атака и оборона — есть все три рода войск',
+      desc: '+15% атака и оборона — пехота и танки вместе',
     });
   }
-  if (byType.infantry >= 4 && byType.tank === 0 && byType.bomber === 0) {
+  if (byType.infantry >= 4 && byType.tank === 0) {
     defMul += 0.25;
     synergies.push({ key: 'entrench', name: 'Окопались', desc: '+25% оборона — чистая пехота' });
   }
   if (byType.tank >= 3) {
     atkMul += 0.2;
-    synergies.push({ key: 'armor', name: 'Танковый кулак', desc: '+20% атака — ≥3 танков (прорыв)' });
-  }
-  if (byType.bomber >= 1) {
-    atkMul += 0.1;
     synergies.push({
-      key: 'air',
-      name: 'Авиаподдержка',
-      desc: '+10% атака и удар по структурам — есть бомбардировщик',
-    });
-  }
-  if (byType.aa >= 1) {
-    defMul += 0.1;
-    synergies.push({
-      key: 'airdef',
-      name: 'ПВО-зонтик',
-      desc: '+10% оборона и защита от авиации — есть ПВО',
+      key: 'armor',
+      name: 'Танковый кулак',
+      desc: '+20% атака — ≥3 танков (прорыв)',
     });
   }
   return {
@@ -1170,7 +1297,10 @@ export function botFavour(state: GameState, bot: string, player: string): number
 }
 /** Does `bot` embargo `player` on the market (favour below the embargo line)? */
 export function botEmbargoes(state: GameState, bot: string, player: string): boolean {
-  return (state as DivState).approval?.[bot] !== undefined && botFavour(state, bot, player) < FAVOUR_EMBARGO;
+  return (
+    (state as DivState).approval?.[bot] !== undefined &&
+    botFavour(state, bot, player) < FAVOUR_EMBARGO
+  );
 }
 
 /** Default solo skirmish: you (p1) vs one AI (p2), at two of the start candidates. */
@@ -1229,6 +1359,13 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { credits: 260, metal: 320, food: 120, energy: 90, microelectronics: 40 },
       seat.ai,
     );
+    // Human seats get the research-leader council chosen at setup (before the start-point
+    // pick — a start consecration). Default to the command leader «Куратор» so the Steward
+    // line stays reachable when unset; the has_scientist + day-15 gates still apply.
+    if (!seat.ai) {
+      const ids = setup.scientists?.length ? setup.scientists.slice(0, 2) : ['overseer'];
+      players[seat.id]!.scientists = ids.map((id) => ({ id, level: 1 }));
+    }
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,
       seat.id,
@@ -1483,9 +1620,15 @@ export const marketModule: GameModule = {
   setup(api) {
     // Place a lot: a sell (ask) escrows goods; a buy (bid) escrows credits.
     api.onAction('market.list', (action, h) => {
-      const p = action.payload as { side?: string; resource?: string; amount?: number; price?: number };
+      const p = action.payload as {
+        side?: string;
+        resource?: string;
+        amount?: number;
+        price?: number;
+      };
       if (p?.side !== 'sell' && p?.side !== 'buy') return h.reject('E_BAD_PAYLOAD');
-      if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource)) return h.reject('E_BAD_RESOURCE');
+      if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource))
+        return h.reject('E_BAD_RESOURCE');
       const amount = Math.floor(p.amount ?? 0);
       const price = p.price ?? 0;
       if (!(amount > 0) || !(price >= 0)) return h.reject('E_BAD_PAYLOAD');
@@ -1496,8 +1639,22 @@ export const marketModule: GameModule = {
       payCost(player.resources, escrow);
       const s = h.state as DivState;
       const id = `mk:${action.playerId}:${(s.sessionMarketSeq = (s.sessionMarketSeq ?? 0) + 1)}`;
-      marketLots(h.state).push({ id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
-      h.emit('market.listed', { id, side: p.side, owner: action.playerId, resource: p.resource, amount, price });
+      marketLots(h.state).push({
+        id,
+        side: p.side,
+        owner: action.playerId,
+        resource: p.resource,
+        amount,
+        price,
+      });
+      h.emit('market.listed', {
+        id,
+        side: p.side,
+        owner: action.playerId,
+        resource: p.resource,
+        amount,
+        price,
+      });
     });
 
     // Fill (partially) a lot from the other side. Buying from a sell lot pays credits
@@ -1529,8 +1686,13 @@ export const marketModule: GameModule = {
       lot.amount -= qty;
       if (lot.amount <= 0) lots.splice(lots.indexOf(lot), 1);
       h.emit('market.traded', {
-        id: lot.id, taker: action.playerId, owner: lot.owner, side: lot.side,
-        resource: lot.resource, amount: qty, price: lot.price,
+        id: lot.id,
+        taker: action.playerId,
+        owner: lot.owner,
+        side: lot.side,
+        resource: lot.resource,
+        amount: qty,
+        price: lot.price,
       });
     });
 
@@ -1714,7 +1876,9 @@ const atWar = (state: GameState, a: string, b: string): boolean =>
  *  lowest id first (deterministic order). */
 function divisionsAt(state: GameState, planetId: string): Division[] {
   return Object.values(divisionsOf(state))
-    .filter((d) => d.carriedBy == null && d.location === planetId && d.units.some((u) => u.count > 0))
+    .filter(
+      (d) => d.carriedBy == null && d.location === planetId && d.units.some((u) => u.count > 0),
+    )
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
@@ -1757,7 +1921,8 @@ function applyBucketsToDivs(divs: Division[], buckets: DamageTable): void {
     const dmg = buckets[type] ?? 0;
     if (dmg <= 0) continue;
     const stacks: GroundStack[] = [];
-    for (const d of divs) for (const u of d.units) if (u.type === type && u.count > 0) stacks.push(u);
+    for (const d of divs)
+      for (const u of d.units) if (u.type === type && u.count > 0) stacks.push(u);
     const totalHp = stacks.reduce((n, u) => n + u.hp, 0);
     if (totalHp <= 0) continue;
     for (const u of stacks) {
@@ -1790,7 +1955,12 @@ function captureGround(h: HandlerContext, planetId: string, defenderOwner: strin
   const owners = [
     ...new Set(
       divisionsAt(h.state, planetId)
-        .filter((d) => d.owner !== defenderOwner && defenderOwner !== null && atWar(h.state, d.owner, defenderOwner))
+        .filter(
+          (d) =>
+            d.owner !== defenderOwner &&
+            defenderOwner !== null &&
+            atWar(h.state, d.owner, defenderOwner),
+        )
         .map((d) => d.owner),
     ),
   ].sort();
@@ -1865,7 +2035,8 @@ function runGroundCombat(h: HandlerContext, elapsed: number): void {
   const battles = groundBattlesOf(h.state);
   // Candidate worlds: any holding a garrisoning division, plus any mid-battle.
   const worlds = new Set<string>(Object.keys(battles));
-  for (const d of Object.values(divisionsOf(h.state))) if (d.carriedBy == null) worlds.add(d.location);
+  for (const d of Object.values(divisionsOf(h.state)))
+    if (d.carriedBy == null) worlds.add(d.location);
   for (const planetId of [...worlds].sort()) {
     let acc = (battles[planetId] ?? 0) + elapsed;
     let guard = 0;
@@ -1921,13 +2092,45 @@ export const divisionModule: GameModule = {
         units: makeSide(GROUND_ROSTER, stats.byType),
         location: p.planetId,
       };
-      h.emit('division.mobilized', { id, owner: action.playerId, planetId: p.planetId, template: p.template });
+      h.emit('division.mobilized', {
+        id,
+        owner: action.playerId,
+        planetId: p.planetId,
+        template: p.template,
+      });
+    });
+
+    // Assemble a division template in-match — set slot `slot` of the player's template
+    // `template` to a formation unit (or null). Templates are no longer frozen at setup:
+    // "сбор шаблона из разных юнитов" happens at mobilisation. Materialises the player's
+    // templates from the defaults on first edit (per-player, deep-copied, JSON-safe).
+    api.onAction('division.template', (action, h) => {
+      const p = action.payload as { template?: number; slot?: number; unit?: string | null };
+      if (typeof p?.template !== 'number' || typeof p?.slot !== 'number') return h.reject('E_BAD_PAYLOAD');
+      if (p.slot < 0 || p.slot >= FORMATION_SLOTS) return h.reject('E_BAD_PAYLOAD');
+      const unit = p.unit ?? null;
+      if (unit !== null && !(FORMATION_UNITS as readonly string[]).includes(unit)) {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const ds = h.state as DivState;
+      const all = (ds.templates ??= {});
+      const mine = (all[action.playerId] ??= DEFAULT_TEMPLATES.map((t) => ({
+        name: t.name,
+        slots: [...t.slots],
+      })));
+      const tpl = mine[p.template];
+      if (!tpl) return h.reject('E_NO_TEMPLATE');
+      tpl.slots[p.slot] = unit as FormationUnit | null;
+      h.emit('division.retemplated', { template: p.template, slot: p.slot, unit });
     });
 
     /** Own-key division lookup owned by `playerId` (rejects a poisoned id / a foreign
      *  or missing division — fail-secure, mirroring the artillery `ownFleet` guard). */
     const ownDivision = (h: HandlerContext, id: unknown, playerId: string): Division => {
-      if (typeof id !== 'string' || !Object.prototype.hasOwnProperty.call(divisionsOf(h.state), id)) {
+      if (
+        typeof id !== 'string' ||
+        !Object.prototype.hasOwnProperty.call(divisionsOf(h.state), id)
+      ) {
         h.reject('E_NO_DIVISION');
       }
       const div = divisionsOf(h.state)[id as string]!;
@@ -1946,7 +2149,12 @@ export const divisionModule: GameModule = {
       if (fleet.location !== div.location) return h.reject('E_NOT_COLOCATED');
       if (divisionCargo(div) > fleetCargoFree(h.state, fleet)) return h.reject('E_NO_CARGO');
       div.carriedBy = fleet.id;
-      h.emit('division.loaded', { id: div.id, fleetId: fleet.id, owner: action.playerId, at: div.location });
+      h.emit('division.loaded', {
+        id: div.id,
+        fleetId: fleet.id,
+        owner: action.playerId,
+        at: div.location,
+      });
     });
 
     // Unload a carried division onto the world its carrier is docked over. An
@@ -1954,7 +2162,11 @@ export const divisionModule: GameModule = {
     // capture), mirroring fleet capture-on-arrival; otherwise the world's ground
     // battle (if any) is resolved by the continuous-time driver below.
     api.onAction('division.unload', (action, h) => {
-      const div = ownDivision(h, (action.payload as { divisionId?: string })?.divisionId, action.playerId);
+      const div = ownDivision(
+        h,
+        (action.payload as { divisionId?: string })?.divisionId,
+        action.playerId,
+      );
       if (div.carriedBy == null) return h.reject('E_NOT_LOADED');
       const fleet = requireOwnedIdleFleet(h, div.carriedBy, action.playerId); // docked at a node
       const target = fleet.location;
@@ -1974,7 +2186,12 @@ export const divisionModule: GameModule = {
         // Same event the fleet capture path uses (`via: 'ground'`) → victory + UI react.
         h.emit('planet.captured', { planetId: target, owner: div.owner, from, via: 'ground' });
       }
-      h.emit('division.unloaded', { id: div.id, fleetId: fleet.id, owner: action.playerId, at: target });
+      h.emit('division.unloaded', {
+        id: div.id,
+        fleetId: fleet.id,
+        owner: action.playerId,
+        at: target,
+      });
     });
 
     // Attach / detach an officer (a hero-like leader granting tunable bonuses). The
@@ -2007,7 +2224,10 @@ export const divisionModule: GameModule = {
       const divs = divisionsOf(h.state);
       for (const id of Object.keys(divs)) {
         const d = divs[id]!;
-        if (d.carriedBy != null && !Object.prototype.hasOwnProperty.call(h.state.fleets, d.carriedBy)) {
+        if (
+          d.carriedBy != null &&
+          !Object.prototype.hasOwnProperty.call(h.state.fleets, d.carriedBy)
+        ) {
           h.emit('division.lost', { id, owner: d.owner });
           delete divs[id];
         }
@@ -2016,7 +2236,7 @@ export const divisionModule: GameModule = {
       runGroundCombat(h, elapsed);
       // Daily restoration: +1 HP/unit/day for a garrisoning division on a friendly
       // planet (not in transit; a wiped division is gone, never resurrected).
-      const days = (elapsed / DAY);
+      const days = elapsed / DAY;
       if (days <= 0) return;
       for (const div of Object.values(divisionsOf(h.state))) {
         if (div.carriedBy != null) continue; // in transit / in a hold — no restoration
@@ -2347,10 +2567,17 @@ export const MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // projection hero: fleet combat aura (+5%) + death/respawn
-  combatModule,
+  // The combat family (split along the bus seams). Order matters (invariant #6):
+  // orbital stamps orbit on fleet.arrived BEFORE combat engages, and runs its
+  // AA/bombard span BEFORE artillery's standoff span — the old internal sequence.
+  orbitalModule, // the single near-orbit: stationing, AA fire, bombardment
+  combatModule, // melee battles: engage / tick / assault / retreat / capture
+  artilleryModule, // standoff fire accrual + barrage orders
+  interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,
   technologyModule, // session research: branch/day-gated techs → effect bonuses + content unlocks
+  stewardModule, // «Хранитель»: delegate the seat to the AI while you sleep (gated by the Steward tech)
   armyModule,
   victoryModule, // terminal match state from authoritative state (domination / elimination / score / timeout)
   fleetLaunchModule,
@@ -2461,6 +2688,17 @@ export const engageFleet = (playerId: string, fleetId: string, targetId: string)
 /** Begin researching a session technology (one active at a time — technologyModule). */
 export const researchTech = (playerId: string, technology: string) =>
   act(playerId, 'technology.research', { technology });
+/** «Хранитель»: hand this seat to the AI until game-time `until`, running `posture`
+ *  (v1: 'defend'). Rejected (E_STEWARD_LOCKED) until the Steward tech is researched. */
+export const delegateSteward = (
+  playerId: string,
+  until: number,
+  posture: StewardPosture = 'defend',
+) => act(playerId, 'steward.delegate', { posture, until });
+/** Take the seat back early (a safe no-op if nothing was delegated). */
+export const recallSteward = (playerId: string) => act(playerId, 'steward.recall', {});
+// Re-export the Steward reads so the netserver + UI import them from the `./game` façade.
+export { stewardActive, STEWARD_POSTURES };
 /** Declare war on (or otherwise re-stance) another commander. */
 export const declareWar = (playerId: string, target: string, stance: DiplomaticStance = 'war') =>
   act(playerId, 'diplomacy.declare', { target, stance });
@@ -2626,7 +2864,10 @@ export function sortieSpec(fleet: Fleet): { maxFuel: number; rearmRounds: number
     (s) => s.count > 0 && (data.units[s.unit]?.traits.includes('squadron') ?? false),
   );
   const u = st ? data.units[st.unit]?.stats : undefined;
-  return { maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)), rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)) };
+  return {
+    maxFuel: Math.max(0, Math.floor(u?.fuel ?? 0)),
+    rearmRounds: Math.max(0, Math.floor(u?.rearmRounds ?? 0)),
+  };
 }
 
 /** A fresh, fully-fuelled wing. */
@@ -2645,7 +2886,9 @@ export function canSortie(s: SortieState): boolean {
 export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
   if (!canSortie(s)) return s;
   const fuel = s.fuel - 1;
-  return fuel <= 0 ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) } : { fuel, rearming: 0 };
+  return fuel <= 0
+    ? { fuel: 0, rearming: Math.max(1, Math.floor(rearmRounds)) }
+    : { fuel, rearming: 0 };
 }
 
 /** Advance the rearm cooldown one round; when it elapses the wing refuels to max and is
@@ -2653,7 +2896,9 @@ export function spendSortie(s: SortieState, rearmRounds: number): SortieState {
 export function tickRearm(s: SortieState, maxFuel: number): SortieState {
   if (s.rearming <= 0) return s;
   const rearming = s.rearming - 1;
-  return rearming <= 0 ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 } : { fuel: s.fuel, rearming };
+  return rearming <= 0
+    ? { fuel: Math.max(0, Math.floor(maxFuel)), rearming: 0 }
+    : { fuel: s.fuel, rearming };
 }
 
 // --- squadron strike radius (squadrons-roadmap SQ-3.1) -----------------------
@@ -2950,7 +3195,8 @@ export function serverQueueActions(
     }
     if (step.kind === 'wait') {
       const w = waitStatus(step, now, HOUR);
-      if (step.until === undefined) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: false, holdUntil: w.until });
+      if (step.until === undefined)
+        out.push({ fleetId: fid, owner: f.owner, actions: [], pop: false, holdUntil: w.until });
       else if (w.done) out.push({ fleetId: fid, owner: f.owner, actions: [], pop: true });
       continue; // still counting down → do nothing this tick
     }
@@ -2972,8 +3218,13 @@ export function serverQueueActions(
 }
 /** Place a market lot: `sell` escrows `amount` of `resource` for `price` credits/unit;
  *  `buy` escrows the credits and offers to buy that much of `resource`. */
-export const marketList = (playerId: string, side: MarketSide, resource: string, amount: number, price: number) =>
-  act(playerId, 'market.list', { side, resource, amount, price });
+export const marketList = (
+  playerId: string,
+  side: MarketSide,
+  resource: string,
+  amount: number,
+  price: number,
+) => act(playerId, 'market.list', { side, resource, amount, price });
 /** Take (fill) up to `amount` from an open lot — buy from a sell lot / sell into a buy lot. */
 export const marketTake = (playerId: string, id: string, amount?: number) =>
   act(playerId, 'market.take', amount === undefined ? { id } : { id, amount });
@@ -2983,6 +3234,13 @@ export const marketCancel = (playerId: string, id: string) =>
 /** Mobilise division template `template` (0-based) on your world `planetId`. */
 export const mobilizeDivision = (playerId: string, planetId: string, template: number) =>
   act(playerId, 'division.mobilize', { planetId, template });
+/** Assemble a template: set slot `slot` of your template `template` to `unit` (null = clear). */
+export const setDivisionTemplate = (
+  playerId: string,
+  template: number,
+  slot: number,
+  unit: string | null,
+) => act(playerId, 'division.template', { template, slot, unit });
 /** Load a garrisoning division into a co-located, idle fleet (by free hold). */
 export const loadDivision = (playerId: string, divisionId: string, fleetId: string) =>
   act(playerId, 'division.load', { divisionId, fleetId });
@@ -3010,7 +3268,11 @@ export function canTraverse(state: GameState, mover: string, owner: string | nul
  *  Read-only: it builds and returns the actions; the caller applies them — the
  *  client to its local sim, the server through the authoritative room. Drives
  *  empty seats the same way in solo and multiplayer (a seat with no human). */
-export function aiOrders(state: GameState, ai: string): Action[] {
+export function aiOrders(
+  state: GameState,
+  ai: string,
+  posture: StewardPosture | 'expand' = 'expand',
+): Action[] {
   const out: Action[] = [];
   if (!state.players[ai]) return out; // seat not in play / eliminated
   const isShipUnit = (u: string): boolean => !data.units[u]?.traits.includes('ground');
@@ -3019,7 +3281,11 @@ export function aiOrders(state: GameState, ai: string): Action[] {
     Math.hypot(a.x - b.x, a.y - b.y);
   // Send each idle AI fleet toward the nearest capturable world it can reach — only
   // neutral worlds or territory of someone it's at WAR with (peace = off-limits).
-  for (const f of Object.values(state.fleets)) {
+  // Steward «Оборона» (a delegated human seat, posture 'defend') HOLDS: it skips this
+  // offensive sweep entirely and only builds / reinforces / trades below — repelling an
+  // attacker is automatic in combat. "Autopilot keeps you alive; active play wins."
+  const expandFleets: Fleet[] = posture === 'defend' ? [] : Object.values(state.fleets);
+  for (const f of expandFleets) {
     if (f.owner !== ai || f.location == null || f.movement || f.battleId) continue;
     const here = state.planets[f.location];
     if (!here) continue;
@@ -3087,7 +3353,11 @@ export function aiOrders(state: GameState, ai: string): Action[] {
       if (have >= reserve + 40 && !hasLot('sell', good))
         out.push(marketList(ai, 'sell', good, Math.floor((have - reserve) / 2), 2));
     }
-    if ((pl.resources.metal ?? 0) < 80 && (pl.resources.credits ?? 0) > 300 && !hasLot('buy', 'metal')) {
+    if (
+      (pl.resources.metal ?? 0) < 80 &&
+      (pl.resources.credits ?? 0) > 300 &&
+      !hasLot('buy', 'metal')
+    ) {
       out.push(marketList(ai, 'buy', 'metal', 30, 3));
     }
   }

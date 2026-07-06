@@ -1,4 +1,5 @@
 import { applyDelta, type Action, type GameState, type PlayerId, type StateDelta } from '@void/shared-core';
+import { createActionEnvelope } from '@void/action-layer';
 
 export type MultiplayerStatus = 'connecting' | 'open' | 'closed';
 
@@ -71,6 +72,8 @@ interface InboundBase {
   matchId?: string;
   seq?: number;
   playerId?: PlayerId;
+  sessionId?: string;
+  gated?: boolean;
   state?: GameState;
   delta?: StateDelta;
   actionId?: string;
@@ -103,6 +106,11 @@ export class MultiplayerClient {
   private lastState: GameState | null = null;
   private matchId?: string;
   private playerId?: PlayerId;
+  /** Session binding from `welcome` (SV-1.1). Present ⇒ a gated room expects `action.v1`
+   *  envelopes echoing this id; `clientSeq` is the strict per-session counter it authorizes. */
+  private sessionId?: string;
+  private gated = false;
+  private clientSeq = 0;
 
   constructor(
     private readonly socket: MultiplayerSocket,
@@ -120,7 +128,25 @@ export class MultiplayerClient {
     this.setStatus('closed');
   }
 
+  /** Submit a player intent. On a GATED room (welcome carried `gated` + a `sessionId`)
+   *  this wraps it in an `action.v1` envelope — echoing the session id, stamping the next
+   *  strict `clientSeq`, and deriving the `actionId` the sequence gate keys on — so the
+   *  action-layer gate admits it. Otherwise it sends the bare action (un-gated dev room). */
   sendAction(action: Action): void {
+    if (this.gated && this.sessionId && this.matchId && this.playerId) {
+      const envelope = createActionEnvelope({
+        schemaVersion: 1,
+        matchId: this.matchId,
+        playerId: this.playerId,
+        sessionId: this.sessionId,
+        clientSeq: (this.clientSeq += 1), // strict 1,2,3… per session
+        issuedAt: action.issuedAt,
+        type: action.type,
+        payload: action.payload,
+      });
+      this.socket.send(JSON.stringify({ type: 'action.v1', envelope }));
+      return;
+    }
     this.socket.send(JSON.stringify({ type: 'action', action }));
   }
 
@@ -162,6 +188,13 @@ export class MultiplayerClient {
       this.lastState = message.state;
       this.matchId = message.matchId;
       this.playerId = message.playerId ?? this.playerId;
+      if (message.type === 'welcome') {
+        // Bind the session for the gated send path. A reconnect mints a fresh sessionId
+        // (server resets its cursor), so a changed id restarts our clientSeq at 0 → 1.
+        if (message.sessionId !== this.sessionId) this.clientSeq = 0;
+        this.sessionId = message.sessionId;
+        this.gated = message.gated ?? false;
+      }
       this.handlers.onSnapshot?.({
         matchId: message.matchId,
         playerId: this.playerId,

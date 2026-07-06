@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createKernel } from '../kernel/kernel';
 import { combatModule } from './combat';
+import { orbitalModule } from './orbital';
+import { artilleryModule } from './artillery';
+import { interceptModule } from './intercept';
 import { economyModule } from './economy';
 import { constructionModule } from './construction';
 import {
@@ -13,6 +16,12 @@ import {
 } from '../state/gameState';
 import { parseGameData, buildingLevel, type GameData } from '../data/schemas';
 import type { Action, AdvanceResult, ApplyResult, Context } from '../action/types';
+
+/** The combat family in canonical manifest order — the split of the old monolith
+ *  (orbital stamps orbit before combat engages; orbital's AA/bombard span runs
+ *  before artillery's standoff span), so these kernels behave exactly like the
+ *  pre-split single module. */
+const combatFamily = [orbitalModule, combatModule, artilleryModule, interceptModule];
 
 const data: GameData = parseGameData({
   version: '0.1.0',
@@ -126,7 +135,7 @@ function errCode(r: ApplyResult): string {
 
 describe('orbital — bombardment toggle (fleet.bombard)', () => {
   it('switches bombardment on for a hostile world from the near orbit', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = stateWith({
       planets: [planet('P', 'p2')],
       fleets: [fleet('F', 'p1', 'P', [['cruiser', 1]], { orbit: 'near' })],
@@ -137,7 +146,7 @@ describe('orbital — bombardment toggle (fleet.bombard)', () => {
   });
 
   it('rejects bombarding when not in orbit, your own world, or with no ships', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const notInOrbit = stateWith({
       planets: [planet('P', 'p2')],
       fleets: [fleet('F', 'p1', 'P', [['cruiser', 1]], { orbit: undefined })],
@@ -158,7 +167,7 @@ describe('orbital — bombardment toggle (fleet.bombard)', () => {
 
 describe('orbital — bombardment effects (GDD §7.4)', () => {
   it('freezes the production of the bombarded world and wears its structures', () => {
-    const kernel = createKernel([economyModule, combatModule, constructionModule]);
+    const kernel = createKernel([economyModule, ...combatFamily, constructionModule]);
     const st = stateWith({
       players: [player('p2', { metal: 0 })],
       planets: [planet('P', 'p2', { buildings: [['mine', 1]] })],
@@ -171,7 +180,7 @@ describe('orbital — bombardment effects (GDD §7.4)', () => {
   });
 
   it('lets production flow when the same fleet is not bombarding', () => {
-    const kernel = createKernel([economyModule, combatModule, constructionModule]);
+    const kernel = createKernel([economyModule, ...combatFamily, constructionModule]);
     const st = stateWith({
       players: [player('p2', { metal: 0 })],
       planets: [planet('P', 'p2', { buildings: [['mine', 1]] })],
@@ -182,7 +191,7 @@ describe('orbital — bombardment effects (GDD §7.4)', () => {
   });
 
   it('blocks new construction orders on a bombarded world', () => {
-    const kernel = createKernel([combatModule, constructionModule]);
+    const kernel = createKernel([...combatFamily, constructionModule]);
     const st = stateWith({
       players: [player('p1', { metal: 100 })],
       planets: [planet('P', 'p1')],
@@ -192,7 +201,7 @@ describe('orbital — bombardment effects (GDD §7.4)', () => {
   });
 
   it('pauses an in-flight build under bombardment, resuming when it lifts', () => {
-    const kernel = createKernel([combatModule, constructionModule]);
+    const kernel = createKernel([...combatFamily, constructionModule]);
     const st = stateWith({
       players: [player('p1', { metal: 100 })],
       planets: [planet('P', 'p1')],
@@ -221,7 +230,7 @@ describe('orbital — bombardment effects (GDD §7.4)', () => {
 
 describe('orbital — anti-air (orbital AA)', () => {
   it('fires at a hostile fleet on the near orbit and can destroy it', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = stateWith({
       planets: [planet('P', 'p1', { garrison: [['aa', 2]] })], // 2 × 14 = 28 aa/h
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })], // 40 hp
@@ -232,7 +241,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('ORBITAL tier (buildings) volleys hourly: a sub-hour dip escapes untouched', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([orbitalModule]);
     const st = stateWith({
       planets: [planet('P', 'p1', { buildings: [['flak', 1]] })], // 28 per hourly volley
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })],
@@ -248,7 +257,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('CLOSE tier (garrison) volleys every quarter-hour at a quarter of the rate', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([orbitalModule]);
     const st = stateWith({
       planets: [planet('P', 'p1', { garrison: [['aa', 2]] })], // 28/h → 7 per 15-min volley
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })],
@@ -265,7 +274,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('both tiers together: hour boundary lands the heavy volley first, then the flak', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([orbitalModule]);
     const st = stateWith({
       planets: [planet('P', 'p1', { buildings: [['flak', 1]], garrison: [['aa', 2]] })],
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })], // 80 hp pool
@@ -283,7 +292,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('the volley grid compresses with timeScale like every other duration', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([orbitalModule]);
     const st = stateWith({
       planets: [planet('P', 'p1', { buildings: [['flak', 1]] })],
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })],
@@ -296,7 +305,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('announces every volley — aa.fired carries shooter, target, damage and tier (H2)', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([orbitalModule]);
     const st = stateWith({
       planets: [planet('P', 'p1', { buildings: [['flak', 1]] })],
       fleets: [fleet('E', 'p2', 'P', [['cruiser', 2]], { orbit: 'near' })],
@@ -309,7 +318,7 @@ describe('orbital — anti-air (orbital AA)', () => {
   });
 
   it('holds its fire while a ground assault keeps it busy', () => {
-    const kernel = createKernel([combatModule]);
+    const kernel = createKernel([...combatFamily]);
     const st = stateWith({
       planets: [planet('P', 'p1', { garrison: [['aa', 2]] })],
       // Attacker landing fleet G is mid-assault; bystander E sits on the near orbit.

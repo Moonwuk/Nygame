@@ -328,6 +328,34 @@ describe('technology module — session research tree', () => {
     expect(openFor('fusion_plus', refineries(2))).toBe(true);
   });
 
+  it('has_scientist passes if ANY of the 2 council leaders qualifies (scientists[])', () => {
+    const kernel = createKernel([technologyModule]);
+    const council = (list: Array<{ id: string; level: number }>): GameState => {
+      const s = stateWith({ players: [player('p1', { metal: 30 })] });
+      (s.players.p1 as Player).scientists = list;
+      return s;
+    };
+    // A lone ground leader does NOT open the space-focus gate…
+    expect(
+      errCode(
+        kernel.applyAction(council([{ id: 'ground_sci', level: 9 }]), research('void_doctrine'), ctx(0)),
+      ),
+    ).toBe('E_CONDITIONS_UNMET');
+    // …but a ground + space council does — the space leader in the other slot satisfies it.
+    expect(
+      okApply(
+        kernel.applyAction(
+          council([
+            { id: 'ground_sci', level: 9 },
+            { id: 'void_sci', level: 1 },
+          ]),
+          research('void_doctrine'),
+          ctx(0),
+        ),
+      ).ok,
+    ).toBe(true);
+  });
+
   it('has_scientist gates branch-focus and capstone content on the chosen leader', () => {
     const kernel = createKernel([technologyModule]);
     const withScientist = (sci?: { id: string; level: number }): GameState => {

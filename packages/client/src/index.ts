@@ -10,7 +10,39 @@ export {
   type PingKind,
 } from './multiplayer';
 
+export { openLiveMatch, type LiveMatch } from './net';
 export { theme, type Theme } from './theme';
+export {
+  type Cam,
+  type Viewport,
+  type Bounds,
+  FIT_MARGIN,
+  MIN_SCALE,
+  MAX_SCALE,
+  PAN_SLACK,
+  clamp,
+  clampScale,
+  fitTransform,
+  projectBase,
+  worldToScreen,
+  screenToWorld,
+  clampCam,
+  zoomAt,
+  centerOn,
+  inView,
+} from './camera';
+export { rgba, blitGlow, blitSphere } from './holoDraw';
+export {
+  BOUNDARY,
+  clampPowerWeights,
+  clipHalfPlane,
+  clipHalfPlaneTagged,
+  computePowerCells,
+  drawTerritory,
+  type TerritorySeed,
+  type TerritoryCell,
+  type TerritoryPalette,
+} from './territory';
 export {
   createStatusBarModel,
   createSelectionModel,
@@ -31,6 +63,18 @@ export {
   type BattleAction,
   type BattleIntent,
 } from './matchHud';
+export {
+  createLoadoutEditor,
+  applyLoadoutAction,
+  resolveLoadoutBuild,
+  type LoadoutModel,
+  type LoadoutSlotView,
+  type LoadoutOption,
+  type LoadoutStatLine,
+  type LoadoutEditorResult,
+  type LoadoutEditorAction,
+  type BuildIntent,
+} from './loadoutEditor';
 export {
   createWelcomeModel,
   resolveWelcomeAction,

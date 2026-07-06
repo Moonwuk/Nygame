@@ -17,7 +17,8 @@
     "abilities": [],
     "signature": 4,
     "cost": { "metal": 220, "credits": 80 },
-    "upkeep": { "credits": 8 }
+    "upkeep": { "credits": 8 },
+    "slots": { "weapon": 1, "defense": 1, "utility": 1 }
   },
   "siege_lance": {
     "faction": "vanguard",
@@ -38,7 +39,8 @@
     "abilities": [],
     "signature": 4,
     "cost": { "metal": 180, "credits": 40 },
-    "upkeep": { "credits": 5 }
+    "upkeep": { "credits": 5 },
+    "slots": { "defense": 1, "utility": 2 }
   },
   "militia": {
     "faction": "vanguard",
@@ -72,16 +74,6 @@
     "signature": 2,
     "cost": { "metal": 140, "credits": 40 },
     "upkeep": { "credits": 4 }
-  },
-  "infected_cruiser": {
-    "faction": "swarm",
-    "stats": { "attack": 12, "defense": 4, "speed": 6, "hp": 32, "shield": 8 },
-    "line": "front",
-    "traits": ["infect_planet", "no_food_cost"],
-    "abilities": ["spread_biomass"],
-    "signature": 4,
-    "cost": { "food": 200, "energy": 50 },
-    "upkeep": { "food": 6 }
   },
   "hero": {
     "faction": "vanguard",

@@ -726,6 +726,13 @@ export const en: Record<string, string> = {
     "A fusion reactor on the planetary grid: {e} energy per hour. Energy is the lifeblood of your buildings: refineries, radars, AA and fabs draw current every day — and brown out to half output when it runs short.",
   'Чистые цеха литографии: {m} микроэлектроники в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.':
     'Clean lithography halls: {m} microelectronics per hour. Hungry for power and people, but its output guides strike wings and unlocks siege doctrines. Upgrades pay for themselves in their own product.',
+  'Сборка дивизии': 'Division assembly',
+  'Влияние на характеристики': 'Effect on characteristics',
+  '⚔ Урон в атаке': '⚔ Attack damage',
+  '🛡 Урон в защите': '🛡 Defense damage',
+  '❤ Корпус': '❤ Hull',
+  'состав {n}/{s} · {rest}': 'composition {n}/{s} · {rest}',
+  'Мобилизовать «{name}»': 'Mobilize "{name}"',
   '‹ назад': '‹ back',
   '🧪 Тесты · режим разработчика': '🧪 Tests · developer mode',
 

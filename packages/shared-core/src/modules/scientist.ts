@@ -1,18 +1,20 @@
 import type { GameData } from '../data/schemas';
 import type { GameModule } from '../kernel/module';
 import type { Player } from '../state/gameState';
+import { scientistsOf } from '../state/gameState';
 
 interface SlotArgs {
   playerId?: string;
 }
 
-/** Extra research slots the player's chosen scientist grants (0 if none / unknown id). */
+/** Extra research slots the player's chosen leaders grant, summed across the council (0 if
+ *  none / unknown ids). The technology module clamps the resulting total to the design max. */
 function scientistSlotBonus(player: Player | undefined, data: GameData): number {
-  const chosen = player?.scientist;
-  if (!chosen) {
-    return 0;
+  let bonus = 0;
+  for (const chosen of scientistsOf(player)) {
+    bonus += data.scientists[chosen.id]?.slotBonus ?? 0;
   }
-  return data.scientists[chosen.id]?.slotBonus ?? 0;
+  return bonus;
 }
 
 /**

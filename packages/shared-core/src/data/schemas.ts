@@ -51,6 +51,19 @@ export const UnitStatsSchema = z
   })
   .catchall(z.number());
 
+/** The three module-slot categories a hull exposes. Typed slots: a module fits
+ *  only its own category. Kept small so slots compete — fitting is opportunity
+ *  cost, not an open stack (ship-modules-roadmap.md §0). */
+export const SHIP_SLOT_TYPES = ['weapon', 'defense', 'utility'] as const;
+export const ShipSlotTypeSchema = z.enum(SHIP_SLOT_TYPES);
+/** How many slots of each category a hull carries. Default 0 everywhere ⇒ the
+ *  hull fits no modules (backward-compatible: existing units are unaffected). */
+export const ShipSlotsSchema = z.object({
+  weapon: z.number().int().nonnegative().default(0),
+  defense: z.number().int().nonnegative().default(0),
+  utility: z.number().int().nonnegative().default(0),
+});
+
 export const UnitDefSchema = z.object({
   faction: z.string(),
   stats: UnitStatsSchema,
@@ -75,6 +88,10 @@ export const UnitDefSchema = z.object({
   signature: z.number().nonnegative().default(1),
   /** Radar reach (Euclidean distance, map units) the unit projects as a radar-ship (0 = none). */
   radarRange: z.number().nonnegative().default(0),
+  /** Typed module slots this hull exposes (ship-modules-roadmap.md). A player
+   *  fills them BEFORE building; the built ship is locked (no refit). Omitted →
+   *  all-zero → carries no modules (a partial object defaults the rest to 0). */
+  slots: ShipSlotsSchema.default({ weapon: 0, defense: 0, utility: 0 }),
 });
 
 /** One stack in a faction's starting loadout (a unit id + how many). */
@@ -262,9 +279,10 @@ export const TechnologyEffectsSchema = z.object({
   radarRangeBonus: z.number().default(0),
 });
 
-/** The four tech-tree branches (UI tabs), shared by technologies, scientists and the
- *  `has_scientist` gate. */
-const BranchSchema = z.enum(['ground', 'space', 'squadron', 'missile']);
+/** The five tech-tree branches (UI tabs), shared by technologies, scientists and the
+ *  `has_scientist` gate. `command` is the automation / command-and-control branch (AI
+ *  delegation "Steward", and later order chains and standing postures). */
+const BranchSchema = z.enum(['ground', 'space', 'squadron', 'missile', 'command']);
 
 /** Shared "at least N" threshold for a condition (default 1 = mere existence). This
  *  single `min` knob is the main data lever for tuning a gate without touching code. */
@@ -379,6 +397,45 @@ export const ScientistDefSchema = z.object({
   slotBonus: z.number().int().nonnegative().default(0),
 });
 
+/** What a hull must satisfy for a module to be installable (all given fields must
+ *  hold). Anchors a module to a class of ships (a cargo expander → only transports). */
+export const ModuleAllowedSchema = z.object({
+  domain: z.enum(['space', 'ground']).optional(),
+  traits: z.array(z.string()).default([]),
+  units: z.array(z.string()).default([]),
+});
+/** A module's effect. Two separate channels (kept apart on the balance axis):
+ *  `stats` = flat additive stat deltas (×count); `enables` = action/ability flags
+ *  the carrier unlocks. */
+export const ModuleEffectsSchema = z.object({
+  stats: z.record(z.string(), z.number()).default({}),
+  enables: z.array(z.string()).default([]),
+});
+/** A ship module (loadout item). Chosen at BUILD time and locked onto the built
+ *  stack — there is deliberately NO refit action (owner rule; supersedes the
+ *  roadmap's port equip/unequip). `tag` splits the balance/monetisation axis:
+ *  `horizontal` (logistics/utility) vs `vertical` (combat power). A paid/lootbox
+ *  source must never carry a `vertical` module — enforced downstream and by the
+ *  soulbound refine here. Extensible via data, like `UnitDef`. */
+export const ModuleDefSchema = z
+  .object({
+    name: z.string(),
+    slot: ShipSlotTypeSchema,
+    tag: z.enum(['horizontal', 'vertical']),
+    effects: ModuleEffectsSchema.default({ stats: {}, enables: [] }),
+    cost: ResourceBagSchema.default({}),
+    allowed: ModuleAllowedSchema.optional(),
+    /** Bound to the owning player (anti-RMT). A `vertical` module must never be
+     *  soulbound — a paid source can't sell combat power (refined below). */
+    soulbound: z.boolean().optional(),
+  })
+  .refine((m) => !Object.keys(m.effects.stats).some((k) => /slot/i.test(k)), {
+    message: 'a module may not modify slot capacity (anti self-expansion)',
+  })
+  .refine((m) => !(m.tag === 'vertical' && m.soulbound === true), {
+    message: 'a vertical (combat) module may not be soulbound (anti pay-to-win)',
+  });
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -391,11 +448,16 @@ export const GameDataSchema = z.object({
   planetTypes: z.record(z.string(), PlanetTypeDefSchema).default({}),
   technologies: z.record(z.string(), TechnologyDefSchema).default({}),
   scientists: z.record(z.string(), ScientistDefSchema).default({}),
+  modules: z.record(z.string(), ModuleDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
 export type UnitStats = z.infer<typeof UnitStatsSchema>;
 export type UnitDef = z.infer<typeof UnitDefSchema>;
+export type ShipSlotType = z.infer<typeof ShipSlotTypeSchema>;
+export type ShipSlots = z.infer<typeof ShipSlotsSchema>;
+export type ModuleDef = z.infer<typeof ModuleDefSchema>;
+export type ModuleEffects = z.infer<typeof ModuleEffectsSchema>;
 export type FactionDef = z.infer<typeof FactionDefSchema>;
 export type FactionLoadout = z.infer<typeof FactionLoadoutSchema>;
 export type FactionPassives = z.infer<typeof FactionPassivesSchema>;

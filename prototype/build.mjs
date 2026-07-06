@@ -63,31 +63,49 @@ body::before{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;mix
 .who{line-height:1.1;min-width:0;}
 .who b{display:block;color:#eafffb;font-weight:700;font-size:12px;letter-spacing:2px;white-space:nowrap;}
 .who span{color:var(--cyan-dim);font-size:9px;letter-spacing:2.5px;white-space:nowrap;}
-/* the six currencies always fit the bar — no scroll. Chips share the width and shrink
-   together (flex:1 1 0; min-width:0) so the row scales down instead of overflowing. */
-#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow:hidden;height:100%;margin:0 4px;
-  border-left:1px solid var(--line);border-right:1px solid var(--line);}
-.res{display:flex;align-items:center;justify-content:center;gap:4px;padding:0 4px;height:100%;flex:1 1 0;min-width:0;}
-.res em{font:9px ui-monospace,monospace;font-style:normal;margin-left:3px;}
+/* the five currencies always fit the bar — no scroll. Chips share the width and shrink
+   together (flex:1 1 0; min-width:0) so the row scales down instead of overflowing. Each
+   chip = a small coin-icon + tabular amount + flow, divided by a faint hairline. */
+#purse{display:flex;align-items:center;flex:1 1 auto;min-width:0;overflow:hidden;height:100%;margin:0 2px 0 4px;
+  border-left:1px solid var(--line);}
+.res{display:flex;align-items:center;justify-content:center;gap:5px;padding:0 7px;height:100%;flex:1 1 0;min-width:0;
+  position:relative;overflow:hidden;}
+.res + .res::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:1px;height:20px;
+  background:linear-gradient(180deg,transparent,rgba(53,214,230,.20),transparent);}
+/* amount + flow share one "value line" (.rv); the amount owns the room (flex:0 0 auto),
+   the flow rate clips first. On phones the chip stacks the icon OVER this value line. */
+.rv{display:flex;align-items:baseline;justify-content:center;gap:3px;min-width:0;overflow:hidden;flex:0 1 auto;}
+.res em{font:9px ui-monospace,monospace;font-style:normal;white-space:nowrap;
+  flex:0 1 auto;min-width:0;overflow:hidden;}
 .res em.up{color:var(--grn,#5ff0a8);}
 .res em.dn{color:var(--red,#ff5a4d);}
-.res.dead{opacity:.38;}
-.res.short i{color:var(--red,#ff5a4d);text-shadow:0 0 6px rgba(255,90,77,.5);}
-.res i{flex:0 0 auto;text-align:center;font-style:normal;font-size:13px;line-height:1;
-  color:var(--cyan);font-variant-emoji:text;text-shadow:0 0 6px rgba(53,214,230,.4);}
+.res.dead{opacity:.34;}
+.res i{flex:0 0 auto;width:20px;height:20px;display:grid;place-items:center;border-radius:6px;
+  font-style:normal;font-size:12px;line-height:1;color:var(--cyan);font-variant-emoji:text;
+  background:rgba(53,214,230,.08);box-shadow:inset 0 0 0 1px rgba(53,214,230,.14);
+  text-shadow:0 0 6px rgba(53,214,230,.35);}
+.res.dead i{background:rgba(120,140,150,.05);box-shadow:inset 0 0 0 1px rgba(120,140,150,.14);
+  color:var(--dim);text-shadow:none;}
+.res.short i{color:var(--red,#ff5a4d);box-shadow:inset 0 0 0 1px rgba(255,90,77,.4);text-shadow:0 0 6px rgba(255,90,77,.5);}
 .res b{color:#eafffb;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-/* donate/premium currency (Суверены): gold accent — moved out of the resource bar onto
-   the status line right under it (#devline .dl-donate), pushed to the right end. Rendered
-   as an enlarged, glowing gold pill with a slow pulse so it actually draws the eye. */
-#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:6px;
-  padding:3px 11px;border-radius:13px;color:#fff2cf;font-weight:800;font-size:16px;line-height:1;
-  letter-spacing:.4px;font-variant-numeric:tabular-nums;
-  background:linear-gradient(180deg,rgba(255,206,92,.22),rgba(240,170,40,.12));
-  border:1px solid rgba(255,208,96,.6);
-  box-shadow:0 0 14px rgba(255,198,72,.4),inset 0 0 7px rgba(255,214,120,.18);
-  animation:donatePulse 2.6s ease-in-out infinite;}
-#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 10px rgba(255,212,94,.85);font-style:normal;font-size:20px;}
+  white-space:nowrap;flex:0 0 auto;}
+/* player emblem — a console crest the player picks in the main menu (hub), worn in the
+   TOP-LEFT corner. Tap → player dossier (bubbles to the .crest handler). */
+#crestmark{width:32px;height:32px;border-radius:9px;flex:0 0 auto;cursor:pointer;padding:0;
+  display:grid;place-items:center;font-size:17px;color:var(--cyan);font-variant-emoji:text;
+  background:rgba(3,12,16,.7);border:1px solid var(--line-hi);
+  box-shadow:inset 0 0 10px rgba(53,214,230,.14),0 0 10px rgba(53,214,230,.12);
+  text-shadow:0 0 8px rgba(53,214,230,.5);}
+#crestmark:hover,#crestmark:active{background:rgba(53,214,230,.16);}
+/* donate currency (Суверены ◆, gold) sits UNDER the resource bar on the status line,
+   pushed to the right end — so the resource chips get the full top-bar width for numbers. */
+#devline .dl-donate{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:5px;
+  padding:2px 9px;border-radius:11px;color:#fff2cf;font-weight:800;font-size:12px;line-height:1;
+  letter-spacing:.3px;font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,rgba(255,206,92,.20),rgba(240,170,40,.10));border:1px solid rgba(255,208,96,.55);
+  box-shadow:0 0 12px rgba(255,198,72,.30),inset 0 0 6px rgba(255,214,120,.16);
+  animation:donatePulse 2.8s ease-in-out infinite;white-space:nowrap;}
+#devline .dl-donate i{color:#ffd45e;text-shadow:0 0 9px rgba(255,212,94,.85);font-style:normal;font-size:14px;}
 @keyframes donatePulse{
   0%,100%{box-shadow:0 0 10px rgba(255,198,72,.30),inset 0 0 7px rgba(255,214,120,.16);}
   50%{box-shadow:0 0 22px rgba(255,205,90,.7),inset 0 0 9px rgba(255,220,130,.30);}}
@@ -179,6 +197,19 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .pc-row .pc-v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;}
 .pc-close{margin-top:10px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
+
+/* settings overlay (hub → «Ещё» → Настройки) — client-only display prefs */
+#settings{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#settings.show{display:flex;}
+#settings .setbox{width:min(380px,92vw);max-height:86vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+.set-row{display:flex;flex-direction:column;gap:9px;padding:6px 0 2px;}
+.set-lbl{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink);}
+.set-lbl .set-sub{font-size:10px;color:var(--dim);letter-spacing:.2px;}
+.set-ctl{display:flex;align-items:center;gap:10px;}
+.set-ctl input[type=range]{flex:1;accent-color:var(--cyan);height:22px;cursor:pointer;}
+.set-val{min-width:42px;text-align:right;font-variant-numeric:tabular-nums;color:var(--cyan);font-weight:700;}
 
 /* war prompt — confirm before a move declares war on a player you're at peace with */
 #warprompt{position:fixed;inset:0;z-index:48;display:none;align-items:center;justify-content:center;padding:18px;
@@ -347,15 +378,22 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #devline .dstat{flex:0 0 auto;}
 #devline .dstat.win{color:var(--up);font-weight:700;}
 
-/* slim icon rail in the bottom-left corner (just the wired tools); each icon opens a
-   window. column-reverse + bottom anchor → it grows UPWARD as more tools get wired,
-   with the primary icon nearest the thumb. Short, so the map around it stays tappable. */
-#rail{position:fixed;left:8px;bottom:14px;top:auto;width:42px;z-index:26;display:flex;flex-direction:column-reverse;gap:4px;
-  padding:4px;background:rgba(3,12,16,.72);border:1px solid var(--line-hi);border-radius:9px;
-  box-shadow:0 0 16px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
-#rail button{position:relative;width:34px;height:34px;background:transparent;border:0;cursor:pointer;
-  font-size:17px;color:var(--cyan-dim);border-radius:6px;font-variant-emoji:text;}
-#rail button:hover,#rail button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
+/* left-corner tool rail — collapsed to a single hamburger by default; tapping it expands
+   the wired tools UPWARD (primary icon nearest the thumb). The tools live in their own
+   panel that sizes to its buttons, so nothing overflows the rail. */
+#rail{position:fixed;left:10px;bottom:14px;top:auto;z-index:26;display:flex;flex-direction:column;
+  align-items:flex-start;gap:8px;}
+#railtools{display:none;flex-direction:column;gap:5px;padding:6px;background:rgba(3,12,16,.82);
+  border:1px solid var(--line-hi);border-radius:12px;box-shadow:0 0 16px rgba(0,0,0,.5);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#rail.open #railtools{display:flex;}
+#railtools button{position:relative;width:38px;height:38px;background:transparent;border:0;cursor:pointer;
+  font-size:18px;color:var(--cyan-dim);border-radius:8px;font-variant-emoji:text;display:grid;place-items:center;}
+#railtools button:hover,#railtools button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
+#railtoggle{width:44px;height:44px;display:grid;place-items:center;cursor:pointer;font-size:20px;font-variant-emoji:text;
+  color:var(--cyan);background:rgba(3,12,16,.85);border:1px solid var(--line-hi);border-radius:12px;
+  box-shadow:0 0 16px rgba(0,0,0,.5);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#railtoggle:hover,#rail.open #railtoggle{background:rgba(53,214,230,.16);text-shadow:0 0 8px rgba(53,214,230,.6);}
 #rail .railbadge{position:absolute;top:2px;right:2px;min-width:14px;height:14px;border-radius:7px;
   background:var(--amber,#f0b429);color:#08131a;font:700 9px ui-monospace,monospace;
   display:grid;place-items:center;padding:0 3px;}
@@ -480,15 +518,64 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   font:11px/1.6 ui-monospace,Menlo,monospace;color:#73b6a2;scrollbar-width:thin;}
 #log div::before{content:"> ";color:var(--grn-dim);}
 
-/* technologies window (modal, mirrors #logwin) */
-#tech{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
+/* technologies + steward windows (modal, mirror #logwin) */
+#tech,#steward{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
-#tech.show{display:flex;}
-#tech .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
+#tech.show,#steward.show{display:flex;}
+#tech .twbox,#steward .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
   background:var(--glass);border:1px solid var(--cyan);border-radius:10px;
   box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
 .tw-close{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
-#techbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:12px 14px;}
+#techbody,#stewardbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:12px 14px;}
+/* Steward («Хранитель») delegate panel */
+#stewardbody .st-status{padding:11px 13px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);font-size:12px;color:var(--cyan);line-height:1.55;}
+#stewardbody .st-status.locked{border-color:var(--line);background:rgba(255,255,255,.03);color:var(--dim);}
+#stewardbody .st-status.on{border-color:#7df0d0;background:rgba(125,240,208,.10);color:#9ff0da;}
+#stewardbody .st-h{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:14px 0 8px;}
+#stewardbody .st-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+#stewardbody .st-btn{flex:1;min-width:92px;padding:9px 10px;border-radius:8px;border:1px solid var(--cyan);background:rgba(53,214,230,.10);color:var(--cyan);cursor:pointer;font-size:12px;}
+#stewardbody .st-btn:disabled{opacity:.4;cursor:not-allowed;}
+#stewardbody .st-btn.warn{border-color:#e2a15a;color:#e2a15a;background:rgba(226,161,90,.10);}
+#stewardbody .st-note{margin-top:12px;font-size:11px;color:var(--dim);line-height:1.55;}
+/* read-only council header in the tech window */
+.tw-council{margin:0 0 12px;padding:9px 11px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.06);font-size:11.5px;color:var(--cyan);line-height:1.6;}
+.tw-council b{color:#eafffb;}
+.tw-council .tw-cb{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan-dim);}
+/* scientist council picker (setup-time, over the start-point screen) */
+#scipick{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(1,5,9,.74);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#scipick.show{display:flex;}
+#scipick .twbox{display:flex;flex-direction:column;width:min(560px,96vw);max-height:88vh;overflow:hidden;
+  background:var(--glass);border:1px solid var(--cyan);border-radius:12px;box-shadow:0 0 48px rgba(0,0,0,.7),inset 0 0 0 1px rgba(53,214,230,.06);}
+#scipick .lw-head{display:flex;align-items:center;justify-content:space-between;}
+#scipickbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:14px 15px;}
+.sp-cancel{background:transparent;border:1px solid var(--line-hi);color:var(--dim);border-radius:6px;padding:3px 9px;cursor:pointer;font:inherit;font-size:11px;}
+.sp-cancel:hover{border-color:var(--cyan-dim);color:var(--cyan);}
+.sp-slots{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+.sp-slot{min-height:96px;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:5px;position:relative;}
+.sp-slot.empty{border:1.5px dashed var(--cyan-dim);background:rgba(53,214,230,.03);align-items:center;justify-content:center;text-align:center;color:var(--cyan-dim);}
+.sp-slot.empty .sp-plus{font-size:22px;color:var(--cyan);line-height:1;}
+.sp-slot.empty .sp-hint{font-size:10.5px;letter-spacing:1px;}
+@media (prefers-reduced-motion:no-preference){.sp-slot.empty{animation:sppulse 1.5s ease-in-out infinite;}}
+@keyframes sppulse{0%,100%{border-color:var(--cyan-dim);box-shadow:0 0 0 0 rgba(53,214,230,0);}50%{border-color:var(--cyan);box-shadow:0 0 18px 1px rgba(53,214,230,.30);background:rgba(53,214,230,.08);}}
+.sp-slot.filled{border:1px solid var(--cyan);background:linear-gradient(180deg,rgba(53,214,230,.10),rgba(53,214,230,.03));}
+.sp-slot .sp-sn{font-weight:700;color:#eafffb;font-size:13px;}
+.sp-slot .sp-inf{font-size:10px;color:var(--dim);line-height:1.4;}
+.sp-rm{position:absolute;top:6px;right:7px;width:18px;height:18px;border-radius:5px;border:1px solid var(--line-hi);background:transparent;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;}
+.sp-rm:hover{border-color:var(--red);color:var(--red);}
+.sp-warn{margin-top:12px;display:flex;gap:8px;padding:10px 12px;border:1px solid #6a4a17;border-radius:9px;background:rgba(255,180,58,.09);color:#f4d199;font-size:11.5px;line-height:1.5;}
+.sp-h{margin:15px 0 8px;font-size:10.5px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);}
+.sp-roster{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.sp-card{text-align:left;cursor:pointer;border:1px solid var(--line-hi);border-radius:9px;padding:9px 10px;background:rgba(53,214,230,.04);color:var(--ink);font:inherit;display:flex;flex-direction:column;gap:3px;}
+.sp-card:hover:not(:disabled){border-color:var(--cyan);background:rgba(53,214,230,.11);box-shadow:0 0 12px rgba(53,214,230,.16);}
+.sp-card:disabled{opacity:.34;cursor:not-allowed;}
+.sp-card.picked{border-color:var(--cyan-dim);}
+.sp-card .sp-cn{display:flex;align-items:center;gap:6px;font-weight:700;font-size:12px;color:#eafffb;}
+.sp-card .sp-tick{margin-left:auto;color:var(--grn);font-size:11px;}
+.sp-card .sp-inf{font-size:9.5px;color:var(--dim);line-height:1.4;}
+.sp-go{margin-top:15px;width:100%;padding:12px;border-radius:9px;cursor:pointer;border:1px solid var(--cyan);background:rgba(53,214,230,.12);color:var(--cyan);font:inherit;font-weight:700;font-size:12.5px;letter-spacing:1px;text-transform:uppercase;}
+.sp-go:hover:not(:disabled){background:rgba(53,214,230,.2);box-shadow:0 0 16px rgba(53,214,230,.28);}
+.sp-go:disabled{opacity:.4;cursor:not-allowed;color:var(--dim);border-color:var(--line);}
 .tw-active{margin:0 0 14px;padding:10px 12px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);}
 .tw-active .tw-an{font-size:12px;color:var(--cyan);letter-spacing:.5px;}
 .tw-active .tw-bar{margin-top:8px;height:6px;border-radius:4px;background:rgba(53,214,230,.14);overflow:hidden;}
@@ -618,8 +705,18 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 @media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){
   #top{height:44px;}
   .who{display:none;}
-  .crest{padding:0 10px;}
+  /* phones: the left crest is just the player emblem (title hidden) */
+  .crest{padding:0 8px;}
+  #crestmark{width:30px;height:30px;font-size:16px;}
   #devline{top:44px;}
+  /* the chips get the full bar now (donate moved under it) — tighten just a touch */
+  /* APK / phones: stack the icon OVER the number so each value gets the full chip width */
+  .res{flex-direction:column;gap:1px;padding:0 3px;}
+  .res i{width:20px;height:20px;font-size:12px;}
+  .res b{font-size:13px;}
+  /* the value line sizes to its content on the stacked layout so the flow rate shows */
+  .rv{flex:none;gap:2px;overflow:visible;}
+  #devline .dl-donate{font-size:11px;padding:2px 8px;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);}
@@ -646,7 +743,8 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #banner{font-size:16px;padding:14px 20px;letter-spacing:2px;}
   /* finger-first targets: everything tappable grows to the 44px rule (hud-inmatch.md) */
   button.b{padding:9px 12px;font-size:12px;min-height:44px;}
-  #rail button{width:46px;height:46px;}
+  #railtools button{width:46px;height:46px;}
+  #railtoggle{width:50px;height:50px;font-size:22px;}
   .spd button{min-width:38px;height:40px;font-size:12px;}
   .spd .spdmini{min-width:34px;}
   .pclose{width:44px;height:44px;font-size:14px;}
@@ -662,9 +760,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #cmdbar button{min-width:56px;height:52px;}
   #cmdbar button .ci{font-size:20px;}
   body.sheet-open #cmdbar{bottom:calc(50vh + 8px);}
-}
-@media (max-width:430px){
-  .res .rv em{display:none;}
 }
 /* connect overlay — entry screen (single-player vs join a live session) */
 #connect{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
@@ -815,6 +910,29 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .tpl-stats .syn{display:block;color:var(--cyan);font-size:11px;margin-top:4px;line-height:1.5;}
 #setup .tpl-stats .syn.none{color:var(--dim);}
 #setup .tpl-cost{color:var(--dim);font-size:11px;margin-top:6px;}
+/* polished live stat preview — labelled rows with base→derived + a track bar (the
+   approved loadout-menu look). Shared by the ship / hero / squadron fitting panes. */
+.lstats{border:1px solid var(--line-hi);border-radius:10px;padding:13px 14px;margin-bottom:8px;background:rgba(255,255,255,.02);}
+.lstats .lhd{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);font-weight:800;margin-bottom:11px;}
+.lstats .lsum{font-size:12px;color:var(--ink);line-height:1.7;}
+.lstats .lsum b{color:#eafffb;}
+.lstats .lsum .lpl{color:var(--amber);}
+.lstat{margin-bottom:11px;}
+.lstat:last-child{margin-bottom:0;}
+.lstat .lrow{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:4px;}
+.lstat .lnm{color:var(--dim);font-weight:700;}
+.lstat .lval{font-weight:800;color:#eafffb;}
+.lstat .lval .lb{color:var(--dim);font-weight:600;}
+.lstat .lval .lup{color:var(--grn);}
+.lstat .lval .ldn{color:var(--amber);}
+.lstat .ltrack{height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden;display:flex;}
+.lstat .ltrack .lbar{background:var(--cyan-dim);}
+.lstat .ltrack .ldelta{background:var(--grn);}
+.synlist{border:1px solid var(--line);border-radius:10px;padding:11px 13px;}
+.synlist .syn{display:block;color:var(--cyan);font-size:11px;line-height:1.55;margin-bottom:4px;}
+.synlist .syn:last-child{margin-bottom:0;}
+.synlist .syn em{color:var(--amber);font-style:normal;}
+.synlist .syn.none{color:var(--dim);}
 /* hero fitting — Minecraft-inventory style: equip "bays" + a module inventory grid you
    grab from (tap to pick onto the cursor, tap a bay to place; a ghost trails the pointer) */
 .fitpane .heroslots{grid-template-columns:repeat(2,1fr);}
@@ -835,8 +953,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .fitpane .mcell.held{border-color:var(--amber);box-shadow:0 0 12px rgba(255,180,58,.45);}
 .fitpane .mcell.planned{opacity:.55;}
 .fitpane .mcell .badge{position:absolute;top:3px;right:6px;font:700 10px ui-monospace,monospace;color:var(--cyan);}
-#heldghost{position:fixed;z-index:80;pointer-events:none;display:none;transform:translate(-50%,-50%);
-  font-size:26px;filter:drop-shadow(0 0 7px rgba(53,214,230,.9));}
 /* hero grade (rarity) line — colour by tier */
 .fitpane .hgradeline{font:600 12px ui-monospace,monospace;letter-spacing:.5px;margin:2px 0 10px;}
 .fitpane .hgradeline.g-common{color:#8fa6ad;}
@@ -940,7 +1056,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 /* --- short viewports (landscape phones, split-screen): overlays scroll instead of
    clipping off-screen; the welcome card compacts and stacks its chip/footer in-flow --- */
 @media (max-height:680px){
-  #connect,#setup,#codex,#playercard,#warprompt,#diplo,#splitdlg,#pingmenu{
+  #connect,#setup,#codex,#playercard,#settings,#warprompt,#diplo,#splitdlg,#pingmenu{
     align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   #connect{padding:14px 18px;}
   #connect .cwrap{display:flex;flex-direction:column;margin:auto;}
@@ -969,7 +1085,28 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   text-shadow:0 0 14px rgba(53,214,230,.45);}
 #hub .hub-id{flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);}
 #hub .hub-av{width:42px;height:42px;border-radius:50%;border:1px solid var(--line-hi);background:rgba(3,12,16,.8);
-  display:grid;place-items:center;color:var(--cyan);font-size:17px;flex:0 0 auto;box-shadow:inset 0 0 10px rgba(53,214,230,.1);}
+  display:grid;place-items:center;color:var(--cyan);font-size:17px;flex:0 0 auto;box-shadow:inset 0 0 10px rgba(53,214,230,.1);
+  cursor:pointer;position:relative;font-variant-emoji:text;}
+#hub .hub-av:hover{border-color:var(--cyan);box-shadow:inset 0 0 12px rgba(53,214,230,.22),0 0 12px rgba(53,214,230,.2);}
+/* a tiny pencil badge hints the avatar is editable (pick your emblem) */
+#hub .hub-av::after{content:"✎";position:absolute;right:-3px;bottom:-3px;width:16px;height:16px;border-radius:50%;
+  background:var(--cyan);color:#04141c;font-size:9px;display:grid;place-items:center;box-shadow:0 0 8px rgba(53,214,230,.6);}
+/* emblem picker — a small console modal opened from the hub avatar */
+#emblempick{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(1,5,9,.72);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);padding:20px;}
+#emblempick.show{display:flex;}
+#emblempick .ep-box{width:min(340px,92vw);background:var(--glass);border:1px solid var(--line-hi);border-radius:14px;
+  box-shadow:0 0 30px rgba(0,0,0,.6),inset 0 0 30px rgba(53,214,230,.05);overflow:hidden;}
+#emblempick .ep-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;
+  border-bottom:1px solid var(--line);color:var(--cyan);letter-spacing:2px;font:700 13px ui-monospace,monospace;}
+#emblempick .ep-head button{background:transparent;border:0;color:var(--dim);font-size:16px;cursor:pointer;}
+#emblempick .ep-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px;}
+#emblempick .ep-cell{aspect-ratio:1;display:grid;place-items:center;font-size:24px;cursor:pointer;font-variant-emoji:text;
+  color:var(--cyan);background:rgba(3,12,16,.6);border:1px solid var(--line-hi);border-radius:10px;
+  text-shadow:0 0 8px rgba(53,214,230,.4);transition:background .12s,border-color .12s;}
+#emblempick .ep-cell:hover{background:rgba(53,214,230,.12);}
+#emblempick .ep-cell.sel{border-color:var(--cyan);background:rgba(53,214,230,.18);
+  box-shadow:inset 0 0 12px rgba(53,214,230,.25),0 0 10px rgba(53,214,230,.3);}
 #hub .hub-who{flex:1;min-width:0;}
 #hub .hub-name{font-size:15px;color:#eafffb;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #hub .hub-st{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);margin-top:3px;}
@@ -1109,6 +1246,7 @@ const html = `<!doctype html>
 <canvas id="map"></canvas>
 <header id="top">
   <div class="crest">
+    <button id="crestmark" title="Ваш профиль" type="button">◆</button>
     <div class="who"><b>VOID DOMINION</b><span>SECTOR COMMAND</span></div>
   </div>
   <div id="purse"></div>
@@ -1117,19 +1255,27 @@ const html = `<!doctype html>
 <!-- slim left rail: only the wired tools (each opens its window). More icons land here as
      features get wired. -->
 <nav id="rail">
-  <button id="rail-diplo" title="Дипломатия" data-i18n-title>⬡</button>
-  <button id="rail-msgs" title="Сообщения" data-i18n-title>✉<b id="msgbadge" class="railbadge" style="display:none"></b></button>
-  <button id="rail-tech" title="Технологии" data-i18n-title>⚛</button>
-  <button id="rail-market" title="Рынок" data-i18n-title>⇄</button>
-  <button id="railcorp" title="Корпорация" data-i18n-title>⬢</button>
-  <button id="rail-chat" title="Чат" data-i18n-title class="desk-only">🗨</button>
-  <button id="rail-log" title="Сводки" data-i18n-title>≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+  <div id="railtools">
+    <button id="rail-diplo" title="Дипломатия" data-i18n-title>⬡</button>
+    <button id="rail-msgs" title="Сообщения" data-i18n-title>✉<b id="msgbadge" class="railbadge" style="display:none"></b></button>
+    <button id="rail-tech" title="Технологии" data-i18n-title>⚛</button>
+    <button id="rail-steward" title="Хранитель — передать ИИ на сон" data-i18n-title>😴</button>
+    <button id="rail-market" title="Рынок" data-i18n-title>⇄</button>
+    <button id="railcorp" title="Корпорация" data-i18n-title>⬢</button>
+    <button id="rail-chat" title="Чат" data-i18n-title class="desk-only">🗨</button>
+    <button id="rail-log" title="Сводки" data-i18n-title>≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+  </div>
+  <button id="railtoggle" title="Инструменты" type="button" aria-expanded="false"><span id="railglyph">☰</span><span class="badge" id="railalert" style="display:none">0</span></button>
 </nav>
 <!-- floating chat window (desktop only) — content rendered by renderChat() in main.ts -->
 <div id="chatwin" class="desk-only"></div>
 <div id="logwin"><div class="lwbox"><div class="lw-head"><b data-i18n>СВОДКИ</b><button class="lw-close">✕</button></div><div id="log"></div></div></div>
 <!-- technologies window — content rendered by renderTech() in main.ts -->
 <div id="tech"><div class="twbox"><div class="lw-head"><b data-i18n>ТЕХНОЛОГИИ</b><button class="tw-close">✕</button></div><div id="techbody"></div></div></div>
+<!-- steward («Хранитель») window — content rendered by renderSteward() in main.ts -->
+<div id="steward"><div class="twbox"><div class="lw-head"><b data-i18n>ХРАНИТЕЛЬ · ИИ НА СОН</b><button class="tw-close">✕</button></div><div id="stewardbody"></div></div></div>
+<!-- scientist council picker (setup-time, before the start-point) — rendered by renderSciPick() -->
+<div id="scipick"><div class="twbox"><div class="lw-head"><b data-i18n>СОВЕТ УЧЁНЫХ · ВЫБОР НАВСЕГДА</b><button class="sp-cancel" type="button" data-i18n>↩ В меню</button></div><div id="scipickbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
 <aside id="side"></aside>
@@ -1142,6 +1288,7 @@ const html = `<!doctype html>
 <div id="cmdbar"></div>
 <div id="codex"></div>
 <div id="playercard"></div>
+<div id="settings"></div>
 <div id="warprompt"></div>
 <div id="diplo"></div>
 <div id="pingpop"></div>
@@ -1219,7 +1366,7 @@ const html = `<!doctype html>
     <div class="hub-bt">VOID DOMINION</div>
   </div>
   <div class="hub-id">
-    <div class="hub-av">◆</div>
+    <div class="hub-av" id="hubav" title="Сменить эмблему">◆</div>
     <div class="hub-who">
       <div class="hub-name" id="hub-name">Командир</div>
       <div class="hub-st" data-i18n>в сети</div>
@@ -1249,6 +1396,7 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
+        <button class="hub-tile" id="hub-settings" type="button"><span class="ht-ic">⚙</span><span data-i18n>Настройки</span></button>
         <button class="hub-tile" data-more="Аккаунт" type="button"><span class="ht-ic">◉</span><span data-i18n>Аккаунт</span></button>
         <button class="hub-tile" data-more="Сообщество" type="button"><span class="ht-ic">◍</span><span data-i18n>Сообщество</span></button>
         <button class="hub-tile" data-more="Поддержка" type="button"><span class="ht-ic">⚠</span><span data-i18n>Поддержка</span></button>
@@ -1266,6 +1414,12 @@ const html = `<!doctype html>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span><span data-i18n>Альянсы</span></button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span><span data-i18n>Ещё</span></button>
   </nav>
+</div>
+<div id="emblempick">
+  <div class="ep-box">
+    <div class="ep-head"><b>ВЫБОР ЭМБЛЕМЫ</b><button id="ep-close" type="button" aria-label="Закрыть">✕</button></div>
+    <div class="ep-grid" id="ep-grid"></div>
+  </div>
 </div>
 <div id="corp">
   <div class="corpbox">
@@ -1285,7 +1439,6 @@ const html = `<!doctype html>
 <div id="setup">
   <div class="sbox">
     <div class="stitle"><span class="dia"></span><b data-i18n>НАСТРОЙКА СХВАТКИ</b></div>
-    <div class="stabs"><button data-stab="start" class="on" data-i18n>Старт</button><button data-stab="div" data-i18n>Дивизии</button><button data-stab="hero" data-i18n>Герои</button><button data-stab="ship" data-i18n>Верфь</button></div>
     <div id="setup-start" class="spane">
       <p class="ssub" data-i18n>Выберите свой домашний мир на карте, задайте число соперников-ботов и запускайте. Пустые места займут боты — выключите место, чтобы командовать меньшим сектором, или выключите все ради мирной одиночной песочницы для знакомства с интерфейсом.</p>
       <svg id="setupmap" class="smap" preserveAspectRatio="xMidYMid meet"></svg>
@@ -1301,15 +1454,11 @@ const html = `<!doctype html>
         <button class="spdchip" type="button" data-spd="50">×50</button>
       </div>
     </div>
-    <div id="setup-div" class="spane" style="display:none"></div>
-    <div id="setup-hero" class="spane fitpane" style="display:none"></div>
-    <div id="setup-ship" class="spane fitpane" style="display:none"></div>
     <button id="setupgo" class="sgo" disabled data-i18n>ЗАПУСК</button>
     <button id="setupcancel" class="scancel" data-i18n>Назад</button>
   </div>
 </div>
 <!-- hero fitting: the module "on the cursor" — follows the pointer (heroes setup tab) -->
-<div id="heldghost"></div>
 <!-- DEV TEST MODE — content rendered by testmode.ts; delete this one line to cut the markup -->
 <div id="testmode"></div>
 <script>${js}</script>

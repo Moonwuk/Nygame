@@ -50,5 +50,16 @@
     "prerequisites": ["industrial_automation"],
     "unlocks": { "buildings": ["fabricator"] },
     "effects": { "productionBonus": 0.05 }
+  },
+  "ai_stewardship": {
+    "name": "Steward Protocol",
+    "description": "Command-automation doctrine: delegate your seat to a trusted AI while you are offline (asleep). It holds the line on a chosen posture and hands control back at a set time. Powerful — so it is gated behind choosing the command leader and only opens mid-session.",
+    "branch": "command",
+    "tier": 3,
+    "cost": { "credits": 400, "metal": 260 },
+    "researchTimeHours": 14,
+    "dayGate": 15,
+    "conditions": [{ "type": "has_scientist", "branch": "command" }],
+    "unlocks": { "abilities": ["steward"] }
   }
 }

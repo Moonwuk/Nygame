@@ -3,14 +3,17 @@ import {
   MemoryAccountStore,
   MemoryMatchStore,
   MemoryReceiptStore,
+  MemoryUserStore,
   PostgresAccountStore,
   PostgresMatchStore,
   PostgresReceiptStore,
+  PostgresUserStore,
   migrate,
   type AccountStore,
   type MatchSnapshot,
   type MatchStore,
   type ReceiptStore,
+  type UserStore,
 } from './store';
 
 /**
@@ -28,6 +31,8 @@ export interface Stores {
   /** Nick→seat identity. Durable (Postgres) alongside the match itself, so a returning
    *  nick resumes its own side after a restart — not just the match state (review #6). */
   accountStore: AccountStore;
+  /** Login+password accounts (SE-1.x) — the identity the /auth API authenticates. */
+  userStore: UserStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -40,6 +45,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       store: new MemoryMatchStore(),
       receiptStore: new MemoryReceiptStore(),
       accountStore: new MemoryAccountStore(),
+      userStore: new MemoryUserStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -53,6 +59,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     store: new PostgresMatchStore(pool),
     receiptStore: new PostgresReceiptStore(pool),
     accountStore: new PostgresAccountStore(pool), // shares the pool; closed by pool.end()
+    userStore: new PostgresUserStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

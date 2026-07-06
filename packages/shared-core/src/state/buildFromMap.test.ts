@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseGameData, type GameData } from '../data/schemas';
+import type { GameData } from '../data/schemas';
+import { loadGameData } from '../data/loadGameData';
 import { parseMatchMap, type MatchMap } from '../data/mapSchema';
 import { buildStateFromMap, validateMatchMap } from './buildFromMap';
 
@@ -10,20 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const readJson = (p: string): unknown => JSON.parse(readFileSync(path.join(repoRoot, p), 'utf8'));
 
 function shippedData(): GameData {
-  const manifest = readJson('data/manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('data/resources.json'),
-    units: readJson('data/units.json'),
-    factions: readJson('data/factions.json'),
-    buildings: readJson('data/buildings.json'),
-    events: readJson('data/events.json'),
-    sectors: readJson('data/sectors.json'),
-    sectorKinds: readJson('data/sectorKinds.json'),
-    planetTypes: readJson('data/planetTypes.json'),
-    technologies: readJson('data/technologies.json'),
-    scientists: readJson('data/scientists.json'),
-  });
+  return loadGameData((name) => readJson('data/' + name));
 }
 
 const data = shippedData();
@@ -139,8 +127,10 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slot_b: { playerId: 'p2' },
       },
     });
-    expect(state.players.p1!.scientist).toEqual({ id: 'void_admiral', level: 3 });
-    expect(state.players.p2!.scientist).toBeUndefined(); // no leader chosen
+    // Legacy single `scientist` input is seated as a one-leader council (`scientists`).
+    expect(state.players.p1!.scientists).toEqual([{ id: 'void_admiral', level: 3 }]);
+    expect(state.players.p1!.scientist).toBeUndefined(); // legacy field no longer written
+    expect(state.players.p2!.scientists).toBeUndefined(); // no leader chosen
   });
 
   it('rejects a slot assigning an unknown scientist (fail-secure at boot)', () => {
@@ -149,6 +139,42 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
         slots: { slot_a: { playerId: 'p1', scientist: 'ghost' }, slot_b: { playerId: 'p2' } },
       }),
     ).toThrow(/E_UNKNOWN_SCIENTIST/);
+  });
+
+  it('seats a 2-leader council; rejects a duplicate or a third leader (fail-secure)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        slot_a: {
+          playerId: 'p1',
+          scientists: [{ id: 'void_admiral', level: 3 }, { id: 'ground_marshal' }],
+        },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    expect(state.players.p1!.scientists).toEqual([
+      { id: 'void_admiral', level: 3 },
+      { id: 'ground_marshal', level: 1 }, // level defaults to 1
+    ]);
+    // Distinct + capped at two — fail-secure at boot.
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: {
+          slot_a: { playerId: 'p1', scientists: [{ id: 'void_admiral' }, { id: 'void_admiral' }] },
+          slot_b: { playerId: 'p2' },
+        },
+      }),
+    ).toThrow(/E_DUPLICATE_SCIENTIST/);
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: {
+          slot_a: {
+            playerId: 'p1',
+            scientists: [{ id: 'void_admiral' }, { id: 'ground_marshal' }, { id: 'polymath' }],
+          },
+          slot_b: { playerId: 'p2' },
+        },
+      }),
+    ).toThrow(/E_TOO_MANY_SCIENTISTS/);
   });
 
   it('grants pre-match technology picks as completed research (C3)', () => {

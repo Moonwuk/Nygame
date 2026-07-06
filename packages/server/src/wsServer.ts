@@ -49,6 +49,12 @@ export interface MultiplayerServerOptions {
    *  SV-2.4), after `/health` and `/ready`. Keeps this transport module generic — the
    *  routes and their dependencies live with the caller. */
   httpRoutes?: (app: FastifyInstance) => void;
+  /** Behind a reverse proxy (Caddy/Nginx terminating TLS), trust `X-Forwarded-For` so
+   *  `request.ip` is the CLIENT address, not the proxy's — without this the auth API's
+   *  per-IP rate limit would throttle every player behind the proxy as one bucket.
+   *  Only enable when a trusted proxy is actually in front (a direct client could
+   *  otherwise spoof the header to dodge per-IP limits). Default off. */
+  trustProxy?: boolean;
 }
 
 export interface MultiplayerServerHandle {
@@ -97,7 +103,11 @@ export function createMultiplayerServer(
   // later) while the real traffic is WebSocket — per-request logs would just be a flood
   // of health-poll noise. Boot/shutdown + explicit logs stay; add per-route logging where
   // it earns its keep.
-  const app = Fastify({ logger: options.logger ?? false, disableRequestLogging: true });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    disableRequestLogging: true,
+    trustProxy: options.trustProxy ?? false,
+  });
 
   // Fail-secure (invariant #4): a route handler that throws/rejects (e.g. a store fault in
   // the match API) must return a stable code with NO internal detail — Fastify's default

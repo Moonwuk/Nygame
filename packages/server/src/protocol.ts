@@ -147,6 +147,10 @@ export interface ServerWelcomeMessage extends VisibilityFields, LobbyField, Hash
    *  it in every `action.v1` envelope so a gated room can authorize the session binding.
    *  Present only when the transport bound one; absent for a bare in-process room. */
   sessionId?: string;
+  /** True when this room runs the action-layer gate: the client MUST send `action.v1`
+   *  envelopes (a bare `action` is refused). Absent/false ⇒ send bare actions. Lets the
+   *  client self-configure its send path from the handshake instead of a build-time flag. */
+  gated?: boolean;
 }
 
 export interface ServerStateMessage extends VisibilityFields, LobbyField, HashField {

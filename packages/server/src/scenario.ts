@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import {
   armyModule,
+  artilleryModule,
   captureOnArrivalModule,
   combatModule,
   constructionModule,
@@ -10,9 +11,11 @@ import {
   economyModule,
   factionModule,
   heroModule,
+  interceptModule,
   marketModule,
   movementModule,
-  parseGameData,
+  loadGameData,
+  orbitalModule,
   planetTypeModule,
   scientistModule,
   sectorModule,
@@ -40,25 +43,12 @@ import type { MatchSnapshot, StoredReceipt } from './store';
  * connect → authoritative `applyAction` → delta broadcast to every peer.
  */
 
-/** The shipped game-content bundle, composed and validated exactly like the
- *  loader in `shared-core`'s `schemas.test.ts` (A05/A08: validate before use). */
+/** The shipped game-content bundle, composed + validated by the shared `loadGameData`
+ *  (CP0.3 — one composer for server/tests/client); we only inject the Node file reader. */
 export function loadShippedData(): GameData {
-  const readJson = (name: string): unknown =>
-    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8'));
-  const manifest = readJson('manifest.json') as { version: string };
-  return parseGameData({
-    version: manifest.version,
-    resources: readJson('resources.json'),
-    units: readJson('units.json'),
-    factions: readJson('factions.json'),
-    buildings: readJson('buildings.json'),
-    events: readJson('events.json'),
-    sectors: readJson('sectors.json'),
-    sectorKinds: readJson('sectorKinds.json'),
-    planetTypes: readJson('planetTypes.json'),
-    technologies: readJson('technologies.json'),
-    scientists: readJson('scientists.json'),
-  });
+  return loadGameData((name) =>
+    JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8')),
+  );
 }
 
 /** Full base-module manifest, in a fixed order (invariant #6: execution order =
@@ -69,8 +59,15 @@ export const DEV_MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // per-player hero: redeploy, temp public lanes, planet annihilation
-  diplomacyModule, // declarations (escalation-only) + the `diplomacy` capability combat consults
-  combatModule,
+  diplomacyModule, // declarations + consent offers + the `diplomacy` capability combat consults
+  // The combat family, split along the bus seams. Order matters (invariant #6):
+  // `orbital` stamps orbit on `fleet.arrived` BEFORE `combat` engages, and runs
+  // its AA/bombard span BEFORE `artillery`'s standoff span — the exact sequence
+  // the old single module had internally.
+  orbitalModule, // the single near-orbit: stationing, AA fire, bombardment
+  combatModule, // melee battles: engage / tick / assault / retreat / capture
+  artilleryModule, // standoff fire accrual + barrage orders
+  interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)

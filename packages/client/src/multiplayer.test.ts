@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, diffState, type GameState } from '@void/shared-core';
 import {
+  authorizeActionEnvelope,
+  validateActionEnvelope,
+  type ActionEnvelope,
+} from '@void/action-layer';
+import {
   MultiplayerClient,
   type MultiplayerSnapshot,
   type MultiplayerSocket,
@@ -142,5 +147,91 @@ describe('MultiplayerClient', () => {
     // a ping.removed without a reason defaults to 'cleared'
     client.receive(JSON.stringify({ type: 'ping.removed', matchId: 'm', pingId: 'ping:p2:4' }));
     expect(removed[1]).toEqual(['ping:p2:4', 'cleared']);
+  });
+});
+
+// SV-1.1 bridge — on a GATED room the client wraps intents in `action.v1` envelopes so
+// the server's action-layer gate admits them. These prove the client speaks exactly what
+// the gate accepts by running its output through the SAME validate + authorize the gate does.
+function gatedWelcome(state: GameState, sessionId: string, seq = 0): string {
+  return JSON.stringify({
+    type: 'welcome',
+    matchId: 'm',
+    playerId: 'p1',
+    seq,
+    serverTime: 0,
+    state,
+    sessionId,
+    gated: true,
+  });
+}
+const orbit = (): Parameters<MultiplayerClient['sendAction']>[0] => ({
+  id: 'client-picks-this',
+  type: 'fleet.orbit',
+  playerId: 'p1',
+  payload: { fleetId: 'f', orbit: 'near' },
+  issuedAt: 1234,
+});
+
+describe('MultiplayerClient · gated envelope path (SV-1.1)', () => {
+  it('wraps actions in an action.v1 envelope the gate validates + authorizes', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket, {});
+    client.receive(gatedWelcome(baseState(10), 'sess-A'));
+
+    client.sendAction(orbit());
+    client.sendAction(orbit());
+
+    const first = JSON.parse(socket.sent[0] ?? '{}') as { type: string; envelope: ActionEnvelope };
+    expect(first.type).toBe('action.v1');
+    expect(first.envelope).toMatchObject({
+      schemaVersion: 1,
+      matchId: 'm',
+      playerId: 'p1',
+      sessionId: 'sess-A',
+      clientSeq: 1,
+      actionId: 'sess-A:p1:1', // sessionId:playerId:clientSeq — the key the gate dedups on
+      issuedAt: 1234,
+      action: { type: 'fleet.orbit', playerId: 'p1', payload: { fleetId: 'f', orbit: 'near' } },
+    });
+    // clientSeq is strict 1,2,… per session.
+    const second = JSON.parse(socket.sent[1] ?? '{}') as { envelope: ActionEnvelope };
+    expect(second.envelope.clientSeq).toBe(2);
+    expect(second.envelope.actionId).toBe('sess-A:p1:2');
+
+    // End-to-end contract: the emitted envelope passes the exact gates the server runs.
+    const validated = validateActionEnvelope(first.envelope);
+    expect(validated.ok).toBe(true);
+    const authorized = authorizeActionEnvelope(first.envelope, {
+      matchId: 'm',
+      playerId: 'p1',
+      sessionId: 'sess-A',
+    });
+    expect(authorized.ok).toBe(true);
+  });
+
+  it('falls back to a bare action when the room is not gated', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket, {});
+    // welcome with a sessionId but NO gated flag ⇒ bare action (un-gated room).
+    client.receive(
+      JSON.stringify({ type: 'welcome', matchId: 'm', playerId: 'p1', seq: 0, serverTime: 0, state: baseState(10), sessionId: 'sess-A' }),
+    );
+    client.sendAction(orbit());
+    expect(JSON.parse(socket.sent[0] ?? '{}')).toMatchObject({ type: 'action', action: { type: 'fleet.orbit' } });
+  });
+
+  it('restarts clientSeq on a fresh session (reconnect mints a new sessionId)', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket, {});
+    client.receive(gatedWelcome(baseState(10), 'sess-A'));
+    client.sendAction(orbit()); // clientSeq 1 under sess-A
+
+    client.receive(gatedWelcome(baseState(10), 'sess-B')); // reconnect → new session
+    client.sendAction(orbit());
+    const env = (JSON.parse(socket.sent[1] ?? '{}') as { envelope: ActionEnvelope }).envelope;
+    expect(env.sessionId).toBe('sess-B');
+    expect(env.clientSeq).toBe(1); // reset, not 2
+    expect(env.actionId).toBe('sess-B:p1:1');
   });
 });

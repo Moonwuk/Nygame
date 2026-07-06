@@ -19,6 +19,11 @@ export interface MatchStore {
   /** Upsert the snapshot. Optimistic by `seq`: a save with an older `seq` than the
    *  stored one is a no-op, so a late write can't clobber fresher state. */
   save(snapshot: MatchSnapshot): Promise<void>;
+  /** Ids of every match still `ongoing` (not ended). Cheap — reads the normalized
+   *  `status` column (never the JSONB blob), so the match factory and the open-matches
+   *  feed can enumerate joinable matches without loading each snapshot. Restart-safe:
+   *  it reflects what is durably in the store, not just the rooms live in memory. */
+  ongoingMatchIds(): Promise<string[]>;
   /** Cheap reachability check for the `/ready` probe (SV-0.1): true if the backing
    *  store is reachable (a `SELECT 1` for Postgres). Absent ⇒ assumed reachable
    *  (in-memory has no dependency to be down). */
@@ -50,6 +55,28 @@ export interface AccountStore {
   /** Read-only: how many seats are currently claimed in a room (occupied count), for
    *  the browser's "players X/Y" status line. */
   occupiedSeats(room: string): Promise<number>;
+  close?(): Promise<void>;
+}
+
+/** A stored account: identity for the login+password authentication (SE-1.x). */
+export interface UserRecord {
+  userId: string;
+  /** The login as the user typed it at registration (display form). Uniqueness is
+   *  CASE-INSENSITIVE — `Vasya` and `vasya` are the same account. */
+  login: string;
+  /** Password hash in the self-describing `scrypt$…` format (see password.ts). */
+  passHash: string;
+}
+
+/** Accounts for login+password auth. Lookup is case-insensitive on `login`. */
+export interface UserStore {
+  /** Create an account; fail-secure duplicate handling: an existing login (any case)
+   *  → `E_LOGIN_TAKEN`, never an overwrite. */
+  createUser(
+    login: string,
+    passHash: string,
+  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }>;
+  findUser(login: string): Promise<UserRecord | null>;
   close?(): Promise<void>;
 }
 

@@ -1,6 +1,13 @@
 import { ActionGate } from '@void/action-layer';
 import { isValidActionPayload } from '@void/shared-core';
-import { hmacSecret, signJoinToken, type JoinTokenVerifyConfig } from './auth';
+import {
+  hmacSecret,
+  signJoinToken,
+  signSessionToken,
+  verifySessionToken,
+  type JoinTokenVerifyConfig,
+  type SessionTokenResult,
+} from './auth';
 
 /**
  * The server's security composition, derived from the environment — extracted from the
@@ -19,7 +26,13 @@ export interface ServerConfig {
   auth?: JoinTokenVerifyConfig;
   allowedOrigins?: string[];
   /** Mint a join token for a seat (the /join API). Present iff auth is configured. */
-  signToken?: (matchId: string, playerId: string) => Promise<string>;
+  signToken?: (matchId: string, playerId: string, accountId?: string) => Promise<string>;
+  /** Mint a session token for an authenticated account (the /auth API). Present iff
+   *  auth is configured — same secret, but a distinct `typ` + audience, so session and
+   *  join tokens can never be replayed as each other. */
+  signSession?: (accountId: string, login: string) => Promise<string>;
+  /** Verify a session token (the identity gate on /matches routes). Present iff auth. */
+  verifySession?: (token: string) => Promise<SessionTokenResult>;
   /** Build a fresh per-match ActionGate. Present iff GATE is enabled. */
   gateFactory?: () => ActionGate;
 }
@@ -27,6 +40,8 @@ export interface ServerConfig {
 /** Join tokens ride in the WS URL, so keep the leaked-token window small; the verify side
  *  also caps age from `iat` (maxTokenAgeSec) as defence-in-depth. */
 const JOIN_TOKEN_TTL_SEC = 15 * 60;
+/** Sessions are the "stay logged in" credential — days, not minutes. Env-tunable. */
+const SESSION_TTL_SEC_DEFAULT = 7 * 24 * 3600;
 
 export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
   const authSecret = env.AUTH_JWT_SECRET;
@@ -37,12 +52,34 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
     ? { key: hmacSecret(authSecret), algorithms: ['HS256'], issuer, audience, maxTokenAgeSec: JOIN_TOKEN_TTL_SEC }
     : undefined;
   const signToken = authSecret
-    ? (matchId: string, playerId: string): Promise<string> =>
+    ? (matchId: string, playerId: string, accountId?: string): Promise<string> =>
         signJoinToken(
-          { matchId, playerId },
+          accountId ? { matchId, playerId, accountId } : { matchId, playerId },
           { key: hmacSecret(authSecret), algorithm: 'HS256', issuer, audience },
           { ttlSeconds: JOIN_TOKEN_TTL_SEC },
         )
+    : undefined;
+
+  // Session tokens: same key, DIFFERENT audience (+ a different pinned typ in auth.ts) —
+  // a session can't be replayed as a join token or vice versa.
+  const sessionAudience = env.AUTH_SESSION_AUDIENCE ?? 'session';
+  const sessionTtlSec = Number(env.SESSION_TTL_SEC ?? '') || SESSION_TTL_SEC_DEFAULT;
+  const signSession = authSecret
+    ? (accountId: string, login: string): Promise<string> =>
+        signSessionToken(
+          { accountId, login },
+          { key: hmacSecret(authSecret), algorithm: 'HS256', issuer, audience: sessionAudience },
+          { ttlSeconds: sessionTtlSec },
+        )
+    : undefined;
+  const verifySession = authSecret
+    ? (token: string): Promise<SessionTokenResult> =>
+        verifySessionToken(token, {
+          key: hmacSecret(authSecret),
+          algorithms: ['HS256'],
+          issuer,
+          audience: sessionAudience,
+        })
     : undefined;
 
   const allowedOrigins = env.ALLOWED_ORIGINS
@@ -55,5 +92,5 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
     ? (): ActionGate => new ActionGate({ payloadValidator: isValidActionPayload })
     : undefined;
 
-  return { auth, allowedOrigins, signToken, gateFactory };
+  return { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory };
 }

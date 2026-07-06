@@ -29,16 +29,17 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
       message: 'fleet.move needs a `to` node or a `toEdge`',
     }),
   'fleet.stop': z.object({ fleetId: id }),
-  // combat.ts
+  // orbital.ts
   'fleet.orbit': z.object({ fleetId: id, orbit: z.literal('near') }), // a single orbit (GDD §7.4)
-  'fleet.assault': z.object({ fleetId: id }),
   'fleet.bombard': z.object({ fleetId: id, on: z.boolean() }),
-  // artillery focus-fire: a hostile fleet id, or null/absent to resume auto-targeting
+  // artillery.ts — focus-fire: a hostile fleet id, or null/absent to resume auto-targeting
   'fleet.barrage': z.object({ fleetId: id, targetId: id.nullish() }),
   'fleet.barrageMode': z.object({
     fleetId: id,
     mode: z.enum(['passive', 'return', 'standard', 'aggressive']),
   }),
+  // combat.ts (melee battles)
+  'fleet.assault': z.object({ fleetId: id }),
   'fleet.retreat': z.object({ fleetId: id }),
   // army.ts
   'army.load': z.object({ fleetId: id, unit: id, count: count.optional() }),

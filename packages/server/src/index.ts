@@ -28,22 +28,32 @@ export {
 export {
   registerBrowserApi,
   registerMatchApi,
+  registerOpenMatchesFeed,
   type CreatedMatch,
   type JoinFailure,
   type JoinResult,
   type MatchApiDeps,
+  type OpenMatch,
+  type OpenMatchesFeedDeps,
 } from './matchApi';
+export { MatchKeeper, type MatchKeeperOptions } from './matchFactory';
 export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export {
   hmacSecret,
   signJoinToken,
+  signSessionToken,
   verifyJoinToken,
+  verifySessionToken,
   type JoinClaim,
   type JoinTokenResult,
   type JoinTokenSignConfig,
   type JoinTokenVerifyConfig,
+  type SessionClaim,
+  type SessionTokenResult,
   type VerifyKey,
 } from './auth';
+export { registerAuthApi, type AuthApiDeps } from './authApi';
+export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {
   ClientActionMessage,
   ClientActionEnvelopeMessage,
@@ -65,11 +75,15 @@ export {
   type ReceiptStore,
   type SeatAssignment,
   type StoredReceipt,
+  type UserRecord,
+  type UserStore,
   MemoryAccountStore,
   MemoryMatchStore,
   MemoryReceiptStore,
+  MemoryUserStore,
   migrate,
   PostgresAccountStore,
   PostgresMatchStore,
   PostgresReceiptStore,
+  PostgresUserStore,
 } from './store';

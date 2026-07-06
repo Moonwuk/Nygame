@@ -4,6 +4,8 @@ import {
   order,
   advance,
   mobilizeDivision,
+  setDivisionTemplate,
+  templatesOf,
   loadDivision,
   unloadDivision,
   setDivisionOfficer,
@@ -39,7 +41,7 @@ function inject(
   s: GameState,
   owner: string,
   location: string,
-  counts: Partial<Record<'infantry' | 'tank' | 'bomber' | 'aa', number>>,
+  counts: Partial<Record<'infantry' | 'tank', number>>,
 ): string {
   const divs = divisionsOf(s);
   const seq = Object.keys(divs).length + 1;
@@ -64,6 +66,32 @@ function ownedWorld(s: GameState, owner: string): string {
   w.garrison = [];
   return w.id;
 }
+
+describe('divisions — in-match template assembly (сбор шаблона)', () => {
+  it('edits a template slot in-match and the edit rides into the mobilised division', () => {
+    let s = richGame();
+    // Линия = [inf,inf,inf,inf,tank,tank]; retool slot 0 (infantry) → tank.
+    s = order(s, setDivisionTemplate('p1', 0, 0, 'tank'), 0).state;
+    expect(templatesOf(s, 'p1')[0]!.slots[0]).toBe('tank');
+    const r = order(s, mobilizeDivision('p1', HOME, 0), s.time);
+    expect(r.error).toBeUndefined();
+    const div = Object.values(divisionsOf(r.state)).find((d) => d.owner === 'p1')!;
+    expect(div.max.tank).toBe(3); // slots 4,5 tanks + slot 0 (now tank)
+    expect(div.max.infantry).toBe(3); // slots 1,2,3 still infantry
+  });
+
+  it('editing is per-player and does not touch the shared defaults', () => {
+    const s = order(richGame(), setDivisionTemplate('p1', 1, 0, null), 0).state;
+    expect(templatesOf(s, 'p1')[1]!.slots[0]).toBe(null);
+    expect(templatesOf(s, 'p2')[1]!.slots[0]).not.toBe(null); // p2 still on the defaults
+  });
+
+  it('rejects a bad slot, unknown unit, or missing template', () => {
+    expect(order(richGame(), setDivisionTemplate('p1', 0, 9, 'tank'), 0).error).toBe('E_BAD_PAYLOAD');
+    expect(order(richGame(), setDivisionTemplate('p1', 0, 0, 'jetpack'), 0).error).toBe('E_BAD_PAYLOAD');
+    expect(order(richGame(), setDivisionTemplate('p1', 9, 0, 'tank'), 0).error).toBe('E_NO_TEMPLATE');
+  });
+});
 
 describe('divisions — mobilisation', () => {
   it('mobilises a full-strength division on an owned world and charges the cost', () => {
@@ -93,7 +121,7 @@ describe('divisions — daily restoration on a friendly planet', () => {
     const r = order(richGame(), mobilizeDivision('p1', HOME, 0), 0);
     const st = r.state;
     const id = Object.keys(divisionsOf(st))[0]!;
-    // Damage it: one battered infantryman left, tank + bomber wiped.
+    // Damage it: one battered infantryman left, the tank slots wiped.
     divisionsOf(st)[id]!.units = [{ type: 'infantry', count: 1, hp: 5, hpEach: GROUND_ROSTER.infantry!.hp }];
     const after = divisionsOf(advance(st, st.time + 10 * DAY).state)[id]!;
     expect(total(after.units)).toBeGreaterThan(1); // healed + regrew
@@ -123,18 +151,18 @@ describe('divisions — daily restoration on a friendly planet', () => {
 
 describe('divisions — transport (по грузоподъёмности)', () => {
   it('loads a division into a co-located fleet, billing its cargo footprint', () => {
-    // Two Линия (cargo 9 each) but the home fleet (p1-1) holds 11 → only one fits.
+    // Two Линия (cargo 10 each) but the home fleet (p1-1) holds 11 → only one fits.
     let st = order(richGame(), mobilizeDivision('p1', HOME, 0), 0).state;
     st = order(st, mobilizeDivision('p1', HOME, 0), st.time).state;
-    st.fleets['p1-1']!.landing = []; // clear any seeded landing so the hold is the ships' full 11
+    st.fleets['p1-1']!.landing = []; // start from an empty hold so it's the ships' full 11
     const [a, b] = Object.keys(divisionsOf(st));
-    expect(divisionCargo(divisionsOf(st)[a!]!)).toBe(9); // 4×1 + 1×3 + 1×2
+    expect(divisionCargo(divisionsOf(st)[a!]!)).toBe(10); // 4×1 + 2×3
     expect(fleetCargoFree(st, st.fleets['p1-1']!)).toBe(11); // 2 cruisers (5) + scout (1)
 
     const r1 = order(st, loadDivision('p1', a!, 'p1-1'), st.time);
     expect(r1.error).toBeUndefined();
     expect(divisionsOf(r1.state)[a!]!.carriedBy).toBe('p1-1');
-    expect(fleetCargoFree(r1.state, r1.state.fleets['p1-1']!)).toBe(2); // 11 − 9
+    expect(fleetCargoFree(r1.state, r1.state.fleets['p1-1']!)).toBe(1); // 11 − 10
 
     const r2 = order(r1.state, loadDivision('p1', b!, 'p1-1'), r1.state.time);
     expect(r2.error).toBe('E_NO_CARGO'); // the second division doesn't fit

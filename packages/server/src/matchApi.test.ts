@@ -64,4 +64,36 @@ describe('SV-2.4 · match API', () => {
       await app.close();
     }
   });
+
+  it('rate-limits create+join per IP over a shared window (429 past the cap)', async () => {
+    const app = appWith({
+      createMatch: () => Promise.resolve({ matchId: 'm', seats: [] }),
+      join: (_matchId, nick) => Promise.resolve({ playerId: 'green', token: `tok:${nick}` }),
+      now: () => 1_000, // frozen clock → all attempts fall in one window
+      rateMax: 2, // create+join share the budget
+    });
+    // Two attempts pass (one create, one join), the third is throttled.
+    expect((await app.inject({ method: 'POST', url: '/matches' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/matches/m/join?nick=a' })).statusCode).toBe(200);
+    const throttled = await app.inject({ method: 'POST', url: '/matches' });
+    expect(throttled.statusCode).toBe(429);
+    expect(throttled.json()).toEqual({ error: 'E_RATE_LIMIT' });
+    await app.close();
+  });
+
+  it('a fresh window clears the throttle', async () => {
+    let clock = 0;
+    const app = appWith({
+      createMatch: () => Promise.resolve({ matchId: 'm', seats: [] }),
+      join: denyJoin,
+      now: () => clock,
+      rateMax: 1,
+      rateWindowMs: 1_000,
+    });
+    expect((await app.inject({ method: 'POST', url: '/matches' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/matches' })).statusCode).toBe(429);
+    clock = 1_000; // window elapsed → budget refills
+    expect((await app.inject({ method: 'POST', url: '/matches' })).statusCode).toBe(200);
+    await app.close();
+  });
 });

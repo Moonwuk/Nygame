@@ -9,6 +9,7 @@ import { hoursToMs, timeScaleOf } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { canAfford, payCost } from '../util/treasury';
 import { addUnits } from '../util/stacks';
+import { effectiveStats, loadoutCost, validateLoadout } from '../util/loadout';
 
 /** Share of the ground assault's round damage that also wears down the planet's
  *  structures (the rest is spent on the defending garrison). Tunable. */
@@ -22,6 +23,10 @@ interface BuildUnitPayload {
   planetId: string;
   unit: string;
   count?: number;
+  /** Ship modules to install on the built stack (loadout). Validated against the
+   *  hull's slots at order time, paid for up-front, then LOCKED onto the stack —
+   *  there is no refit action. Absent/empty = a bare hull. */
+  modules?: string[];
 }
 /** Payload of the internal `construction.complete` schedule (we author it, so
  *  it is well-formed; the handler still guards types and is fail-secure). */
@@ -33,10 +38,18 @@ interface CompletePayload {
   unit?: string;
   count?: number;
   level?: number;
+  modules?: string[];
 }
 interface ConstructionRequirement {
   allowed: boolean;
   code?: string;
+}
+
+/** Sum two resource bags (`a + b`), for hull + loadout costs. */
+function sumBags(a: ResourceBag, b: ResourceBag): ResourceBag {
+  const out: Record<string, number> = { ...a };
+  for (const [res, amt] of Object.entries(b)) out[res] = (out[res] ?? 0) + amt;
+  return out;
 }
 
 /** `cost × count`, for multi-unit orders. */
@@ -283,7 +296,20 @@ export const constructionModule: GameModule = {
         return h.reject('E_UNKNOWN_UNIT');
       }
       requireUnlocked(h, action.playerId, 'unit', payload.unit);
-      const cost = scaleCost(def.cost, count);
+      const modules = payload.modules;
+      if (modules !== undefined) {
+        if (!Array.isArray(modules) || !modules.every((m) => typeof m === 'string')) {
+          return h.reject('E_BAD_PAYLOAD');
+        }
+        const valid = validateLoadout(payload.unit, def, modules, h.ctx.data);
+        if (!valid.ok) return h.reject(valid.code);
+      }
+      // The loadout is paid up-front with the hull and locked onto the built stack.
+      const perShip =
+        modules && modules.length > 0
+          ? sumBags(def.cost, loadoutCost(modules, h.ctx.data))
+          : def.cost;
+      const cost = scaleCost(perShip, count);
       if (!canAfford(player.resources, cost)) {
         return h.reject('E_INSUFFICIENT');
       }
@@ -294,6 +320,7 @@ export const constructionModule: GameModule = {
         playerId: action.playerId,
         unit: payload.unit,
         count,
+        ...(modules && modules.length > 0 ? { modules } : {}),
       });
       h.emit('construction.started', {
         kind: 'unit',
@@ -350,12 +377,13 @@ export const constructionModule: GameModule = {
           owner: p.playerId,
         });
       } else if (p.kind === 'unit' && typeof p.unit === 'string' && typeof p.count === 'number') {
-        addUnits(planet.garrison, p.unit, p.count);
+        addUnits(planet.garrison, p.unit, p.count, p.modules);
         h.emit('unit.built', {
           planetId: planet.id,
           unit: p.unit,
           count: p.count,
           owner: p.playerId,
+          ...(p.modules && p.modules.length > 0 ? { modules: p.modules } : {}),
         });
       }
     });
@@ -450,7 +478,7 @@ export const constructionModule: GameModule = {
         for (const stack of planet.garrison) {
           const unitDef = data.units[stack.unit];
           if (!unitDef) continue;
-          const fullHp = stack.count * unitDef.stats.hp;
+          const fullHp = stack.count * (effectiveStats(unitDef, stack, data).hp ?? 0);
           const currentHp = stack.hp ?? fullHp;
           if (currentHp >= fullHp) continue;
           const healed = totalHealRate * hours * fullHp;
@@ -493,7 +521,7 @@ export const constructionModule: GameModule = {
 
           // Hull (`hp`): friendly-port repair only, never a free regen.
           if (stack.hp !== undefined) {
-            const fullHp = stack.count * unitDef.stats.hp;
+            const fullHp = stack.count * (effectiveStats(unitDef, stack, data).hp ?? 0);
             if (fullHp <= 0 || stack.hp >= fullHp) stack.hp = undefined;
             else if (hullRate > 0) {
               const cur = Math.min(fullHp, stack.hp + hullRate * hours * fullHp);
@@ -503,7 +531,7 @@ export const constructionModule: GameModule = {
 
           // Shield (`shieldHp`): free out-of-combat regen once past the damage delay.
           if (stack.shieldHp !== undefined) {
-            const fullShield = stack.count * unitDef.stats.shield;
+            const fullShield = stack.count * (effectiveStats(unitDef, stack, data).shield ?? 0);
             if (fullShield <= 0 || stack.shieldHp >= fullShield) stack.shieldHp = undefined;
             else if (shieldHours > 0) {
               const cur = Math.min(fullShield, stack.shieldHp + SHIELD_REGEN * shieldHours * fullShield);

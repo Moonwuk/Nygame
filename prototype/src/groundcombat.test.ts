@@ -57,16 +57,16 @@ describe('ground combat — matrix damage weighted by target composition', () =>
     expect(out13.tank).toBeCloseTo(out12.tank!); // the 13th infantry adds no firepower
   });
 
-  it('the 12 firing slots go to the units MOST EFFECTIVE vs the enemy (AA fires at bombers)', () => {
-    // 12 infantry (our anti-air) + 12 tanks defend; 12 bombers attack. Only the infantry
-    // return fire — they out-rank the tanks against bombers; the tanks are benched.
-    const defenders = makeSide(GROUND_ROSTER, { infantry: 12, tank: 12 });
-    const bombers = makeSide(GROUND_ROSTER, { bomber: 12 });
-    const mixed = damageBuckets(GROUND_ROSTER, defenders, bombers, 'def').bomber!;
-    const infOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { infantry: 12 }), bombers, 'def').bomber!;
-    const tankOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { tank: 12 }), bombers, 'def').bomber!;
-    expect(mixed).toBeCloseTo(infOnly); // infantry do all the firing
-    expect(mixed).not.toBeCloseTo(tankOnly); // tanks (poor vs air) sit in reserve
+  it('the 12 firing slots go to the units MOST EFFECTIVE vs the enemy (best counter fires)', () => {
+    // 12 tanks + 12 infantry defend; 12 tanks attack. Only the tanks return fire — they
+    // out-rank infantry against armour; the infantry sit in reserve.
+    const defenders = makeSide(GROUND_ROSTER, { tank: 12, infantry: 12 });
+    const enemy = makeSide(GROUND_ROSTER, { tank: 12 });
+    const mixed = damageBuckets(GROUND_ROSTER, defenders, enemy, 'def').tank!;
+    const tankOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { tank: 12 }), enemy, 'def').tank!;
+    const infOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { infantry: 12 }), enemy, 'def').tank!;
+    expect(mixed).toBeCloseTo(tankOnly); // tanks do all the firing
+    expect(mixed).not.toBeCloseTo(infOnly); // infantry (poorer vs armour) sit in reserve
   });
 
   it('vs an infantry enemy the best counter (tanks) fills the slots first', () => {
@@ -76,23 +76,9 @@ describe('ground combat — matrix damage weighted by target composition', () =>
     expect(out.infantry).toBeCloseTo(exp); // not all 10 infantry fire — 3 are bumped to reserve
   });
 
-  it('AA hard-counters bombers and out-ranks ground types vs air', () => {
-    const bombers = makeSide(GROUND_ROSTER, { bomber: 1 });
-    const aaDmg = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 1 }), bombers, 'atk').bomber!;
-    const tankDmg = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { tank: 1 }), bombers, 'atk').bomber!;
-    expect(aaDmg).toBeGreaterThan(tankDmg * 3); // AA dwarfs a tank against air
-    // In a mixed AA+tank army vs bombers, only the AA fire (most effective).
-    const mix = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 12, tank: 12 }), makeSide(GROUND_ROSTER, { bomber: 12 }), 'atk').bomber!;
-    const aaOnly = damageBuckets(GROUND_ROSTER, makeSide(GROUND_ROSTER, { aa: 12 }), makeSide(GROUND_ROSTER, { bomber: 12 }), 'atk').bomber!;
-    expect(mix).toBeCloseTo(aaOnly);
-  });
-
-  it('resolves the counter web: tank > infantry, bomber > tank, AA > bomber, tank > AA', () => {
-    const six = (u: 'infantry' | 'tank' | 'bomber' | 'aa') => makeSide(GROUND_ROSTER, { [u]: 6 });
+  it('resolves the counter web: tanks overrun infantry', () => {
+    const six = (u: 'infantry' | 'tank') => makeSide(GROUND_ROSTER, { [u]: 6 });
     expect(resolveGround(GROUND_ROSTER, six('tank'), six('infantry')).winner).toBe('attacker'); // tanks crush infantry
-    expect(resolveGround(GROUND_ROSTER, six('bomber'), six('tank')).winner).toBe('attacker'); // bombers kill tanks
-    expect(resolveGround(GROUND_ROSTER, six('aa'), six('bomber')).winner).toBe('attacker'); // AA shreds bombers
-    expect(resolveGround(GROUND_ROSTER, six('tank'), six('aa')).winner).toBe('attacker'); // tanks overrun AA on the ground
   });
 
   it('kills whole units as the HP pool drops, and ends with a winner', () => {

@@ -15,7 +15,7 @@ describe('formationStats — division template = Σ slots × composition synergy
   it('sums the slots and excludes empty ones', () => {
     const f = formationStats(tpl(['infantry', null, null, null, null, null]));
     expect(f.count).toBe(1);
-    expect(f.byType).toEqual({ infantry: 1, tank: 0, bomber: 0, aa: 0 });
+    expect(f.byType).toEqual({ infantry: 1, tank: 0 });
     expect(f.attack).toBe(8); // single infantry, no synergy
     expect(f.defense).toBe(16);
     expect(f.hp).toBe(24);
@@ -23,14 +23,14 @@ describe('formationStats — division template = Σ slots × composition synergy
     expect(f.synergies).toHaveLength(0);
   });
 
-  it('combined-arms (all 3 types) gives +15% atk/def, and a bomber adds +10% atk', () => {
-    const f = formationStats(tpl(['infantry', 'tank', 'bomber', null, null, null]));
-    // base atk 8+22+26=56, def 16+14+4=34; combined ×1.15 + air ×0.10 → atk ×1.25, def ×1.15
-    expect(f.attack).toBe(70); // round(56 × 1.25)
-    expect(f.defense).toBe(39); // round(34 × 1.15)
-    expect(f.hp).toBe(88);
-    expect(f.cost).toEqual({ metal: 245, credits: 80 });
-    expect(keys(f)).toEqual(['air', 'combined']);
+  it('combined-arms (infantry + tank together) gives +15% atk/def', () => {
+    const f = formationStats(tpl(['infantry', 'infantry', 'tank', null, null, null]));
+    // base atk 8+8+22=38, def 16+16+14=46; combined ×1.15 both.
+    expect(f.attack).toBe(44); // round(38 × 1.15)
+    expect(f.defense).toBe(53); // round(46 × 1.15)
+    expect(f.hp).toBe(94); // 24 + 24 + 46
+    expect(f.cost).toEqual({ metal: 190, credits: 30 });
+    expect(keys(f)).toEqual(['combined']);
   });
 
   it('pure infantry entrenches (+25% defense), no other synergy', () => {
@@ -41,9 +41,9 @@ describe('formationStats — division template = Σ slots × composition synergy
   });
 
   it('three or more tanks form an armoured fist (+20% attack)', () => {
-    const f = formationStats(tpl(['tank', 'tank', 'tank', 'infantry', 'infantry', 'infantry']));
-    expect(f.attack).toBe(108); // round((22×3 + 8×3) × 1.20)
-    expect(f.defense).toBe(90); // 14×3 + 16×3, no def synergy (bomber absent → not combined)
+    const f = formationStats(tpl(['tank', 'tank', 'tank', null, null, null]));
+    expect(f.attack).toBe(79); // round(22×3 × 1.20)
+    expect(f.defense).toBe(42); // 14×3, no def synergy (pure armour, no combined)
     expect(keys(f)).toEqual(['armor']);
   });
 

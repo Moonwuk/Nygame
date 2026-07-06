@@ -57,6 +57,7 @@ import {
   divisionsOf,
   templatesOf,
   mobilizeDivision,
+  setDivisionTemplate,
   loadDivision,
   unloadDivision,
   setDivisionOfficer,
@@ -65,7 +66,6 @@ import {
   isInhabited,
   divisionCargo,
   fleetCargoFree,
-  clampPowerWeights,
   type FormationTemplate,
   type FormationUnit,
   type SetupConfig,
@@ -94,30 +94,15 @@ import {
   FAVOUR_BASE,
   FAVOUR_EMBARGO,
   FAVOUR_WAR,
+  delegateSteward,
+  recallSteward,
+  stewardActive,
   type QStep,
   type Patrol,
 } from './game';
 import { OFFICERS } from './groundcombat';
-import {
-  DEFAULT_HEROES,
-  HERO_ABILITIES,
-  HERO_ABILITY_IDS,
-  HERO_GRADES,
-  HERO_ROSTER_COUNT,
-  heroSlots,
-  heroLoadoutInfo,
-  type HeroLoadout,
-} from './heroes';
-import {
-  SHIP_HULLS,
-  SHIP_MODULES,
-  SHIP_MODULE_IDS,
-  hullSlots,
-  shipStats,
-  shipLoadoutInfo,
-  DEFAULT_SHIP_LOADOUTS,
-  type ShipLoadout,
-} from './ships';
+import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
+import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
 import {
   buildingLevel,
   buildingMaxLevel,
@@ -129,6 +114,14 @@ import {
   planRoute,
 } from '../../packages/shared-core/src/index';
 import { MultiplayerClient, type MultiplayerPing, createBattleModel, type BattleSideView } from '../../packages/client/src/index';
+import {
+  worldToScreen as camWorldToScreen,
+  zoomAt as camZoomAt,
+  clampCam as camClampCam,
+  centerOn as camCenterOn,
+} from '../../packages/client/src/camera';
+import { rgba, blitGlow as hdBlitGlow, blitSphere as hdBlitSphere } from '../../packages/client/src/holoDraw';
+import { drawTerritory } from '../../packages/client/src/territory';
 import {
   buildLabel,
   checkForUpdateDetailed,
@@ -280,89 +273,16 @@ function esc(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** hex `#rrggbb` → `rgba()` with alpha — for tinted rings, ticks and trails. */
-function rgba(hex: string, a: number): string {
-  const v = hex.replace('#', '');
-  const r = parseInt(v.slice(0, 2), 16);
-  const g = parseInt(v.slice(2, 4), 16);
-  const b = parseInt(v.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-// Cached radial-glow sprites: building a `createRadialGradient` per node every frame
-// (×60 provinces) is a major CPU cost, as is `shadowBlur`. Bake one soft glow disc
-// per (colour, radius) once and blit it with `drawImage` + `globalAlpha` instead —
-// drawImage is cheap, so the map glow scales to many provinces.
-const glowCache = new Map<string, HTMLCanvasElement>();
-function glowSprite(color: string, radius: number): HTMLCanvasElement {
-  const rad = Math.max(4, Math.round(radius));
-  const key = `${color}:${rad}`;
-  const hit = glowCache.get(key);
-  if (hit) return hit;
-  const cv = document.createElement('canvas');
-  const px = Math.ceil(rad * 2 * DPR);
-  cv.width = px;
-  cv.height = px;
-  const g = cv.getContext('2d') as CanvasRenderingContext2D;
-  g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const grd = g.createRadialGradient(rad, rad, 0, rad, rad, rad);
-  grd.addColorStop(0, rgba(color, 0.95));
-  grd.addColorStop(0.5, rgba(color, 0.32));
-  grd.addColorStop(1, rgba(color, 0));
-  g.fillStyle = grd;
-  g.fillRect(0, 0, rad * 2, rad * 2);
-  glowCache.set(key, cv);
-  return cv;
-}
-/** Blit a cached glow disc of `color` centred at (x,y), radius r, at opacity `a`. */
+// Holographic draw primitives (rgba tint, cached glow/sphere sprites) now live in the
+// shared render kit (@void/client · holoDraw.ts, CP0.2 — one render implementation). The
+// prototype keeps thin same-named delegators so every call site is unchanged; it passes its
+// canvas ctx (`cx`) + current DPR, and the module owns the dpr-keyed sprite caches. `rgba`
+// is imported directly (a pure colour helper).
 function blitGlow(color: string, x: number, y: number, r: number, a: number): void {
-  if (a <= 0.004) return;
-  const spr = glowSprite(color, r);
-  const rad = Math.max(4, Math.round(r));
-  cx.globalAlpha = Math.min(1, a);
-  cx.drawImage(spr, x - rad, y - rad, rad * 2, rad * 2);
-  cx.globalAlpha = 1;
+  hdBlitGlow(cx, DPR, color, x, y, r, a);
 }
-
-// EXPERIMENT (holographic volume): give map objects a sense of depth so they read as
-// orbs projected on the ship's command terminal, not flat rings. Bake one shaded sphere
-// per colour — lit from the upper-left with a Fresnel rim — and blit it scaled to the
-// node, same cache-and-blit trick as the glow (no per-node gradient on the hot path).
-const sphereCache = new Map<string, HTMLCanvasElement>();
-function sphereSprite(color: string): HTMLCanvasElement {
-  const hit = sphereCache.get(color);
-  if (hit) return hit;
-  const rad = 32;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = Math.ceil(rad * 2 * DPR);
-  const g = cv.getContext('2d') as CanvasRenderingContext2D;
-  g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  // specular highlight up-left → colour body → translucent rim = a lit sphere
-  const grd = g.createRadialGradient(rad - rad * 0.34, rad - rad * 0.4, rad * 0.06, rad, rad, rad);
-  grd.addColorStop(0, rgba('#ffffff', 0.8));
-  grd.addColorStop(0.18, rgba(color, 0.62));
-  grd.addColorStop(0.55, rgba(color, 0.26));
-  grd.addColorStop(0.85, rgba(color, 0.1));
-  grd.addColorStop(1, rgba(color, 0.02));
-  g.fillStyle = grd;
-  g.beginPath();
-  g.arc(rad, rad, rad - 1, 0, TAU);
-  g.fill();
-  g.strokeStyle = rgba('#ffffff', 0.26); // holographic rim
-  g.lineWidth = 1.2;
-  g.beginPath();
-  g.arc(rad, rad, rad - 1.4, 0, TAU);
-  g.stroke();
-  sphereCache.set(color, cv);
-  return cv;
-}
-/** Blit the cached shaded sphere of `color` centred at (x,y) at node radius r, scaled
- *  by `a` (fade the volume out at the far/whole-map view where nodes pack together). */
 function blitSphere(color: string, x: number, y: number, r: number, a = 1): void {
-  if (a <= 0.02) return;
-  cx.globalAlpha = a;
-  cx.drawImage(sphereSprite(color), x - r, y - r, r * 2, r * 2);
-  cx.globalAlpha = 1;
+  hdBlitSphere(cx, DPR, color, x, y, r, a);
 }
 
 /** Total count across a stack of units (ships, garrison or landing troops). */
@@ -513,6 +433,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
 let hoverObj: string | null = null; // side-panel object under the pointer (data-desc key)
 let planetTab: PlanetTab = 'buildings';
+let mobTplIdx = 0; // which division template the mobilisation panel is assembling
 const buildQueues: Record<string, PlanetBuildQueue> = {};
 const logLines: string[] = [];
 let lastAiAt = 0;
@@ -539,6 +460,7 @@ const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 // chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
+let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
 // Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
 // normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
 const SETUP_SPEEDS = [1, 2, 5, 10, 50];
@@ -551,6 +473,7 @@ let lastClockText = '';
 let lastObjDescHtml = '';
 let lastLogHtml = '';
 let lastAlertText = '';
+let lastRailAlert = '';
 // --- fog of war (renderer projection; always on) -----------------------------
 // Client-side projection just for the renderer — NOT the real security boundary
 // (that is `visibleState` in shared-core). Fog is always on: ships are near-blind,
@@ -573,6 +496,36 @@ const restartSep = $('restart-sep');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
+// top-bar right cluster + collapsible rail
+const railEl = $('rail');
+const railToggle = $('railtoggle');
+const railGlyph = $('railglyph');
+const railAlert = $('railalert');
+const crestMark = $('crestmark');
+
+// Player emblem — a cosmetic console crest the player picks in the main menu (hub) and
+// wears in the in-match top-bar corner. Client-side only (localStorage) — never match
+// state, never sent to the server. Falls back to the first glyph if unset/unknown.
+const EMBLEMS = ['◆', '◇', '⬡', '⬢', '✦', '✧', '★', '⚛', '◉', '⌖', '❖', '⟡'];
+function playerEmblem(): string {
+  const e = (typeof localStorage !== 'undefined' && localStorage.getItem('void.emblem')) || '';
+  return EMBLEMS.includes(e) ? e : EMBLEMS[0]!;
+}
+function applyEmblem(): void {
+  const g = playerEmblem();
+  const hubAv = document.getElementById('hubav');
+  if (hubAv) hubAv.textContent = g;
+  crestMark.textContent = g;
+}
+function setPlayerEmblem(g: string): void {
+  if (!EMBLEMS.includes(g)) return;
+  try {
+    localStorage.setItem('void.emblem', g);
+  } catch {
+    /* private mode — keep the in-memory choice only */
+  }
+  applyEmblem();
+}
 
 // --- viewport, galaxy backdrop & map projection ------------------------------
 
@@ -644,6 +597,24 @@ let sweepArms: SweepArm[] = [];
 let sweepAng = 0;
 let sweepOn = false;
 let sweepPrevAng = -1; // previous frame's arm angle, for "did the arm cross X" tests
+// Player display preference (client-only, localStorage): the sweep's VISUAL opacity 0..1.
+// 0 hides the wedge + arm entirely; any value only dims the CHROME — the radar MECHANIC
+// (contact snapshots + blip afterglow) is computed before the visual gate, so it is
+// unaffected at every setting. Absent key ⇒ full (1); a stored 0 must NOT be read as absent.
+let sweepOpacity = ((): number => {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('void.sweepOpacity') : null;
+  if (raw === null) return 1;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1;
+})();
+function setSweepOpacity(v: number): void {
+  sweepOpacity = Math.min(1, Math.max(0, v));
+  try {
+    localStorage.setItem('void.sweepOpacity', String(sweepOpacity));
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
 /** Radar contacts as PAINTED BY THE SWEEP: a signature is refreshed only as the arm
@@ -700,15 +671,21 @@ function drawScanSweep(now: number) {
   sweepAng = (now / SWEEP_DIV) % TAU;
   sweepOn = sweepArms.length > 0;
   if (!sweepOn) return;
+  // Visual gate (player preference). Everything above — arms, angle, sweepOn — is the
+  // MECHANIC and always runs; only the chrome below is skipped/dimmed. At 0 the sweep is
+  // invisible yet still snapshots contacts and lights blips exactly as before.
+  const op = sweepOpacity;
+  if (op <= 0) return;
   cx.save();
   cx.globalCompositeOperation = 'lighter';
   for (const a of sweepArms) {
     if (!visible(a, a.r + 40)) continue; // draw-cull; the arm still paints contacts
     // subtle trailing wedge, clipped to this source's reach — reads as a slow
-    // rotating radar sweep (fades over ~0.4 turn behind the leading edge)
+    // rotating radar sweep (fades over ~0.4 turn behind the leading edge). Alpha is
+    // scaled by the player's opacity preference so it can be dimmed toward invisible.
     const grd = cx.createConicGradient(sweepAng, a.x, a.y);
-    grd.addColorStop(0, 'rgba(53,214,230,0.05)');
-    grd.addColorStop(0.16, 'rgba(53,214,230,0.012)');
+    grd.addColorStop(0, `rgba(53,214,230,${0.05 * op})`);
+    grd.addColorStop(0.16, `rgba(53,214,230,${0.012 * op})`);
     grd.addColorStop(0.4, 'rgba(53,214,230,0)');
     grd.addColorStop(1, 'rgba(53,214,230,0)');
     cx.save();
@@ -719,7 +696,7 @@ function drawScanSweep(now: number) {
     cx.fillRect(a.x - a.r, a.y - a.r, a.r * 2, a.r * 2);
     cx.restore();
     // the leading edge — the visible radar arm itself
-    cx.strokeStyle = 'rgba(53,214,230,0.26)';
+    cx.strokeStyle = `rgba(53,214,230,${0.26 * op})`;
     cx.lineWidth = 1;
     cx.beginPath();
     cx.moveTo(a.x, a.y);
@@ -818,91 +795,47 @@ function insets(): { left: number; right: number; top: number; bottom: number } 
   const botPad = Math.min(150, Math.max(78, VH * 0.16));
   return { left: RAIL + 80, right: VW - rightPad, top: TOP + topPad, bottom: VH - botPad };
 }
-// Leave a little breathing room around the whole-map (scale-1) view so it reads as a
-// framed board, not edge-to-edge. This is the floor of the zoom range (MIN_SCALE = 1).
-const FIT_MARGIN = 0.94;
-// Base fit: map-space → screen, fitting the whole map inside the play area at scale 1.
-function projBase(p: { x: number; y: number }): { x: number; y: number } {
-  const { left, right, top, bottom } = insets();
-  const aw = Math.max(60, right - left);
-  const ah = Math.max(60, bottom - top);
-  const mapW = MAXX - MINX || 1;
-  const mapH = MAXY - MINY || 1;
-  // UNIFORM scale (preserve aspect): one factor for both axes, so a circle in map
-  // space stays a circle on screen — distances aren't stretched, and the radar
-  // ring reads as a true circle. Fit the whole map inside the play area and centre
-  // it (the spare axis gets symmetric margins / letterbox).
-  const scale = Math.min(aw / mapW, ah / mapH) * FIT_MARGIN;
-  const offX = left + (aw - mapW * scale) / 2;
-  const offY = top + (ah - mapH * scale) / 2;
-  return { x: offX + (p.x - MINX) * scale, y: offY + (p.y - MINY) * scale };
-}
+// The view transform (fit / zoom / pan / projection) lives in the shared camera module
+// (@void/client · camera.ts, CP0.2 — one render implementation for the prototype and the
+// Stage-4 client). MINX..MAXY (set once from MAP above) are the map bounds it projects.
+const mapBounds = () => ({ minX: MINX, minY: MINY, maxX: MAXX, maxY: MAXY });
 
-// Camera: pan offset + zoom over the base fit. Node/label sizes stay constant
-// in screen pixels; only positions transform (a node-graph style zoom).
+// Camera: pan offset + zoom over the base fit (scale range MIN_SCALE..MAX_SCALE lives in
+// the module: 1 = whole-map fit, 6 = one province + neighbours). Node/label sizes stay
+// constant in screen px; only positions transform (node-graph style zoom). On a phone the
+// opening view zooms onto the home region; double-tap resets, pinch out to the overview.
 const cam = { scale: 1, x: 0, y: 0 };
-// Zoom range tied to content: 1 = the whole-map fit (you can't zoom out past it into
-// empty void); 6 = close enough to read one province + its neighbours on a phone. On a
-// phone the opening view zooms onto your home region (the wide map is too dense to read
-// whole on a narrow screen); double-tap resets to that view, pinch out to the overview.
-const MIN_SCALE = 1;
-const MAX_SCALE = 6;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // node sector type by id — drives asteroid-junction rendering + capture-by-arrival
 const SECTOR_OF: Record<string, string> = Object.fromEntries(MAP.map((n) => [n.id, n.sector]));
 function world(p: { x: number; y: number }): { x: number; y: number } {
-  const b = projBase(p);
-  return { x: b.x * cam.scale + cam.x, y: b.y * cam.scale + cam.y };
+  return camWorldToScreen(p, cam, insets(), mapBounds());
 }
 function visible(c: { x: number; y: number }, pad = 80): boolean {
   return c.x >= -pad && c.x <= VW + pad && c.y >= -pad && c.y <= VH + pad;
 }
 function zoomAt(fx: number, fy: number, factor: number) {
-  // Anchor the zoom on the focal point (cursor / pinch centre): the map-space point under
-  // it stays put, so zoom grows toward where you're looking instead of drifting.
-  const bx = (fx - cam.x) / cam.scale;
-  const by = (fy - cam.y) / cam.scale;
-  cam.scale = clamp(cam.scale * factor, MIN_SCALE, MAX_SCALE);
-  cam.x = fx - bx * cam.scale;
-  cam.y = fy - by * cam.scale;
-  clampCam();
+  // Zoom anchored on the focal point (cursor / pinch centre) — camera.ts clamps scale + pan.
+  const n = camZoomAt(cam, fx, fy, factor, insets(), mapBounds());
+  cam.scale = n.scale;
+  cam.x = n.x;
+  cam.y = n.y;
 }
 
-/** Keep the map filling the play area, but with SLACK at the edges so the outermost
- *  provinces don't jam against the screen border — you can pan a comfortable margin
- *  past the content edge, which makes edge navigation easy. At the whole-map (min-zoom)
- *  floor the map sits centred and still; a zoomed-in map pans freely across its content. */
+/** Keep the map filling the play area with SLACK at the edges (module: PAN_SLACK) so the
+ *  outermost provinces don't jam against the border. Delegates to the shared camera. */
 function clampCam(): void {
-  const { left, right, top, bottom } = insets();
-  const tl = projBase({ x: MINX, y: MINY });
-  const br = projBase({ x: MAXX, y: MAXY });
-  const pL = tl.x * cam.scale;
-  const pR = br.x * cam.scale;
-  const pT = tl.y * cam.scale;
-  const pB = br.y * cam.scale;
-  // Breathing room: allow panning ~16% of the play area past each edge.
-  const mx = (right - left) * 0.16;
-  const my = (bottom - top) * 0.16;
-  // Per axis: if the map is at least as big as the play area, pan within it (+ slack) so
-  // an edge can sit a margin inside; otherwise it fits, so park it centred in the play area.
-  cam.x =
-    pR - pL >= right - left
-      ? clamp(cam.x, right - pR - mx, left - pL + mx)
-      : (left + right - pL - pR) / 2;
-  cam.y =
-    pB - pT >= bottom - top
-      ? clamp(cam.y, bottom - pB - my, top - pT + my)
-      : (top + bottom - pT - pB) / 2;
+  const n = camClampCam(cam, insets(), mapBounds());
+  cam.x = n.x;
+  cam.y = n.y;
 }
 
 /** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
 function centerOn(p: { x: number; y: number }, scale: number): void {
-  cam.scale = clamp(scale, MIN_SCALE, MAX_SCALE);
-  const b = projBase(p);
-  const { left, right, top, bottom } = insets();
-  cam.x = (left + right) / 2 - b.x * cam.scale;
-  cam.y = (top + bottom) / 2 - b.y * cam.scale;
-  clampCam();
+  const n = camCenterOn(cam, p, scale, insets(), mapBounds());
+  cam.scale = n.scale;
+  cam.x = n.x;
+  cam.y = n.y;
 }
 /** The opening / reset view. On a phone the wide map is too dense to read whole, so
  *  zoom onto your home region and pan to explore; on a wide screen the whole-map fit
@@ -1208,11 +1141,12 @@ function divisionsHtml(planetId: string): string {
       const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
       const off = d.officer ? t(OFFICERS[d.officer]?.name ?? '') : '';
       h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(d.name)}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
-      // Officer attach / detach (a hero-like leader; bonuses tuned in groundcombat).
-      h += `<div class="row">`;
+      // Ground hero = the division's officer: an immutable aura-leader that buffs the
+      // division it fights with (passive; activatable skills are space heroes only).
+      h += `<div class="hint">★ Наземный герой — аура своим в бою:</div><div class="row">`;
       for (const key of Object.keys(OFFICERS)) {
         const on = d.officer === key;
-        h += btn('officer', `${d.id}|${key}`, `${on ? '● ' : ''}${esc(t(OFFICERS[key]!.name))}`, !on);
+        h += btn('officer', `${d.id}|${key}`, `${on ? '● ' : ''}★ ${esc(t(OFFICERS[key]!.name))}`, !on);
       }
       if (d.officer) h += btn('officer', `${d.id}|`, t('Снять'), true);
       h += `</div>`;
@@ -1222,14 +1156,32 @@ function divisionsHtml(planetId: string): string {
   }
   const tpls = templatesOf(s, ME);
   const res = s.players[ME]?.resources ?? {};
-  h += `<div class="sec">${t('Мобилизовать дивизию')}</div>`;
+  const idx = Math.max(0, Math.min(mobTplIdx, tpls.length - 1));
+  const cur = tpls[idx] ?? tpls[0]!;
+  h += `<div class="sec">${t('Сборка дивизии')}</div>`;
+  h += `<div class="row">`;
   for (let i = 0; i < tpls.length; i++) {
-    const tpl = tpls[i]!;
-    const f = formationStats(tpl);
-    const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
-    const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
-    h += btn('mobilize', String(i), `${esc(tpl.name)} (${f.count}) · ${cost}`, afford && f.count > 0);
+    h += btn('mobtpl', String(i), esc(tpls[i]!.name), i !== idx);
   }
+  h += `</div>`;
+  // Tap a slot to cycle its род войск (пусто → пехота → танк → пусто).
+  h += `<div class="row">`;
+  for (let i = 0; i < FORMATION_SLOTS; i++) {
+    const u = cur.slots[i] ?? null;
+    h += btn('divslot', `${idx}|${i}`, u ? `${FORM_ICON[u] ?? '▪'} ${esc(FORM_RU[u] ?? u)}` : '＋', true);
+  }
+  h += `</div>`;
+  const f = formationStats(cur);
+  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${r[0]}`).join(' ') || '—';
+  const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
+  const syn = f.synergies.map((x) => esc(x.name)).join(' · ');
+  // Live influence on characteristics as you assemble (same bar preview as ships).
+  const bar = (label: string, val: number, max: number): string =>
+    `<div class="lstat"><div class="lrow"><span class="lnm">${label}</span><span class="lval">${val}</span></div>` +
+    `<div class="ltrack"><div class="lbar" style="width:${Math.round(Math.min(100, (val / max) * 100))}%"></div></div></div>`;
+  h += `<div class="lstats"><div class="lhd">${t('Влияние на характеристики')}</div>${bar(t('⚔ Урон в атаке'), f.attack, 300)}${bar(t('🛡 Урон в защите'), f.defense, 300)}${bar(t('❤ Корпус'), f.hp, 600)}</div>`;
+  h += `<div class="hint">${t('состав {n}/{s} · {rest}', { n: f.count, s: FORMATION_SLOTS, rest: cost + (syn ? ' · ' + syn : '') })}</div>`;
+  h += btn('mobilize', String(idx), t('Мобилизовать «{name}»', { name: esc(tData(cur.name)) }), afford && f.count > 0);
   h += `<div class="hint">${t('Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.')}</div>`;
   return h;
 }
@@ -2024,6 +1976,34 @@ function handleEvents(events: DomainEvent[]) {
           note(t('⚛ изучено: {tech}', { tech: tData(data.technologies[p.technology as string]?.name ?? (p.technology as string)) }));
         if (techWin.classList.contains('show')) renderTech();
         break;
+      // «Хранитель» lifecycle: snapshot at delegation, diff on expiry (the morning report).
+      case 'steward.delegated':
+        if (p.playerId === ME) {
+          stewSnapshot = stewMetrics();
+          note('😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.');
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
+      case 'steward.recalled':
+        if (p.playerId === ME) {
+          stewSnapshot = null;
+          note('🎮 Вы вернули командование себе.');
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
+      case 'steward.expired':
+        if (p.playerId === ME) {
+          const now = stewMetrics();
+          const base = stewSnapshot;
+          stewSnapshot = null;
+          const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+          const diff = base
+            ? ` Пока вы спали: планет ${base.planets}→${now.planets}, металл ${sign(now.metal - base.metal)}, кредиты ${sign(now.credits - base.credits)}.`
+            : '';
+          note(`🌅 Хранитель вернул вам управление (была «Оборона»).${diff}`);
+          if (stewWin.classList.contains('show')) renderSteward();
+        }
+        break;
       // Both espionage events are addressed to the ACTOR (`owner`); in NET play the
       // server's fog filter already withholds them from the victim — mirror it here.
       case 'intel.stolen': {
@@ -2178,6 +2158,12 @@ function runAI() {
   // server uses to drive unfilled multiplayer seats). Apply them in sequence.
   for (const ai of AI_PLAYERS) {
     for (const a of aiOrders(s, ai)) apply(order(s, a, s.time));
+  }
+  // «Хранитель»: while your own seat is delegated, the local AI plays it too — on its
+  // posture (defend), so solo delegation actually holds the line, not just shows a timer.
+  const myPosture = stewardActive(s, ME, s.time);
+  if (myPosture && !AI_PLAYERS.has(ME)) {
+    for (const a of aiOrders(s, ME, myPosture)) apply(order(s, a, s.time));
   }
 }
 
@@ -2977,75 +2963,6 @@ function ownersSig(): string {
   return out;
 }
 
-/** Clip a convex polygon to the half-plane a*x + b*y + c ≤ 0 (Sutherland–Hodgman).
- *  Used to carve the weighted-Voronoi (power-diagram) province cells. */
-function clipHalfPlane(
-  poly: Array<[number, number]>,
-  a: number,
-  b: number,
-  c: number,
-): Array<[number, number]> {
-  const out: Array<[number, number]> = [];
-  for (let i = 0; i < poly.length; i++) {
-    const cur = poly[i]!;
-    const nxt = poly[(i + 1) % poly.length]!;
-    const dc = a * cur[0] + b * cur[1] + c;
-    const dn = a * nxt[0] + b * nxt[1] + c;
-    if (dc <= 0) out.push(cur);
-    if (dc < 0 !== dn < 0) {
-      const t = dc / (dc - dn);
-      out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-    }
-  }
-  return out;
-}
-
-/** Sentinel edge-tag: this province edge sits on the map boundary, not a neighbour. */
-const BOUNDARY = -1;
-
-/** Like {@link clipHalfPlane}, but carries a per-edge tag so the political map can
- *  colour each border by what lies across it. `tags[k]` is what borders the edge
- *  `poly[k]→poly[k+1]`: a neighbour seed index (≥0) or BOUNDARY. The newly-cut edge
- *  (along the clip line) is tagged `clipTag` (the seed we clipped against); surviving
- *  original edges keep their tag. Lets same-owner borders draw as faint hairlines
- *  (the empire reads as one field) and owner-vs-owner borders as a bright frontier. */
-function clipHalfPlaneTagged(
-  poly: Array<[number, number]>,
-  tags: number[],
-  a: number,
-  b: number,
-  c: number,
-  clipTag: number,
-): { poly: Array<[number, number]>; tags: number[] } {
-  const out: Array<[number, number]> = [];
-  const outT: number[] = [];
-  const n = poly.length;
-  for (let i = 0; i < n; i++) {
-    const cur = poly[i]!;
-    const nxt = poly[(i + 1) % n]!;
-    const tag = tags[i]!;
-    const dc = a * cur[0] + b * cur[1] + c;
-    const dn = a * nxt[0] + b * nxt[1] + c;
-    const cross = dc < 0 !== dn < 0;
-    if (dc <= 0) {
-      out.push(cur);
-      if (cross) {
-        const t = dc / (dc - dn);
-        out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-        outT.push(tag); // cur → intersection: surviving part of the original edge
-        outT.push(clipTag); // intersection → next: along the new clip line (this neighbour)
-      } else {
-        outT.push(tag); // wholly-inside original edge keeps its tag
-      }
-    } else if (cross) {
-      const t = dc / (dc - dn);
-      out.push([cur[0] + t * (nxt[0] - cur[0]), cur[1] + t * (nxt[1] - cur[1])]);
-      outT.push(tag); // intersection → nxt: re-entering part of the original edge
-    }
-  }
-  return { poly: out, tags: outT };
-}
-
 /** Rebuild the cached province map when the camera/ownership/viewport moves. */
 function buildStaticLayer(): void {
   // Rebuild only when the content/size changes, or when the camera has SETTLED at a
@@ -3115,9 +3032,6 @@ function buildStaticLayer(): void {
     const c = world(n);
     seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: knownOwner(n.id), kind: n.sector });
   }
-  // Keep the power diagram valid: clamp the weight spread so a heavier neighbour can
-  // never swallow a close smaller node's cell (which left it with no province border).
-  clampPowerWeights(seeds);
   // Clip cells to the MAP boundary (province bounding box + padding), not the
   // viewport — otherwise the outermost provinces stretch to the screen edge. This
   // gives the map a defined edge that pans/zooms with the camera.
@@ -3130,104 +3044,18 @@ function buildStaticLayer(): void {
     [br.x, br.y],
     [tl.x, br.y],
   ];
-  const trace = (poly: Array<[number, number]>): void => {
-    g.beginPath();
-    g.moveTo(poly[0]![0], poly[0]![1]);
-    for (let k = 1; k < poly.length; k++) g.lineTo(poly[k]![0], poly[k]![1]);
-    g.closePath();
-  };
-  // Pass 1 — bake every province cell (tagged power-diagram polygon) and its fill.
-  // Same owner ⇒ same colour, so a captured cluster paints as ONE political field.
-  const cells: Array<{
-    poly: Array<[number, number]>;
-    tags: number[];
-    owner: string | null;
-    idx: number;
-  }> = [];
-  for (let i = 0; i < seeds.length; i++) {
-    const si = seeds[i]!;
-    let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
-    let tags: number[] = clip.map(() => BOUNDARY);
-    for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
-      if (i === j) continue;
-      const sj = seeds[j]!;
-      // power-diagram half-plane: keep |x-ci|² - wi ≤ |x-cj|² - wj
-      const a = 2 * (sj.x - si.x);
-      const b = 2 * (sj.y - si.y);
-      const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
-      ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
-    }
-    if (poly.length < 3) continue;
-    // Unified territory fill. Owned land is painted STRONGLY in its owner colour so
-    // who-holds-what reads at a glance — your worlds clearly green, each rival its hue
-    // — and it ignores fog on purpose: a province an enemy has captured keeps showing
-    // its owner colour even when you can't see the garrison (last-known control map,
-    // Bytro/HoI-style). Neutral stays a faint wash.
-    trace(poly);
-    g.fillStyle = rgba(si.owner ? ownerColor(si.owner) : COLOR.null, si.owner ? 0.58 : 0.1);
-    g.fill();
-    // faint terrain/kind accent — each province still reads as its own kind of place
-    // (nebula slows fleets, gas-giant boosts output, …)
-    const accent = SECTOR_TYPES[si.kind]?.color;
-    if (accent) {
-      trace(poly);
-      g.fillStyle = rgba(accent, 0.16); // province-type tint reads through the owner fill
-      g.fill();
-    }
-    cells.push({ poly, tags, owner: si.owner, idx: i });
-  }
-
-  // Pass 2 — classify every cell edge by what's across it. Same-owner borders are
-  // thin INNER hairlines (so an empire stays one colour field with subtle province
-  // divisions); owner-vs-(other owner / neutral / void) borders are a glowing
-  // FRONTIER in the owner's colour. That contrast is the "merged territory, thinly
-  // outlined provinces" look.
-  type Seg = [number, number, number, number];
-  const ownedFront = new Map<string, Seg[]>();
-  const ownedInner = new Map<string, Seg[]>();
-  const neutralEdge: Seg[] = [];
-  const bucket = (m: Map<string, Seg[]>, key: string): Seg[] => {
-    let arr = m.get(key);
-    if (!arr) m.set(key, (arr = []));
-    return arr;
-  };
-  for (const cell of cells) {
-    const { poly, tags, owner, idx } = cell;
-    const m = poly.length;
-    for (let k = 0; k < m; k++) {
-      const t = tags[k]!;
-      const p0 = poly[k]!;
-      const p1 = poly[(k + 1) % m]!;
-      const seg: Seg = [p0[0], p0[1], p1[0], p1[1]];
-      const neigh = t >= 0 ? seeds[t]!.owner : undefined; // undefined ⇒ map boundary
-      if (t >= 0 && owner !== null && neigh === owner) {
-        if (idx < t) bucket(ownedInner, ownerColor(owner)).push(seg); // same empire, draw once
-      } else if (owner !== null) {
-        bucket(ownedFront, ownerColor(owner)).push(seg); // empire frontier (each side glows)
-      } else if (t === BOUNDARY || idx < t) {
-        neutralEdge.push(seg); // neutral province division (faint, drawn once)
-      }
-    }
-  }
-  const strokeSegs = (segs: Seg[], style: string, width: number): void => {
-    if (segs.length === 0) return;
-    g.strokeStyle = style;
-    g.lineWidth = width;
-    g.beginPath();
-    for (const sg of segs) {
-      g.moveTo(sg[0], sg[1]);
-      g.lineTo(sg[2], sg[3]);
-    }
-    g.stroke();
-  };
-  g.save();
-  g.lineJoin = 'round';
-  g.lineCap = 'round';
-  for (const [col, segs] of ownedInner) strokeSegs(segs, rgba(col, 0.18), 0.65); // inner hairlines
-  strokeSegs(neutralEdge, 'rgba(67,98,110,0.34)', 1); // neutral divisions
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.14), 5.5); // frontier glow
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.9), 1.6); // frontier crisp
-  g.restore();
+  // Weighted-Voronoi political fill + classified borders — the shared @void/client
+  // territory renderer clamps the weights (so no cell is swallowed), tessellates the
+  // power diagram, fills each province in its owner's colour, and draws same-owner
+  // inner hairlines vs glowing owner frontiers. Fog is honoured upstream: each seed
+  // carries the owner AS THE VIEWER KNOWS IT (knownOwner), so a hidden capture never
+  // repaints the map. Owned land is painted strongly (who-holds-what at a glance);
+  // neutral stays a faint wash; a faint terrain tint reads through per sector kind.
+  drawTerritory(g, seeds, clip, {
+    ownerColor,
+    neutralFill: COLOR.null!,
+    kindAccent: (kind) => SECTOR_TYPES[kind]?.color,
+  });
 
   // PATH NETWORK — thin roads between adjacent provinces (the visible "пути").
   // Movement runs along these; an army marches province-to-adjacent-province and
@@ -3459,17 +3287,49 @@ function render(now: number) {
       continue;
     }
 
-    // province-type badge: a small kind glyph above the node so the type reads at a
-    // glance, regardless of the bespoke art below it (planet / asteroid / nebula / …).
+    // province-type badge — a holographic type icon that HOVERS above the province:
+    // a projected hologram (soft glow halo + holo capsule ring + a faint projector
+    // tether down to the node), gently bobbing in the sector-type colour so the type
+    // reads at a glance regardless of the bespoke art below (planet / asteroid / …).
     if (KIND_ICON[n.sector]) {
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd';
+      const bob = Math.sin(now / 700 + n.x * 0.021 + n.y * 0.017) * 2.4;
+      const brad = 11;
+      const bx = c.x;
+      const by = c.y - R - 6 - brad - 6 + bob; // badge centre floats above, softly bobbing
       cx.save();
-      cx.font = '13px ui-monospace,Menlo,monospace';
+      blitGlow(kc, bx, by, brad + 9, 0.5); // holographic bloom (cached disc)
+      // projector tether — a faint dashed beam from the node up to the badge
+      cx.strokeStyle = rgba(kc, 0.16);
+      cx.setLineDash([2, 3]);
+      cx.lineWidth = 1;
+      cx.beginPath();
+      cx.moveTo(bx, c.y - R);
+      cx.lineTo(bx, by + brad);
+      cx.stroke();
+      cx.setLineDash([]);
+      // holo capsule: translucent disc + bright rim + inner scanline ring
+      cx.fillStyle = rgba(kc, 0.12);
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.fill();
+      cx.strokeStyle = rgba(kc, 0.6);
+      cx.lineWidth = 1.2;
+      cx.beginPath();
+      cx.arc(bx, by, brad, 0, TAU);
+      cx.stroke();
+      cx.strokeStyle = rgba(kc, 0.26);
+      cx.beginPath();
+      cx.arc(bx, by, brad - 3, 0, TAU);
+      cx.stroke();
+      // the type glyph, glowing in the sector colour
+      cx.font = '700 15px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
       cx.textBaseline = 'middle';
-      cx.shadowColor = 'rgba(0,0,0,0.85)';
-      cx.shadowBlur = 3;
-      cx.fillStyle = rgba(SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd', 1);
-      cx.fillText(KIND_ICON[n.sector]!, c.x, c.y - 18);
+      cx.shadowColor = kc;
+      cx.shadowBlur = 5;
+      cx.fillStyle = rgba(kc, 0.95);
+      cx.fillText(KIND_ICON[n.sector]!, bx, by + 0.5);
       cx.restore();
     }
 
@@ -3535,12 +3395,23 @@ function render(now: number) {
       cx.save();
       cx.shadowColor = 'rgba(0,0,0,0.85)';
       cx.shadowBlur = 3;
-      cx.fillStyle = p.owner ? col : '#9fc9c4';
-      cx.font = '700 11px ui-monospace,Menlo,monospace';
-      cx.fillText(n.id, c.x + 16, c.y - 1);
-      cx.fillStyle = 'rgba(150,210,205,0.55)';
-      cx.font = '9px ui-monospace,Menlo,monospace';
-      cx.fillText(fort ? 'void fortress ✦' : 'asteroid field', c.x + 16, c.y + 11);
+      if (fort) {
+        // a fortress stays a prominent, special designation (unchanged)
+        cx.fillStyle = p.owner ? col : '#9fc9c4';
+        cx.font = '700 11px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.55)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('void fortress ✦', c.x + 16, c.y + 11);
+      } else {
+        // a plain asteroid field is a minor sector — de-emphasised (dim, smaller)
+        cx.fillStyle = p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)';
+        cx.font = '600 10px ui-monospace,Menlo,monospace';
+        cx.fillText(n.id, c.x + 16, c.y - 1);
+        cx.fillStyle = 'rgba(150,210,205,0.38)';
+        cx.font = '9px ui-monospace,Menlo,monospace';
+        cx.fillText('asteroid field', c.x + 16, c.y + 11);
+      }
       cx.restore();
       continue;
     }
@@ -3591,50 +3462,196 @@ function render(now: number) {
       cx.restore();
     }
 
-    // holographic volume: a lit sphere inside the ring — subtle at the far view (nodes
-    // pack together there), blooming to full once you zoom into a region
-    blitSphere(col, c.x, c.y, R, clamp(0.3 + (cam.scale - 1) * 0.7, 0.3, 1));
+    if (n.sector === 'planet') {
+      // Planet: holographic volume — a lit sphere inside the ring, subtle at far view,
+      // blooming to full once you zoom into a region
+      blitSphere(col, c.x, c.y, R, clamp(0.3 + (cam.scale - 1) * 0.7, 0.3, 1));
 
-    // wireframe body + bright core (glow comes from the cached aura/bloom discs,
-    // not shadowBlur — shadowBlur per node per frame is a major CPU cost)
-    blitGlow(col, c.x, c.y, R + 7, showOwner ? 0.22 : 0.12); // tight bloom at the ring
-    cx.strokeStyle = col;
-    cx.lineWidth = 2;
-    cx.beginPath();
-    cx.arc(c.x, c.y, R, 0, TAU);
-    cx.stroke();
-    cx.fillStyle = rgba(col, 0.72 + 0.28 * ownerPulse);
-    cx.beginPath();
-    cx.arc(c.x, c.y, 2.6 + 1.2 * ownerPulse, 0, TAU);
-    cx.fill();
+      // wireframe body + bright core (glow comes from the cached aura/bloom discs,
+      // not shadowBlur — shadowBlur per node per frame is a major CPU cost)
+      blitGlow(col, c.x, c.y, R + 7, showOwner ? 0.22 : 0.12);
+      cx.strokeStyle = col;
+      cx.lineWidth = 2;
+      cx.beginPath();
+      cx.arc(c.x, c.y, R, 0, TAU);
+      cx.stroke();
+      cx.fillStyle = rgba(col, 0.72 + 0.28 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 2.6 + 1.2 * ownerPulse, 0, TAU);
+      cx.fill();
 
-    // N/E/S/W crosshair ticks
-    cx.strokeStyle = rgba(col, 0.7);
-    cx.lineWidth = 1.2;
-    cx.beginPath();
-    for (const [dx, dy] of CARDINAL) {
-      cx.moveTo(c.x + dx * (R - 3), c.y + dy * (R - 3));
-      cx.lineTo(c.x + dx * (R + 5), c.y + dy * (R + 5));
+      // N/E/S/W crosshair ticks
+      cx.strokeStyle = rgba(col, 0.7);
+      cx.lineWidth = 1.2;
+      cx.beginPath();
+      for (const [dx, dy] of CARDINAL) {
+        cx.moveTo(c.x + dx * (R - 3), c.y + dy * (R - 3));
+        cx.lineTo(c.x + dx * (R + 5), c.y + dy * (R + 5));
+      }
+      cx.stroke();
+    } else if (n.sector === 'nebula' || n.sector === 'dense_nebula') {
+      // Nebula: soft diamond (rotated square) with diffuse glow
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? col;
+      const dr = R * 0.85;
+      blitGlow(kc, c.x, c.y, R + 7, showOwner ? 0.2 : 0.1);
+      cx.save();
+      cx.strokeStyle = rgba(kc, 0.7);
+      cx.fillStyle = rgba(kc, 0.12 + 0.08 * ownerPulse);
+      cx.lineWidth = 1.6;
+      cx.beginPath();
+      cx.moveTo(c.x, c.y - dr);
+      cx.lineTo(c.x + dr, c.y);
+      cx.lineTo(c.x, c.y + dr);
+      cx.lineTo(c.x - dr, c.y);
+      cx.closePath();
+      cx.fill();
+      cx.stroke();
+      // inner diamond (scanline effect)
+      cx.strokeStyle = rgba(kc, 0.3);
+      cx.lineWidth = 1;
+      const ir = dr * 0.55;
+      cx.beginPath();
+      cx.moveTo(c.x, c.y - ir);
+      cx.lineTo(c.x + ir, c.y);
+      cx.lineTo(c.x, c.y + ir);
+      cx.lineTo(c.x - ir, c.y);
+      cx.closePath();
+      cx.stroke();
+      // core dot
+      cx.fillStyle = rgba(kc, 0.7 + 0.3 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 2, 0, TAU);
+      cx.fill();
+      cx.restore();
+    } else if (n.sector === 'ion_storm' || n.sector === 'solar_flare') {
+      // Storm: spiky burst (6-pointed star)
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? col;
+      const outerR = R * 0.9;
+      const innerR = R * 0.4;
+      const spikes = n.sector === 'ion_storm' ? 5 : 8;
+      blitGlow(kc, c.x, c.y, R + 7, showOwner ? 0.22 : 0.1);
+      cx.save();
+      cx.strokeStyle = rgba(kc, 0.75);
+      cx.fillStyle = rgba(kc, 0.1 + 0.06 * ownerPulse);
+      cx.lineWidth = 1.4;
+      cx.beginPath();
+      for (let i = 0; i < spikes * 2; i++) {
+        const a = (i / (spikes * 2)) * TAU - Math.PI / 2;
+        const rr = i % 2 === 0 ? outerR : innerR;
+        if (i === 0) cx.moveTo(c.x + Math.cos(a) * rr, c.y + Math.sin(a) * rr);
+        else cx.lineTo(c.x + Math.cos(a) * rr, c.y + Math.sin(a) * rr);
+      }
+      cx.closePath();
+      cx.fill();
+      cx.stroke();
+      // core dot
+      cx.fillStyle = rgba(kc, 0.7 + 0.3 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 2, 0, TAU);
+      cx.fill();
+      cx.restore();
+    } else if (n.sector === 'graveyard') {
+      // Derelict Graveyard: scattered debris fragments around a dim hub
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? col;
+      blitGlow(kc, c.x, c.y, R + 5, showOwner ? 0.16 : 0.06);
+      cx.save();
+      cx.strokeStyle = rgba(kc, 0.5);
+      cx.lineWidth = 1.2;
+      // scattered wreck fragments — short dashes at fixed angles
+      const frags = [0, 0.7, 1.5, 2.3, 3.1, 4.0, 4.9, 5.6];
+      for (const a of frags) {
+        const r0 = 5 + 2 * Math.sin(a * 3.7);
+        const r1 = 9 + 3 * Math.sin(a * 2.1 + 1);
+        cx.beginPath();
+        cx.moveTo(c.x + Math.cos(a) * r0, c.y + Math.sin(a) * r0);
+        cx.lineTo(c.x + Math.cos(a) * r1, c.y + Math.sin(a) * r1);
+        cx.stroke();
+      }
+      // dim centre hub
+      cx.fillStyle = rgba(kc, 0.5 + 0.2 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 3, 0, TAU);
+      cx.fill();
+      cx.strokeStyle = rgba(kc, 0.4);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 7, 0, TAU);
+      cx.stroke();
+      cx.restore();
+    } else if (n.sector === 'dead_world') {
+      // Dead World: broken/dashed circle with an X through it
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? col;
+      blitGlow(kc, c.x, c.y, R + 5, showOwner ? 0.16 : 0.08);
+      cx.save();
+      cx.setLineDash([4, 4]);
+      cx.strokeStyle = rgba(kc, 0.6);
+      cx.lineWidth = 1.6;
+      cx.beginPath();
+      cx.arc(c.x, c.y, R * 0.8, 0, TAU);
+      cx.stroke();
+      cx.setLineDash([]);
+      // cross through the centre (the "dead" mark)
+      const xr = R * 0.45;
+      cx.strokeStyle = rgba(kc, 0.45);
+      cx.lineWidth = 1.3;
+      cx.beginPath();
+      cx.moveTo(c.x - xr, c.y - xr);
+      cx.lineTo(c.x + xr, c.y + xr);
+      cx.moveTo(c.x + xr, c.y - xr);
+      cx.lineTo(c.x - xr, c.y + xr);
+      cx.stroke();
+      // dim core dot
+      cx.fillStyle = rgba(kc, 0.5 + 0.2 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 2, 0, TAU);
+      cx.fill();
+      cx.restore();
+    } else {
+      // Fallback for any other non-planet type: small hexagon marker
+      const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? col;
+      blitGlow(kc, c.x, c.y, R + 5, showOwner ? 0.14 : 0.06);
+      cx.save();
+      cx.strokeStyle = rgba(kc, 0.55);
+      cx.fillStyle = rgba(kc, 0.08);
+      cx.lineWidth = 1.4;
+      poly(c.x, c.y, R * 0.7, 6, Math.PI / 6);
+      cx.fill();
+      cx.stroke();
+      cx.fillStyle = rgba(kc, 0.5 + 0.2 * ownerPulse);
+      cx.beginPath();
+      cx.arc(c.x, c.y, 2, 0, TAU);
+      cx.fill();
+      cx.restore();
     }
-    cx.stroke();
 
     if (selPlanet === n.id) targetBrackets(c.x, c.y, R + 10, now);
 
-    // callout: id + garrison/buildings, monospace (fogged → no telemetry)
+    // callout: id + garrison/buildings, monospace. Worlds (planets — the capturable
+    // prize) get a BRIGHT designation; every other sector is de-emphasised to a dim,
+    // smaller coordinate so the map reads "worlds first" (fogged → no telemetry).
+    const isWorld = n.sector === 'planet';
     cx.save();
     cx.shadowColor = 'rgba(0,0,0,0.85)';
     cx.shadowBlur = 3;
-    cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
-    cx.font = '700 12px ui-monospace,Menlo,monospace';
+    if (isWorld) {
+      cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
+      cx.font = '700 12px ui-monospace,Menlo,monospace';
+    } else {
+      cx.fillStyle = kn ? (p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)') : 'rgba(120,140,150,0.4)';
+      cx.font = '600 10px ui-monospace,Menlo,monospace';
+    }
     cx.fillText(n.id, c.x + R + 12, c.y - 1);
-    cx.font = '10px ui-monospace,Menlo,monospace';
     if (kn) {
       const g = p.garrison.reduce((a, st) => a + st.count, 0);
-      cx.fillStyle = 'rgba(150,210,205,0.6)';
       const icons = p.buildings.map((b) => BUILD_ICON[b.type] ?? '▪').join('');
-      cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + 12);
+      // worlds always show telemetry; a quiet sector only when it holds something
+      if (isWorld || g > 0 || p.buildings.length) {
+        cx.fillStyle = rgba('#96d2cd', isWorld ? 0.6 : 0.42);
+        cx.font = isWorld ? '10px ui-monospace,Menlo,monospace' : '9px ui-monospace,Menlo,monospace';
+        cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + (isWorld ? 12 : 11));
+      }
     } else {
       cx.fillStyle = 'rgba(110,130,140,0.5)';
+      cx.font = '10px ui-monospace,Menlo,monospace';
       cx.fillText('· no telemetry', c.x + R + 12, c.y + 12);
     }
     cx.restore();
@@ -5495,6 +5512,14 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
+  } else if (act === 'mobtpl') {
+    mobTplIdx = Number(arg); // switch which template the assembler shows (local, re-renders)
+  } else if (act === 'divslot') {
+    const [ti, si] = arg.split('|').map(Number);
+    const cur = templatesOf(s, ME)[ti!]?.slots[si!] ?? null;
+    const order: (string | null)[] = [null, ...FORMATION_UNITS];
+    const next = order[(order.indexOf(cur) + 1) % order.length] ?? null;
+    playerOrder(setDivisionTemplate(ME, ti!, si!, next));
   } else if (act === 'mobilize') {
     playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
   } else if (act === 'spyplanet') {
@@ -6115,7 +6140,9 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'ground', label: 'Земля' },
   { key: 'squadron', label: 'Эскадрильи' },
   { key: 'missile', label: 'Ракеты' },
+  { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
+const branchLabel = (key: string): string => TECH_BRANCHES.find((b) => b.key === key)?.label ?? key;
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
 function renderTech(): void {
@@ -6130,6 +6157,21 @@ function renderTech(): void {
   const res = (me?.resources ?? {}) as Record<string, number>;
   const started = s.startedAt ?? 0;
   let html = '';
+  // Read-only council header: the 2 leaders chosen at setup (immutable) + the branches
+  // they open, so it's clear why the gated nodes below are reachable.
+  const council = me?.scientists ?? [];
+  if (council.length) {
+    html +=
+      `<div class="tw-council">🧪 Ваши учёные: ` +
+      council
+        .map((c) => {
+          const def = data.scientists[c.id];
+          const br = def?.branch ? ` <span class="tw-cb">${branchLabel(def.branch)}</span>` : '';
+          return `<b>${esc(def?.name ?? c.id)}</b>${br}`;
+        })
+        .join(' · ') +
+      `</div>`;
+  }
   for (const a of activeList) {
     const def = techs[a.technology];
     const total = a.completesAt - a.startedAt;
@@ -6197,6 +6239,88 @@ techWin.addEventListener('click', (e) => {
     playerOrder(researchTech(ME, id));
     renderTech();
   }
+});
+
+// --- steward («Хранитель»): hand the seat to the AI while you sleep ----------
+// Delegate control to a defensive AI until a game-time deadline; it holds the line and
+// returns control on time (stewardModule). Gated by the Steward tech (researched via the
+// «Командование» branch, day 15, scientist Куратор). A "morning report" note fires on expiry.
+const stewWin = $('steward');
+let lastStewAt = 0;
+const STEW_DURATIONS = [4, 8, 12]; // game-hours a single delegation can run
+// Snapshot of my standing at delegation time, diffed on expiry for the morning report.
+let stewSnapshot: { planets: number; metal: number; credits: number } | null = null;
+function stewMetrics(): { planets: number; metal: number; credits: number } {
+  let planets = 0;
+  for (const pl of Object.values(s.planets)) if (pl.owner === ME) planets += 1;
+  const r = (s.players[ME]?.resources ?? {}) as Record<string, number>;
+  return { planets, metal: Math.round(r.metal ?? 0), credits: Math.round(r.credits ?? 0) };
+}
+function stewFmtDur(ms: number): string {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(mins / 60);
+  return h > 0 ? `${h}ч ${mins % 60}м` : `${mins}м`;
+}
+function stewardTechDone(): boolean {
+  return s.players[ME]?.technologies?.completed.includes('ai_stewardship') ?? false;
+}
+function renderSteward(): void {
+  const body = $('stewardbody');
+  const posture = stewardActive(s, ME, s.time); // null unless a live delegation
+  const cur = s.players[ME]?.steward;
+  let html = '';
+  if (posture && cur) {
+    html +=
+      `<div class="st-status on">🤖 <b>Хранитель ведёт оборону.</b><br>` +
+      `Управление вернётся через <b>${stewFmtDur(cur.until - s.time)}</b>.<br>` +
+      `Пока вы спите: держит рубежи и отбивает атаки, застраивает очередь и торгует — без наступлений.</div>` +
+      `<div class="st-row"><button class="st-btn warn" data-stew="recall">Вернуть управление</button></div>` +
+      `<div class="st-note">«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.</div>`;
+  } else if (!stewardTechDone()) {
+    const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY);
+    html +=
+      `<div class="st-status locked">🔒 <b>«Протокол Хранитель» ещё не изучен.</b><br>` +
+      `Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день ${day}).<br>` +
+      `Изучите его в окне технологий — затем сможете передать место ИИ на время сна.</div>` +
+      `<div class="st-row"><button class="st-btn" data-stew="tech">Открыть технологии</button></div>`;
+  } else {
+    html +=
+      `<div class="st-status">😴 <b>Хранитель готов.</b><br>` +
+      `Передайте место доверенному ИИ (поза «Оборона»), пока вы офлайн — он удержит рубежи и вернёт управление к сроку.</div>` +
+      `<div class="st-h">Передать на</div><div class="st-row">` +
+      STEW_DURATIONS.map(
+        (h) => `<button class="st-btn" data-stew="go" data-h="${h}">${h} ч</button>`,
+      ).join('') +
+      `</div>` +
+      `<div class="st-note">Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.</div>`;
+  }
+  body.innerHTML = html;
+}
+document.getElementById('rail-steward')?.addEventListener('click', () => {
+  stewWin.classList.add('show');
+  renderSteward();
+});
+stewWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.id === 'steward' || tg.classList.contains('tw-close')) {
+    stewWin.classList.remove('show');
+    return;
+  }
+  const btn = tg.closest('[data-stew]') as HTMLElement | null;
+  if (!btn) return;
+  const kind = btn.dataset.stew;
+  if (kind === 'go') {
+    const h = Number(btn.dataset.h) || 8;
+    playerOrder(delegateSteward(ME, s.time + h * HOUR));
+  } else if (kind === 'recall') {
+    playerOrder(recallSteward(ME));
+  } else if (kind === 'tech') {
+    stewWin.classList.remove('show');
+    techWin.classList.add('show');
+    renderTech();
+    return;
+  }
+  renderSteward();
 });
 
 // --- session market: a two-sided order book, one tab per tradeable good -------
@@ -6460,6 +6584,38 @@ for (const tile of Array.from(document.querySelectorAll('#hp-more .hub-tile[data
   });
 }
 
+// --- settings overlay (hub → «Ещё» → Настройки) -----------------------------
+// Client-only display preferences (localStorage), never sent to the server. One control
+// for now: the radar sweep's visual opacity — 0% hides the rotating arm, anything between
+// just dims it. Purely cosmetic; the radar mechanic (contact detection) is unaffected.
+const settingsEl = $('settings');
+function renderSettings(): void {
+  const pct = Math.round(sweepOpacity * 100);
+  settingsEl.innerHTML =
+    `<div class="setbox">` +
+    `<div class="pc-head"><span class="pc-dia" style="background:var(--cyan)"></span><b>НАСТРОЙКИ</b><span class="pc-tag">интерфейс</span></div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">Радарная развёртка<span class="set-sub">вращающийся луч на карте — только вид, не влияет на обнаружение</span></div>` +
+    `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="Прозрачность радарной развёртки"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
+    `</div>` +
+    `<button class="pc-close" id="set-close" type="button">ГОТОВО</button>` +
+    `</div>`;
+  const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
+  const val = document.getElementById('set-sweep-val');
+  slider?.addEventListener('input', () => {
+    setSweepOpacity(Number(slider.value) / 100);
+    if (val) val.textContent = `${Math.round(sweepOpacity * 100)}%`; // 0% reads as hidden
+  });
+  document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
+}
+$('hub-settings').addEventListener('click', () => {
+  renderSettings();
+  settingsEl.classList.add('show');
+});
+settingsEl.addEventListener('click', (e) => {
+  if (e.target === settingsEl) settingsEl.classList.remove('show'); // tap the backdrop → close
+});
+
 // First-run gate: a returning commander (a saved callsign) skips the identity card
 // and boots straight into the hub — the raw "Новый командир / войти" screen is only
 // for a genuinely new device. "Сменить командира" in the hub goes back to identity.
@@ -6476,92 +6632,19 @@ const setupSlotsEl = $('setupslots');
 const setupSpeedEl = $('setupspeed');
 const setupHintEl = $('setuphint');
 const setupGoEl = $('setupgo') as HTMLButtonElement;
-const setupDivEl = $('setup-div');
-const setupHeroEl = $('setup-hero');
-const setupShipEl = $('setup-ship');
 
-// --- division designer (main-menu "Дивизии" tab) ----------------------------
-// The player's 3 templates, composed before the match and LOCKED once it starts.
-// Persisted across openSetup() so a design survives going Back; deep-cloned from the
-// defaults so editing never mutates them.
+// The player's division templates / hero roster / ship blueprints. Pre-match loadout
+// EDITORS were removed (modules unlock via tech in-match, so freezing a loadout before
+// the match is incoherent — loadout now happens in-match: ships at build time, heroes
+// in the capital). These default rosters still seed the match via buildSetupConfig.
 const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   name: t.name,
   slots: [...t.slots],
 }));
-let setupTplIdx = 0; // which of the 3 templates is open in the designer
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡', bomber: '✈', aa: '◎' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк', bomber: 'Бомбер', aa: 'ПВО' };
-
-function renderTemplates(): void {
-  const tabs = setupTemplates
-    .map((tp, i) => `<button data-tpl="${i}" class="${i === setupTplIdx ? 'on' : ''}">${esc(t(tp.name))}</button>`)
-    .join('');
-  const tpl = setupTemplates[setupTplIdx]!;
-  const slots = tpl.slots
-    .map((u, i) => {
-      const cls = u ? '' : 'empty';
-      const ic = u ? FORM_ICON[u] : '＋';
-      const nm = u ? t(FORM_RU[u]!) : t('пусто');
-      return `<div class="tslot ${cls}" data-slot="${i}"><span class="ic">${ic}</span><span class="nm">${esc(nm)}</span></div>`;
-    })
-    .join('');
-  const f = formationStats(tpl);
-  const syn = f.synergies.length
-    ? f.synergies.map((x) => `<span class="syn">◈ ${esc(t(x.name))} — ${esc(t(x.desc))}</span>`).join('')
-    : `<span class="syn none">◇ ${t('Нет бонусов состава — смешай рода войск.')}</span>`;
-  const cost = Object.entries(f.cost)
-    .map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`)
-    .join(' · ');
-  setupDivEl.innerHTML =
-    `<p class="ssub">${t('Собери 3 шаблона дивизий из 6 слотов. Состав даёт суммарные статы и бонусы; во время боя шаблоны не меняются. Тапни слот, чтобы сменить юнит.')}</p>` +
-    `<div class="tpl-tabs">${tabs}</div>` +
-    `<div class="tpl-slots">${slots}</div>` +
-    `<div class="tpl-stats"><div class="row"><span>⚔ ${t('Атака')} ${f.attack}</span><span>🛡 ${t('Оборона')} ${f.defense}</span><span>❤ HP ${f.hp}</span><span>№ ${f.count}/${FORMATION_SLOTS}</span></div>${syn}<div class="tpl-cost">${t('Стоимость мобилизации: {cost}', { cost: cost || '—' })}</div></div>`;
-}
-
-/** Cycle a slot through: пусто → пехота → танк → бомбер → пусто. */
-function cycleSlot(i: number): void {
-  const tpl = setupTemplates[setupTplIdx];
-  if (!tpl) return;
-  const cur = tpl.slots[i] ?? null;
-  const order: (FormationUnit | null)[] = [null, ...FORMATION_UNITS];
-  const next = order[(order.indexOf(cur) + 1) % order.length] ?? null;
-  tpl.slots[i] = next;
-  renderTemplates();
-}
-
-setupDivEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-slot],[data-tpl]') as HTMLElement | null;
-  if (!t) return;
-  if (t.dataset.tpl !== undefined) {
-    setupTplIdx = Number(t.dataset.tpl);
-    renderTemplates();
-  } else if (t.dataset.slot !== undefined) {
-    cycleSlot(Number(t.dataset.slot));
-  }
-});
-// --- hero designer (main-menu "Герои" tab) ----------------------------------
-// The player's hero roster: up to 3 loadouts, each with HERO_SLOTS ability "modules"
-// + the implicit base aura. Composed before the match (in-match capital/respawn/refit
-// land in a later phase). Reuses the division designer's tab/slot/stats chrome.
+/** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
+const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡' };
+const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
-let setupHeroIdx = 0; // which hero is open in the designer
-let heldModule: string | null = null; // the module on the "cursor" (grab → place, Minecraft-style)
-const heldGhostEl = $('heldghost');
-
-/** Put a module on the cursor (or clear with null); reflect it in the floating ghost. */
-function setHeld(id: string | null, kind: 'hero' | 'ship' = 'hero'): void {
-  heldModule = id;
-  const icon =
-    id == null ? '' : kind === 'ship' ? (SHIP_MODULES[id]?.icon ?? '') : (HERO_ABILITIES[id]?.icon ?? '');
-  heldGhostEl.textContent = icon;
-  heldGhostEl.style.display = icon ? 'block' : 'none';
-}
-/** Move the floating ghost to the pointer (called on grab + pointermove). */
-function moveGhost(x: number, y: number): void {
-  heldGhostEl.style.left = `${x}px`;
-  heldGhostEl.style.top = `${y}px`;
-}
 
 /** The hero's display name — the главный hero shows the player's callsign (nick),
  *  falling back to its localized preset name only while the nick field is empty. */
@@ -6569,198 +6652,12 @@ function heroName(h: HeroLoadout): string {
   return h.grade === 'main' ? nickInput.value.trim() || t(h.name) : h.name;
 }
 
-function renderHeroes(): void {
-  const tabs = setupHeroes
-    .map((h, i) => `<button data-hero="${i}" class="${i === setupHeroIdx ? 'on' : ''}">${HERO_GRADES[h.grade].icon} ${esc(h.grade === 'main' ? heroName(h) : t(heroName(h)))}</button>`)
-    .join('');
-  const hero = setupHeroes[setupHeroIdx]!;
-  const grade = HERO_GRADES[hero.grade];
-  const slots = heroSlots(hero.grade);
-  const holding = heldModule != null;
-  // Equip "bays" — one per grade slot; the drop targets while a module is held.
-  const bays = Array.from({ length: slots }, (_, i) => {
-    const id = hero.abilities[i] ?? null;
-    const ab = id ? HERO_ABILITIES[id] : undefined;
-    return `<div class="tslot ${ab ? '' : 'empty'} ${holding ? 'drop' : ''}" data-aslot="${i}"><span class="ic">${ab ? ab.icon : '＋'}</span><span class="nm">${esc(ab ? t(ab.name) : t('пусто'))}</span></div>`;
-  }).join('');
-  const info = heroLoadoutInfo(hero);
-  const syn = info.abilities.length
-    ? info.abilities
-        .map((a) => `<span class="syn">${a.icon} ${esc(t(a.name))} — ${esc(t(a.desc))}${a.live ? '' : ` <em>(${t('скоро')})</em>`}</span>`)
-        .join('')
-    : `<span class="syn none">◇ ${t('Слоты пусты — возьми модуль из инвентаря ниже.')}</span>`;
-  // Module "inventory" grid — tap a cell to grab it onto the cursor, then tap a hero slot.
-  const equipped = new Set(hero.abilities.slice(0, slots).filter(Boolean) as string[]);
-  const inv = HERO_ABILITY_IDS.map((id) => {
-    const a = HERO_ABILITIES[id]!;
-    const cls = `${equipped.has(id) ? 'equip' : ''} ${heldModule === id ? 'held' : ''} ${a.live ? '' : 'planned'}`;
-    return `<div class="mcell ${cls}" data-abil="${id}"><span class="ic">${a.icon}</span><span class="nm">${esc(t(a.name))}</span>${equipped.has(id) ? '<span class="badge">✓</span>' : ''}</div>`;
-  }).join('');
-  const heldA = heldModule ? HERO_ABILITIES[heldModule] : undefined;
-  const heldBar = heldA
-    ? `<div class="mheld active" data-drop="1">${t('В руке')}: ${heldA.icon} <b>${esc(t(heldA.name))}</b> — ${t('тапни слот героя')} · <em>(${t('тап сюда — убрать')})</em></div>`
-    : `<div class="mheld">${t('Возьми модуль из инвентаря и тапни слот героя. Тап по занятому слоту — снять модуль.')}</div>`;
-  setupHeroEl.innerHTML =
-    `<p class="ssub">${t('{n} героя: главный (имя = твой ник) + по одному грейду. Грейд задаёт число слотов под модули (обычный {c} · редкий {r} · легендарный {l} · главный {m}) + базовая аура (+5% бой флоту). Бери модуль из инвентаря и вставляй в слот. В матче меняется в столице.', { n: HERO_ROSTER_COUNT, c: HERO_GRADES.common.slots, r: HERO_GRADES.rare.slots, l: HERO_GRADES.legendary.slots, m: HERO_GRADES.main.slots })}</p>` +
-    `<div class="tpl-tabs">${tabs}</div>` +
-    `<div class="hgradeline g-${hero.grade}">${grade.icon} ${esc(t(grade.name))} · ${t(slots === 1 ? '{n} слот под модули' : '{n} слота под модули', { n: slots })}</div>` +
-    `<div class="tpl-slots heroslots" style="grid-template-columns:repeat(${Math.min(slots, 4)},1fr)">${bays}</div>` +
-    `<div class="tpl-stats"><div class="row"><span>★ ${t('Модули')} ${info.count}/${slots}</span><span>✦ ${t('Аура +5%')}</span></div>${syn}</div>` +
-    heldBar +
-    `<div class="hpal-h">${t('Инвентарь модулей')}</div><div class="minv">${inv}</div>`;
-}
-
-/** Tap a hero slot: place the held module (swapping out any current one onto the
- *  cursor), or — empty-handed — pick the slot's module up. No duplicate module per hero. */
-function tapHeroSlot(i: number): void {
-  const hero = setupHeroes[setupHeroIdx];
-  if (!hero) return;
-  if (heldModule == null) {
-    const cur = hero.abilities[i];
-    if (cur != null) {
-      hero.abilities[i] = null;
-      setHeld(cur);
-    }
-  } else if (!hero.abilities.some((a, j) => j !== i && a === heldModule)) {
-    const prev = hero.abilities[i] ?? null;
-    hero.abilities[i] = heldModule;
-    setHeld(prev); // swap: now holding what the slot had (null = hand emptied)
-  }
-  renderHeroes();
-}
-
-setupHeroEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-aslot],[data-hero],[data-abil],[data-drop]') as HTMLElement | null;
-  if (!t) return;
-  if (t.dataset.hero !== undefined) {
-    setupHeroIdx = Number(t.dataset.hero);
-    renderHeroes();
-  } else if (t.dataset.drop !== undefined) {
-    setHeld(null); // drop the held module back to the inventory
-    renderHeroes();
-  } else if (t.dataset.aslot !== undefined) {
-    tapHeroSlot(Number(t.dataset.aslot));
-  } else if (t.dataset.abil !== undefined) {
-    setHeld(heldModule === t.dataset.abil ? null : t.dataset.abil); // grab a copy (tap again = drop)
-    moveGhost(ev.clientX, ev.clientY);
-    renderHeroes();
-  }
-});
-
-// --- shipyard designer (main-menu "Верфь" tab) ------------------------------
-// The player's ship blueprints: a module loadout per hull class, frozen at session
-// start (GDD §2). Reuses the SAME Minecraft-inventory fitting chrome as heroes — but
-// ship modules STACK (no per-loadout duplicate guard), and the stat preview is derived
-// from the hull's base unit stats. Effects reach combat in a later brick (SHIP-3).
 const setupShips: ShipLoadout[] = DEFAULT_SHIP_LOADOUTS.map((l) => ({ hull: l.hull, modules: [...l.modules] }));
-let setupShipIdx = 0;
 
-function renderShips(): void {
-  const tabs = setupShips
-    .map((l, i) => `<button data-hull="${i}" class="${i === setupShipIdx ? 'on' : ''}">${SHIP_HULLS[l.hull]?.icon ?? '▦'} ${esc(t(SHIP_HULLS[l.hull]?.name ?? l.hull))}</button>`)
-    .join('');
-  const loadout = setupShips[setupShipIdx]!;
-  const hull = SHIP_HULLS[loadout.hull];
-  const slots = hullSlots(loadout.hull);
-  const holding = heldModule != null;
-  const bays = Array.from({ length: slots }, (_, i) => {
-    const id = loadout.modules[i] ?? null;
-    const m = id ? SHIP_MODULES[id] : undefined;
-    return `<div class="tslot ${m ? '' : 'empty'} ${holding ? 'drop' : ''}" data-mslot="${i}"><span class="ic">${m ? m.icon : '＋'}</span><span class="nm">${esc(m ? t(m.name) : t('пусто'))}</span></div>`;
-  }).join('');
-  const baseUnit = hull ? data.units[hull.base] : undefined;
-  const base = {
-    attack: baseUnit?.stats.attack ?? 0,
-    defense: baseUnit?.stats.defense ?? 0,
-    speed: baseUnit?.stats.speed ?? 0,
-    hp: baseUnit?.stats.hp ?? 0,
-  };
-  const der = shipStats(base, loadout);
-  const stat = (label: string, b: number, d: number): string =>
-    `<span>${label} ${d}${d !== b ? ` <em>(${b})</em>` : ''}</span>`;
-  const info = shipLoadoutInfo(loadout);
-  const syn = info.modules.length
-    ? info.modules
-        .map((m) => `<span class="syn">${m.icon} ${esc(t(m.name))} — ${esc(t(m.desc))}${m.live ? '' : ` <em>(${t('скоро')})</em>`}</span>`)
-        .join('')
-    : `<span class="syn none">◇ ${t('Слоты пусты — возьми модуль из инвентаря ниже.')}</span>`;
-  const inv = SHIP_MODULE_IDS.map((id) => {
-    const m = SHIP_MODULES[id]!;
-    const cls = `${heldModule === id ? 'held' : ''} ${m.live ? '' : 'planned'}`;
-    return `<div class="mcell ${cls}" data-smod="${id}"><span class="ic">${m.icon}</span><span class="nm">${esc(t(m.name))}</span></div>`;
-  }).join('');
-  const heldM = heldModule ? SHIP_MODULES[heldModule] : undefined;
-  const heldBar = heldM
-    ? `<div class="mheld active" data-drop="1">${t('В руке')}: ${heldM.icon} <b>${esc(t(heldM.name))}</b> — ${t('тапни слот корпуса')} · <em>(${t('тап сюда — убрать')})</em></div>`
-    : `<div class="mheld">${t('Возьми модуль из инвентаря и вставь в слот корпуса. Модули стэкаются. Тап по слоту — снять.')}</div>`;
-  setupShipEl.innerHTML =
-    `<p class="ssub">${t('Чертёж корабля: на класс корпуса навешиваешь модули в слоты (крейсер {c} · осадная {s} · скаут {sc} · десантный {d}). Модули стэкаются и меняют статы. На старте матча чертёж замораживается.', { c: hullSlots('cruiser'), s: hullSlots('siege_lance'), sc: hullSlots('scout_drone'), d: hullSlots('dropship') })} <em>(${t('статы — превью; бой их читает скоро')})</em></p>` +
-    `<div class="tpl-tabs">${tabs}</div>` +
-    `<div class="hgradeline">${hull?.icon ?? '▦'} ${esc(t(hull?.name ?? loadout.hull))} · ${t(slots === 1 ? '{n} слот под модули' : '{n} слота под модули', { n: slots })}</div>` +
-    `<div class="tpl-slots" style="display:grid;gap:8px;margin-bottom:10px;grid-template-columns:repeat(${Math.min(slots, 4)},1fr)">${bays}</div>` +
-    `<div class="tpl-stats"><div class="row">${stat('⚔ ' + t('Атака'), base.attack, der.attack)}${stat('🛡 ' + t('Оборона'), base.defense, der.defense)}${stat('» ' + t('Скор'), base.speed, der.speed)}${stat('❤ HP', base.hp, der.hp)}</div>${syn}</div>` +
-    heldBar +
-    `<div class="hpal-h">${t('Инвентарь модулей')}</div><div class="minv">${inv}</div>`;
-}
-
-/** Tap a hull slot: place the held module (swapping out any current one), or — empty-
- *  handed — pick the slot's module up. Ship modules STACK, so no duplicate guard. */
-function tapShipSlot(i: number): void {
-  const loadout = setupShips[setupShipIdx];
-  if (!loadout) return;
-  if (heldModule == null) {
-    const cur = loadout.modules[i];
-    if (cur != null) {
-      loadout.modules[i] = null;
-      setHeld(cur, 'ship');
-    }
-  } else {
-    const prev = loadout.modules[i] ?? null;
-    loadout.modules[i] = heldModule;
-    setHeld(prev, 'ship'); // swap (null = hand emptied)
-  }
-  renderShips();
-}
-
-setupShipEl.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-mslot],[data-hull],[data-smod],[data-drop]') as HTMLElement | null;
-  if (!t) return;
-  if (t.dataset.hull !== undefined) {
-    setupShipIdx = Number(t.dataset.hull);
-    renderShips();
-  } else if (t.dataset.drop !== undefined) {
-    setHeld(null);
-    renderShips();
-  } else if (t.dataset.mslot !== undefined) {
-    tapShipSlot(Number(t.dataset.mslot));
-  } else if (t.dataset.smod !== undefined) {
-    setHeld(heldModule === t.dataset.smod ? null : t.dataset.smod, 'ship'); // grab (tap again = drop)
-    moveGhost(ev.clientX, ev.clientY);
-    renderShips();
-  }
-});
-
-// The held module's ghost trails the pointer while carried (desktop hover; on touch it
-// sits where you grabbed it). Bound to the setup overlay — never to `document`.
-setupEl.addEventListener('pointermove', (ev) => {
-  if (heldModule != null) moveGhost(ev.clientX, ev.clientY);
-});
-
-// Setup tab switch (Старт ↔ Дивизии ↔ Герои).
-document.querySelector('#setup .stabs')?.addEventListener('click', (ev) => {
-  const t = (ev.target as Element).closest('[data-stab]') as HTMLElement | null;
-  if (!t) return;
-  const tab = t.dataset.stab;
-  document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === tab));
-  $('setup-start').style.display = tab === 'start' ? '' : 'none';
-  setupDivEl.style.display = tab === 'div' ? '' : 'none';
-  setupHeroEl.style.display = tab === 'hero' ? '' : 'none';
-  setupShipEl.style.display = tab === 'ship' ? '' : 'none';
-  setHeld(null); // a held module never crosses a tab switch (hero ↔ ship pools differ)
-  if (tab === 'div') renderTemplates();
-  if (tab === 'hero') renderHeroes();
-  if (tab === 'ship') renderShips();
-});
+// Loadout is chosen in-match now (ships at build time under tech-unlocks, heroes in the
+// capital), so the pre-match Верфь / Герои / Дивизии editors and their inventory chrome
+// were removed. `setupTemplates` / `setupHeroes` / `setupShips` above keep seeding the
+// match with the default rosters via buildSetupConfig.
 
 function renderSetupMap(): void {
   const pad = 60;
@@ -6837,10 +6734,92 @@ function renderSetup(): void {
 // Where the Setup screen's Back button returns to — the surface that opened it, so
 // arriving from the hub goes back to the hub, not the raw identity card.
 let setupReturn: 'welcome' | 'hub' = 'welcome';
+// --- scientist council picker: choose your 2 research leaders BEFORE the start-point ----
+// A start consecration (GDD §5.2): snapshotted into the match, immutable in-match. Empty
+// slots pulse to prompt the choice; each pick shows which tech-tree branch (and gated nodes)
+// it opens — the influence the player asked to see up front.
+const sciWin = $('scipick');
+function sciInfluence(id: string): string {
+  const def = data.scientists[id];
+  if (!def) return '';
+  if (!def.branch) return '+1 слот исследования (генералист, без фокуса ветки)';
+  const opens = Object.values(data.technologies)
+    .filter(
+      (t) =>
+        t.branch === def.branch && (t.conditions ?? []).some((c) => c.type === 'has_scientist'),
+    )
+    .map((t) => t.name);
+  const br = branchLabel(def.branch);
+  return opens.length ? `Открывает ветку «${br}»: ${opens.join(', ')}` : `Фокус ветки «${br}»`;
+}
+function renderSciPick(): void {
+  const chosen = setupScientists;
+  const slots = [0, 1]
+    .map((i) => {
+      const id = chosen[i];
+      if (!id) {
+        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">Выбрать учёного</div></div>`;
+      }
+      const def = data.scientists[id];
+      return (
+        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="убрать">✕</button>` +
+        `<div class="sp-sn">${esc(def?.name ?? id)}</div>` +
+        `<div class="sp-inf">${esc(sciInfluence(id))}</div></div>`
+      );
+    })
+    .join('');
+  const roster = Object.keys(data.scientists)
+    .map((id) => {
+      const def = data.scientists[id]!;
+      const placed = chosen.includes(id);
+      const dis = placed || (chosen.length >= 2 && !placed);
+      return (
+        `<button class="sp-card${placed ? ' picked' : ''}" data-spadd="${id}"${dis ? ' disabled' : ''}>` +
+        `<div class="sp-cn">${esc(def.name)}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
+        `<div class="sp-inf">${esc(sciInfluence(id))}</div></button>`
+      );
+    })
+    .join('');
+  const ready = chosen.length >= 2;
+  $('scipickbody').innerHTML =
+    `<div class="sp-slots">${slots}</div>` +
+    `<div class="sp-warn">⚠ Выбор учёных закрепляется на всю сессию — изменить в матче будет нельзя.</div>` +
+    `<div class="sp-h">Кандидаты · нажмите, чтобы занять слот</div>` +
+    `<div class="sp-roster">${roster}</div>` +
+    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? 'Закрепить и продолжить к выбору места →' : 'Выберите двух учёных'}</button>`;
+}
+function openSciPick(): void {
+  sciWin.classList.add('show');
+  renderSciPick();
+}
+sciWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.closest('.sp-cancel')) {
+    sciWin.classList.remove('show');
+    $('setupcancel').click(); // back out of setup entirely
+    return;
+  }
+  const add = tg.closest('[data-spadd]') as HTMLElement | null;
+  if (add && !add.hasAttribute('disabled')) {
+    const id = add.dataset.spadd ?? '';
+    if (id && !setupScientists.includes(id) && setupScientists.length < 2) setupScientists.push(id);
+    renderSciPick();
+    return;
+  }
+  const rm = tg.closest('[data-sprm]') as HTMLElement | null;
+  if (rm) {
+    setupScientists.splice(Number(rm.dataset.sprm), 1);
+    renderSciPick();
+    return;
+  }
+  if (tg.id === 'sp-go' && setupScientists.length >= 2) sciWin.classList.remove('show');
+});
+
 function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
+  setupScientists = []; // re-consecrate the council each time setup opens
   // A lively default: ×1 wall-clock reads as a FROZEN screen to a newcomer, so the
   // setup opens on the last chosen multiplier (first launch: ×10). True real time
   // stays one tap away — the ×1 chip.
@@ -6848,14 +6827,9 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupSpeed = SETUP_SPEEDS.includes(savedSpeed) ? savedSpeed : 10;
   showConnect(false);
   setupEl.style.display = 'flex';
-  // Always open on the Старт tab (the division designer keeps its own state).
-  document.querySelectorAll('#setup .stabs button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.stab === 'start'));
   $('setup-start').style.display = '';
-  setupDivEl.style.display = 'none';
-  setupHeroEl.style.display = 'none';
-  setupShipEl.style.display = 'none';
-  setHeld(null);
   renderSetup();
+  openSciPick(); // consecrate your 2 research leaders before picking the start point
 }
 
 function buildSetupConfig(): SetupConfig {
@@ -6875,6 +6849,7 @@ function buildSetupConfig(): SetupConfig {
   // Carry the player's division templates + hero roster into the match (deep-cloned).
   return {
     seats,
+    ...(setupScientists.length ? { scientists: [...setupScientists] } : {}),
     templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
     heroes: setupHeroes.map((h) => ({ name: heroName(h), grade: h.grade, abilities: [...h.abilities] })),
     ships: setupShips.map((l) => ({ hull: l.hull, modules: [...l.modules] })),
@@ -7617,7 +7592,7 @@ function frame(nowReal: number) {
     const dead = stock === 0 && flow === 0 ? ' dead' : '';
     // Unpaid upkeep on this resource → the chip flags the brownout (tap it for words).
     const short = myArrears.includes(key) ? ' short' : '';
-    return `<span class="res${dead}${short}" title="${tData(name)}" data-res="${key}"><i>${icon}</i><b>${kfmt(stock)}</b>${short ? '<em class="dn">⚠</em>' : flowTxt}</span>`;
+    return `<span class="res${dead}${short}" title="${tData(name)}" data-res="${key}"><i>${icon}</i><span class="rv"><b>${kfmt(stock)}</b>${short ? '<em class="dn">⚠</em>' : flowTxt}</span></span>`;
   };
   const hudHtml =
     chip('¤', 'credits', 'Credits') +
@@ -7642,6 +7617,15 @@ function frame(nowReal: number) {
     alertBadge.style.display = battles > 0 ? 'grid' : 'none';
     alertBadge.textContent = alertText;
     lastAlertText = alertText;
+  }
+  // collapsed rail mirrors unread/battle attention onto the hamburger, so notifications
+  // still surface while the tool panel (with its per-tool badges) is closed.
+  const attn = battles + unreadMsgs;
+  const railAlertText = attn > 0 && !railEl.classList.contains('open') ? String(attn) : '';
+  if (railAlertText !== lastRailAlert) {
+    railAlert.style.display = railAlertText ? 'grid' : 'none';
+    if (railAlertText) railAlert.textContent = railAlertText;
+    lastRailAlert = railAlertText;
   }
   const logHtml = logLines.map((l) => `<div>${esc(l)}</div>`).join('');
   if (logHtml !== lastLogHtml) {
@@ -7674,6 +7658,11 @@ function frame(nowReal: number) {
     lastTechAt = nowReal;
     renderTech();
   }
+  // Keep the steward window live while open (countdown to control returning), throttled.
+  if (stewWin.classList.contains('show') && nowReal - lastStewAt > 500) {
+    lastStewAt = nowReal;
+    renderSteward();
+  }
   requestAnimationFrame(frame);
 }
 
@@ -7698,7 +7687,47 @@ if (codexEl) {
 
 // Player card: tap the top-left crest to open your session dossier (faction, worlds,
 // fleets, score, treasury); tap the backdrop or CLOSE to dismiss.
+// the left crest (emblem + title) opens the player dossier
 document.querySelector('.crest')?.addEventListener('click', () => openPlayerCard());
+
+// mirror the chosen emblem into the top-left corner + the hub avatar
+applyEmblem();
+
+// collapsible rail — the hamburger toggles the tool panel; picking a tool closes it.
+function setRailOpen(open: boolean): void {
+  railEl.classList.toggle('open', open);
+  railGlyph.textContent = open ? '✕' : '☰';
+  railToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+railToggle.addEventListener('click', () => setRailOpen(!railEl.classList.contains('open')));
+document.getElementById('railtools')?.addEventListener('click', () => setRailOpen(false));
+
+// emblem picker — the hub avatar opens a glyph grid; picking one persists + applies it.
+const emblemPick = document.getElementById('emblempick');
+const epGrid = document.getElementById('ep-grid');
+function openEmblemPick(): void {
+  if (!emblemPick || !epGrid) return;
+  const cur = playerEmblem();
+  epGrid.innerHTML = EMBLEMS.map(
+    (g) => `<button type="button" class="ep-cell${g === cur ? ' sel' : ''}" data-emblem="${g}">${g}</button>`,
+  ).join('');
+  emblemPick.classList.add('show');
+}
+document.getElementById('hubav')?.addEventListener('click', openEmblemPick);
+document.getElementById('ep-close')?.addEventListener('click', () => emblemPick?.classList.remove('show'));
+emblemPick?.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.id === 'emblempick') {
+    emblemPick.classList.remove('show'); // backdrop tap closes
+    return;
+  }
+  const cell = t.closest('.ep-cell') as HTMLElement | null;
+  if (cell?.dataset.emblem) {
+    setPlayerEmblem(cell.dataset.emblem);
+    emblemPick.classList.remove('show');
+  }
+});
+
 const playerCardEl = document.getElementById('playercard');
 if (playerCardEl) {
   playerCardEl.addEventListener('click', (e) => {

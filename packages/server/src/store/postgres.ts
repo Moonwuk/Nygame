@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { PlayerId } from '@void/shared-core';
 import type {
@@ -7,6 +8,8 @@ import type {
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
+  UserRecord,
+  UserStore,
 } from './types';
 
 /** Create the tables (idempotent). JSONB discipline: the queryable fields (status,
@@ -45,6 +48,15 @@ export async function migrate(pool: Pool): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (match_id, action_id)
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id         text PRIMARY KEY,
+      login      text NOT NULL,
+      pass_hash  text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    -- logins are unique case-insensitively: Vasya and vasya are one account
+    CREATE UNIQUE INDEX IF NOT EXISTS users_login_idx ON users (lower(login));
   `);
 }
 
@@ -99,6 +111,14 @@ export class PostgresMatchStore implements MatchStore {
        WHERE matches.seq <= EXCLUDED.seq`,
       [snapshot.matchId, snapshot.dataVersion, snapshot.seq, snapshot.status, snapshot.state],
     );
+  }
+
+  async ongoingMatchIds(): Promise<string[]> {
+    // Uses matches_status_idx — never touches the JSONB `state`.
+    const r = await this.pool.query<{ id: string }>(
+      `SELECT id FROM matches WHERE status = 'ongoing'`,
+    );
+    return r.rows.map((row) => row.id);
   }
 }
 
@@ -161,6 +181,38 @@ export class PostgresAccountStore implements AccountStore {
       [room],
     );
     return Number(r.rows[0]?.n ?? 0);
+  }
+}
+
+export class PostgresUserStore implements UserStore {
+  constructor(private readonly pool: Pool) {}
+
+  async createUser(
+    login: string,
+    passHash: string,
+  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    const userId = randomUUID();
+    try {
+      await this.pool.query(`INSERT INTO users (id, login, pass_hash) VALUES ($1, $2, $3)`, [
+        userId,
+        login,
+        passHash,
+      ]);
+      return { ok: true, userId };
+    } catch {
+      // The unique lower(login) index makes the INSERT the atomic claim; a violation
+      // (concurrent or pre-existing registration) is the one expected failure here.
+      return { ok: false, code: 'E_LOGIN_TAKEN' };
+    }
+  }
+
+  async findUser(login: string): Promise<UserRecord | null> {
+    const r = await this.pool.query<{ id: string; login: string; pass_hash: string }>(
+      `SELECT id, login, pass_hash FROM users WHERE lower(login) = lower($1)`,
+      [login],
+    );
+    const row = r.rows[0];
+    return row ? { userId: row.id, login: row.login, passHash: row.pass_hash } : null;
   }
 }
 
