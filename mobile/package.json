@@ -13,7 +13,7 @@
     "apk": "npm run www && npm run sync && npm run brand && cd android && ./gradlew assembleDebug --no-daemon"
   },
   "dependencies": {
-    "@capacitor/android": "^6.0.0",
+    "@capacitor/android": "^8.4.1",
     "@capacitor/core": "^8.4.1"
   },
   "devDependencies": {
