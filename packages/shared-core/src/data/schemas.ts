@@ -436,6 +436,59 @@ export const ModuleDefSchema = z
     message: 'a vertical (combat) module may not be soulbound (anti pay-to-win)',
   });
 
+/** A hero's skill-tree branch (docs/heroes.md): `transhuman` (implant-users) vs
+ *  `psionic`. Deliberately distinct from the tech-tree `BranchSchema` — a hero belongs
+ *  to a hero branch, not a research branch. Optional on an archetype (a branchless hero
+ *  simply draws from no branch tree until skill trees land, HERO-7). */
+export const HERO_BRANCHES = ['transhuman', 'psionic'] as const;
+export const HeroBranchSchema = z.enum(HERO_BRANCHES);
+
+/** One hero ability (a "module" in design terms) — a data-driven effect the `heroModule`
+ *  dispatches on `type` (built-in handler, else capability `hero.effect.<type>`; HERO-4).
+ *  `params` is effect-specific and validated more tightly by that handler, mirroring
+ *  `EffectRuleSchema`. Balancing an ability = editing these numbers, not code. */
+export const HeroAbilityDefSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  /** Effect dispatch key (e.g. `temp_lane` / `annihilate` / `aura` / `reveal`). */
+  type: z.string(),
+  /** Cooldown in game-hours before it can fire again (deterministic `readyAt`). 0 = none. */
+  cooldownHours: z.number().nonnegative().default(0),
+  /** Targeting reach in MAP UNITS (Euclidean). 0 = self / untargeted. */
+  range: z.number().nonnegative().default(0),
+  /** Treasury cost to activate (absent / empty = cooldown-only). */
+  cost: ResourceBagSchema.default({}),
+  /** Effect-specific parameters, interpreted by the type's handler. */
+  params: z.record(z.string(), z.unknown()).default({}),
+});
+
+/** The ship a hero commands: either an existing unit archetype (`unit` → `data.units`) or
+ *  inline stat overrides. A hero reuses the fleet for position/movement/combat, so its
+ *  ship is described the same way a unit is (docs/heroes.md §Модель состояния). Both
+ *  optional so an archetype can lean on a unit id, tweak it, or define stats outright. */
+export const HeroShipSchema = z.object({
+  unit: z.string().optional(),
+  stats: UnitStatsSchema.partial().optional(),
+});
+
+/** A hero archetype (docs/heroes.md §Данные) — the persona a player fields, distinct from
+ *  a `UnitDef` (it carries abilities/branch/slots and reuses a ship for its body). The
+ *  data-first core model behind the prototype's roster; passives/fittings/skill-trees are
+ *  later bricks (HERO-5/6/7), so `startPassives` is a plain id list here. */
+export const HeroArchetypeDefSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  branch: HeroBranchSchema.optional(),
+  /** The ship the hero commands (unit ref and/or inline stats). */
+  ship: HeroShipSchema.default({}),
+  /** Module slots the hero's ship exposes (fittings fill these — HERO-6). */
+  slots: z.number().int().nonnegative().default(0),
+  /** Ability ids granted at spawn (→ `data.heroAbilities`). */
+  startAbilities: z.array(z.string()).default([]),
+  /** Passive ids active from spawn (→ `data.heroPassives`, HERO-5). Ids only here. */
+  startPassives: z.array(z.string()).default([]),
+});
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -449,6 +502,8 @@ export const GameDataSchema = z.object({
   technologies: z.record(z.string(), TechnologyDefSchema).default({}),
   scientists: z.record(z.string(), ScientistDefSchema).default({}),
   modules: z.record(z.string(), ModuleDefSchema).default({}),
+  heroes: z.record(z.string(), HeroArchetypeDefSchema).default({}),
+  heroAbilities: z.record(z.string(), HeroAbilityDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -473,6 +528,10 @@ export type TechnologyUnlocks = z.infer<typeof TechnologyUnlocksSchema>;
 export type TechnologyEffects = z.infer<typeof TechnologyEffectsSchema>;
 export type TechnologyDef = z.infer<typeof TechnologyDefSchema>;
 export type ScientistDef = z.infer<typeof ScientistDefSchema>;
+export type HeroBranch = z.infer<typeof HeroBranchSchema>;
+export type HeroAbilityDef = z.infer<typeof HeroAbilityDefSchema>;
+export type HeroShip = z.infer<typeof HeroShipSchema>;
+export type HeroArchetypeDef = z.infer<typeof HeroArchetypeDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;

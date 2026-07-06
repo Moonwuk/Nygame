@@ -1,0 +1,38 @@
+{
+  "commander": {
+    "name": "Командир",
+    "description": "Главный герой-флагман: командный трансгуманист, усиливает флот и открывает коридоры.",
+    "branch": "transhuman",
+    "ship": { "unit": "hero" },
+    "slots": 4,
+    "startAbilities": ["corridor", "rally", "scan", "bulwark"],
+    "startPassives": []
+  },
+  "ravager": {
+    "name": "Разрушитель",
+    "description": "Псионик-разрушитель: аннигилирует миры и вскрывает туман.",
+    "branch": "psionic",
+    "ship": { "unit": "hero" },
+    "slots": 3,
+    "startAbilities": ["annihilate", "scan", "recall"],
+    "startPassives": []
+  },
+  "vanguard": {
+    "name": "Авангард",
+    "description": "Трансгуманист-манёвренник: коридоры и боевой клич для передовых флотов.",
+    "branch": "transhuman",
+    "ship": { "unit": "hero" },
+    "slots": 2,
+    "startAbilities": ["corridor", "rally"],
+    "startPassives": []
+  },
+  "warden": {
+    "name": "Страж",
+    "description": "Псионик-защитник: держит рубеж бастионным щитом.",
+    "branch": "psionic",
+    "ship": { "unit": "hero" },
+    "slots": 1,
+    "startAbilities": ["bulwark"],
+    "startPassives": []
+  }
+}

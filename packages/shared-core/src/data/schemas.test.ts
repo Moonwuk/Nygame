@@ -133,6 +133,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     for (const [id, def] of Object.entries(data.technologies)) {
       check(def.cost, `technology ${id} cost`);
     }
+    for (const [id, def] of Object.entries(data.heroAbilities)) {
+      check(def.cost, `hero ability ${id} cost`);
+    }
   });
 
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {
@@ -201,5 +204,74 @@ describe('game data schema (docs/architecture.md §2)', () => {
       events: { bad: { trigger: 't', effect: 'e', chance: 2 } },
     });
     expect(res.success).toBe(false);
+  });
+});
+
+describe('hero archetypes + abilities (HERO-1, docs/heroes.md)', () => {
+  it('validates the shipped hero content and its shape', () => {
+    const data = parseGameData(loadShippedBundle());
+    // Archetypes carry a branch, a ship, module slots and start abilities.
+    const commander = data.heroes.commander;
+    expect(commander).toBeDefined();
+    expect(commander!.branch).toBe('transhuman');
+    expect(commander!.ship.unit).toBe('hero');
+    expect(commander!.slots).toBe(4);
+    expect(commander!.startAbilities).toContain('corridor');
+    // A hero branch is its OWN axis (transhuman/psionic), not a tech branch.
+    expect(data.heroes.ravager?.branch).toBe('psionic');
+    // Abilities are data-driven effects: a dispatch type + cooldown/range/params.
+    const annihilate = data.heroAbilities.annihilate;
+    expect(annihilate!.type).toBe('annihilate');
+    expect(annihilate!.cooldownHours).toBe(48);
+    expect(annihilate!.range).toBe(500);
+    expect(data.heroAbilities.rally?.params.combatBonus).toBe(0.1);
+  });
+
+  it('every hero references known abilities and a known ship unit (referential integrity)', () => {
+    const data = parseGameData(loadShippedBundle());
+    const abilities = new Set(Object.keys(data.heroAbilities));
+    const units = new Set(Object.keys(data.units));
+    for (const [id, def] of Object.entries(data.heroes)) {
+      for (const ab of def.startAbilities) {
+        expect(abilities.has(ab), `hero ${id} references unknown ability "${ab}"`).toBe(true);
+      }
+      if (def.ship.unit !== undefined) {
+        expect(units.has(def.ship.unit), `hero ${id} references unknown unit "${def.ship.unit}"`).toBe(true);
+      }
+    }
+  });
+
+  it('applies defaults for omitted optional hero fields (graceful, back-compat)', () => {
+    const data = parseGameData({
+      ...loadShippedBundle(),
+      heroes: { minimal: { name: 'Аноним' } },
+      heroAbilities: { blink: { name: 'Мигание', type: 'recall' } },
+    });
+    const h = data.heroes.minimal!;
+    expect(h.ship).toEqual({}); // no unit / no inline stats
+    expect(h.slots).toBe(0);
+    expect(h.startAbilities).toEqual([]);
+    expect(h.startPassives).toEqual([]);
+    expect(h.branch).toBeUndefined(); // branchless is allowed
+    const a = data.heroAbilities.blink!;
+    expect(a.cooldownHours).toBe(0);
+    expect(a.range).toBe(0);
+    expect(a.cost).toEqual({});
+    expect(a.params).toEqual({});
+  });
+
+  it('rejects an unknown hero branch and an ability with no type (fail-closed)', () => {
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroes: { cyborg: { name: 'X', branch: 'cyborg' } },
+      }).success,
+    ).toBe(false);
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroAbilities: { void: { name: 'X' } },
+      }).success,
+    ).toBe(false);
   });
 });

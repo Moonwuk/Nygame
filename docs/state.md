@@ -638,6 +638,8 @@ nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
   `microelectronics_fabrication`): стоимость,
   длительность, prerequisite-цепочки, unlocks юнитов/зданий и бонусы к
   production/speed/damage.
+- **heroes / heroAbilities (HERO-1, `data/heroes.json` + `data/heroAbilities.json`):**
+  data-first фундамент героев (`docs/heroes.md`). `HeroArchetypeDef {name, branch?, ship{unit?|stats?}, slots, startAbilities[], startPassives[]}` — архетипы (`commander/ravager/vanguard/warden`), `branch` — своя ось героев `transhuman|psionic` (не tech-ветка). `HeroAbilityDef {name, type, cooldownHours, range, cost, params}` — способности как data-driven эффекты (`corridor/annihilate/rally/scan/recall/bulwark`), `type` — ключ диспетчеризации будущего `hero.ability` (HERO-4). Загрузчик (`loadGameData`) дополнен двумя фрагментами; `parseGameData` валидирует; тест-инвариант: `startAbilities`∈heroAbilities, `ship.unit`∈units. Пассивки/фитинги/дерево — HERO-5/6/7 (пока `startPassives` — просто список id). Движок (`hero.spawn`/обобщённый `hero.ability`) — следующие кирпичи; сейчас это только контент+схемы (мягкая деградация: нет данных → нет героев).
 
 ## 7. Прототип (`prototype/`)
 
