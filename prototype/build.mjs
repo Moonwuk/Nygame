@@ -1146,6 +1146,26 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #hub .hub-note{flex:0 0 auto;min-height:0;text-align:center;color:var(--amber);font-size:12px;
   padding:0 16px;}
 #hub .hub-note:not(:empty){padding:8px 16px;}
+/* «Прокачка» — meta-progression trees (hub tab) */
+#hp-meta{overflow-y:auto;gap:10px;}
+.mp-head{display:flex;align-items:baseline;gap:12px;color:#eafffb;}
+.mp-head b{font-size:16px;letter-spacing:1px;}
+.mp-xp{color:var(--cyan-dim);font-size:11px;}
+.mp-pts{margin-left:auto;color:var(--amber);font-weight:700;font-size:12px;}
+.mp-track{height:5px;border-radius:3px;background:rgba(53,214,230,.12);overflow:hidden;}
+.mp-fill{height:100%;background:var(--cyan);box-shadow:0 0 8px rgba(53,214,230,.5);}
+.mp-branch{border:1px solid var(--line-hi);border-radius:10px;padding:10px 12px;}
+.mp-bt{font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--grn-dim);margin-bottom:8px;}
+.mp-node{padding:7px 0;border-top:1px dashed var(--line);}
+.mp-node:first-of-type{border-top:none;}
+.mp-nm{color:#eafffb;font-weight:700;font-size:12px;}
+.mp-nm em{color:var(--dim);font-style:normal;font-weight:400;}
+.mp-ds{color:#74b0aa;font-size:11px;margin:2px 0 5px;}
+.mp-node.lock{opacity:.5;}
+.mp-node.own .mp-nm{color:var(--grn,#5ff0a8);}
+.mp-buy{padding:5px 12px;border:1px solid var(--cyan-dim);border-radius:7px;background:transparent;color:var(--cyan);font:700 11px ui-monospace,monospace;cursor:pointer;}
+.mp-buy:disabled{border-color:var(--line);color:var(--dim);cursor:default;}
+.mp-note{color:var(--dim);font-size:10px;margin:2px 0 0;}
 #hub .hub-nav{flex:0 0 auto;display:flex;border-top:1px solid var(--line-hi);background:rgba(2,9,13,.94);
   padding-bottom:env(safe-area-inset-bottom,0);}
 #hub .hub-tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 2px 8px;cursor:pointer;
@@ -1387,6 +1407,7 @@ const html = `<!doctype html>
         <div><div class="hc-t" data-i18n>Сезон ещё не начат</div><div class="hc-s" data-i18n>Рейтинги и альянсы откроются со стартом мета-слоя.</div></div>
       </div>
     </div>
+    <div class="hub-panel" id="hp-meta" style="display:none"></div>
     <div class="hub-panel" id="hp-rank" style="display:none">
       <div class="hub-empty"><span class="he-ic">▤</span><span data-i18n>Рейтинги — скоро</span><br><span style="font-size:11px;color:var(--cyan-dim)" data-i18n>сезонный рейтинг по местам в матчах</span></div>
     </div>
@@ -1411,6 +1432,7 @@ const html = `<!doctype html>
     <button class="hub-tab active" data-hub="home" type="button"><span class="hn-ic">⌂</span><span data-i18n>Домой</span></button>
     <button class="hub-tab" data-hub="games" type="button"><span class="hn-ic">▶</span><span data-i18n>Игры</span></button>
     <button class="hub-tab" data-hub="rank" type="button"><span class="hn-ic">▤</span><span data-i18n>Рейтинг</span></button>
+    <button class="hub-tab" data-hub="meta" type="button"><span class="hn-ic">★</span><span data-i18n>Прокачка</span></button>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span><span data-i18n>Альянсы</span></button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span><span data-i18n>Ещё</span></button>
   </nav>

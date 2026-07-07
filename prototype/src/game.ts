@@ -83,6 +83,45 @@ export const data: GameData = parseGameData({
   // `unlocks`, so researching never locks the content you can already build. Branch /
   // tier / prerequisite / day-gating all apply. Costs use the prototype's 2 resources.
   technologies: {
+    // --- meta-progression grants (прокачка командующего, prototype/src/meta.ts) ----
+    // Hidden session techs granted as `completed` at newGame for unlocked meta nodes.
+    // the meta_ prefix keeps them out of the research window (renderTech).
+    meta_drill_speed: {
+      name: 'Commander Drill: Logistics',
+      description: 'Мета-прокачка: +5% к скорости флотов.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { fleetSpeedBonus: 0.05 },
+    },
+    meta_drill_combat: {
+      name: 'Commander Drill: Gunnery',
+      description: 'Мета-прокачка: +5% к урону.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { combatDamageBonus: 0.05 },
+    },
+    meta_drill_radar: {
+      name: 'Commander Drill: Recon',
+      description: 'Мета-прокачка: +15% к радиусу радаров.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { radarRangeBonus: 0.15 },
+    },
+    meta_drill_veteran: {
+      name: 'Commander Drill: Veterancy',
+      description: 'Мета-прокачка: ещё +5% к скорости и урону.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { fleetSpeedBonus: 0.05, combatDamageBonus: 0.05 },
+    },
+    meta_industry: {
+      name: 'Commander Drill: Industry',
+      description: 'Мета-прокачка: +5% к производству.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { productionBonus: 0.05 },
+    },
+    meta_industry_2: {
+      name: 'Commander Drill: Magnate',
+      description: 'Мета-прокачка: ещё +5% к производству.',
+      branch: 'command', tier: 1, cost: {}, researchTimeHours: 0,
+      effects: { productionBonus: 0.05 },
+    },
     industrial_automation: {
       name: 'Industrial Automation',
       description: 'Апгрейд планетарной логистики: +10% к производству.',
@@ -1175,6 +1214,11 @@ export interface SetupConfig {
   /** The player's ship blueprints — a module loadout per hull class (the "Верфь"
    *  designer). Frozen at session start (GDD §2). Absent → DEFAULT_SHIP_LOADOUTS. */
   ships?: ShipLoadout[];
+  /** Meta-progression grant for the HUMAN seat (prototype/src/meta.ts metaGrant),
+   *  snapshotted at match start like scientists/templates: hidden techs land as
+   *  `completed`, the council starts higher, the treasury opens fatter. Earned by
+   *  play only — never sold (main-menu.md §5). Absent = a fresh commander. */
+  meta?: { tech: string[]; scientistLevel: number; resourceMult: number };
 }
 
 // --- ground formations (HOI4-style division templates) -----------------------
@@ -1364,7 +1408,19 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     // line stays reachable when unset; the has_scientist + day-15 gates still apply.
     if (!seat.ai) {
       const ids = setup.scientists?.length ? setup.scientists.slice(0, 2) : ['overseer'];
-      players[seat.id]!.scientists = ids.map((id) => ({ id, level: 1 }));
+      // Meta-progression raises the whole council's level (snapshot at match start).
+      const lvl = 1 + Math.max(0, setup.meta?.scientistLevel ?? 0);
+      players[seat.id]!.scientists = ids.map((id) => ({ id, level: lvl }));
+      // …opens the treasury fatter…
+      const mult = 1 + Math.max(0, setup.meta?.resourceMult ?? 0);
+      if (mult > 1) {
+        const bag = players[seat.id]!.resources;
+        for (const r of Object.keys(bag)) bag[r] = Math.round((bag[r] ?? 0) * mult);
+      }
+      // …and lands the unlocked hidden techs as completed (bonuses ride the normal
+      // technology hooks from the first second — the C3 pre-match seam, reused).
+      const grant = (setup.meta?.tech ?? []).filter((id) => data.technologies[id]);
+      if (grant.length) players[seat.id]!.technologies = { completed: [...new Set(grant)] };
     }
     fleets[`${seat.id}-1`] = fleet(
       `${seat.id}-1`,

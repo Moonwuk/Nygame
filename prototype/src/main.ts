@@ -133,6 +133,7 @@ import {
 // Russian source string; `t()` wraps every user-visible literal, `tData()` maps
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
+import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 import { initTestMode, openTestMode } from './testmode';
@@ -2459,6 +2460,17 @@ function checkEnd() {
       : s.match.winner === null
         ? t('⚖️ НИЧЬЯ — {why}', { why })
         : t('💀 ПОРАЖЕНИЕ — {why}', { why });
+  // Meta-progression: one XP award per finished match (прокачка командующего).
+  if (!xpAwarded) {
+    xpAwarded = true;
+    const st = loadMeta();
+    const gained = matchXp({ won: s.match.winner === ME, score: s.match.scores?.[ME]?.total ?? 0 });
+    const before = metaLevel(st.xp);
+    const after = { xp: st.xp + gained, spent: st.spent };
+    saveMeta(after);
+    note(t('★ Опыт командующего: +{n}', { n: gained }));
+    if (metaLevel(after.xp) > before) note(t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: metaLevel(after.xp) }));
+  }
 }
 
 // --- rendering ---------------------------------------------------------------
@@ -6148,7 +6160,9 @@ const techCost = (c: Record<string, number>): string =>
 function renderTech(): void {
   const body = $('techbody');
   const me = s.players[ME];
-  const techs = data.technologies;
+  // Meta-progression grants (meta_*) are account perks, not researchable session
+  // techs — the window lists only the real tree.
+  const techs = Object.fromEntries(Object.entries(data.technologies).filter(([id]) => !id.startsWith('meta_')));
   const done = new Set(me?.technologies?.completed ?? []);
   // Research now runs in CONCURRENT slots (core: technologies.active is a list), so
   // normalise to an array and show a progress banner per active slot.
@@ -6513,7 +6527,7 @@ const hubNote = $('hub-note');
 function showHub(show: boolean): void {
   hubEl.style.display = show ? 'flex' : 'none';
 }
-const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', ally: 'hp-ally', more: 'hp-more' };
+const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', ally: 'hp-ally', more: 'hp-more' };
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -6522,10 +6536,51 @@ function hubTab(tab: string): void {
     enterBrowse(); // hand off to the existing match browser
     return;
   }
+  if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
   for (const [k, pid] of Object.entries(HUB_PANELS)) $(pid).style.display = k === tab ? 'flex' : 'none';
   for (const b of Array.from(document.querySelectorAll('.hub-tab')))
     b.classList.toggle('active', (b as HTMLElement).dataset.hub === tab);
 }
+
+// --- «Прокачка» — the commander's meta-progression trees (hub tab) -----------------
+// Three straight tracks (командование/экономика/наука); XP comes ONLY from finished
+// matches, a node costs its tier in points. Effects are session-start snapshots
+// (hidden techs / council level / starting treasury) — see prototype/src/meta.ts.
+function renderMetaPanel(): void {
+  const el = $('hp-meta');
+  const st = loadMeta();
+  const lvl = metaLevel(st.xp);
+  const [got, need] = metaLevelProgress(st.xp);
+  const pts = metaPoints(st);
+  let h = `<div class="mp-head"><b>${t('Уровень {n}', { n: lvl })}</b>` +
+    `<span class="mp-xp">${t('{got}/{need} XP', { got, need })}</span>` +
+    `<span class="mp-pts">${t('Очков: {n}', { n: pts })}</span></div>`;
+  h += `<div class="mp-track"><div class="mp-fill" style="width:${Math.round((got / need) * 100)}%"></div></div>`;
+  for (const branch of ['command', 'economy', 'science'] as MetaBranch[]) {
+    h += `<div class="mp-branch"><div class="mp-bt">${t(META_BRANCH_RU[branch])}</div>`;
+    for (const node of META_TREE.filter((x) => x.branch === branch)) {
+      const owned = st.spent.includes(node.id);
+      const can = canUnlock(st, node.id);
+      h += `<div class="mp-node ${owned ? 'own' : can ? 'can' : 'lock'}">` +
+        `<div class="mp-nm">${owned ? '✓ ' : ''}${esc(t(node.name))} <em>· ${t('{n} очк.', { n: node.tier })}</em></div>` +
+        `<div class="mp-ds">${esc(t(node.desc))}</div>` +
+        (owned ? '' : `<button class="mp-buy" data-meta="${node.id}" ${can ? '' : 'disabled'}>${can ? t('Изучить') : t('Закрыто')}</button>`) +
+        `</div>`;
+    }
+    h += `</div>`;
+  }
+  h += `<p class="mp-note">${t('Опыт даётся за завершённые матчи: участие + счёт + победа. Прокачка не продаётся — только игра.')}</p>`;
+  el.innerHTML = h;
+}
+$('hp-meta').addEventListener('click', (ev) => {
+  const b = (ev.target as HTMLElement).closest('[data-meta]') as HTMLElement | null;
+  if (!b || (b as HTMLButtonElement).disabled) return;
+  const next = unlockNode(loadMeta(), b.dataset.meta!);
+  if (next) {
+    saveMeta(next);
+    renderMetaPanel();
+  }
+});
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
   $('hub-name').textContent = nickInput.value.trim() || t('Командир');
@@ -6832,6 +6887,20 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   openSciPick(); // consecrate your 2 research leaders before picking the start point
 }
 
+// --- meta-progression (прокачка командующего) --------------------------------
+// Per-callsign account state; v1 lives in localStorage next to the guest identity —
+// the server account (SE-1.x) takes this over when the meta-layer lands there.
+function metaKey(): string {
+  return 'vd.meta.' + (nickInput.value.trim() || 'guest');
+}
+function loadMeta(): MetaState {
+  return parseMetaState(localStorage.getItem(metaKey()));
+}
+function saveMeta(st: MetaState): void {
+  localStorage.setItem(metaKey(), JSON.stringify(st));
+}
+let xpAwarded = false; // one award per installed match
+
 function buildSetupConfig(): SetupConfig {
   const seats: SeatConfig[] = [
     { id: SEAT_META[0]!.id, name: SEAT_META[0]!.name, faction: SEAT_META[0]!.faction, start: setupStart, ai: false },
@@ -6846,8 +6915,10 @@ function buildSetupConfig(): SetupConfig {
     const m = SEAT_META[i]!;
     seats.push({ id: m.id, name: m.name, faction: m.faction, start, ai: true });
   }
-  // Carry the player's division templates + hero roster into the match (deep-cloned).
+  // Carry the player's division templates + hero roster into the match (deep-cloned),
+  // plus the meta-progression grant (snapshot — no live account reads mid-match).
   return {
+    meta: metaGrant(loadMeta()),
     seats,
     ...(setupScientists.length ? { scientists: [...setupScientists] } : {}),
     templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
@@ -6914,6 +6985,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
+  xpAwarded = false; // a fresh match earns its own meta-XP award
   // The match goal, written AFTER the wipe so it is the first line a player can read.
   // Kept honest against the kernel: victoryModule ends on score (SCORE_LIMIT), on
   // elimination, or on domination — no "capital capture" victory exists.
