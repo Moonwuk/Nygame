@@ -173,6 +173,18 @@ function ownerColor(owner: string | null | undefined): string {
   const i = rivals.indexOf(owner);
   return i >= 0 ? RIVAL_COLORS[i % RIVAL_COLORS.length]! : RIVAL_COLORS[0]!;
 }
+// Player builds hide the dev chrome (FPS overlay, the welcome-screen «Тесты» button):
+// it reads as debug noise to a newcomer. Flip it on with `?dev` in the URL or
+// localStorage 'vd.dev'='1' (persists per device). A live DESYNC still surfaces the
+// overlay to everyone — that's a bug players must see and report, not diagnostics.
+const DEV_UI = ((): boolean => {
+  try {
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('dev')) return true;
+    return typeof localStorage !== 'undefined' && localStorage.getItem('vd.dev') === '1';
+  } catch {
+    return false;
+  }
+})();
 // The four possible commanders, in stable seat order. Seat 1 is always you (human);
 // seats 2-4 are AI or off in the setup screen. Mirrors DEFAULT_SETUP in game.ts.
 const SEAT_META: ReadonlyArray<{ id: string; name: string; faction: string; color: string }> = [
@@ -5194,7 +5206,7 @@ function renderDiplo(): void {
       : `<div class="dp-convo">${convoListHtml()}${convoThreadHtml()}</div>`;
   el.innerHTML =
     `<div class="dpbox">` +
-    `<div class="dp-head"><b>${t('СЕССИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}<button class="dp-close">✕</button></div>` +
+    `<div class="dp-head"><b>${t('ДИПЛОМАТИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}<button class="dp-close">✕</button></div>` +
     body +
     `</div>`;
   if (diploTab === 'msgs') scrollFeedToEnd();
@@ -6157,7 +6169,7 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'missile', label: 'Ракеты' },
   { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
-const branchLabel = (key: string): string => TECH_BRANCHES.find((b) => b.key === key)?.label ?? key;
+const branchLabel = (key: string): string => t(TECH_BRANCHES.find((b) => b.key === key)?.label ?? key);
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
 function renderTech(): void {
@@ -6177,12 +6189,12 @@ function renderTech(): void {
   const council = me?.scientists ?? [];
   if (council.length) {
     html +=
-      `<div class="tw-council">🧪 Ваши учёные: ` +
+      `<div class="tw-council">🧪 ${t('Ваши учёные:')} ` +
       council
         .map((c) => {
           const def = data.scientists[c.id];
           const br = def?.branch ? ` <span class="tw-cb">${branchLabel(def.branch)}</span>` : '';
-          return `<b>${esc(def?.name ?? c.id)}</b>${br}`;
+          return `<b>${esc(tData(def?.name ?? c.id))}</b>${br}`;
         })
         .join(' · ') +
       `</div>`;
@@ -6470,6 +6482,8 @@ $('csolo').addEventListener('click', () => {
 // DEV TEST MODE — fenced hook. The "Тесты" button opens the dev test overlay;
 // initTestMode wires it to the host with two tiny callbacks. Cut this whole block
 // (and the import + #testmode HTML/CSS) to remove the feature without a trace.
+// Player builds hide the button entirely (dev chrome) — `?dev` / vd.dev restores it.
+if (!DEV_UI) $('ctest').style.display = 'none';
 $('ctest')?.addEventListener('click', () => {
   userClosed = true;
   NET = false;
@@ -6757,15 +6771,17 @@ const sciWin = $('scipick');
 function sciInfluence(id: string): string {
   const def = data.scientists[id];
   if (!def) return '';
-  if (!def.branch) return '+1 слот исследования (генералист, без фокуса ветки)';
+  if (!def.branch) return t('+1 слот исследования (генералист, без фокуса ветки)');
   const opens = Object.values(data.technologies)
     .filter(
-      (t) =>
-        t.branch === def.branch && (t.conditions ?? []).some((c) => c.type === 'has_scientist'),
+      (td) =>
+        td.branch === def.branch && (td.conditions ?? []).some((c) => c.type === 'has_scientist'),
     )
-    .map((t) => t.name);
+    .map((td) => tData(td.name));
   const br = branchLabel(def.branch);
-  return opens.length ? `Открывает ветку «${br}»: ${opens.join(', ')}` : `Фокус ветки «${br}»`;
+  return opens.length
+    ? t('Открывает ветку «{br}»: {list}', { br, list: opens.join(', ') })
+    : t('Фокус ветки «{br}»', { br });
 }
 function renderSciPick(): void {
   const chosen = setupScientists;
@@ -6773,12 +6789,12 @@ function renderSciPick(): void {
     .map((i) => {
       const id = chosen[i];
       if (!id) {
-        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">Выбрать учёного</div></div>`;
+        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">${t('Выбрать учёного')}</div></div>`;
       }
       const def = data.scientists[id];
       return (
-        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="убрать">✕</button>` +
-        `<div class="sp-sn">${esc(def?.name ?? id)}</div>` +
+        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="${t('убрать')}">✕</button>` +
+        `<div class="sp-sn">${esc(tData(def?.name ?? id))}</div>` +
         `<div class="sp-inf">${esc(sciInfluence(id))}</div></div>`
       );
     })
@@ -6790,7 +6806,7 @@ function renderSciPick(): void {
       const dis = placed || (chosen.length >= 2 && !placed);
       return (
         `<button class="sp-card${placed ? ' picked' : ''}" data-spadd="${id}"${dis ? ' disabled' : ''}>` +
-        `<div class="sp-cn">${esc(def.name)}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
+        `<div class="sp-cn">${esc(tData(def.name))}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
         `<div class="sp-inf">${esc(sciInfluence(id))}</div></button>`
       );
     })
@@ -6798,10 +6814,10 @@ function renderSciPick(): void {
   const ready = chosen.length >= 2;
   $('scipickbody').innerHTML =
     `<div class="sp-slots">${slots}</div>` +
-    `<div class="sp-warn">⚠ Выбор учёных закрепляется на всю сессию — изменить в матче будет нельзя.</div>` +
-    `<div class="sp-h">Кандидаты · нажмите, чтобы занять слот</div>` +
+    `<div class="sp-warn">${t('⚠ Совет закрепляется на весь матч. Рекомендованная пара уже выбрана — замените по вкусу.')}</div>` +
+    `<div class="sp-h">${t('Кандидаты · нажмите, чтобы занять слот')}</div>` +
     `<div class="sp-roster">${roster}</div>` +
-    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? 'Закрепить и продолжить к выбору места →' : 'Выберите двух учёных'}</button>`;
+    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? t('Закрепить и продолжить к выбору места →') : t('Выберите двух учёных')}</button>`;
 }
 function openSciPick(): void {
   sciWin.classList.add('show');
@@ -6834,7 +6850,11 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
-  setupScientists = []; // re-consecrate the council each time setup opens
+  // Re-consecrate the council each time setup opens, PRE-SEEDED with the recommended
+  // newbie pair (командование «Куратор» + генералист «Полимат»): the first permanent
+  // choice a new player faces must never be a wall of empty slots + a disabled button —
+  // one tap continues, swapping is optional. Guarded by presence so data edits degrade.
+  setupScientists = ['overseer', 'polymath'].filter((id) => data.scientists[id]);
   // A lively default: ×1 wall-clock reads as a FROZEN screen to a newcomer, so the
   // setup opens on the last chosen multiplier (first launch: ×10). True real time
   // stays one tap away — the ×1 chip.
@@ -7572,19 +7592,26 @@ function frame(nowReal: number) {
     lastClockText = statusHtml;
   }
 
-  // Dev net overlay (M0): FPS always; when connected, append round-trip latency and
-  // a desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
-  let fpsText = `${Math.round(fpsEma)} FPS`;
-  if (NET) {
-    const rtt = rttEma === null ? '· · ms' : `${Math.round(rttEma)} ms`;
-    const sync = netDesync ? `desync ✗ ${netDesyncCount}` : 'sync ✓';
-    fpsText += ` · ${rtt} · ${sync}`;
-  }
-  if (BUILD_TAG) fpsText += ` · ${BUILD_TAG}`; // running build, always visible
-  if (fpsText !== lastFpsText) {
-    fpsEl.textContent = fpsText;
-    fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
-    lastFpsText = fpsText;
+  // Dev net overlay (M0): FPS; when connected, append round-trip latency and a
+  // desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
+  // Hidden from players (dev chrome) — EXCEPT on a live desync, which everyone
+  // must be able to see and report.
+  if (DEV_UI || (NET && netDesync)) {
+    let fpsText = `${Math.round(fpsEma)} FPS`;
+    if (NET) {
+      const rtt = rttEma === null ? '· · ms' : `${Math.round(rttEma)} ms`;
+      const sync = netDesync ? `desync ✗ ${netDesyncCount}` : 'sync ✓';
+      fpsText += ` · ${rtt} · ${sync}`;
+    }
+    if (BUILD_TAG) fpsText += ` · ${BUILD_TAG}`; // running build, visible in dev
+    if (fpsText !== lastFpsText) {
+      fpsEl.textContent = fpsText;
+      fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
+      lastFpsText = fpsText;
+    }
+  } else if (lastFpsText !== '') {
+    fpsEl.textContent = '';
+    lastFpsText = '';
   }
   // Top bar = the five session resources (icon + amount). The donate currency (Суверены ◆)
   // is rendered separately on the status line right under this bar (see statusHtml above).

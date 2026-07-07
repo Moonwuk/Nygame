@@ -387,6 +387,7 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   border:1px solid var(--line-hi);border-radius:12px;box-shadow:0 0 16px rgba(0,0,0,.5);
   -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
 #rail.open #railtools{display:flex;}
+#railtools .rlbl{display:none;font:8px ui-monospace,monospace;letter-spacing:.4px;color:var(--cyan-dim);line-height:1;}
 #railtools button{position:relative;width:38px;height:38px;background:transparent;border:0;cursor:pointer;
   font-size:18px;color:var(--cyan-dim);border-radius:8px;font-variant-emoji:text;display:grid;place-items:center;}
 #railtools button:hover,#railtools button:active{color:var(--cyan);background:rgba(53,214,230,.12);text-shadow:0 0 8px rgba(53,214,230,.6);}
@@ -719,7 +720,11 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #devline .dl-donate{font-size:11px;padding:2px 8px;}
 
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
-    border-left:0;border-right:0;border-top:1px solid var(--cyan);}
+    border-left:0;border-right:0;border-top:1px solid var(--cyan);
+    padding-bottom:env(safe-area-inset-bottom,0px);}
+  /* bottom-sheet affordance: the little grab-bar phones use to say "this is a sheet" */
+  #side::before{content:'';position:absolute;top:6px;left:50%;transform:translateX(-50%);
+    width:42px;height:4px;border-radius:2px;background:rgba(53,214,230,.35);pointer-events:none;}
   /* the bottom-sheet (z-index 28) opens OVER the corner rail: the hamburger stays put at
      the bottom-left and the panel covers it, instead of the rail jumping up into the
      command bar and overlapping it. Hidden while a panel is open (reopen by closing it). */
@@ -745,12 +750,40 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   button.b{padding:9px 12px;font-size:12px;min-height:44px;}
   #railtools button{width:46px;height:46px;}
   #railtoggle{width:50px;height:50px;font-size:22px;}
-  .spd button{min-width:38px;height:40px;font-size:12px;}
-  .spd .spdmini{min-width:34px;}
+  .spd button{min-width:42px;height:44px;font-size:12px;}
+  .spd .spdmini{min-width:38px;}
   .pclose{width:44px;height:44px;font-size:14px;}
   .ptab{min-height:42px;}
+  /* tech cards: a long 🔒-prerequisite badge gets its own full row instead of
+     squeezing the name/cost column into a one-word-per-line strip */
+  .tw-card{flex-wrap:wrap;}
+  .tw-card .tw-badge{flex:1 1 100%;}
+  /* market listing form: label+input pairs lock together on a grid, the segment
+     switch and the submit span the full width — no orphaned inputs on wrap */
+  .mk-form{display:grid;grid-template-columns:auto 1fr auto 1fr;align-items:center;}
+  .mk-form .mk-seg{grid-column:1 / -1;justify-self:start;}
+  .mk-form .mk-go{grid-column:1 / -1;justify-self:stretch;min-height:44px;}
+  /* toasts (goal line etc.) wrap to two lines instead of clipping with an ellipsis
+     that hides the rest and offers no way to read it */
+  #toasts .toast{white-space:normal;text-overflow:clip;line-height:1.45;}
+  /* the status line lies over bright provinces — give it a real backdrop */
+  #devline{background:rgba(2,8,11,.9);}
+  /* setup: the LAUNCH button must never scroll below the fold — the pane scrolls,
+     the CTA (and Back) stay pinned at the bottom of the box */
+  #setup .sbox{display:flex;flex-direction:column;overflow:hidden;}
+  #setup .spane{flex:1 1 auto;min-height:0;overflow:auto;}
+  #setup .sgo,#setup .scancel{flex:0 0 auto;}
+  /* rail: icons get tiny labels — seven unlabeled glyphs read as a puzzle */
+  #railtools button{width:64px;height:54px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;}
+  #railtools .rlbl{display:block;}
+  /* window close-✕ buttons reach the 44px thumb rule */
+  .dp-close,.mk-close,.lw-head button{min-width:44px;min-height:44px;}
   /* notched phones: controls step inside the safe area instead of under the notch */
-  #top{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+  #top{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
+    padding-top:env(safe-area-inset-top,0px);height:calc(46px + env(safe-area-inset-top,0px));}
+  #devline{top:calc(44px + env(safe-area-inset-top,0px));}
+  #fps{top:calc(78px + env(safe-area-inset-top,0px));}
   #rail{padding-bottom:env(safe-area-inset-bottom);}
   #speedbar{bottom:calc(12px + env(safe-area-inset-bottom));}
   #cmdbar{bottom:calc(10px + env(safe-area-inset-bottom));gap:5px;
@@ -1256,14 +1289,14 @@ const html = `<!doctype html>
      features get wired. -->
 <nav id="rail">
   <div id="railtools">
-    <button id="rail-diplo" title="Дипломатия" data-i18n-title>⬡</button>
-    <button id="rail-msgs" title="Сообщения" data-i18n-title>✉<b id="msgbadge" class="railbadge" style="display:none"></b></button>
-    <button id="rail-tech" title="Технологии" data-i18n-title>⚛</button>
-    <button id="rail-steward" title="Хранитель — передать ИИ на сон" data-i18n-title>😴</button>
-    <button id="rail-market" title="Рынок" data-i18n-title>⇄</button>
-    <button id="railcorp" title="Корпорация" data-i18n-title>⬢</button>
-    <button id="rail-chat" title="Чат" data-i18n-title class="desk-only">🗨</button>
-    <button id="rail-log" title="Сводки" data-i18n-title>≡<span class="badge" id="alertbadge" style="display:none">0</span></button>
+    <button id="rail-diplo" title="Дипломатия" data-i18n-title>⬡<span class="rlbl" data-i18n>Дипло</span></button>
+    <button id="rail-msgs" title="Сообщения" data-i18n-title>✉<span class="rlbl" data-i18n>Почта</span><b id="msgbadge" class="railbadge" style="display:none"></b></button>
+    <button id="rail-tech" title="Технологии" data-i18n-title>⚛<span class="rlbl" data-i18n>Наука</span></button>
+    <button id="rail-steward" title="Хранитель — передать ИИ на сон" data-i18n-title>😴<span class="rlbl" data-i18n>Сон</span></button>
+    <button id="rail-market" title="Рынок" data-i18n-title>⇄<span class="rlbl" data-i18n>Рынок</span></button>
+    <button id="railcorp" title="Корпорация" data-i18n-title>⬢<span class="rlbl" data-i18n>Корп</span></button>
+    <button id="rail-chat" title="Чат" data-i18n-title class="desk-only">🗨<span class="rlbl" data-i18n>Чат</span></button>
+    <button id="rail-log" title="Сводки" data-i18n-title>≡<span class="rlbl" data-i18n>Сводки</span><span class="badge" id="alertbadge" style="display:none">0</span></button>
   </div>
   <button id="railtoggle" title="Инструменты" type="button" aria-expanded="false"><span id="railglyph">☰</span><span class="badge" id="railalert" style="display:none">0</span></button>
 </nav>
@@ -1275,7 +1308,7 @@ const html = `<!doctype html>
 <!-- steward («Хранитель») window — content rendered by renderSteward() in main.ts -->
 <div id="steward"><div class="twbox"><div class="lw-head"><b data-i18n>ХРАНИТЕЛЬ · ИИ НА СОН</b><button class="tw-close">✕</button></div><div id="stewardbody"></div></div></div>
 <!-- scientist council picker (setup-time, before the start-point) — rendered by renderSciPick() -->
-<div id="scipick"><div class="twbox"><div class="lw-head"><b data-i18n>СОВЕТ УЧЁНЫХ · ВЫБОР НАВСЕГДА</b><button class="sp-cancel" type="button" data-i18n>↩ В меню</button></div><div id="scipickbody"></div></div></div>
+<div id="scipick"><div class="twbox"><div class="lw-head"><b data-i18n>СОВЕТ УЧЁНЫХ</b><button class="sp-cancel" type="button" data-i18n>↩ В меню</button></div><div id="scipickbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
 <aside id="side"></aside>
