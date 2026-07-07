@@ -66,6 +66,39 @@ describe('MultiplayerClient', () => {
     expect(snaps.at(-1)?.seq).toBe(1);
   });
 
+  it('delivers fog-filtered domain events AFTER the snapshot they rode in on', () => {
+    const socket = new FakeSocket();
+    const order: string[] = [];
+    let seenState = 0;
+    const client = new MultiplayerClient(socket, {
+      onSnapshot: (snap) => {
+        order.push('snapshot');
+        seenState = (snap.state.players.p1?.resources.credits as number) ?? 0;
+      },
+      onEvents: (events) => {
+        order.push('events:' + events.map((e) => e.type).join(','));
+        // the handler must observe the POST-delta world (state already patched)
+        expect(seenState).toBe(99);
+      },
+    });
+    client.open();
+    const s0 = baseState(10);
+    const s1 = baseState(99);
+    client.receive(welcome(s0)); // welcome carries no events → no onEvents call
+    const withEvents = JSON.stringify({
+      type: 'delta',
+      matchId: 'm',
+      seq: 1,
+      serverTime: 0,
+      delta: diffState(s0, s1),
+      events: [{ type: 'artillery.fired', payload: { fleetId: 'a', target: 'b' }, at: 5 }],
+    });
+    client.receive(withEvents);
+    // an empty events array must NOT fire the handler (deltaMsg sends events: [])
+    client.receive(deltaMsg(diffState(s1, s1), 2));
+    expect(order).toEqual(['snapshot', 'snapshot', 'events:artillery.fired', 'snapshot']);
+  });
+
   it('surfaces rejections and errors, and ignores a delta before any baseline', () => {
     const socket = new FakeSocket();
     let rejected: [string, string] | null = null;

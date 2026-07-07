@@ -1,4 +1,4 @@
-import { applyDelta, type Action, type GameState, type PlayerId, type StateDelta } from '@void/shared-core';
+import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type StateDelta } from '@void/shared-core';
 import { createActionEnvelope } from '@void/action-layer';
 
 export type MultiplayerStatus = 'connecting' | 'open' | 'closed';
@@ -65,6 +65,10 @@ export interface MultiplayerClientHandlers {
   onPingAdded?(ping: MultiplayerPing): void;
   /** A ping we could see was cleared by its owner or expired. */
   onPingRemoved?(pingId: string, reason: 'cleared' | 'expired'): void;
+  /** Fog-filtered domain events that accompanied a delta (battles, volleys, losses,
+   *  captures…) — the server only sends what this player may see. Fired AFTER
+   *  `onSnapshot`, so a handler reading the current state sees the post-delta world. */
+  onEvents?(events: DomainEvent[]): void;
 }
 
 interface InboundBase {
@@ -86,6 +90,7 @@ interface InboundBase {
   ping?: MultiplayerPing;
   pingId?: string;
   reason?: 'cleared' | 'expired';
+  events?: DomainEvent[];
 }
 
 function decode(raw: string): InboundBase | null {
@@ -224,6 +229,11 @@ export class MultiplayerClient {
         hash: message.hash,
         lobby: message.lobby,
       });
+      // Domain events ride the same delta (already fog-filtered server-side); deliver
+      // them after the snapshot so consumers resolve ids against the updated state.
+      if (Array.isArray(message.events) && message.events.length > 0) {
+        this.handlers.onEvents?.(message.events);
+      }
       return;
     }
     if (message.type === 'pong' && typeof message.serverTime === 'number') {

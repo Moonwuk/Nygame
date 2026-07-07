@@ -847,7 +847,6 @@ export const en: Record<string, string> = {
   'СОВЕТ УЧЁНЫХ': 'SCIENCE COUNCIL',
   '↩ В меню': '↩ Menu',
   'Выбрать учёного': 'Pick a scientist',
-  'убрать': 'remove',
   '⚠ Совет закрепляется на весь матч. Рекомендованная пара уже выбрана — замените по вкусу.':
     '⚠ The council locks in for the whole match. A recommended pair is pre-selected — swap to taste.',
   'Кандидаты · нажмите, чтобы занять слот': 'Candidates · tap to fill a slot',
@@ -865,10 +864,8 @@ export const en: Record<string, string> = {
   'data:Полимат': 'Polymath',
   // --- tech-branch labels (tabs / chips / section heads) ---------------------------
   'Космос': 'Space',
-  'Земля': 'Ground',
   'Эскадрильи': 'Squadrons',
   'Ракеты': 'Missiles',
-  'Командование': 'Command',
   'Дом: {home} — одиночная песочница, без соперников · тапните светящийся мир, чтобы сменить':
     'Home: {home} — a solo sandbox, no rivals · tap another glowing world to change',
   'Дом: {home} — тапните другой светящийся мир, чтобы сменить':
@@ -876,10 +873,42 @@ export const en: Record<string, string> = {
   // --- rail icon labels + window headers -------------------------------------------
   'Дипло': 'Diplo',
   'Почта': 'Mail',
-  'Наука': 'Tech',
   'Сон': 'Sleep',
   'Корп': 'Corp',
   'ДИПЛОМАТИЯ': 'DIPLOMACY',
+
+  // --- steward window («Хранитель») + settings + end-of-match ---------------------
+  'Хранитель ведёт оборону.': 'The Steward holds the line.',
+  'Управление вернётся через <b>{dur}</b>.': 'Control returns in <b>{dur}</b>.',
+  'Пока вы спите: держит рубежи и отбивает атаки, застраивает очередь и торгует — без наступлений.':
+    'While you sleep: holds the borders and repels attacks, keeps building and trading — no offensives.',
+  'Вернуть управление': 'Take back control',
+  '«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.':
+    '“Autopilot keeps you alive — active play wins.” The defensive posture never attacks and never negotiates.',
+  '«Протокол Хранитель» ещё не изучен.': 'The “Steward Protocol” is not researched yet.',
+  'Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день {day}).':
+    'The <b>Command</b> branch, opens on <b>day 15</b> to the <b>Overseer</b> scientist (now day {day}).',
+  'Изучите его в окне технологий — затем сможете передать место ИИ на время сна.':
+    'Research it in the technology window — then you can hand your seat to the AI while you sleep.',
+  'Открыть технологии': 'Open technologies',
+  'Хранитель готов.': 'The Steward is ready.',
+  'Передайте место доверенному ИИ (поза «Оборона»), пока вы офлайн — он удержит рубежи и вернёт управление к сроку.':
+    'Hand your seat to a trusted AI (the “Defend” posture) while you are offline — it holds the line and returns control on time.',
+  'Передать на': 'Delegate for',
+  '{h} ч': '{h} h',
+  'Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.':
+    'The “Defend” posture: holds and repels, keeps building and trading — no offensives, no diplomacy. Control returns automatically, with a morning report.',
+  '😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.':
+    '😴 The Steward took command (Defend) — holding the line while you sleep.',
+  '🌅 Хранитель вернул вам управление (была «Оборона»).':
+    '🌅 The Steward returned control to you (posture was “Defend”).',
+  'интерфейс': 'interface',
+  'Радарная развёртка': 'Radar sweep',
+  'вращающийся луч на карте — только вид, не влияет на обнаружение':
+    'the rotating beam on the map — visual only, does not affect detection',
+  'Прозрачность радарной развёртки': 'Radar sweep opacity',
+  'ГОТОВО': 'DONE',
+  '⟳ К выбору ботов': '⟳ Back to setup',
 
   // --- suggested-callsign wordlist -----------------------------------------------
   'Носорог': 'Rhino',

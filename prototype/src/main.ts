@@ -2018,7 +2018,7 @@ function handleEvents(events: DomainEvent[]) {
       case 'steward.delegated':
         if (p.playerId === ME) {
           stewSnapshot = stewMetrics();
-          note('😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.');
+          note(t('😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.'));
           if (stewWin.classList.contains('show')) renderSteward();
         }
         break;
@@ -2038,7 +2038,7 @@ function handleEvents(events: DomainEvent[]) {
           const diff = base
             ? ` Пока вы спали: планет ${base.planets}→${now.planets}, металл ${sign(now.metal - base.metal)}, кредиты ${sign(now.credits - base.credits)}.`
             : '';
-          note(`🌅 Хранитель вернул вам управление (была «Оборона»).${diff}`);
+          note(t('🌅 Хранитель вернул вам управление (была «Оборона»).') + diff);
           if (stewWin.classList.contains('show')) renderSteward();
         }
         break;
@@ -6444,28 +6444,30 @@ function renderSteward(): void {
   let html = '';
   if (posture && cur) {
     html +=
-      `<div class="st-status on">🤖 <b>Хранитель ведёт оборону.</b><br>` +
-      `Управление вернётся через <b>${stewFmtDur(cur.until - s.time)}</b>.<br>` +
-      `Пока вы спите: держит рубежи и отбивает атаки, застраивает очередь и торгует — без наступлений.</div>` +
-      `<div class="st-row"><button class="st-btn warn" data-stew="recall">Вернуть управление</button></div>` +
-      `<div class="st-note">«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.</div>`;
+      `<div class="st-status on">🤖 <b>${t('Хранитель ведёт оборону.')}</b><br>` +
+      t('Управление вернётся через <b>{dur}</b>.', { dur: stewFmtDur(cur.until - s.time) }) +
+      `<br>` +
+      `${t('Пока вы спите: держит рубежи и отбивает атаки, застраивает очередь и торгует — без наступлений.')}</div>` +
+      `<div class="st-row"><button class="st-btn warn" data-stew="recall">${t('Вернуть управление')}</button></div>` +
+      `<div class="st-note">${t('«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.')}</div>`;
   } else if (!stewardTechDone()) {
     const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY);
     html +=
-      `<div class="st-status locked">🔒 <b>«Протокол Хранитель» ещё не изучен.</b><br>` +
-      `Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день ${day}).<br>` +
-      `Изучите его в окне технологий — затем сможете передать место ИИ на время сна.</div>` +
-      `<div class="st-row"><button class="st-btn" data-stew="tech">Открыть технологии</button></div>`;
+      `<div class="st-status locked">🔒 <b>${t('«Протокол Хранитель» ещё не изучен.')}</b><br>` +
+      t('Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день {day}).', { day: String(day) }) +
+      `<br>` +
+      `${t('Изучите его в окне технологий — затем сможете передать место ИИ на время сна.')}</div>` +
+      `<div class="st-row"><button class="st-btn" data-stew="tech">${t('Открыть технологии')}</button></div>`;
   } else {
     html +=
-      `<div class="st-status">😴 <b>Хранитель готов.</b><br>` +
-      `Передайте место доверенному ИИ (поза «Оборона»), пока вы офлайн — он удержит рубежи и вернёт управление к сроку.</div>` +
-      `<div class="st-h">Передать на</div><div class="st-row">` +
+      `<div class="st-status">😴 <b>${t('Хранитель готов.')}</b><br>` +
+      `${t('Передайте место доверенному ИИ (поза «Оборона»), пока вы офлайн — он удержит рубежи и вернёт управление к сроку.')}</div>` +
+      `<div class="st-h">${t('Передать на')}</div><div class="st-row">` +
       STEW_DURATIONS.map(
-        (h) => `<button class="st-btn" data-stew="go" data-h="${h}">${h} ч</button>`,
+        (h) => `<button class="st-btn" data-stew="go" data-h="${h}">${t('{h} ч', { h: String(h) })}</button>`,
       ).join('') +
       `</div>` +
-      `<div class="st-note">Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.</div>`;
+      `<div class="st-note">${t('Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.')}</div>`;
   }
   body.innerHTML = html;
 }
@@ -6809,12 +6811,12 @@ function renderSettings(): void {
   const pct = Math.round(sweepOpacity * 100);
   settingsEl.innerHTML =
     `<div class="setbox">` +
-    `<div class="pc-head"><span class="pc-dia" style="background:var(--cyan)"></span><b>НАСТРОЙКИ</b><span class="pc-tag">интерфейс</span></div>` +
+    `<div class="pc-head"><span class="pc-dia" style="background:var(--cyan)"></span><b>${t('НАСТРОЙКИ')}</b><span class="pc-tag">${t('интерфейс')}</span></div>` +
     `<div class="set-row">` +
-    `<div class="set-lbl">Радарная развёртка<span class="set-sub">вращающийся луч на карте — только вид, не влияет на обнаружение</span></div>` +
-    `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="Прозрачность радарной развёртки"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
+    `<div class="set-lbl">${t('Радарная развёртка')}<span class="set-sub">${t('вращающийся луч на карте — только вид, не влияет на обнаружение')}</span></div>` +
+    `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="${t('Прозрачность радарной развёртки')}"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
     `</div>` +
-    `<button class="pc-close" id="set-close" type="button">ГОТОВО</button>` +
+    `<button class="pc-close" id="set-close" type="button">${t('ГОТОВО')}</button>` +
     `</div>`;
   const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
   const val = document.getElementById('set-sweep-val');
@@ -7295,6 +7297,14 @@ function connect(): void {
         lastPanelHtml = '';
       },
       onRejection: (_id, code) => note('✖ ' + errText(code)),
+      // Fog-filtered domain events ride each delta (the server already cuts what we
+      // may not see): feed them to the SAME pipeline the local sim uses, so battle
+      // toasts, AA tracers, siege arcs, loss tallies and the victory banner all work
+      // in a network match too. Fired after onSnapshot — `s` is already up to date.
+      onEvents: (events) => {
+        if (sock !== netSock) return; // a superseded socket must not touch globals
+        handleEvents(events);
+      },
       // Server-relayed ally pings (own + allies, hidden from enemies): merge them into
       // the coalition channel so they render as map markers + chat lines, same as solo.
       onPingAdded: (ping: MultiplayerPing) => {
@@ -7896,7 +7906,7 @@ function frame(nowReal: number) {
     // (back to bot selection). Net-status banners (reconnecting / waiting) get no button.
     const ended = !NET && s.match?.status === 'ended';
     const html = ended
-      ? `<div class="bn-text">${esc(banner)}</div><button class="bn-btn" data-restart>⟳ К выбору ботов</button>`
+      ? `<div class="bn-text">${esc(banner)}</div><button class="bn-btn" data-restart>${t('⟳ К выбору ботов')}</button>`
       : `<div class="bn-text">${esc(banner)}</div>`;
     if (html !== lastBannerHtml) {
       bannerEl.innerHTML = html;

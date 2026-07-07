@@ -36,6 +36,8 @@ import {
   newGame,
   kernel,
   data,
+  DEFAULT_SETUP,
+  SCORE_LIMIT,
   aiOrders,
   stewardActive,
   HOUR,
@@ -168,7 +170,13 @@ if (DATABASE_URL) {
   receiptStore = new MemoryReceiptStore();
 }
 const restored = await matchStore.load('proto');
-const initialState = restored?.state ?? newGame();
+// NET seats are all HUMAN chairs (the server AI only stands in for an EMPTY one), so
+// seed the world with every seat un-branded ai:false — newGame then deals each seat
+// its research council and start kit symmetrically. Seeding the solo default here
+// left a live player on p2 without scientists (the «Хранитель» line unreachable).
+const initialState =
+  restored?.state ??
+  newGame({ seats: DEFAULT_SETUP.seats.map((seat) => ({ ...seat, ai: false })) });
 // A NET seat is not a bot: every seat here is claimable by a human, and the
 // server-side AI merely stands in for an empty chair (`humans` is the live truth).
 // Strip the static `ai` branding newGame took from the seat config, or two humans
@@ -191,6 +199,9 @@ const room = new MatchRoom({
   emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
   observe, // M0: log every room event to JSONL + count for the on-exit summary
   initialReceipts, // rehydrated idempotency (deduped action stays deduped after restart)
+  // The kernel context config must match what the local sim (and the HUD) promise:
+  // without it victory falls back to its 600 default while the HUD counts to 450.
+  config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } },
   initialSeq: restored?.seq, // resume the action counter — else the optimistic-by-seq
   // store drops post-restart saves until seq climbs back past the stored value
   // Strict commit-before-broadcast: await the durable write of the new snapshot +
