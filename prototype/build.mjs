@@ -413,9 +413,11 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 /* scrollable content (left) + a dossier pane glued to the right edge, filling the
    panel's otherwise-empty space. The pane shows the hovered object's description. */
 .pscroll{flex:1 1 auto;min-width:0;overflow:auto;padding:13px 15px;touch-action:pan-y;}
-/* dossier pane: width fits its content (grows as rows are added) instead of a
-   fixed column, and it never scrolls internally — the colleague's no-scroll rule */
-.pdesc{flex:0 1 auto;width:fit-content;min-width:188px;max-width:48%;overflow:visible;
+/* dossier pane: a FIXED-width reserved column (was fit-content, which reflowed the
+   left content every time a longer/shorter dossier was hovered — buttons jumped).
+   A stable basis keeps .pscroll's width constant no matter what's hovered; a long
+   dossier scrolls inside the pane instead of resizing the whole panel. */
+.pdesc{flex:0 0 44%;min-width:200px;overflow-y:auto;overflow-x:hidden;
   padding:14px 16px;border-left:1px solid var(--line-hi);border-radius:0 10px 10px 0;
   background:rgba(53,214,230,.045);}
 .pdesc .pd-title{font-size:14px;font-weight:700;letter-spacing:1.5px;color:#eafffb;margin-bottom:9px;
@@ -1091,11 +1093,13 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
     max-height:calc(100vh - 88px);flex-direction:column;clip-path:none;
     border:1px solid var(--cyan);border-radius:12px;
     box-shadow:-8px 0 30px rgba(0,0,0,.55),inset 0 0 30px rgba(53,214,230,.04);}
-  /* content stacks: list on top, hovered-object dossier pinned below. While the card
-     fits its content it just grows; once it hits the viewport cap the list (not the
-     whole card) scrolls — so the dossier stays put and nothing is ever clipped away */
+  /* content stacks: list on top, hovered-object dossier pinned below. The dossier gets
+     a FIXED reserved height (was content-sized, which changed the panel's height every
+     time a taller/shorter dossier — or none — was hovered, scrolling & jumping the list
+     rows the cursor was aiming for). A stable block keeps the list rock-steady; a long
+     dossier scrolls inside its own area instead of resizing the panel. */
   #side .pscroll{flex:1 1 auto;min-height:0;}
-  #side .pdesc{flex:0 0 auto;width:auto;max-width:none;max-height:none;
+  #side .pdesc{flex:0 0 auto;width:auto;max-width:none;height:154px;overflow-y:auto;
     border-left:0;border-radius:0;border-top:1px solid var(--line-hi);}
   /* the panel is on the right now, not the bottom: don't lift the bars by a vh fraction,
      just keep them clear of the panel's width */

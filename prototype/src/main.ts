@@ -5924,7 +5924,10 @@ side.addEventListener('pointermove', (ev) => {
   const t = ev.target as HTMLElement;
   if (t.closest('#pdesc')) return; // over the dossier itself — keep what's shown
   const key = (t.closest('[data-desc]') as HTMLElement | null)?.dataset.desc ?? null;
-  if (key !== hoverObj) {
+  // Only swap when landing on a DIFFERENT object; passing over a gap (key === null)
+  // keeps the last dossier shown, so the pane never flashes empty (and shrinks) while
+  // the cursor travels from one row to the next. pointerleave clears it on real exit.
+  if (key !== null && key !== hoverObj) {
     hoverObj = key;
     renderObjDesc();
   }
