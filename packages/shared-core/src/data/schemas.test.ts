@@ -136,6 +136,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     for (const [id, def] of Object.entries(data.heroAbilities)) {
       check(def.cost, `hero ability ${id} cost`);
     }
+    for (const [id, def] of Object.entries(data.heroSkillTrees)) {
+      check(def.cost, `skill node ${id} cost`);
+    }
   });
 
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {
@@ -298,6 +301,40 @@ describe('hero archetypes + abilities (HERO-1, docs/heroes.md)', () => {
     const data = parseGameData(loadShippedBundle());
     expect(data.heroAbilities.corridor?.type).toBe('temp_lane');
     expect(data.heroAbilities.annihilate?.type).toBe('annihilate');
+  });
+
+  it('the shipped skill tree is internally consistent (HERO-7 referential integrity)', () => {
+    const data = parseGameData(loadShippedBundle());
+    const nodes = data.heroSkillTrees;
+    const abilities = new Set(Object.keys(data.heroAbilities));
+    const passives = new Set(Object.keys(data.heroPassives));
+    for (const [id, def] of Object.entries(nodes)) {
+      for (const parent of def.requires) {
+        expect(nodes[parent], `node ${id} requires unknown node "${parent}"`).toBeDefined();
+      }
+      if (def.grants.ability !== undefined) {
+        expect(abilities.has(def.grants.ability), `node ${id} grants unknown ability`).toBe(true);
+      }
+      if (def.grants.passive !== undefined) {
+        expect(passives.has(def.grants.passive), `node ${id} grants unknown passive`).toBe(true);
+      }
+    }
+    // Both design branches ship a root node.
+    expect(nodes.neural_lace?.branch).toBe('transhuman');
+    expect(nodes.void_attunement?.branch).toBe('psionic');
+    // Fail-closed: an unknown branch or a negative cost never parses.
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroSkillTrees: { bad: { name: 'X', branch: 'cyborg' } },
+      }).success,
+    ).toBe(false);
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroSkillTrees: { bad: { name: 'X', cost: { metal: -5 } } },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a hero ability with a negative cost (no resource minting)', () => {

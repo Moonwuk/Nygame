@@ -345,8 +345,16 @@
   Referential-integrity `startPassives`∈heroPassives. 4 теста.
 - **HERO-6** ⏳ _(HERO-2 ✅ — замок снят)_ Фитинги корабля: `data/heroFittings.json` + `hero.fit` (слоты,
   модификаторы статов / выдаёт способность). Тесты.
-- **HERO-7** ⏳ _(HERO-4 ✅ — замок снят)_ Дерево навыков: `data/heroSkillTrees.json` (ветки **transhuman**/
-  **psionic**) + `hero.skill.unlock` (валидация `requires`/ветки); бонусы к способностям/статам. Тесты.
+- **HERO-7** ✅ Дерево навыков: `data/heroSkillTrees.json` (`HeroSkillNode {name, branch?,
+  requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psionic**, по руту на
+  каждую: `neural_lace`/`overclocked_helm` и `void_attunement`/`psi_veil`) + действие
+  `hero.skill.unlock {heroId, node}`: гейты владения/живости, каталога (`E_NO_NODE`),
+  повтора (`E_ALREADY_UNLOCKED`), ветки архетипа (`E_WRONG_BRANCH`; узел без ветки — общий,
+  открыт и безархетипным героям), цепочки `requires` (`E_REQUIRES`) и казны
+  (`E_INSUFFICIENT`, nonnegative cost). Грант ложится на инстанс (`Hero.abilities`/
+  `Hero.passives` + `Hero.skills`) — движки HERO-4/5 подхватывают без доп. вайринга;
+  stat-/param-бонусы узлов — когда появится их движковый шов (не шипуем обещания).
+  Payload-схема в гейте; referential-integrity дерева (requires/grants). 4 теста.
 - **HERO-8** ⏳ _(HERO-2/3/4 ✅ — замки сняты)_ Способность спавна **на флоте / у союзника** (тип-эффект,
   ослабляет проверку `at` в `hero.spawn`; союзник — через будущую `MatchRoom.areAllied`/дипломатию D1). Тесты.
 - **HERO-9** ⏳ _(HERO-3 ✅ — замок снят)_ Ростер: пред-матч выбор до 3 героев (config, как фракция/тех C3) +

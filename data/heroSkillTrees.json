@@ -1,0 +1,32 @@
+{
+  "neural_lace": {
+    "name": "Нейрокружево",
+    "description": "Имплант прямого канала «мозг—штурвал»: корабль героя разгоняется на +10%.",
+    "branch": "transhuman",
+    "cost": { "microelectronics": 20 },
+    "grants": { "passive": "vanguard_impulse" }
+  },
+  "overclocked_helm": {
+    "name": "Разогнанный шлем",
+    "description": "Форсаж нейроинтерфейса открывает герою прокладку коридоров.",
+    "branch": "transhuman",
+    "requires": ["neural_lace"],
+    "cost": { "microelectronics": 45, "credits": 100 },
+    "grants": { "ability": "corridor" }
+  },
+  "void_attunement": {
+    "name": "Сонастройка с Пустотой",
+    "description": "Пси-резонанс героя воодушевляет флоты рядом: +8% к урону в радиусе 300.",
+    "branch": "psionic",
+    "cost": { "energy": 60 },
+    "grants": { "passive": "rally_beacon" }
+  },
+  "psi_veil": {
+    "name": "Пси-вуаль",
+    "description": "Отточенное пси-зрение: герой учится вскрывать туман разведкой.",
+    "branch": "psionic",
+    "requires": ["void_attunement"],
+    "cost": { "energy": 90, "credits": 100 },
+    "grants": { "ability": "scan" }
+  }
+}

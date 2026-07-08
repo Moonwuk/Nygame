@@ -56,8 +56,22 @@ const data: GameData = parseGameData({
     },
   },
   // HERO-3: an archetype whose ship is a concrete hull (spawn resolves the unit).
+  // Its branch also anchors the HERO-7 skill-tree branch gate.
   heroes: {
-    raider: { name: 'Raider', ship: { unit: 'warship' } },
+    raider: { name: 'Raider', branch: 'transhuman', ship: { unit: 'warship' } },
+  },
+  // HERO-7 tree: a transhuman root + a costly child, a psionic node, a common node.
+  heroSkillTrees: {
+    neural_lace: { name: 'Neural Lace', branch: 'transhuman', grants: { passive: 'swift' } },
+    overclock: {
+      name: 'Overclock',
+      branch: 'transhuman',
+      requires: ['neural_lace'],
+      cost: { metal: 40 },
+      grants: { ability: 'burst' },
+    },
+    void_gift: { name: 'Void Gift', branch: 'psionic', grants: { ability: 'ghost' } },
+    common_core: { name: 'Core', grants: {} },
   },
   // HERO-5 catalog: one passive per scope for each wired hook.
   heroPassives: {
@@ -705,6 +719,92 @@ describe('hero — manual spawn (HERO-3)', () => {
     delete held.state.fleets.s3;
     const freed = okApply(withSignal.applyAction(held.state, spawn(SECOND, 'A', 'p1', 2), ctx(1)));
     expect(freed.state.heroes![SECOND]!.alive).toBe(true);
+  });
+});
+
+describe('hero — skill tree (HERO-7)', () => {
+  const kernel = createKernel([heroModule]);
+  const HERO_ID = 'hero:p1';
+
+  /** world() + the hero is a transhuman raider with a treasury. */
+  function skillWorld(): GameState {
+    const st = world();
+    st.heroes![HERO_ID]!.archetype = 'raider'; // branch: transhuman
+    st.players.p1!.resources = { metal: 50 };
+    return st;
+  }
+  const unlock = (node: string, playerId = 'p1', seq = 1) =>
+    act('hero.skill.unlock', playerId, { heroId: HERO_ID, node }, seq);
+
+  it('unlocks a chain: grants land on the instance and feed the HERO-4/5 engines', () => {
+    const root = okApply(kernel.applyAction(skillWorld(), unlock('neural_lace'), ctx(0)));
+    const hero1 = root.state.heroes![HERO_ID]!;
+    expect(hero1.skills).toEqual(['neural_lace']);
+    expect(hero1.passives).toContain('swift'); // granted passive, HERO-5 picks it up
+    expect(root.events.map((e) => e.type)).toContain('hero.skill.unlocked');
+    // The child costs 40 metal and grants the `burst` ability.
+    const child = okApply(kernel.applyAction(root.state, unlock('overclock', 'p1', 2), ctx(1)));
+    const hero2 = child.state.heroes![HERO_ID]!;
+    expect(hero2.skills).toEqual(['neural_lace', 'overclock']);
+    expect(hero2.abilities).toContain('burst');
+    expect(child.state.players.p1?.resources.metal).toBe(10); // 50 − 40
+    // The granted ability passes the HERO-4 equipment gate: casting `burst` now fails
+    // on the unwired effect type (E_NO_EFFECT), NOT on E_NOT_EQUIPPED.
+    expect(
+      errCode(
+        kernel.applyAction(
+          child.state,
+          act('hero.ability', 'p1', { heroId: HERO_ID, abilityId: 'burst' }, 3),
+          ctx(2),
+        ),
+      ),
+    ).toBe('E_INSUFFICIENT'); // burst costs 50 metal, purse is 10 — equipment gate passed
+  });
+
+  it('fail-secure gates: requires / branch / funds / duplicates / unknown / dead / foreign', () => {
+    const st = skillWorld();
+    expect(errCode(kernel.applyAction(st, unlock('overclock'), ctx(0)))).toBe('E_REQUIRES');
+    expect(errCode(kernel.applyAction(st, unlock('void_gift'), ctx(0)))).toBe('E_WRONG_BRANCH');
+    expect(errCode(kernel.applyAction(st, unlock('nothing'), ctx(0)))).toBe('E_NO_NODE');
+    expect(errCode(kernel.applyAction(st, unlock('neural_lace', 'p2'), ctx(0)))).toBe(
+      'E_FORBIDDEN', // p2 tries to skill up p1's hero
+    );
+    expect(
+      errCode(
+        kernel.applyAction(
+          st,
+          act('hero.skill.unlock', 'p1', { heroId: 'nobody', node: 'neural_lace' }),
+          ctx(0),
+        ),
+      ),
+    ).toBe('E_NO_HERO');
+    const poor = skillWorld();
+    poor.players.p1!.resources = {};
+    poor.heroes![HERO_ID]!.skills = ['neural_lace'];
+    expect(errCode(kernel.applyAction(poor, unlock('overclock'), ctx(0)))).toBe('E_INSUFFICIENT');
+    const done = skillWorld();
+    done.heroes![HERO_ID]!.skills = ['neural_lace'];
+    expect(errCode(kernel.applyAction(done, unlock('neural_lace'), ctx(0)))).toBe(
+      'E_ALREADY_UNLOCKED',
+    );
+    const dead = skillWorld();
+    dead.heroes![HERO_ID]!.alive = false;
+    expect(errCode(kernel.applyAction(dead, unlock('neural_lace'), ctx(0)))).toBe('E_HERO_DEAD');
+  });
+
+  it('a branchless hero takes only common nodes; an archetype-less hero is branchless', () => {
+    // No archetype ⇒ no branch ⇒ branch nodes are closed…
+    const st = world();
+    expect(
+      errCode(
+        kernel.applyAction(st, act('hero.skill.unlock', 'p1', { heroId: HERO_ID, node: 'neural_lace' }), ctx(0)),
+      ),
+    ).toBe('E_WRONG_BRANCH');
+    // …but a common (branch-free) node is open to everyone.
+    const r = okApply(
+      kernel.applyAction(st, act('hero.skill.unlock', 'p1', { heroId: HERO_ID, node: 'common_core' }), ctx(0)),
+    );
+    expect(r.state.heroes![HERO_ID]!.skills).toEqual(['common_core']);
   });
 });
 

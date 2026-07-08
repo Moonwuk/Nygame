@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1063 зелёных** (4 skip, 105 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1067 зелёных** (4 skip, 105 файлов).
 
 ---
 
@@ -553,6 +553,15 @@ E_NOT_DESTRUCTIBLE, E_OUT_OF_RANGE, E_COOLDOWN`.
   (переполнен — герой остаётся мёртв). Ручной спавн — путь спасения: бездомно-мёртвый
   или удержанный кэпом герой поднимается вручную, когда мир/слот появился. Событие
   `hero.spawned` (авто-путь по-прежнему `hero.respawned`).
+- Действие **`hero.skill.unlock {heroId, node}`** (HERO-7) — прокачка дерева навыков из
+  `data/heroSkillTrees.json` (`HeroSkillNode {branch?, requires[], cost, grants
+  {ability?|passive?}}`, ветки `transhuman|psionic`). Гейты: владение/живость →
+  `E_NO_NODE` → `E_ALREADY_UNLOCKED` → ветка узла против ветки архетипа героя
+  (`E_WRONG_BRANCH`; безветочный узел — общий) → `E_REQUIRES` (родители в `Hero.skills`)
+  → казна (`E_INSUFFICIENT`, `payCost` на драфте). Грант дописывается в лоадаут инстанса
+  (`abilities`/`passives`, с дедупом) — HERO-4/5 применяют его штатно; `Hero.skills`
+  ведёт разблокированные узлы. Событие `hero.skill.unlocked`. Шипованы 2 ветки × 2 узла
+  (рут-пассивка + дитя-способность за ресурсы).
 - **Пассивки (HERO-5, `data/heroPassives.json`):** `HeroPassiveDef {hook, scope,
   params{bonus, radius}}`, хуки — enum `fleet.speed|combat.damage` (fail-closed, новый
   хук = запись в enum + кейс-интерпретатор), scope — `heroFleet` (флот героя) |

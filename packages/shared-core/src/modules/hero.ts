@@ -33,6 +33,12 @@ import { canAfford, payCost } from '../util/treasury';
  * spawn legality (`E_BAD_SPAWN`) and the per-player active cap of 3 (`E_HERO_CAP`);
  * the scheduled auto-respawn honors the same cap and shares the same deploy body.
  *
+ * HERO-7 (docs/heroes.md) — the skill tree: `hero.skill.unlock {heroId, node}` unlocks
+ * a `data.heroSkillTrees` node for a living, owned hero, gated by the node's `branch`
+ * (vs the archetype's branch), its `requires` parents and its treasury `cost`; the
+ * node's grants land on the instance (`abilities` / `passives`) so the existing
+ * HERO-4/HERO-5 engines pick them up with no extra wiring.
+ *
  * HERO-4 (docs/heroes.md) adds the generic, data-driven dispatcher on top:
  *
  *   - `hero.ability {heroId, abilityId, target?}` — cast an ability the hero carries
@@ -602,6 +608,45 @@ export const heroModule: GameModule = {
       }
       const fleetId = formHeroShip(h, hero, at);
       h.emit('hero.spawned', { owner: action.playerId, heroId, fleetId, at });
+    });
+
+    // HERO-7 — unlock a skill-tree node. The tree is pure data: branch/requires/cost
+    // gate the order, and the grants simply extend the hero's own ability/passive
+    // loadout — the HERO-4 dispatcher and HERO-5 passives then apply them as usual.
+    api.onAction('hero.skill.unlock', (action, h) => {
+      const { heroId, node } = action.payload as { heroId?: string; node?: string };
+      if (typeof heroId !== 'string' || typeof node !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const hero = h.state.heroes?.[heroId];
+      if (!hero) return h.reject('E_NO_HERO');
+      if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      const def = h.ctx.data.heroSkillTrees[node];
+      if (!def) return h.reject('E_NO_NODE');
+      const skills = hero.skills ?? [];
+      if (skills.includes(node)) return h.reject('E_ALREADY_UNLOCKED');
+      // A branch node is exclusive to heroes of that branch (via the archetype); a
+      // branchless "common" node is open to everyone, incl. archetype-less heroes.
+      if (def.branch !== undefined) {
+        const branch =
+          hero.archetype !== undefined ? h.ctx.data.heroes[hero.archetype]?.branch : undefined;
+        if (branch !== def.branch) return h.reject('E_WRONG_BRANCH');
+      }
+      if (!def.requires.every((parent) => skills.includes(parent))) {
+        return h.reject('E_REQUIRES');
+      }
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      if (!canAfford(player.resources, def.cost)) return h.reject('E_INSUFFICIENT');
+      payCost(player.resources, def.cost);
+
+      hero.skills = [...skills, node];
+      if (def.grants.ability !== undefined && !(hero.abilities ?? []).includes(def.grants.ability)) {
+        (hero.abilities ??= []).push(def.grants.ability);
+      }
+      if (def.grants.passive !== undefined && !(hero.passives ?? []).includes(def.grants.passive)) {
+        (hero.passives ??= []).push(def.grants.passive);
+      }
+      h.emit('hero.skill.unlocked', { owner: action.playerId, heroId, node, grants: def.grants });
     });
   },
 };

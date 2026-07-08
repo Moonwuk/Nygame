@@ -491,6 +491,33 @@ export const HeroPassiveDefSchema = z.object({
     .default({ bonus: 0, radius: 0 }),
 });
 
+/** What a skill node grants when unlocked (HERO-7). Deliberately only the two grants
+ *  the engine already interprets — an ability slot-in (`Hero.abilities`, HERO-4) or a
+ *  passive (`Hero.passives`, HERO-5). Stat / ability-param bonuses join when their
+ *  engine seams exist (don't ship data promising what nothing implements). */
+export const HeroSkillGrantsSchema = z.object({
+  /** Ability id (→ `data.heroAbilities`) added to the hero's loadout. */
+  ability: z.string().optional(),
+  /** Passive id (→ `data.heroPassives`) switched on for the hero. */
+  passive: z.string().optional(),
+});
+
+/** One node of the hero skill tree (docs/heroes.md — «дерево = бонусы к способностям»,
+ *  ветки transhuman/psionic). Unlock order is gated by `requires` (parent nodes) and
+ *  the hero's archetype branch; `cost` is an optional treasury price (default free —
+ *  the points economy is an open design question). */
+export const HeroSkillNodeSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  /** Branch this node belongs to; omit for a common node any hero may take. */
+  branch: HeroBranchSchema.optional(),
+  /** Parent node ids that must be unlocked first (the tree edges). */
+  requires: z.array(z.string()).default([]),
+  /** Treasury cost to unlock (nonnegative — a node must not mint resources). */
+  cost: z.record(z.string(), z.number().nonnegative()).default({}),
+  grants: HeroSkillGrantsSchema.default({}),
+});
+
 /** The ship a hero commands: either an existing unit archetype (`unit` → `data.units`) or
  *  inline stat overrides. A hero reuses the fleet for position/movement/combat, so its
  *  ship is described the same way a unit is (docs/heroes.md §Модель состояния). Both
@@ -534,6 +561,7 @@ export const GameDataSchema = z.object({
   heroes: z.record(z.string(), HeroArchetypeDefSchema).default({}),
   heroAbilities: z.record(z.string(), HeroAbilityDefSchema).default({}),
   heroPassives: z.record(z.string(), HeroPassiveDefSchema).default({}),
+  heroSkillTrees: z.record(z.string(), HeroSkillNodeSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -563,6 +591,8 @@ export type HeroAbilityDef = z.infer<typeof HeroAbilityDefSchema>;
 export type HeroShip = z.infer<typeof HeroShipSchema>;
 export type HeroArchetypeDef = z.infer<typeof HeroArchetypeDefSchema>;
 export type HeroPassiveDef = z.infer<typeof HeroPassiveDefSchema>;
+export type HeroSkillNode = z.infer<typeof HeroSkillNodeSchema>;
+export type HeroSkillGrants = z.infer<typeof HeroSkillGrantsSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;
