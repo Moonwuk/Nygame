@@ -1,0 +1,20 @@
+{
+  "psi_amplifier": {
+    "name": "Пси-усилитель",
+    "description": "Резонансный контур раскрывает герою разведку сквозь туман.",
+    "grants": { "ability": "scan" },
+    "cost": { "microelectronics": 30 }
+  },
+  "aegis_matrix": {
+    "name": "Матрица «Эгида»",
+    "description": "Полевой генератор воодушевляет флоты рядом с героем: +8% к урону в радиусе 300.",
+    "grants": { "passive": "rally_beacon" },
+    "cost": { "metal": 60 }
+  },
+  "ablative_plating": {
+    "name": "Абляционная обшивка",
+    "description": "Дополнительные +40 к корпусу корабля героя. (Статы корабля заработают со швом эффективных статов, SHIP-3.)",
+    "statMods": { "hp": 40 },
+    "cost": { "metal": 30 }
+  }
+}

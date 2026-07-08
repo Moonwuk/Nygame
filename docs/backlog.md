@@ -343,8 +343,15 @@
   (`heroNode`, HERO-2); мёртвый герой/неизвестный id — ноль (мягкая деградация). Шипованы
   `vanguard_impulse` (+10% скорость флота героя) и `rally_beacon` (+8% урона в 300).
   Referential-integrity `startPassives`∈heroPassives. 4 теста.
-- **HERO-6** ⏳ _(HERO-2 ✅ — замок снят)_ Фитинги корабля: `data/heroFittings.json` + `hero.fit` (слоты,
-  модификаторы статов / выдаёт способность). Тесты.
+- **HERO-6** ✅ Фитинги корабля: `data/heroFittings.json` (`HeroFittingDef {statMods,
+  grants{ability?|passive?}, cost}`, анти-self-expansion рефайн как у ship-модулей) +
+  действие `hero.fit {heroId, fitting}`: слот-бюджет из архетипа (`slots`;
+  `E_NO_SLOTS`, безархетипный герой — 0 слотов), `E_ALREADY_FITTED`/`E_NO_FITTING`,
+  казна (nonnegative), **без refit** (owner-правило ship-модулей). `grants` живые
+  (HERO-4/5, общий `applyGrants` с дедупом); `statMods` едут данными до шва
+  эффективных статов (SHIP-3/4) — «designed, not live». Шипованы «Пси-усилитель»
+  (scan), «Матрица „Эгида"» (rally_beacon), «Абляционная обшивка» (hp+40, не live).
+  3 теста.
 - **HERO-7** ✅ Дерево навыков: `data/heroSkillTrees.json` (`HeroSkillNode {name, branch?,
   requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psionic**, по руту на
   каждую: `neural_lace`/`overclocked_helm` и `void_attunement`/`psi_veil`) + действие

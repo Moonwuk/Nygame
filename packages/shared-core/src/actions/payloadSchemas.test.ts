@@ -19,6 +19,7 @@ const CLIENT_ACTION_TYPES = [
   'hero.ability',
   'hero.spawn',
   'hero.skill.unlock',
+  'hero.fit',
   'planet.annihilate',
   'station.deploy',
   'building.construct',
@@ -61,6 +62,7 @@ describe('SV-1.2 · action payload schemas', () => {
       ['hero.ability', { heroId: 'hero:p1', abilityId: 'recall' }], // untargeted cast
       ['hero.spawn', { heroId: 'hero:p1', at: 'home_a' }],
       ['hero.skill.unlock', { heroId: 'hero:p1', node: 'neural_lace' }],
+      ['hero.fit', { heroId: 'hero:p1', fitting: 'psi_amplifier' }],
       ['planet.annihilate', { planetId: 'p1' }],
       ['station.deploy', { planetId: 'p1' }],
       ['building.construct', { planetId: 'p1', building: 'radar' }],
@@ -105,6 +107,7 @@ describe('SV-1.2 · action payload schemas', () => {
       ['hero.ability', { heroId: 'hero:p1', abilityId: 'corridor', target: 7 }], // target not an id
       ['hero.spawn', { heroId: 'hero:p1' }], // missing spawn world
       ['hero.skill.unlock', { node: 'neural_lace' }], // missing heroId
+      ['hero.fit', { heroId: 'hero:p1' }], // missing fitting
       ['diplomacy.declare', { target: 'p2', stance: 'frenemy' }], // not a known stance
       ['diplomacy.declare', { target: 'p2' }], // missing stance
       ['diplomacy.declare', { stance: 'war' }], // missing target
