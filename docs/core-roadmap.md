@@ -8,11 +8,14 @@
 
 ## Текущее состояние (факт)
 
-Этап 1 в основном готов: микроядро (`createKernel`/`applyAction`/`advanceTo`), 16 базовых модулей
-(army/combat/construction/economy/movement/planetType/sector/technology/victory + captureOnArrival/station/faction/reanimation/visibility/hero/market — `packages/shared-core/src/index.ts`), seeded RNG
+Этап 1 в основном готов: микроядро (`createKernel`/`applyAction`/`advanceTo`), 22 базовых модуля
+(economy/movement/combat/orbital/artillery/intercept/captureOnArrival/sector/planetType/construction/
+station/technology/scientist/faction/army/victory/visibility/hero/steward/market/espionage/diplomacy —
+`packages/shared-core/src/index.ts`; reanimation вырезан, см. CR-1.4), seeded RNG
 (+golden), модель времени, `diffState`/`applyDelta`, `visibleState` (туман как проекция). Данные
-валидируются zod (`parseGameData`). Фракции (Фаза 1) и память видимости (CR-2.1) — уже в коде.
-**Осталось:** дипломатия, доводка видимости (радар как явные хуки), трейты,
+валидируются zod (`parseGameData`). Фракции (Фаза 1), память видимости (CR-2.1), дипломатия
+(D1–D4) и герои (HERO-0..9) — уже в коде.
+**Осталось:** трейты (EFX-1),
 **версияирование сейвов и реплей** (🔴-пробел из тех-исследования).
 
 ## Зависимости
@@ -82,17 +85,18 @@
 
 ## Фаза 3 · Технологии и дипломатия (Блоки C, D)
 
-### CR-3.1 · Предматчевый выбор технологий + бусты `[core][data]` ⏳ — S
-**Подзадачи:** config предматчевого выбора + стартовые бусты. **Бирка C3** (C1/C2/C4 ✅).
-**Готово, когда:** стартовые техи/бусты применяются по конфигу матча.
+### CR-3.1 · Предматчевый выбор технологий + бусты `[core][data]` ✅ — S
+**Бирка C3** (C1/C2/C4 ✅). Сделано: `SlotAssignment.technologies` выдаёт стартовые техи
+как completed при сборке матча (`buildFromMap`), fail-secure на неизвестный id.
 
-### CR-3.2 · Состояние дипломатии `[core]` ⏳ — M
-**Подзадачи:** война/мир/альянс/пакт в `GameState`. **Бирка D1.**
-**Готово, когда:** дип-статусы хранятся и сериализуются.
+### CR-3.2 · Состояние дипломатии `[core]` ✅ — M
+**Бирка D1.** Сделано: `state.diplomacy` (war/peace/pact/alliance, симметрично) + чистые
+примитивы `state/diplomacy.ts`; в delta-META.
 
-### CR-3.3 · `diplomacyModule` `[core]` 🔒(CR-3.2) — M
-**Подзадачи:** действия объявления; `isHostile` управляется модулём; деградация без него. **Бирка D2.**
-**Готово, когда:** смена статуса влияет на враждебность/бой; тесты.
+### CR-3.3 · `diplomacyModule` `[core]` ✅ — M
+**Бирки D2+D3+D4.** Сделано: эскалация односторонняя, смягчение по consent-офферам,
+`E_BOT_ALLIANCE`, свип офферов на `player.eliminated`, capability `diplomacy` для
+`combat.isHostile` (мягкая деградация); прототип использует этот же модуль (D4).
 
 ---
 

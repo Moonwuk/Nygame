@@ -17,9 +17,10 @@
 > ✅ уже в коде: пакет `packages/action-layer/` собран (`envelope.ts` —
 > `validateActionEnvelope`/`authorizeActionEnvelope`/`createActionEnvelope`; `gate.ts` —
 > `ActionGate`; `sequence.ts` — `InMemorySequenceGate` с `E_REPLAY`/`E_OUT_OF_ORDER`;
-> `receipts.ts`; тесты `envelope.test.ts`/`gate.test.ts`). Осталось **интегрировать пакет
-> в сервер**: `packages/server/src/matchRoom.ts` пока принимает сырой `Action` и держит
-> собственный `ActionReceipt`, без `@void/action-layer`.
+> `receipts.ts`; тесты `envelope.test.ts`/`gate.test.ts`). **Интеграция в сервер тоже
+> сделана** (SV-1.1/1.2): `MatchRoom.gate` принимает `action.v1`-конверты через
+> `ActionGate` (validate→payload-schema→authorize→dedup→sequence) перед редьюсером,
+> включается `GATE=1`; bare-`Action` на gated-комнате отклоняется.
 
 1. `@void/action-layer` — ✅ построен
    - `ActionEnvelope` вокруг core `Action`:
@@ -35,10 +36,10 @@
    - `dedupe(actionId)` — повтор не применяет эффект второй раз (`InMemoryActionReceiptStore`).
    - `sequence gate` — защита от out-of-order команд (`InMemorySequenceGate`).
 
-2. Integration с server slice из PR #9 — ⏳ следующий шаг
-   - заменить прямой WebSocket `Action` на `ActionEnvelope`;
-   - `MatchRoom` должен принимать только envelope;
-   - rejection codes остаются стабильными и без внутренних деталей.
+2. Integration с server slice из PR #9 — ✅ сделано (SV-1.1/1.2)
+   - gated-комната принимает только `action.v1`-конверт (`ActionEnvelope`);
+   - `MatchRoom.gate` = `ActionGate` из `@void/action-layer` (флаг `GATE=1`);
+   - rejection codes стабильны и без внутренних деталей.
 
 3. Тесты гонок — ✅ покрыты в пакете (`gate.test.ts`/`envelope.test.ts`)
    - double spend;
@@ -109,12 +110,11 @@
 
 ## 2. Самый логичный следующий PR
 
-> ✅ уже в коде: сам пакет **Action Layer** (`packages/action-layer/`) построен с тестами.
-> Следующий PR теперь — **интеграция action-layer в сервер** (`MatchRoom` принимает
-> `ActionEnvelope` через `ActionGate` вместо сырого `Action`). Ниже — исходная мотивация,
-> она всё ещё объясняет, зачем этот слой идёт впереди «большего мультиплеера».
+> ✅ уже в коде: пакет **Action Layer** построен И интегрирован в сервер (SV-1.1/1.2,
+> флаг `GATE=1`). Ниже — исходная мотивация, оставлена как объяснение, зачем этот слой
+> шёл впереди «большего мультиплеера»; сам «следующий PR» давно случился.
 
-Я бы следующим сделал **Action Layer** (теперь: его интеграцию в сервер).
+Я бы следующим сделал **Action Layer** (историческая рекомендация — выполнена).
 
 Почему не сразу «больше мультиплеера»:
 
@@ -573,12 +573,12 @@ action_receipts(
 
 ## 12. Предлагаемый порядок PR после текущего состояния
 
-### PR A — Action Layer — ✅ пакет построен, ⏳ осталась интеграция в сервер
+### PR A — Action Layer — ✅ пакет построен и интегрирован в сервер (SV-1.1/1.2)
 
 Файлы:
 
 - ✅ `packages/action-layer/` (envelope/gate/sequence/receipts + tests);
-- ⏳ wiring в `packages/server/src/matchRoom.ts` (сейчас всё ещё сырой `Action` + собственный `ActionReceipt`).
+- ✅ wiring: `MatchRoom.gate` (`ActionGate`, флаг `GATE=1`), payload-схемы SV-1.2.
 
 Почему первым: закрывает самые опасные multiplayer гонки.
 

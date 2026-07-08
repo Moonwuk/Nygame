@@ -54,7 +54,7 @@ RTMP — «80% результата за 20% усилий»), а не разов
 | Подделка интентов (S/T) | server-authority: «клиент шлёт намерение, не состояние» | ✅ инвариант |
 | Double-spend / TOCTOU гонка (T) | один авторитетный редьюсер на клоне + per-player очередь | 🟠 редьюсер ✅, очередь 🔒(srv) |
 | Replay / abuse идемпотентности (S/R) | sequence-gate + receipts по `actionId` | ✅ (in-mem) |
-| Утечка тумана = maphack (I) | `visibleState`-проекция **перед** отправкой | 🟠 ядро ✅, на отправке 🔒(F6) |
+| Утечка тумана = maphack (I) | `visibleState`-проекция **перед** отправкой | 🟢 ядро ✅, на отправке ✅ (F6: per-player дельты в `MatchRoom.broadcastState`) |
 | Боты/фарм (DoS экономики) | rate-limit + аномалии + anti-multiaccount | 🔴 не реализовано |
 
 ---

@@ -3,8 +3,8 @@
 > **Целевой профиль:** 10 одновременных сессий по 10 игроков = **100 WS-соединений,
 > 10 активных комнат**. Дополняет `server-roadmap.md` (SV-*), `operations-roadmap.md`
 > (OPS-*), `persistence-roadmap.md` (PE-*) и `tech-stack.md` — не дублирует их решения,
-> а привязывает к ним конкретный сайзинг. Все цифры сверены с кодом (`file:line`);
-> где цифра — оценка, а не факт из кода/доков, это помечено **[оценка]**.
+> а привязывает к ним конкретный сайзинг. Все цифры сверены с кодом (ссылки — на символы
+> в файлах); где цифра — оценка, а не факт из кода/доков, это помечено **[оценка]**.
 
 ## Главный вывод
 
@@ -21,10 +21,10 @@
 > прото-сервером). Первая редакция этого дока писала «сервер теряет матч / не тикает»
 > обобщённо — это было верно только для `main.ts`, не для играбельного прото-сервера.
 
-1. `createMultiplayerServer` привязан к **одной** комнате (`wsServer.ts:52`, путь
-   `${pathPrefix}/${room.id}` — `wsServer.ts:84`). Мультиплексора комнат нет → «10
-   комнат в одном процессе» сегодня невозможно (нужен SV-0.2 или N процессов). Это
-   остаётся настоящим ограничением масштаба.
+1. `createMultiplayerServer` принимает `registry` и роутит `${pathPrefix}/<matchId>`
+   на N комнат в одном процессе; `main.ts` хостит матчи через `LazyRoomRegistry`
+   (load-on-demand + гибернация). «10 комнат в одном процессе» возможно — ограничение
+   **снято (SV-0.2)**; остаётся разнос на >1 процесс/инстанс (SV-4.1).
 2. **Восстановление `seq` при рестарте** — оба сервера сохраняли снапшот по
    optimistic-by-seq, но `seq` сбрасывался в 0 при рестарте (`matchRoom.ts` `private seq
    = 0`), из-за чего пост-рестартные сохранения ДРОПАЛИСЬ (`WHERE seq <= EXCLUDED.seq`),
@@ -36,13 +36,13 @@
 | Метрика | Значение | Источник |
 |---|---|---|
 | Соединения | 100 WS (10×10) | — |
-| Модель исполнения | 1 процесс = 1 комната, single-threaded event-loop, `submitAction` синхронный/атомарный | `wsServer.ts:52,84`; `matchRoom.ts:436` |
+| Модель исполнения | N комнат на процесс (реестр), single-threaded event-loop, `submitAction` синхронный/атомарный | `createMultiplayerServer` (`registry`) в `wsServer.ts`; `submitAction` в `matchRoom.ts` |
 | Потолок пропускной комнаты | **одно ядро** (нет cluster/worker) | там же |
-| CPU на действие | O(игроков): на действие — цикл по пирам с `visibleState`+`diffState`+delta на каждого | `broadcastState` `matchRoom.ts:594,600-617` |
-| Память live-state | ~(игроки+1) клонов `GameState` на комнату (`stateValue` + `lastVisible` на игрока) | `matchRoom.ts:171`, `lastVisible` |
-| Потолок burst | 20 действий/с/игрок; 50 msg/с/сокет (pre-parse) | `matchRoom.ts:144`; `wsServer.ts:127` |
-| Backpressure-cap | 1 MiB на сокет, дальше drop (close 1013) | `matchRoom.ts:129,790` |
-| Payload-cap | 32 KB вход | `wsServer.ts:53` |
+| CPU на действие | O(игроков): на действие — цикл по пирам с `visibleState`+`diffState`+delta на каждого | `broadcastState` в `matchRoom.ts` |
+| Память live-state | ~(игроки+1) клонов `GameState` на комнату (`stateValue` + `lastVisible` на игрока) | `stateValue` + `lastVisible` в `matchRoom.ts` |
+| Потолок burst | 20 действий/с/игрок; 50 msg/с/сокет (pre-parse) | `ACTION_RATE_MAX_DEFAULT` в `matchRoom.ts`; `FLOOD_MAX` в `wsServer.ts` |
+| Backpressure-cap | 1 MiB на сокет, дальше drop (close 1013) | `MAX_BUFFERED_BYTES` в `matchRoom.ts` |
+| Payload-cap | 32 KB вход | `maxPayload` в `wsServer.ts` |
 | Данные игры | **~12 KB** JSON (не 40 KB — то блок-округление `du`) | `wc -c data/*.json` = 12 368 |
 
 **Реальный драйвер стоимости** — CPU на действие внутри одного event-loop, не число
@@ -57,13 +57,13 @@
 
 | Компонент | Роль | Обоснование / шов |
 |---|---|---|
-| **App-tier: Node 20+ контейнер** | Хостит `MatchRoom`, `ws` (noServer), ядро (`advanceTo`/`applyAction`), per-player туман + дельта-рассылку | `tech-stack.md:21`. ⚠️ 1 процесс = 1 комната (`wsServer.ts:52`) |
+| **App-tier: Node 20+ контейнер** | Хостит `MatchRoom`, `ws` (noServer), ядро (`advanceTo`/`applyAction`), per-player туман + дельта-рассылку | `tech-stack.md:21`. N комнат/процесс через `RoomRegistry` (`wsServer.ts`); >1 процесса — SV-4.1 |
 | **Managed Postgres + JSONB** | Единственная обязательная зависимость: durable-снапшоты, receipts, планировщик (pg-boss), pub/sub (`LISTEN/NOTIFY`) | `tech-stack.md:24-25`; PE-2.1 |
-| **pg-boss (в процессе, на Postgres)** | Будит спящую комнату к `nextEventAt` → `tick()` → persist → снова спать. 24/7-драйвер, которого нет в `main.ts` | `tech-stack.md:24`; OPS/PE |
+| **pg-boss (в процессе, на Postgres)** | Будит спящую комнату к `nextEventAt` → `tick()` → persist → снова спать. Одно-процессный 24/7-драйвер уже есть в `main.ts` (`startClockDriver`, F8); pg-boss как его распределённая замена — ещё нет | `tech-stack.md:24`; OPS/PE |
 | **Cloudflare** | TLS / DDoS / скрытие IP; room-affine вход по `matchId` | `tech-stack.md:29` |
-| **Внешний OIDC** (Clerk/Auth0/Keycloak/Zitadel) | JWT в WS-handshake; фронт для сейчас-неаутентифицированного `?player=`. Шов `accountStore` уже есть в upgrade (`wsServer.ts:77,90-92`) | `tech-stack.md:30`; SV-1.1/F7 |
+| **Внешний OIDC** (Clerk/Auth0/Keycloak/Zitadel) | JWT в WS-handshake; фронт для сейчас-неаутентифицированного `?player=`. Шов `accountStore` уже есть в upgrade-хендшейке (`accountStore.resolveSeat` в `wsServer.ts`) | `tech-stack.md:30`; SV-1.1/F7 |
 | **Наблюдаемость** pino+OTel+Prometheus/Grafana+Sentry | Логи/трейсы по match/player; gauges: соединения, дропы, due-events, лаг планировщика | OPS-0.1/0.2 |
-| **Fastify-скелет** | `/health`+`/ready`, graceful drain WS на деплое | SV-0.1; сейчас голый `node:http` + только `/health` (`wsServer.ts:58`) |
+| **Fastify-скелет** | `/health`+`/ready`, graceful drain WS на деплое | SV-0.1 ✅ — Fastify в `wsServer.ts`: `/health`+`/ready`+`/metrics`, pino, graceful drain |
 | **Redis — НЕ нужен** | `InMemoryEphemeralStore` покрывает единственного эфемерного жильца (пинги). Шов `EphemeralStore` заложен на будущее | `tech-stack.md:25,40,43-45` |
 
 ## Мощности по тирам
@@ -140,7 +140,7 @@ CPU одной комнаты на одном ядре → потом единс
 1. **Per-action O(игроков)** внутри одного event-loop (`matchRoom.ts:600-617`). Шов:
    **SV-3.1** (кэш `visibleState` на комнату) режет дублирующую проекцию на пира.
 2. **Единственный процесс** (1 комната/процесс) — **снято (SV-0.2)**: `MatchRegistry`
-   роутит N изолированных матчей/процесс, `LazyMatchRegistry` грузит по запросу,
+   роутит N изолированных матчей/процесс, `LazyRoomRegistry` грузит по запросу,
    гибернирует простаивающие в стор (live-память ∝ активным матчам, risk13) **и будит
    спящий матч к его следующему событию** (реорганизует+персистит+снова спит) — мир
    идёт 24/7 даже при всех офлайн. Таймер пробуждения инжектируемый — тот же шов, куда

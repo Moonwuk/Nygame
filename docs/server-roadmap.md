@@ -16,18 +16,19 @@
 - **Фильтр видимости на отправке (SV-3.1):** `broadcastState` диффит каждого peer против
   `visibleState(playerId)`, а `eventVisibleTo` фильтрует события — скрытые миры/флоты физически
   не уходят (`matchRoom.ts`).
-- **Per-player rate-limit действий** (`E_RATE_LIMIT`, транзиентно, без квитанции — `matchRoom.ts:449-466`)
-  + **connection flood-guard** (грубый per-socket cap до парсинга — `wsServer.ts:200-220`).
+- **Per-player rate-limit действий** (`E_RATE_LIMIT`, транзиентно, без квитанции — `rateLimited`
+  в `matchRoom.ts`) + **connection flood-guard** (грубый per-socket cap до парсинга —
+  `FLOOD_MAX` в `wsServer.ts`).
 - **Мульти-матч реестр** (`matchRegistry.ts`) + браузер матчей `GET /matches` и роутинг
   `/<prefix>/<id>` (`wsServer.ts`).
 - **v1 offline-планировщик:** `tick()` / `msUntilNextEvent()` на `MatchRoom` — драйвер пробуждения
   двигает мир по расписанию без действия игрока.
 - **Ограниченные квитанции** (FIFO-вытеснение старейших сверх `maxReceipts`, `matchRoom.ts`).
 - **`?nick=`→seat-login** через `AccountStore` — вернувшийся ник получает свою сторону
-  (`wsServer.ts:163-172`).
+  (`accountStore.resolveSeat` в `wsServer.ts`).
 
-**Нет:** Fastify-скелета, интеграции `@void/action-layer`, per-player очереди (concurrency=1),
-JWT, масштаба на >1 инстанс.
+**Нет:** per-player очереди (concurrency=1, SV-2.3), масштаба на >1 инстанс/мульти-процесс
+(SV-4.1), внешнего OIDC, pg-boss.
 
 ## Зависимости
 
@@ -48,7 +49,7 @@ JWT, масштаба на >1 инстанс.
 **Цель:** один логический актор на матч — сериализованная обработка, изоляция матчей.
 **Подзадачи:** реестр матчей; почтовый ящик/очередь сообщений на матч; lifecycle load/idle/evict; согласовать с `MatchRoom`.
 **Готово, когда:** действия матча обрабатываются строго последовательно внутри актора; матчи независимы.
-**Сделано:** `MatchRegistry` (`InMemory` + `Lazy` с load-on-demand/idle-гибернацией/пробуждением к событию), per-room actor-mailbox сериализует committed-submit + lobby-start; боевой вход хостит N матчей через `LazyMatchRegistry` (SV-4.0 в state.md).
+**Сделано:** `MatchRegistry` (`InMemory` + `Lazy` с load-on-demand/idle-гибернацией/пробуждением к событию), per-room actor-mailbox сериализует committed-submit + lobby-start; боевой вход хостит N матчей через `LazyRoomRegistry` (SV-4.0 в state.md).
 
 ---
 

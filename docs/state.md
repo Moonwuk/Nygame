@@ -79,7 +79,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, faction, hero, intercept, market, movement, orbital, planetType, scientist, sector, station, technology, victory, visibility  (20 модулей, + *.test.ts)
+  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, espionage, faction, hero, intercept, market, movement, orbital, planetType, scientist, sector, station, steward, technology, victory, visibility  (22 модуля, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -110,7 +110,7 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   `fleet` | `landing` | `garrison`.
 - `scheduled: ScheduledEvent[]` `{id, at, type, payload, seq}`, счётчики
   `battleSeq`, `scheduleSeq`.
-- `UnitStack {unit, count, hp?, shieldHp?}` (`hp` — пул корпуса, `shieldHp` — пул
+- `UnitStack {unit, count, hp?, shieldHp?, modules?}` (`hp` — пул корпуса, `shieldHp` — пул
   **аблятивного щита**, shields-roadmap SH-0.1). Для наземных стеков оба пула живут
   только во время боя (после — сброс в `undefined` = полное HP/щит). Для
   **корабельных** стеков (`fleet.units`) оба **сохраняются и вне боя**; вне боя
@@ -734,8 +734,15 @@ nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
   `microelectronics_fabrication`): стоимость,
   длительность, prerequisite-цепочки, unlocks юнитов/зданий и бонусы к
   production/speed/damage.
-- **heroes / heroAbilities (HERO-1, `data/heroes.json` + `data/heroAbilities.json`):**
-  data-first фундамент героев (`docs/heroes.md`). `HeroArchetypeDef {name, branch?, ship{unit?|stats?}, slots, startAbilities[], startPassives[]}` — архетипы (`commander/ravager/vanguard/warden`), `branch` — своя ось героев `transhuman|psionic` (не tech-ветка). `HeroAbilityDef {name, type, cooldownHours, range, cost, params}` — способности как data-driven эффекты (`corridor/annihilate/rally/scan/recall/bulwark`), `type` — ключ диспетчеризации будущего `hero.ability` (HERO-4). Загрузчик (`loadGameData`) дополнен двумя фрагментами; `parseGameData` валидирует; тест-инвариант: `startAbilities`∈heroAbilities, `ship.unit`∈units. Пассивки/фитинги/дерево — HERO-5/6/7 (пока `startPassives` — просто список id). Движок (`hero.spawn`/обобщённый `hero.ability`) — следующие кирпичи; сейчас это только контент+схемы (мягкая деградация: нет данных → нет героев).
+- **Герои — 5 data-каталогов (HERO-1..9 ✅):** `heroes.json` (архетипы `commander/ravager/
+  vanguard/warden`; `branch` — своя ось `transhuman|psionic`, `ship.unit`, `slots`,
+  `startAbilities`/`startPassives`), `heroAbilities.json` (`{type, cooldownHours, range,
+  cost, params}` — включая маркер-типы `spawn_fleet`/`spawn_allied`), `heroPassives.json`
+  (`{hook, scope, params}`), `heroSkillTrees.json` (`{branch?, requires[], cost,
+  grants}`), `heroFittings.json` (`{statMods, grants, cost}`). Движок ПОЛНОСТЬЮ живой:
+  `hero.ability`/`hero.spawn`/`hero.skill.unlock`/`hero.fit` + пассивки на хуках +
+  пред-матч ростер (`SlotAssignment.heroes`) — см. §5 hero-модуль. Referential-integrity
+  тесты связывают все каталоги; загрузчик собирает 5 фрагментов.
 
 ## 7. Прототип (`prototype/`)
 
@@ -744,7 +751,8 @@ self-contained `dist/void-dominion.html` (открывается с диска, 
 
 - **Реальное ядро** в браузере: `createKernel([sector, planetType, tax, economy, movement,
 hero, combat, captureOnArrival, construction, technology, army, victory, fleetLaunch,
-diplomacy, botDiplomacy, market, division, capital])` (18 модулей), тик в реальном
+diplomacy, botDiplomacy, market, division, capital, orbital, artillery, intercept,
+steward, espionage, orderQueue, subscription, standingOrders])` (26 модулей), тик в реальном
   времени (скорость ⏸/▶/⏩). Концовка матча — из авторитетного `state.match` (`victoryModule`),
   баннер победы/поражения/ничьи (а не хардкод по узлам).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
