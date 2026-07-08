@@ -89,6 +89,43 @@ describe('camera — pan clamp & centring', () => {
   });
 });
 
+describe('camera — edge slack (панель поверх карты)', () => {
+  it('bottom slack widens the UP-drag range by exactly that many px when zoomed in', () => {
+    // Zoomed in: the scaled map is taller than the play area → the y-range branch.
+    const base = clampCam({ scale: 3, x: 0, y: -10_000 }, VP, B); // slam to the old floor
+    const slacked = clampCam({ scale: 3, x: 0, y: -10_000 }, VP, B, { bottom: 300 });
+    expect(slacked.y).toBeCloseTo(base.y - 300, 6); // 300px further up, no more
+    expect(slacked.x).toBeCloseTo(base.x, 6); // x untouched by bottom slack
+  });
+
+  it('at the min-zoom fit the parked axis can be pulled up by the slack (and only it)', () => {
+    // Scale 1: the square map letterboxes vertically → y normally PARKS centred.
+    const parked = clampCam({ scale: 1, x: 0, y: 0 }, VP, B);
+    const pulled = clampCam({ scale: 1, x: 0, y: parked.y - 10_000 }, VP, B, { bottom: 250 });
+    expect(pulled.y).toBeCloseTo(parked.y - 250, 6); // freed by exactly the slack
+    // Without slack the old parked behaviour is unchanged (regression guard).
+    const still = clampCam({ scale: 1, x: 0, y: parked.y - 10_000 }, VP, B);
+    expect(still.y).toBeCloseTo(parked.y, 6);
+    // And slack only opens the covered side — dragging DOWN stays parked.
+    const down = clampCam({ scale: 1, x: 0, y: parked.y + 10_000 }, VP, B, { bottom: 250 });
+    expect(down.y).toBeCloseTo(parked.y, 6);
+  });
+
+  it('right slack widens the LEFT-drag range (right-hand panel layout)', () => {
+    const base = clampCam({ scale: 3, x: -10_000, y: 0 }, VP, B);
+    const slacked = clampCam({ scale: 3, x: -10_000, y: 0 }, VP, B, { right: 180 });
+    expect(slacked.x).toBeCloseTo(base.x - 180, 6);
+  });
+
+  it('zoomAt and centerOn accept the slack (bounded wider, same anchor math)', () => {
+    const viaZoom = zoomAt({ scale: 3, x: 0, y: -10_000 }, 200, 400, 1, VP, B, { bottom: 300 });
+    expect(viaZoom.y).toBeCloseTo(clampCam({ scale: 3, x: 0, y: -10_000 }, VP, B).y - 300, 6);
+    const c = centerOn({ scale: 1, x: 0, y: 0 }, { x: 500, y: 1000 }, 3, VP, B, { bottom: 300 });
+    const noSlack = centerOn({ scale: 1, x: 0, y: 0 }, { x: 500, y: 1000 }, 3, VP, B);
+    expect(c.y).toBeLessThan(noSlack.y); // the bottom-edge target gets closer to centre
+  });
+});
+
 describe('camera — cull', () => {
   it('inView respects the padded viewport', () => {
     expect(inView({ x: 200, y: 400 }, 400, 800, 80)).toBe(true);

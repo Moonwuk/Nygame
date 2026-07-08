@@ -32,6 +32,17 @@ export interface Bounds {
   maxY: number;
 }
 
+/** Extra pan slack per screen edge (screen px) ON TOP of PAN_SLACK — lets the camera
+ *  overshoot the map border where an overlay (e.g. the open bottom-sheet panel) covers
+ *  the play area, so content hidden behind it can be dragged into the clear part.
+ *  `bottom` widens the UP-drag range, `right` the LEFT-drag range, etc. */
+export interface EdgeSlack {
+  left?: number;
+  right?: number;
+  top?: number;
+  bottom?: number;
+}
+
 /** Breathing room around the whole-map (scale-1) view so it reads as a framed board. */
 export const FIT_MARGIN = 0.94;
 /** 1 = the whole-map fit (can't zoom out past it into empty void). */
@@ -99,9 +110,11 @@ export function screenToWorld(
 }
 
 /** Keep the map filling the play area with SLACK at the edges (an edge can sit a margin
- *  inside); at the whole-map floor a smaller-than-viewport axis parks centred. Returns a
- *  new camera with `scale` unchanged and `x`/`y` bounded. */
-export function clampCam(cam: Cam, vp: Viewport, b: Bounds): Cam {
+ *  inside); at the whole-map floor a smaller-than-viewport axis parks centred. Optional
+ *  `extra` (EdgeSlack) widens the range past a given edge — the "panel open" overshoot —
+ *  including from the parked centre, so the map can be pulled out from under an overlay
+ *  even at the min-zoom fit. Returns a new camera with `scale` unchanged, `x`/`y` bounded. */
+export function clampCam(cam: Cam, vp: Viewport, b: Bounds, extra: EdgeSlack = {}): Cam {
   const tl = projectBase({ x: b.minX, y: b.minY }, vp, b);
   const br = projectBase({ x: b.maxX, y: b.maxY }, vp, b);
   const pL = tl.x * cam.scale;
@@ -110,35 +123,59 @@ export function clampCam(cam: Cam, vp: Viewport, b: Bounds): Cam {
   const pB = br.y * cam.scale;
   const mx = (vp.right - vp.left) * PAN_SLACK;
   const my = (vp.bottom - vp.top) * PAN_SLACK;
+  const eL = extra.left ?? 0;
+  const eR = extra.right ?? 0;
+  const eT = extra.top ?? 0;
+  const eB = extra.bottom ?? 0;
+  // A covered right edge lets you drag further LEFT (lower x bound); a covered bottom
+  // edge further UP (lower y bound) — and symmetrically for left/top overlays.
+  const parkedX = (vp.left + vp.right - pL - pR) / 2;
   const x =
     pR - pL >= vp.right - vp.left
-      ? clamp(cam.x, vp.right - pR - mx, vp.left - pL + mx)
-      : (vp.left + vp.right - pL - pR) / 2;
+      ? clamp(cam.x, vp.right - pR - mx - eR, vp.left - pL + mx + eL)
+      : clamp(cam.x, parkedX - eR, parkedX + eL);
+  const parkedY = (vp.top + vp.bottom - pT - pB) / 2;
   const y =
     pB - pT >= vp.bottom - vp.top
-      ? clamp(cam.y, vp.bottom - pB - my, vp.top - pT + my)
-      : (vp.top + vp.bottom - pT - pB) / 2;
+      ? clamp(cam.y, vp.bottom - pB - my - eB, vp.top - pT + my + eT)
+      : clamp(cam.y, parkedY - eB, parkedY + eT);
   return { scale: cam.scale, x, y };
 }
 
 /** Zoom by `factor` anchored on the focal point (cursor / pinch centre): the map-space
  *  point under it stays put, so zoom grows toward where you're looking. Returns a new
  *  clamped camera. */
-export function zoomAt(cam: Cam, fx: number, fy: number, factor: number, vp: Viewport, b: Bounds): Cam {
+export function zoomAt(
+  cam: Cam,
+  fx: number,
+  fy: number,
+  factor: number,
+  vp: Viewport,
+  b: Bounds,
+  extra: EdgeSlack = {},
+): Cam {
   const bx = (fx - cam.x) / cam.scale;
   const by = (fy - cam.y) / cam.scale;
   const scale = clampScale(cam.scale * factor);
-  return clampCam({ scale, x: fx - bx * scale, y: fy - by * scale }, vp, b);
+  return clampCam({ scale, x: fx - bx * scale, y: fy - by * scale }, vp, b, extra);
 }
 
 /** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
-export function centerOn(cam: Cam, p: { x: number; y: number }, scale: number, vp: Viewport, b: Bounds): Cam {
+export function centerOn(
+  cam: Cam,
+  p: { x: number; y: number },
+  scale: number,
+  vp: Viewport,
+  b: Bounds,
+  extra: EdgeSlack = {},
+): Cam {
   const s = clampScale(scale);
   const base = projectBase(p, vp, b);
   return clampCam(
     { scale: s, x: (vp.left + vp.right) / 2 - base.x * s, y: (vp.top + vp.bottom) / 2 - base.y * s },
     vp,
     b,
+    extra,
   );
 }
 

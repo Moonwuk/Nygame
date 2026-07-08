@@ -184,6 +184,10 @@ function runArtillery(h: HandlerContext, hours: number): void {
       target: shot.targetId,
       power: shot.dmg,
       at: h.ctx.now,
+      // A node anchor near the exchange (shooter's node, else a lane endpoint) — the
+      // client's tracer needs a map position even when the victim died to this very
+      // volley and is already gone from the state by the time events drain.
+      near: shot.at,
     });
     removeIfWiped(h, shot.targetId);
   }

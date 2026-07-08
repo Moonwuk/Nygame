@@ -174,6 +174,18 @@ function ownerColor(owner: string | null | undefined): string {
   const i = rivals.indexOf(owner);
   return i >= 0 ? RIVAL_COLORS[i % RIVAL_COLORS.length]! : RIVAL_COLORS[0]!;
 }
+// Player builds hide the dev chrome (FPS overlay, the welcome-screen «Тесты» button):
+// it reads as debug noise to a newcomer. Flip it on with `?dev` in the URL or
+// localStorage 'vd.dev'='1' (persists per device). A live DESYNC still surfaces the
+// overlay to everyone — that's a bug players must see and report, not diagnostics.
+const DEV_UI = ((): boolean => {
+  try {
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('dev')) return true;
+    return typeof localStorage !== 'undefined' && localStorage.getItem('vd.dev') === '1';
+  } catch {
+    return false;
+  }
+})();
 // The four possible commanders, in stable seat order. Seat 1 is always you (human);
 // seats 2-4 are AI or off in the setup screen. Mirrors DEFAULT_SETUP in game.ts.
 const SEAT_META: ReadonlyArray<{ id: string; name: string; faction: string; color: string }> = [
@@ -454,6 +466,16 @@ const aaShots: Array<{
   at: number;
   close: boolean; // ближняя ПВО (гарнизон, залп раз в 15 мин) — рисуется легче
 }> = [];
+// Siege (artillery) volleys to visualize: map-space endpoints captured at event
+// time, drawn as a ballistic ARC with a stagger of shell particles and an impact
+// burst — so a standoff bombardment visibly points at WHO is being hit.
+const siegeShots: Array<{
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  at: number; // performance.now() at event time
+  seed: number; // stable per-volley variation (spark angles, shell jitter)
+}> = [];
+let siegeSeed = 0;
 // Casualties per contested location (owner → unit → count), accumulated from
 // unit.died while a battle runs and paid out as a result note on battle.resolved.
 const battleLosses = new Map<string, Record<string, Record<string, number>>>();
@@ -815,25 +837,40 @@ function world(p: { x: number; y: number }): { x: number; y: number } {
 function visible(c: { x: number; y: number }, pad = 80): boolean {
   return c.x >= -pad && c.x <= VW + pad && c.y >= -pad && c.y <= VH + pad;
 }
+/** Extra pan slack while the selection panel (#side) covers the play area: let the
+ *  camera overshoot the map border by the covered strip, so worlds hidden behind the
+ *  open panel can be dragged into the clear part of the screen. The panel is a
+ *  full-width bottom sheet on phones (→ slack below) and a right-hand column on wide
+ *  screens (→ slack on the right); measure its live rect so both layouts just work. */
+function panelSlack(): { right?: number; bottom?: number } {
+  const el = typeof document !== 'undefined' ? document.getElementById('side') : null;
+  if (!el || getComputedStyle(el).display === 'none') return {};
+  const r = el.getBoundingClientRect();
+  if (r.height <= 0 || r.width <= 0) return {};
+  if (r.width >= VW * 0.7) return { bottom: Math.max(0, VH - r.top) }; // bottom sheet
+  return { right: Math.max(0, VW - r.left) }; // right-hand column
+}
+
 function zoomAt(fx: number, fy: number, factor: number) {
   // Zoom anchored on the focal point (cursor / pinch centre) — camera.ts clamps scale + pan.
-  const n = camZoomAt(cam, fx, fy, factor, insets(), mapBounds());
+  const n = camZoomAt(cam, fx, fy, factor, insets(), mapBounds(), panelSlack());
   cam.scale = n.scale;
   cam.x = n.x;
   cam.y = n.y;
 }
 
 /** Keep the map filling the play area with SLACK at the edges (module: PAN_SLACK) so the
- *  outermost provinces don't jam against the border. Delegates to the shared camera. */
+ *  outermost provinces don't jam against the border. Delegates to the shared camera;
+ *  an open panel widens the range (panelSlack) so it never traps the view. */
 function clampCam(): void {
-  const n = camClampCam(cam, insets(), mapBounds());
+  const n = camClampCam(cam, insets(), mapBounds(), panelSlack());
   cam.x = n.x;
   cam.y = n.y;
 }
 
 /** Put map-point `p` at the centre of the play area at `scale` (clamped + bounded). */
 function centerOn(p: { x: number; y: number }, scale: number): void {
-  const n = camCenterOn(cam, p, scale, insets(), mapBounds());
+  const n = camCenterOn(cam, p, scale, insets(), mapBounds(), panelSlack());
   cam.scale = n.scale;
   cam.x = n.x;
   cam.y = n.y;
@@ -2103,6 +2140,26 @@ function handleEvents(events: DomainEvent[]) {
         while (aaShots.length > 40) aaShots.shift();
         break;
       }
+      case 'artillery.fired': {
+        // Standoff bombardment: arc from the shooter to its victim. Endpoints are
+        // captured NOW — the victim may already be wiped from the state (the core
+        // emits after damage), so fall back to the `near` node anchor it sent.
+        const shooter = s.fleets[p.fleetId as string];
+        const from = shooter && fleetPos(shooter);
+        if (!from) break;
+        const anchorNode = (id: string | null | undefined) =>
+          id ? (s.planets[id]?.position ?? null) : null;
+        const victim = s.fleets[p.target as string];
+        const to = (victim && fleetPos(victim)) ?? anchorNode(p.near as string);
+        if (!to) break;
+        // Fog: show the exchange only if either end sits on a node we can see.
+        const shooterNode = shooter.location ?? shooter.edge?.from;
+        const nearNode = (p.near as string) ?? '';
+        if (!(shooterNode && known(shooterNode)) && !known(nearNode)) break;
+        siegeShots.push({ from: { ...from }, to: { x: to.x, y: to.y }, at: performance.now(), seed: siegeSeed++ });
+        while (siegeShots.length > 24) siegeShots.shift();
+        break;
+      }
       case 'market.bought':
         if (p.seller === ME || p.buyer === ME)
           note(
@@ -3229,6 +3286,108 @@ function render(now: number) {
       cx.beginPath();
       cx.arc(b.x, b.y, (shot.close ? 1.5 : 2) + (age / 700) * (shot.close ? 3 : 5), 0, TAU);
       cx.fill();
+    }
+    cx.restore();
+  }
+
+  // Siege bombardment (artillery.fired): a ballistic ARC from the shooter to its
+  // victim with a stagger of shell particles and impact bursts — the map answers
+  // «who is shelling whom» at a glance. Endpoints are map-space; projected each
+  // frame so the volley tracks pan/zoom.
+  if (siegeShots.length) {
+    const nowMs = performance.now();
+    const SHELLS = 3; // shells per volley, launched in a stagger
+    const FLIGHT = 780; // ms a shell spends on the arc
+    const STAGGER = 130; // ms between shell launches
+    const BURST = 520; // ms an impact burst lives
+    const LIFE = FLIGHT + STAGGER * (SHELLS - 1) + BURST;
+    cx.save();
+    for (let i = siegeShots.length - 1; i >= 0; i--) {
+      const shot = siegeShots[i]!;
+      const age = nowMs - shot.at;
+      if (age > LIFE) {
+        siegeShots.splice(i, 1);
+        continue;
+      }
+      const a = world(shot.from);
+      const b = world(shot.to);
+      if (!visible(a, 200) && !visible(b, 200)) continue;
+      // Ballistic lob: the mid-point lifts straight up in screen space, scaled by
+      // the span — long-range fire arches higher, point-blank stays flat-ish.
+      const dist = Math.hypot(b.x - a.x, b.y - a.y);
+      const lift = Math.min(64, Math.max(16, dist * 0.24));
+      const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - lift };
+      const q = (t: number) => ({
+        x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x,
+        y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y,
+      });
+      // 1) the traced arc — a faint amber dashed path up to the lead shell.
+      const lead = Math.min(1, age / FLIGHT);
+      const pathFade = Math.max(0, 1 - age / LIFE);
+      cx.strokeStyle = rgba('#ffb066', 0.34 * pathFade);
+      cx.lineWidth = 1;
+      cx.setLineDash([4, 5]);
+      cx.lineDashOffset = -age / 16;
+      cx.beginPath();
+      cx.moveTo(a.x, a.y);
+      const STEPS = 18;
+      for (let sgm = 1; sgm <= Math.ceil(STEPS * lead); sgm++) {
+        const pt = q(Math.min(lead, sgm / STEPS));
+        cx.lineTo(pt.x, pt.y);
+      }
+      cx.stroke();
+      cx.setLineDash([]);
+      // 2) the shells — bright tracer dots with a short glowing tail.
+      cx.shadowColor = '#ffb066';
+      for (let sh = 0; sh < SHELLS; sh++) {
+        const t = (age - sh * STAGGER) / FLIGHT;
+        if (t <= 0 || t >= 1) continue;
+        const pt = q(t);
+        const tail = q(Math.max(0, t - 0.06));
+        cx.strokeStyle = rgba('#ffd29b', 0.85);
+        cx.lineWidth = 1.6;
+        cx.shadowBlur = 7;
+        cx.beginPath();
+        cx.moveTo(tail.x, tail.y);
+        cx.lineTo(pt.x, pt.y);
+        cx.stroke();
+        cx.fillStyle = rgba('#fff1dc', 0.95);
+        cx.beginPath();
+        cx.arc(pt.x, pt.y, 1.7, 0, TAU);
+        cx.fill();
+      }
+      cx.shadowBlur = 0;
+      // 3) impacts — each landed shell pops an expanding ring + sparks on stable
+      // per-volley angles (seeded — no per-frame randomness, replays stay clean).
+      for (let sh = 0; sh < SHELLS; sh++) {
+        const landed = age - (sh * STAGGER + FLIGHT);
+        if (landed < 0 || landed > BURST) continue;
+        const k = landed / BURST;
+        const burstFade = 1 - k;
+        // Hot core flash first — the «попал!» read — then the expanding ring.
+        if (k < 0.45) {
+          cx.fillStyle = rgba('#fff1dc', 0.9 * (1 - k / 0.45));
+          cx.shadowColor = '#ff8a3d';
+          cx.shadowBlur = 10;
+          cx.beginPath();
+          cx.arc(b.x, b.y, 3.2 - k * 3, 0, TAU);
+          cx.fill();
+          cx.shadowBlur = 0;
+        }
+        cx.strokeStyle = rgba('#ff8a3d', 0.75 * burstFade);
+        cx.lineWidth = 1.6;
+        cx.beginPath();
+        cx.arc(b.x, b.y, 2 + k * 14, 0, TAU);
+        cx.stroke();
+        cx.fillStyle = rgba('#ffd29b', 0.85 * burstFade);
+        for (let spk = 0; spk < 5; spk++) {
+          const ang = ((shot.seed * 7 + sh * 5 + spk) % 12) * (TAU / 12) + 0.35;
+          const r = 4 + k * 14;
+          cx.beginPath();
+          cx.arc(b.x + Math.cos(ang) * r, b.y + Math.sin(ang) * r * 0.8, 1.3, 0, TAU);
+          cx.fill();
+        }
+      }
     }
     cx.restore();
   }
@@ -5191,7 +5350,7 @@ function renderDiplo(): void {
       : `<div class="dp-convo">${convoListHtml()}${convoThreadHtml()}</div>`;
   el.innerHTML =
     `<div class="dpbox">` +
-    `<div class="dp-head"><b>${t('СЕССИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}<button class="dp-close">✕</button></div>` +
+    `<div class="dp-head"><b>${t('ДИПЛОМАТИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}<button class="dp-close">✕</button></div>` +
     body +
     `</div>`;
   if (diploTab === 'msgs') scrollFeedToEnd();
@@ -6157,7 +6316,7 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'missile', label: 'Ракеты' },
   { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
-const branchLabel = (key: string): string => TECH_BRANCHES.find((b) => b.key === key)?.label ?? key;
+const branchLabel = (key: string): string => t(TECH_BRANCHES.find((b) => b.key === key)?.label ?? key);
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
 function renderTech(): void {
@@ -6179,12 +6338,12 @@ function renderTech(): void {
   const council = me?.scientists ?? [];
   if (council.length) {
     html +=
-      `<div class="tw-council">🧪 Ваши учёные: ` +
+      `<div class="tw-council">🧪 ${t('Ваши учёные:')} ` +
       council
         .map((c) => {
           const def = data.scientists[c.id];
           const br = def?.branch ? ` <span class="tw-cb">${branchLabel(def.branch)}</span>` : '';
-          return `<b>${esc(def?.name ?? c.id)}</b>${br}`;
+          return `<b>${esc(tData(def?.name ?? c.id))}</b>${br}`;
         })
         .join(' · ') +
       `</div>`;
@@ -6472,6 +6631,8 @@ $('csolo').addEventListener('click', () => {
 // DEV TEST MODE — fenced hook. The "Тесты" button opens the dev test overlay;
 // initTestMode wires it to the host with two tiny callbacks. Cut this whole block
 // (and the import + #testmode HTML/CSS) to remove the feature without a trace.
+// Player builds hide the button entirely (dev chrome) — `?dev` / vd.dev restores it.
+if (!DEV_UI) $('ctest').style.display = 'none';
 $('ctest')?.addEventListener('click', () => {
   userClosed = true;
   NET = false;
@@ -6800,15 +6961,17 @@ const sciWin = $('scipick');
 function sciInfluence(id: string): string {
   const def = data.scientists[id];
   if (!def) return '';
-  if (!def.branch) return '+1 слот исследования (генералист, без фокуса ветки)';
+  if (!def.branch) return t('+1 слот исследования (генералист, без фокуса ветки)');
   const opens = Object.values(data.technologies)
     .filter(
-      (t) =>
-        t.branch === def.branch && (t.conditions ?? []).some((c) => c.type === 'has_scientist'),
+      (td) =>
+        td.branch === def.branch && (td.conditions ?? []).some((c) => c.type === 'has_scientist'),
     )
-    .map((t) => t.name);
+    .map((td) => tData(td.name));
   const br = branchLabel(def.branch);
-  return opens.length ? `Открывает ветку «${br}»: ${opens.join(', ')}` : `Фокус ветки «${br}»`;
+  return opens.length
+    ? t('Открывает ветку «{br}»: {list}', { br, list: opens.join(', ') })
+    : t('Фокус ветки «{br}»', { br });
 }
 function renderSciPick(): void {
   const chosen = setupScientists;
@@ -6816,12 +6979,12 @@ function renderSciPick(): void {
     .map((i) => {
       const id = chosen[i];
       if (!id) {
-        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">Выбрать учёного</div></div>`;
+        return `<div class="sp-slot empty"><div class="sp-plus">＋</div><div class="sp-hint">${t('Выбрать учёного')}</div></div>`;
       }
       const def = data.scientists[id];
       return (
-        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="убрать">✕</button>` +
-        `<div class="sp-sn">${esc(def?.name ?? id)}</div>` +
+        `<div class="sp-slot filled"><button class="sp-rm" data-sprm="${i}" title="${t('убрать')}">✕</button>` +
+        `<div class="sp-sn">${esc(tData(def?.name ?? id))}</div>` +
         `<div class="sp-inf">${esc(sciInfluence(id))}</div></div>`
       );
     })
@@ -6833,7 +6996,7 @@ function renderSciPick(): void {
       const dis = placed || (chosen.length >= 2 && !placed);
       return (
         `<button class="sp-card${placed ? ' picked' : ''}" data-spadd="${id}"${dis ? ' disabled' : ''}>` +
-        `<div class="sp-cn">${esc(def.name)}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
+        `<div class="sp-cn">${esc(tData(def.name))}${placed ? '<span class="sp-tick">✓</span>' : ''}</div>` +
         `<div class="sp-inf">${esc(sciInfluence(id))}</div></button>`
       );
     })
@@ -6841,10 +7004,10 @@ function renderSciPick(): void {
   const ready = chosen.length >= 2;
   $('scipickbody').innerHTML =
     `<div class="sp-slots">${slots}</div>` +
-    `<div class="sp-warn">⚠ Выбор учёных закрепляется на всю сессию — изменить в матче будет нельзя.</div>` +
-    `<div class="sp-h">Кандидаты · нажмите, чтобы занять слот</div>` +
+    `<div class="sp-warn">${t('⚠ Совет закрепляется на весь матч. Рекомендованная пара уже выбрана — замените по вкусу.')}</div>` +
+    `<div class="sp-h">${t('Кандидаты · нажмите, чтобы занять слот')}</div>` +
     `<div class="sp-roster">${roster}</div>` +
-    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? 'Закрепить и продолжить к выбору места →' : 'Выберите двух учёных'}</button>`;
+    `<button class="sp-go" id="sp-go"${ready ? '' : ' disabled'}>${ready ? t('Закрепить и продолжить к выбору места →') : t('Выберите двух учёных')}</button>`;
 }
 function openSciPick(): void {
   sciWin.classList.add('show');
@@ -6877,7 +7040,11 @@ function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
-  setupScientists = []; // re-consecrate the council each time setup opens
+  // Re-consecrate the council each time setup opens, PRE-SEEDED with the recommended
+  // newbie pair (командование «Куратор» + генералист «Полимат»): the first permanent
+  // choice a new player faces must never be a wall of empty slots + a disabled button —
+  // one tap continues, swapping is optional. Guarded by presence so data edits degrade.
+  setupScientists = ['overseer', 'polymath'].filter((id) => data.scientists[id]);
   // A lively default: ×1 wall-clock reads as a FROZEN screen to a newcomer, so the
   // setup opens on the last chosen multiplier (first launch: ×10). True real time
   // stays one tap away — the ×1 chip.
@@ -7463,6 +7630,19 @@ function renderLobby(): void {
 // --- loop --------------------------------------------------------------------
 
 const fpsEl = $('fps');
+// Dev FX lab (DEV_UI only): push a demo siege volley between two nodes without
+// staging a real standoff duel — for design review and the FX screenshot tests.
+if (DEV_UI && typeof window !== 'undefined') {
+  (window as unknown as { __vdFx?: object }).__vdFx = {
+    pushSiege(fromId: string, toId: string): boolean {
+      const a = s.planets[fromId]?.position;
+      const b = s.planets[toId]?.position;
+      if (!a || !b) return false;
+      siegeShots.push({ from: { ...a }, to: { ...b }, at: performance.now(), seed: siegeSeed++ });
+      return true;
+    },
+  };
+}
 let fpsEma = 60; // smoothed frames-per-second readout
 let lastFpsText = '';
 let lastTechAt = 0; // throttle for live re-rendering the tech window while it's open
@@ -7632,19 +7812,26 @@ function frame(nowReal: number) {
     lastClockText = statusHtml;
   }
 
-  // Dev net overlay (M0): FPS always; when connected, append round-trip latency and
-  // a desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
-  let fpsText = `${Math.round(fpsEma)} FPS`;
-  if (NET) {
-    const rtt = rttEma === null ? '· · ms' : `${Math.round(rttEma)} ms`;
-    const sync = netDesync ? `desync ✗ ${netDesyncCount}` : 'sync ✓';
-    fpsText += ` · ${rtt} · ${sync}`;
-  }
-  if (BUILD_TAG) fpsText += ` · ${BUILD_TAG}`; // running build, always visible
-  if (fpsText !== lastFpsText) {
-    fpsEl.textContent = fpsText;
-    fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
-    lastFpsText = fpsText;
+  // Dev net overlay (M0): FPS; when connected, append round-trip latency and a
+  // desync flag (✓ in sync with the server, ✗ + running mismatch count if not).
+  // Hidden from players (dev chrome) — EXCEPT on a live desync, which everyone
+  // must be able to see and report.
+  if (DEV_UI || (NET && netDesync)) {
+    let fpsText = `${Math.round(fpsEma)} FPS`;
+    if (NET) {
+      const rtt = rttEma === null ? '· · ms' : `${Math.round(rttEma)} ms`;
+      const sync = netDesync ? `desync ✗ ${netDesyncCount}` : 'sync ✓';
+      fpsText += ` · ${rtt} · ${sync}`;
+    }
+    if (BUILD_TAG) fpsText += ` · ${BUILD_TAG}`; // running build, visible in dev
+    if (fpsText !== lastFpsText) {
+      fpsEl.textContent = fpsText;
+      fpsEl.style.color = NET && netDesync ? 'var(--red, #ff5a4d)' : '';
+      lastFpsText = fpsText;
+    }
+  } else if (lastFpsText !== '') {
+    fpsEl.textContent = '';
+    lastFpsText = '';
   }
   // Top bar = the five session resources (icon + amount). The donate currency (Суверены ◆)
   // is rendered separately on the status line right under this bar (see statusHtml above).

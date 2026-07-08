@@ -843,6 +843,44 @@ export const en: Record<string, string> = {
   'Неверный адрес сервера': 'Invalid server address',
   'Введи позывной': 'Enter a callsign',
 
+  // --- science council (pre-match scientist pick + tech-window header) -------------
+  'СОВЕТ УЧЁНЫХ': 'SCIENCE COUNCIL',
+  '↩ В меню': '↩ Menu',
+  'Выбрать учёного': 'Pick a scientist',
+  'убрать': 'remove',
+  '⚠ Совет закрепляется на весь матч. Рекомендованная пара уже выбрана — замените по вкусу.':
+    '⚠ The council locks in for the whole match. A recommended pair is pre-selected — swap to taste.',
+  'Кандидаты · нажмите, чтобы занять слот': 'Candidates · tap to fill a slot',
+  'Закрепить и продолжить к выбору места →': 'Lock in and continue to start pick →',
+  'Выберите двух учёных': 'Pick two scientists',
+  '+1 слот исследования (генералист, без фокуса ветки)': '+1 research slot (a generalist, no branch focus)',
+  'Открывает ветку «{br}»: {list}': 'Opens the {br} branch: {list}',
+  'Фокус ветки «{br}»': '{br} branch focus',
+  'Ваши учёные:': 'Your scientists:',
+  'data:Куратор': 'Overseer',
+  'data:Космоадмирал': 'Space Admiral',
+  'data:Наземный маршал': 'Ground Marshal',
+  'data:Командир крыла': 'Wing Commander',
+  'data:Ракетный шеф': 'Missile Chief',
+  'data:Полимат': 'Polymath',
+  // --- tech-branch labels (tabs / chips / section heads) ---------------------------
+  'Космос': 'Space',
+  'Земля': 'Ground',
+  'Эскадрильи': 'Squadrons',
+  'Ракеты': 'Missiles',
+  'Командование': 'Command',
+  'Дом: {home} — одиночная песочница, без соперников · тапните светящийся мир, чтобы сменить':
+    'Home: {home} — a solo sandbox, no rivals · tap another glowing world to change',
+  'Дом: {home} — тапните другой светящийся мир, чтобы сменить':
+    'Home: {home} — tap another glowing world to change',
+  // --- rail icon labels + window headers -------------------------------------------
+  'Дипло': 'Diplo',
+  'Почта': 'Mail',
+  'Наука': 'Tech',
+  'Сон': 'Sleep',
+  'Корп': 'Corp',
+  'ДИПЛОМАТИЯ': 'DIPLOMACY',
+
   // --- suggested-callsign wordlist -----------------------------------------------
   'Носорог': 'Rhino',
   'Комета': 'Comet',
