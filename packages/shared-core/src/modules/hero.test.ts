@@ -61,7 +61,13 @@ const data: GameData = parseGameData({
   // HERO-3: an archetype whose ship is a concrete hull (spawn resolves the unit).
   // Its branch also anchors the HERO-7 skill-tree branch gate.
   heroes: {
-    raider: { name: 'Raider', branch: 'transhuman', ship: { unit: 'warship' } },
+    raider: { name: 'Raider', branch: 'transhuman', ship: { unit: 'warship' }, slots: 2 },
+  },
+  // HERO-6 fittings: a live ability grant, a live passive grant, a not-yet-live statMod.
+  heroFittings: {
+    psi_lens: { name: 'Psi Lens', grants: { ability: 'burst' }, cost: { metal: 20 } },
+    war_drum: { name: 'War Drum', grants: { passive: 'warcry' } },
+    plating: { name: 'Plating', statMods: { hp: 40 } },
   },
   // HERO-7 tree: a transhuman root + a costly child, a psionic node, a common node.
   heroSkillTrees: {
@@ -872,6 +878,61 @@ describe('hero — skill tree (HERO-7)', () => {
       kernel.applyAction(st, act('hero.skill.unlock', 'p1', { heroId: HERO_ID, node: 'common_core' }), ctx(0)),
     );
     expect(r.state.heroes![HERO_ID]!.skills).toEqual(['common_core']);
+  });
+});
+
+describe('hero — ship fittings (HERO-6)', () => {
+  const kernel = createKernel([heroModule]);
+  const HERO_ID = 'hero:p1';
+
+  /** world() + the hero is a raider (2 fitting slots) with a treasury. */
+  function fitWorld(): GameState {
+    const st = world();
+    st.heroes![HERO_ID]!.archetype = 'raider';
+    st.players.p1!.resources = { metal: 25 };
+    return st;
+  }
+  const fit = (fitting: string, playerId = 'p1', seq = 1) =>
+    act('hero.fit', playerId, { heroId: HERO_ID, fitting }, seq);
+
+  it('installs a fitting: cost charged, grant lands, the loadout is live', () => {
+    const r = okApply(kernel.applyAction(fitWorld(), fit('psi_lens'), ctx(0)));
+    const hero = r.state.heroes![HERO_ID]!;
+    expect(hero.fittings).toEqual(['psi_lens']);
+    expect(hero.abilities).toContain('burst'); // granted, HERO-4 equipment gate passes
+    expect(r.state.players.p1?.resources.metal).toBe(5); // 25 − 20
+    expect(r.events.map((e) => e.type)).toContain('hero.fitted');
+    // A statMods-only fitting installs cleanly too (data for the SHIP-3 seam).
+    const plated = okApply(kernel.applyAction(r.state, fit('plating', 'p1', 2), ctx(1)));
+    expect(plated.state.heroes![HERO_ID]!.fittings).toEqual(['psi_lens', 'plating']);
+  });
+
+  it('enforces the slot budget, uniqueness and the fail-secure gate set', () => {
+    // Two slots filled → the third fitting has nowhere to go.
+    const st = fitWorld();
+    st.heroes![HERO_ID]!.fittings = ['plating', 'war_drum'];
+    expect(errCode(kernel.applyAction(st, fit('psi_lens'), ctx(0)))).toBe('E_NO_SLOTS');
+    // The same fitting cannot be doubled.
+    const one = fitWorld();
+    one.heroes![HERO_ID]!.fittings = ['psi_lens'];
+    expect(errCode(kernel.applyAction(one, fit('psi_lens'), ctx(0)))).toBe('E_ALREADY_FITTED');
+    // An archetype-less hero exposes no slots at all.
+    const bare = world();
+    expect(
+      errCode(kernel.applyAction(bare, act('hero.fit', 'p1', { heroId: HERO_ID, fitting: 'war_drum' }), ctx(0))),
+    ).toBe('E_NO_SLOTS');
+    // Unknown fitting / poor purse / dead hero / foreign hero.
+    expect(errCode(kernel.applyAction(fitWorld(), fit('warp_core'), ctx(0)))).toBe('E_NO_FITTING');
+    const poor = fitWorld();
+    poor.players.p1!.resources = { metal: 5 };
+    expect(errCode(kernel.applyAction(poor, fit('psi_lens'), ctx(0)))).toBe('E_INSUFFICIENT');
+    expect(poor.players.p1?.resources.metal).toBe(5); // nothing charged on rejection
+    const dead = fitWorld();
+    dead.heroes![HERO_ID]!.alive = false;
+    expect(errCode(kernel.applyAction(dead, fit('war_drum'), ctx(0)))).toBe('E_HERO_DEAD');
+    expect(errCode(kernel.applyAction(fitWorld(), fit('war_drum', 'p2'), ctx(0)))).toBe(
+      'E_FORBIDDEN',
+    );
   });
 });
 

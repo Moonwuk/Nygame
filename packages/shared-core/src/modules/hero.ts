@@ -44,6 +44,12 @@ import { canAfford, payCost } from '../util/treasury';
  * node's grants land on the instance (`abilities` / `passives`) so the existing
  * HERO-4/HERO-5 engines pick them up with no extra wiring.
  *
+ * HERO-6 (docs/heroes.md) — ship fittings: `hero.fit {heroId, fitting}` installs a
+ * `data.heroFittings` component into one of the archetype's `slots` (for good — the
+ * ship-modules "no refit" owner rule). The fitting's `grants` land on the instance
+ * loadout (live via HERO-4/5); its `statMods` ride as data until the effective-stats
+ * seam (SHIP-3/4) makes them live.
+ *
  * HERO-4 (docs/heroes.md) adds the generic, data-driven dispatcher on top:
  *
  *   - `hero.ability {heroId, abilityId, target?}` — cast an ability the hero carries
@@ -263,6 +269,18 @@ function boardHeroShip(h: HandlerContext, hero: Hero, host: Fleet): void {
   hero.alive = true;
   if (typeof host.location === 'string') hero.location = host.location;
   hero.fleetId = host.id;
+}
+
+/** Extend the hero's instance loadout with a grant (shared by skill nodes, HERO-7, and
+ *  fittings, HERO-6). Deduped — a grant the hero already carries changes nothing, so
+ *  no source can stack the same passive/ability twice. */
+function applyGrants(hero: Hero, grants: { ability?: string; passive?: string }): void {
+  if (grants.ability !== undefined && !(hero.abilities ?? []).includes(grants.ability)) {
+    (hero.abilities ??= []).push(grants.ability);
+  }
+  if (grants.passive !== undefined && !(hero.passives ?? []).includes(grants.passive)) {
+    (hero.passives ??= []).push(grants.passive);
+  }
 }
 
 /** Put a living hero into the dead/respawning state — the single death path shared by
@@ -701,13 +719,37 @@ export const heroModule: GameModule = {
       payCost(player.resources, def.cost);
 
       hero.skills = [...skills, node];
-      if (def.grants.ability !== undefined && !(hero.abilities ?? []).includes(def.grants.ability)) {
-        (hero.abilities ??= []).push(def.grants.ability);
-      }
-      if (def.grants.passive !== undefined && !(hero.passives ?? []).includes(def.grants.passive)) {
-        (hero.passives ??= []).push(def.grants.passive);
-      }
+      applyGrants(hero, def.grants);
       h.emit('hero.skill.unlocked', { owner: action.playerId, heroId, node, grants: def.grants });
+    });
+
+    // HERO-6 — install a ship fitting into one of the archetype's slots. Locked in
+    // for good (no refit); grants are live (HERO-4/5), statMods await SHIP-3.
+    api.onAction('hero.fit', (action, h) => {
+      const { heroId, fitting } = action.payload as { heroId?: string; fitting?: string };
+      if (typeof heroId !== 'string' || typeof fitting !== 'string') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const hero = h.state.heroes?.[heroId];
+      if (!hero) return h.reject('E_NO_HERO');
+      if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      const def = h.ctx.data.heroFittings[fitting];
+      if (!def) return h.reject('E_NO_FITTING');
+      const fitted = hero.fittings ?? [];
+      if (fitted.includes(fitting)) return h.reject('E_ALREADY_FITTED');
+      // Slot budget comes from the archetype; an archetype-less hero fits nothing.
+      const slots =
+        hero.archetype !== undefined ? (h.ctx.data.heroes[hero.archetype]?.slots ?? 0) : 0;
+      if (fitted.length >= slots) return h.reject('E_NO_SLOTS');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      if (!canAfford(player.resources, def.cost)) return h.reject('E_INSUFFICIENT');
+      payCost(player.resources, def.cost);
+
+      hero.fittings = [...fitted, fitting];
+      applyGrants(hero, def.grants);
+      h.emit('hero.fitted', { owner: action.playerId, heroId, fitting, grants: def.grants });
     });
   },
 };

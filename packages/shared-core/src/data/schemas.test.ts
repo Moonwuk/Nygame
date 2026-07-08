@@ -139,6 +139,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     for (const [id, def] of Object.entries(data.heroSkillTrees)) {
       check(def.cost, `skill node ${id} cost`);
     }
+    for (const [id, def] of Object.entries(data.heroFittings)) {
+      check(def.cost, `hero fitting ${id} cost`);
+    }
   });
 
   it('builds the fortress up to level 3 (HP and defense both grow)', () => {
@@ -333,6 +336,35 @@ describe('hero archetypes + abilities (HERO-1, docs/heroes.md)', () => {
       safeParseGameData({
         ...loadShippedBundle(),
         heroSkillTrees: { bad: { name: 'X', cost: { metal: -5 } } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('shipped fittings are consistent and fail-closed (HERO-6)', () => {
+    const data = parseGameData(loadShippedBundle());
+    const abilities = new Set(Object.keys(data.heroAbilities));
+    const passives = new Set(Object.keys(data.heroPassives));
+    for (const [id, def] of Object.entries(data.heroFittings)) {
+      if (def.grants.ability !== undefined) {
+        expect(abilities.has(def.grants.ability), `fitting ${id} grants unknown ability`).toBe(true);
+      }
+      if (def.grants.passive !== undefined) {
+        expect(passives.has(def.grants.passive), `fitting ${id} grants unknown passive`).toBe(true);
+      }
+    }
+    expect(data.heroFittings.psi_amplifier?.grants.ability).toBe('scan');
+    expect(data.heroFittings.ablative_plating?.statMods.hp).toBe(40);
+    // Anti self-expansion: a fitting may not grow slot capacity; costs stay nonnegative.
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroFittings: { bad: { name: 'X', statMods: { slots: 1 } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      safeParseGameData({
+        ...loadShippedBundle(),
+        heroFittings: { bad: { name: 'X', cost: { metal: -5 } } },
       }).success,
     ).toBe(false);
   });

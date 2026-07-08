@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1070 зелёных** (4 skip, 105 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1073 зелёных** (4 skip, 105 файлов).
 
 ---
 
@@ -558,6 +558,15 @@ E_NOT_DESTRUCTIBLE, E_OUT_OF_RANGE, E_COOLDOWN`.
   кроет весь флот, `fleetId`→хост, событие с `aboard: true`; чужой флот — `E_BAD_SPAWN`)
   и **союзный мир** (D1-дипломатия, только `alliance`; нейтрал/война — `E_BAD_SPAWN`).
   Шипованы «Абордажная транслокация» (ravager) и «Дипломатическая высадка» (commander).
+- Действие **`hero.fit {heroId, fitting}`** (HERO-6) — установка фитинга из
+  `data/heroFittings.json` (`HeroFittingDef {statMods, grants{ability?|passive?}, cost}`,
+  анти-self-expansion рефайн) в слот архетипа (`slots`; `Hero.fittings`, **без refit** —
+  owner-правило ship-модулей). Гейты: владение/живость → `E_NO_FITTING` →
+  `E_ALREADY_FITTED` → `E_NO_SLOTS` (безархетипный герой слотов не имеет) → казна.
+  `grants` — живые (общий `applyGrants` с дедупом, HERO-4/5); `statMods` — данные до
+  шва эффективных статов SHIP-3/4 («designed, not live», как `live:false` прототипа).
+  Событие `hero.fitted`. Шипованы «Пси-усилитель» (scan), «Матрица „Эгида"»
+  (rally_beacon), «Абляционная обшивка» (hp+40, не live).
 - Действие **`hero.skill.unlock {heroId, node}`** (HERO-7) — прокачка дерева навыков из
   `data/heroSkillTrees.json` (`HeroSkillNode {branch?, requires[], cost, grants
   {ability?|passive?}}`, ветки `transhuman|psionic`). Гейты: владение/живость →

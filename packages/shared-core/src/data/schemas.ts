@@ -518,6 +518,28 @@ export const HeroSkillNodeSchema = z.object({
   grants: HeroSkillGrantsSchema.default({}),
 });
 
+/** A hero-ship fitting (HERO-6, docs/heroes.md §Данные) — a component installed into
+ *  one of the archetype's `slots` («настройка самого корабля»). `grants` land on the
+ *  instance loadout and are LIVE (HERO-4/5 engines); `statMods` are flat stat deltas
+ *  for the hero's ship, carried as data until the effective-unit-stats seam (SHIP-3/4)
+ *  lands — designed, not yet live (the prototype's `live:false` philosophy). Mirrors
+ *  `ModuleDefSchema`, incl. the anti-self-expansion refine. */
+export const HeroFittingDefSchema = z
+  .object({
+    name: z.string(),
+    description: z.string().optional(),
+    /** Flat additive stat deltas for the hero's SHIP (e.g. { hp: 40, speed: -1 }).
+     *  Trade-offs are allowed (negatives); slot capacity is not (refined below). */
+    statMods: z.record(z.string(), z.number()).default({}),
+    /** What installing the fitting grants the hero (live via HERO-4/5). */
+    grants: HeroSkillGrantsSchema.default({}),
+    /** Treasury cost to install (nonnegative — a fitting must not mint resources). */
+    cost: z.record(z.string(), z.number().nonnegative()).default({}),
+  })
+  .refine((f) => !Object.keys(f.statMods).some((k) => /slot/i.test(k)), {
+    message: 'a fitting may not modify slot capacity (anti self-expansion)',
+  });
+
 /** The ship a hero commands: either an existing unit archetype (`unit` → `data.units`) or
  *  inline stat overrides. A hero reuses the fleet for position/movement/combat, so its
  *  ship is described the same way a unit is (docs/heroes.md §Модель состояния). Both
@@ -562,6 +584,7 @@ export const GameDataSchema = z.object({
   heroAbilities: z.record(z.string(), HeroAbilityDefSchema).default({}),
   heroPassives: z.record(z.string(), HeroPassiveDefSchema).default({}),
   heroSkillTrees: z.record(z.string(), HeroSkillNodeSchema).default({}),
+  heroFittings: z.record(z.string(), HeroFittingDefSchema).default({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -592,6 +615,7 @@ export type HeroShip = z.infer<typeof HeroShipSchema>;
 export type HeroArchetypeDef = z.infer<typeof HeroArchetypeDefSchema>;
 export type HeroPassiveDef = z.infer<typeof HeroPassiveDefSchema>;
 export type HeroSkillNode = z.infer<typeof HeroSkillNodeSchema>;
+export type HeroFittingDef = z.infer<typeof HeroFittingDefSchema>;
 export type HeroSkillGrants = z.infer<typeof HeroSkillGrantsSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 

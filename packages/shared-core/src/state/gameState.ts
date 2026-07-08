@@ -465,6 +465,9 @@ export interface Hero {
   /** Unlocked skill-tree node ids (→ `data.heroSkillTrees`, HERO-7). Grants applied on
    *  unlock land in `abilities`/`passives`; the list itself gates `requires` chains. */
   skills?: string[];
+  /** Installed ship fittings (→ `data.heroFittings`, HERO-6), capped by the archetype's
+   *  `slots`. Installed for good — no refit (the ship-modules owner rule). */
+  fittings?: string[];
   /** Respawn anchor — the owner's capital. A slain hero re-forms here if still held;
    *  absent ⇒ the core falls back to the hero's last node, then any owned world. */
   home?: PlanetId;
