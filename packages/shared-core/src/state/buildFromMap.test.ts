@@ -177,6 +177,41 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     ).toThrow(/E_TOO_MANY_SCIENTISTS/);
   });
 
+  it('seeds a pre-match hero roster as undeployed instances (HERO-9)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: {
+        slot_a: { playerId: 'p1', heroes: ['commander', 'warden'] },
+        slot_b: { playerId: 'p2' },
+      },
+    });
+    const roster = Object.values(state.heroes ?? {}).filter((x) => x.owner === 'p1');
+    expect(roster.map((x) => x.archetype)).toEqual(['commander', 'warden']);
+    const main = state.heroes!['hero:p1:1']!;
+    // Anchored at the slot's owned world, carrying the archetype loadout, undeployed.
+    expect(main.home).toBe('home_a');
+    expect(main.location).toBe('home_a');
+    expect(main.name).toBe('Командир');
+    expect(main.abilities).toEqual(data.heroes.commander!.startAbilities);
+    expect(main.passives).toEqual(['rally_beacon']);
+    expect(main.fleetId).toBeUndefined(); // no ship yet — hero.spawn raises it
+    expect(state.heroes!['hero:p2:1']).toBeUndefined(); // p2 chose no roster
+    // No roster at all → the heroes record stays absent (back-compat).
+    const bare = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1' }, slot_b: { playerId: 'p2' } },
+    });
+    expect(bare.heroes).toBeUndefined();
+  });
+
+  it('rejects an unknown, duplicate or oversized hero roster (fail-secure at boot)', () => {
+    const seat = (heroes: string[]) => () =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'p1', heroes }, slot_b: { playerId: 'p2' } },
+      });
+    expect(seat(['nobody'])).toThrow(/E_UNKNOWN_HERO/);
+    expect(seat(['warden', 'warden'])).toThrow(/E_DUPLICATE_HERO/);
+    expect(seat(['commander', 'ravager', 'vanguard', 'warden'])).toThrow(/E_TOO_MANY_HEROES/);
+  });
+
   it('grants pre-match technology picks as completed research (C3)', () => {
     const state = buildStateFromMap(avaMap(), data, {
       slots: {

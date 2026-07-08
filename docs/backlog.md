@@ -368,8 +368,13 @@
   `fleetId`→хост) и союзный мир (дипломатия D1: `stanceToRelation(getStance)==='ally'`;
   нейтрал/война — по-прежнему `E_BAD_SPAWN`). Чужой флот закрыт и с маркером. Шипованы
   «Абордажная транслокация» (ravager) и «Дипломатическая высадка» (commander). 2 теста.
-- **HERO-9** ⏳ _(HERO-3 ✅ — замок снят)_ Ростер: пред-матч выбор до 3 героев (config, как фракция/тех C3) +
-  сборка старта. Тесты. _(зависит от open-question «ростер» в `heroes.md`)_
+- **HERO-9** ✅ Ростер: `SlotAssignment.heroes?: string[]` (buildFromMap) — пред-матч
+  выбор **до 3 РАЗНЫХ архетипов** (open-question решён по прецедентам C3/совета учёных:
+  снапшот при сборке, дубли — fail-secure `E_DUPLICATE_HERO`; `E_UNKNOWN_HERO`/
+  `E_TOO_MANY_HEROES`/`E_HERO_NO_HOMEWORLD`). Каждый сеется **неразвёрнутой** Hero-записью
+  (`hero:{player}:{n}`, якорь `home`/`location` = первый владеемый мир слота, лоадаут =
+  `startAbilities`/`startPassives` архетипа); корабли поднимает `hero.spawn` (HERO-3).
+  Найм по ходу матча — отдельная будущая механика, не этот кирпич. 2 теста.
 
 ## Блок SHIP · Модульность кораблей `[proto]` `[core]` `[data]`
 

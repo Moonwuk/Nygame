@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1073 зелёных** (4 skip, 105 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1075 зелёных** (4 skip, 105 файлов).
 
 ---
 
@@ -567,6 +567,12 @@ E_NOT_DESTRUCTIBLE, E_OUT_OF_RANGE, E_COOLDOWN`.
   шва эффективных статов SHIP-3/4 («designed, not live», как `live:false` прототипа).
   Событие `hero.fitted`. Шипованы «Пси-усилитель» (scan), «Матрица „Эгида"»
   (rally_beacon), «Абляционная обшивка» (hp+40, не live).
+- **Пред-матч ростер (HERO-9, buildFromMap):** `SlotAssignment.heroes?: string[]` — до
+  **3 разных** архетипов (решение по прецедентам C3/совета учёных: снапшот при сборке;
+  `E_UNKNOWN_HERO`/`E_DUPLICATE_HERO`/`E_TOO_MANY_HEROES`; ростер без владеемого мира —
+  `E_HERO_NO_HOMEWORLD`). Сеются **неразвёрнутыми** (`hero:{player}:{n}`, `home` =
+  первый владеемый мир слота, лоадаут из `startAbilities`/`startPassives`); корабли
+  поднимает `hero.spawn`.
 - Действие **`hero.skill.unlock {heroId, node}`** (HERO-7) — прокачка дерева навыков из
   `data/heroSkillTrees.json` (`HeroSkillNode {branch?, requires[], cost, grants
   {ability?|passive?}}`, ветки `transhuman|psionic`). Гейты: владение/живость →

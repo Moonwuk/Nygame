@@ -1,7 +1,14 @@
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
 import type { MatchMap } from '../data/mapSchema';
-import { createInitialState, type Fleet, type GameState, type Planet, type Player } from './gameState';
+import {
+  createInitialState,
+  type Fleet,
+  type GameState,
+  type Hero,
+  type Planet,
+  type Player,
+} from './gameState';
 import { distance } from './route';
 
 /**
@@ -130,6 +137,12 @@ export interface SlotAssignment {
    *  A start kit may grant a mid-tree node directly (prerequisites are not enforced
    *  here — the kit designer's choice); unknown ids fail the boot (fail-secure). */
   technologies?: string[];
+  /** Pre-match hero roster (HERO-9): up to 3 DISTINCT archetype ids from `data.heroes`,
+   *  snapshotted like the scientist council (GDD §5.2). Each seeds an UNDEPLOYED hero
+   *  instance anchored at the slot's first owned world (`home`), carrying the
+   *  archetype's `startAbilities`/`startPassives`; the player raises ships with
+   *  `hero.spawn` (HERO-3). Unknown / duplicate / more-than-three fail the boot. */
+  heroes?: string[];
   /** Seat an AI-driven player (bot) into this slot. Default: human. */
   ai?: boolean;
 }
@@ -160,6 +173,23 @@ function resolveScientists(
     seen.add(s.id);
     return { id: s.id, level: s.level ?? 1 };
   });
+}
+
+/** The roster cap — mirrors the hero module's active cap (docs/heroes.md: до трёх). */
+const HERO_ROSTER_MAX = 3;
+
+/** Validates a slot's hero roster (HERO-9): ≤3 distinct, catalog-known archetypes.
+ *  Fail-secure at boot: `E_UNKNOWN_HERO` / `E_DUPLICATE_HERO` / `E_TOO_MANY_HEROES`. */
+function resolveHeroes(a: SlotAssignment, data: GameData): string[] {
+  const raw = a.heroes ?? [];
+  if (raw.length > HERO_ROSTER_MAX) throw new Error('E_TOO_MANY_HEROES');
+  const seen = new Set<string>();
+  for (const id of raw) {
+    if (!data.heroes[id]) throw new Error(`E_UNKNOWN_HERO: ${id}`);
+    if (seen.has(id)) throw new Error(`E_DUPLICATE_HERO: ${id}`);
+    seen.add(id);
+  }
+  return raw;
 }
 
 /** Build a `GameState` from a validated map. Throws `E_INVALID_MAP` listing the
@@ -228,6 +258,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
     };
   }
   // seat assigned slots as concrete players (start kit = the slot's resources)
+  const heroes: Record<string, Hero> = {};
   for (const [slotId, a] of Object.entries(slotAssign)) {
     const slot = map.slots[slotId];
     if (!slot) continue; // ignore assignments for slots this map does not declare
@@ -250,6 +281,30 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       ...(scientists.length ? { scientists } : {}),
       ...(a.technologies?.length ? { technologies: { completed: [...new Set(a.technologies)] } } : {}),
     };
+    // HERO-9: seed the roster as UNDEPLOYED hero instances anchored at the slot's
+    // first owned world; hero.spawn (HERO-3) raises their ships in-match.
+    const roster = resolveHeroes(a, data); // fail-secure: unknown / duplicate / >3
+    if (roster.length > 0) {
+      const home = Object.keys(map.sectors)
+        .sort()
+        .find((id) => map.sectors[id]!.owner === slotId);
+      if (home === undefined) throw new Error(`E_HERO_NO_HOMEWORLD: ${slotId}`);
+      roster.forEach((archetype, i) => {
+        const def = data.heroes[archetype]!;
+        const id = `hero:${a.playerId}:${i + 1}`;
+        heroes[id] = {
+          id,
+          owner: a.playerId,
+          name: def.name,
+          location: home,
+          home,
+          cooldowns: {},
+          archetype,
+          abilities: [...def.startAbilities],
+          passives: [...def.startPassives],
+        };
+      });
+    }
   }
 
   const fleets: Record<string, Fleet> = {};
@@ -266,5 +321,5 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
     };
   }
 
-  return { ...base, players, planets, fleets };
+  return { ...base, players, planets, fleets, ...(Object.keys(heroes).length ? { heroes } : {}) };
 }
