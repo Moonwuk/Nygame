@@ -21,6 +21,12 @@ import { canAfford, payCost } from '../util/treasury';
  *     `dead_world`, garrison + buildings are gone, ownership drops. Victory recomputes
  *     automatically (lost score + one fewer ownable world).
  *
+ * HERO-2 (docs/heroes.md) — the hero's position IS its ship: while deployed
+ * (`Hero.fleetId`) every ability acts from the SHIP's current node (`heroNode`), the
+ * hero's `location` trails the ship on `fleet.transit`/`fleet.arrived` (ability origin
+ * mid-flight + respawn anchor), `hero.move` is rejected (`E_HERO_DEPLOYED` — move the
+ * fleet instead), and `fleet.destroyed` is a death signal alongside `unit.died`.
+ *
  * HERO-4 (docs/heroes.md) adds the generic, data-driven dispatcher on top:
  *
  *   - `hero.ability {heroId, abilityId, target?}` — cast an ability the hero carries
@@ -57,6 +63,23 @@ function heroOf(state: GameState, playerId: PlayerId): Hero | undefined {
   // Instance-keyed roster: find the player's hero by owner. (One per player today;
   // the find is order-stable on insertion order, deterministic.)
   return Object.values(state.heroes ?? {}).find((hero) => hero.owner === playerId);
+}
+
+/** The hero commanding this fleet (its ship), if any. Insertion-order stable. */
+function heroByFleet(state: GameState, fleetId: string): Hero | undefined {
+  return Object.values(state.heroes ?? {}).find((hero) => hero.fleetId === fleetId);
+}
+
+/** The node a hero acts from (HERO-2 — the hero's position IS its ship): the fleet's
+ *  current node while deployed; mid-flight (`location: null`) or shipless it falls back
+ *  to `Hero.location` — the last confirmed node, synced on transit/arrival and doubling
+ *  as the respawn anchor after `home`. */
+function heroNode(state: GameState, hero: Hero): PlanetId {
+  if (hero.fleetId) {
+    const loc = state.fleets[hero.fleetId]?.location;
+    if (typeof loc === 'string') return loc;
+  }
+  return hero.location;
 }
 
 /** Does this fleet currently carry a living hero unit? (drives the fleet aura). */
@@ -108,6 +131,19 @@ export interface HeroEffectArgs {
  *  a plain return means success and commits cost + cooldown). */
 export type HeroEffect = (args: HeroEffectArgs, h: HandlerContext) => void;
 
+/** Put a living hero into the dead/respawning state — the single death path shared by
+ *  both death signals (`unit.died` for the hero stack, `fleet.destroyed` for the whole
+ *  ship). Caller has checked the hero is alive. */
+function killHero(h: HandlerContext, hero: Hero): void {
+  hero.alive = false;
+  delete hero.fleetId; // its ship is gone
+  const respawnAt = after(h, HERO_RESPAWN_HOURS);
+  hero.cooldowns = hero.cooldowns ?? {};
+  hero.cooldowns.respawn = respawnAt;
+  h.schedule(respawnAt, 'hero.respawn', { heroId: hero.id });
+  h.emit('hero.died', { owner: hero.owner, heroId: hero.id, at: h.ctx.now });
+}
+
 /** A numeric knob out of an ability's free-form `params`, with an engine fallback. */
 function numParam(params: Record<string, unknown>, key: string, fallback: number): number {
   const v = params[key];
@@ -147,7 +183,7 @@ function castTempLane(
   to: PlanetId,
   opts: { durationHours: number; speedBonus: number },
 ): void {
-  const from = hero.location;
+  const from = heroNode(h.state, hero);
   if (to === from) return h.reject('E_SAME_LOCATION');
   if (!h.state.planets[from] || !h.state.planets[to]) return h.reject('E_NO_PLANET');
   const addedLink = addLink(h.state, from, to);
@@ -200,6 +236,9 @@ export const heroModule: GameModule = {
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
+      // HERO-2: a deployed hero rides its SHIP — redeploy it with `fleet.move`. The
+      // teleport-style redeploy remains only for a shipless hero (legacy model).
+      if (hero.fleetId && h.state.fleets[hero.fleetId]) return h.reject('E_HERO_DEPLOYED');
       const planet = h.state.planets[to];
       if (!planet) return h.reject('E_NO_PLANET');
       if (planet.owner !== action.playerId) return h.reject('E_FORBIDDEN'); // redeploy to your own world
@@ -213,7 +252,7 @@ export const heroModule: GameModule = {
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
-      const from = hero.location;
+      const from = heroNode(h.state, hero); // acts from its ship's node when deployed
       if (to === from) return h.reject('E_SAME_LOCATION');
       const a = h.state.planets[from];
       const b = h.state.planets[to];
@@ -260,7 +299,7 @@ export const heroModule: GameModule = {
       if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
         return h.reject('E_NOT_DESTRUCTIBLE');
       }
-      const origin = h.state.planets[hero.location];
+      const origin = h.state.planets[heroNode(h.state, hero)];
       if (!origin) return h.reject('E_NO_PLANET');
       if (distance(origin.position, planet.position) > ANNIHILATE_RANGE) {
         return h.reject('E_OUT_OF_RANGE');
@@ -299,7 +338,7 @@ export const heroModule: GameModule = {
       const range = abilityRange(def);
       if (range > 0) {
         if (typeof target !== 'string') return h.reject('E_BAD_PAYLOAD'); // ranged ⇒ targeted
-        const origin = h.state.planets[hero.location];
+        const origin = h.state.planets[heroNode(h.state, hero)];
         const dest = h.state.planets[target];
         if (!origin || !dest) return h.reject('E_NO_PLANET');
         if (distance(origin.position, dest.position) > range) {
@@ -384,18 +423,35 @@ export const heroModule: GameModule = {
       };
       if (unit !== HERO_UNIT) return;
       const hero =
-        (typeof fleetId === 'string'
-          ? Object.values(h.state.heroes ?? {}).find((x) => x.fleetId === fleetId)
-          : undefined) ?? (typeof owner === 'string' ? heroOf(h.state, owner) : undefined);
+        (typeof fleetId === 'string' ? heroByFleet(h.state, fleetId) : undefined) ??
+        (typeof owner === 'string' ? heroOf(h.state, owner) : undefined);
       if (!hero || hero.alive === false) return; // no hero entity, or already respawning
-      hero.alive = false;
-      delete hero.fleetId; // its ship is gone
-      const respawnAt = after(h, HERO_RESPAWN_HOURS);
-      hero.cooldowns = hero.cooldowns ?? {};
-      hero.cooldowns.respawn = respawnAt;
-      h.schedule(respawnAt, 'hero.respawn', { heroId: hero.id });
-      h.emit('hero.died', { owner: hero.owner, heroId: hero.id, at: h.ctx.now });
+      killHero(h, hero);
     });
+
+    // HERO-2: the whole ship went down with its fleet. `fleet.destroyed` covers the
+    // removal paths that never drain a hero stack individually; the alive guard makes
+    // the two death signals idempotent (whichever fires first wins).
+    api.on('fleet.destroyed', (event, h) => {
+      const { fleetId } = (event.payload ?? {}) as { fleetId?: string };
+      if (typeof fleetId !== 'string') return;
+      const hero = heroByFleet(h.state, fleetId);
+      if (!hero || hero.alive === false) return;
+      killHero(h, hero);
+    });
+
+    // HERO-2: the hero's node memory follows its ship — every node the ship confirms
+    // (an intermediate transit or the final arrival) becomes `Hero.location`, which is
+    // the ability origin mid-flight and the respawn fallback anchor after `home`.
+    const followShip = (event: { payload?: unknown }, h: HandlerContext): void => {
+      const { fleetId, at } = (event.payload ?? {}) as { fleetId?: string; at?: string };
+      if (typeof fleetId !== 'string' || typeof at !== 'string') return;
+      const hero = heroByFleet(h.state, fleetId);
+      if (!hero || hero.alive === false) return;
+      if (h.state.planets[at]) hero.location = at;
+    };
+    api.on('fleet.transit', followShip);
+    api.on('fleet.arrived', followShip);
 
     // Respawn: the hero re-forms as a fresh one-ship fleet at its capital (`home`) if
     // still held, else its last node, else any world the player holds. Homeless ⇒ stays

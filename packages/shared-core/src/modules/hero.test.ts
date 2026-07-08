@@ -440,6 +440,125 @@ describe('hero — generic data-driven ability (hero.ability, HERO-4)', () => {
   });
 });
 
+describe('hero — ship-borne position and death (HERO-2)', () => {
+  const HERO_ID = 'hero:p1';
+  // Fixture: replay movement/combat signals with an explicit payload.
+  const signalModule: GameModule = {
+    id: 'test-signal',
+    version: '1.0.0',
+    setup(api) {
+      api.onAction('signal', (a, h) => {
+        const { type, payload } = a.payload as { type: string; payload: unknown };
+        h.emit(type, payload);
+      });
+    },
+  };
+  const kernel = createKernel([heroModule, signalModule]);
+
+  /** world() + the hero commands a one-ship fleet parked at C (400,0); home = A. */
+  function shipWorld(): GameState {
+    const st = world();
+    st.fleets.hf = {
+      id: 'hf',
+      owner: 'p1',
+      location: 'C',
+      movement: null,
+      units: [{ unit: 'hero', count: 1 }],
+      traits: [],
+    };
+    const hero = st.heroes![HERO_ID]!;
+    hero.fleetId = 'hf';
+    hero.home = 'A';
+    hero.abilities = ['annihilate'];
+    return st;
+  }
+
+  it('abilities act from the SHIP node, not the stale hero.location', () => {
+    // F sits at 700: unreachable from the hero's recorded node A (700 > 500), but the
+    // ship is parked at C (400,0) → C→F = 300 ≤ 500. The cast must succeed.
+    const r = okApply(
+      kernel.applyAction(
+        shipWorld(),
+        act('hero.ability', 'p1', { heroId: HERO_ID, abilityId: 'annihilate', target: 'F' }),
+        ctx(0),
+      ),
+    );
+    expect(r.state.planets.F?.kind).toBe('dead_world');
+    // The legacy route measures from the ship too (same heroNode origin).
+    const viaLegacy = okApply(
+      kernel.applyAction(shipWorld(), act('planet.annihilate', 'p1', { planetId: 'F' }), ctx(0)),
+    );
+    expect(viaLegacy.state.planets.F?.kind).toBe('dead_world');
+  });
+
+  it('rejects the teleport-style hero.move while the hero is deployed on a ship', () => {
+    expect(errCode(kernel.applyAction(shipWorld(), act('hero.move', 'p1', { to: 'B' }), ctx(0)))).toBe(
+      'E_HERO_DEPLOYED',
+    );
+    // The shipless legacy hero still redeploys (unchanged behavior).
+    const r = okApply(kernel.applyAction(world(), act('hero.move', 'p1', { to: 'B' }), ctx(0)));
+    expect(heroOf(r.state, 'p1')?.location).toBe('B');
+  });
+
+  it("hero.location trails the ship on transit and arrival", () => {
+    const viaTransit = okApply(
+      kernel.applyAction(
+        shipWorld(),
+        act('signal', 'p1', { type: 'fleet.transit', payload: { fleetId: 'hf', at: 'B' } }),
+        ctx(0),
+      ),
+    );
+    expect(viaTransit.state.heroes?.[HERO_ID]?.location).toBe('B');
+    const viaArrival = okApply(
+      kernel.applyAction(
+        shipWorld(),
+        act('signal', 'p1', { type: 'fleet.arrived', payload: { fleetId: 'hf', at: 'F' } }),
+        ctx(0),
+      ),
+    );
+    expect(viaArrival.state.heroes?.[HERO_ID]?.location).toBe('F');
+    // An unknown node or a foreign fleet changes nothing (graceful).
+    const noop = okApply(
+      kernel.applyAction(
+        shipWorld(),
+        act('signal', 'p1', { type: 'fleet.arrived', payload: { fleetId: 'other', at: 'B' } }),
+        ctx(0),
+      ),
+    );
+    expect(noop.state.heroes?.[HERO_ID]?.location).toBe('A');
+  });
+
+  it('fleet.destroyed kills the commanding hero once and the respawn still lands at home', () => {
+    const dead = okApply(
+      kernel.applyAction(
+        shipWorld(),
+        act('signal', 'p1', { type: 'fleet.destroyed', payload: { fleetId: 'hf', owner: 'p1' } }),
+        ctx(0),
+      ),
+    );
+    const hero = dead.state.heroes?.[HERO_ID];
+    expect(hero?.alive).toBe(false);
+    expect(hero?.fleetId).toBeUndefined();
+    expect(dead.events.map((e) => e.type)).toContain('hero.died');
+    // A duplicate signal (unit.died already consumed the death) stays silent.
+    const dup = okApply(
+      kernel.applyAction(
+        dead.state,
+        act('signal', 'p1', { type: 'fleet.destroyed', payload: { fleetId: 'hf', owner: 'p1' } }, 2),
+        ctx(1),
+      ),
+    );
+    expect(dup.events.map((e) => e.type)).not.toContain('hero.died');
+    // 24h later the hero re-forms at its capital A with a fresh ship.
+    const reborn = okAdvance(kernel.advanceTo(dead.state, ctx(24 * HOUR + 1)));
+    const revived = reborn.state.heroes?.[HERO_ID];
+    expect(revived?.alive).toBe(true);
+    expect(revived?.location).toBe('A');
+    expect(revived?.fleetId).toBeDefined();
+    expect(reborn.state.fleets[revived!.fleetId!]?.location).toBe('A');
+  });
+});
+
 // Fixture: emit `fleet.arrived` so combat's engageFleets starts an orbital battle.
 const arriveModule: GameModule = {
   id: 'test-arrive',
