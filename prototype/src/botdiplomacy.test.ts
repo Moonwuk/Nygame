@@ -77,11 +77,11 @@ describe('diplomacy consent — offers, counters, bot answers', () => {
     expect(getOffer(st, 'p1', 'p2')).toBeNull();
   });
 
-  it('duplicate offer → E_ALREADY, same-stance declaration → E_ALREADY', () => {
+  it('duplicate offer → E_ALREADY_OFFERED, same-stance declaration → E_SAME_STANCE', () => {
     let st = order(newGame(HUMANS), declareWar('p1', 'p2'), 0).state;
     st = order(st, declareWar('p1', 'p2', 'peace'), 0).state;
     expect(order(st, declareWar('p1', 'p2', 'peace'), 0).error).toBe('E_ALREADY_OFFERED');
-    expect(order(st, declareWar('p1', 'p2', 'war'), 0).error).toBe('E_ALREADY');
+    expect(order(st, declareWar('p1', 'p2', 'war'), 0).error).toBe('E_SAME_STANCE');
     // a DIFFERENT softening replaces the offer instead of stacking
     st = order(st, declareWar('p1', 'p2', 'pact'), 0).state;
     expect(getOffer(st, 'p1', 'p2')).toBe('pact');

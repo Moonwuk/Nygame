@@ -167,12 +167,14 @@ prototype/       src/game.ts, src/main.ts (UI), src/smoke.ts, build.mjs, uitest.
   `diplomacy.changed`/`proposed`/`rejected`; capability `diplomacy`
   `{getStance, getRelation}` — методы принимают `state` параметром (war→hostile,
   peace/pact→neutral, alliance→ally). Офферы фог-чувствительны: `visibleState` отдаёт
-  только пары с участием зрителя; `diplomacyOffers` — в `delta`-META. Прототипный
-  `diplomacy.declare` (NETP0-5) несёт те же consent-семантики на хелперах ядра
-  (`getOffer`/`setOffer`/`clearOffers`/`STANCE_RANK`): эскалация к войне односторонняя и
-  стирает офферы пары; смягчение записывает оффер (`diplomacy.offered`), встречное такое
-  же объявление коммитит пару (`diplomacy.changed`); повтор — `E_ALREADY_OFFERED`, тот же
-  станс — `E_ALREADY`. Бот отвечает в том же приказе по favour-шкале: peace принимает при
+  только пары с участием зрителя; `diplomacyOffers` — в `delta`-META. **Прототип
+  использует этот же ЯДРОВЫЙ модуль (D4 ✅):** собственная реализация
+  `diplomacy.declare` из `game.ts` удалена, в `MODULES` подключён ядровый (эскалация
+  односторонняя и стирает офферы; смягчение — оффер (`diplomacy.offered`), встречное
+  объявление коммитит (`diplomacy.changed`); повтор — `E_ALREADY_OFFERED`, тот же
+  станс — `E_SAME_STANCE`, кривой target — `E_BAD_PAYLOAD`; `stance` обязателен —
+  дефолт 'war' остался в билдере `declareWar`). Одна реализация на репозиторий.
+  Бот отвечает в том же приказе по favour-шкале: peace принимает при
   ≥ `FAVOUR_PEACE_ACCEPT` (=15, линия войны), pact при ≥ 55, иначе отклоняет
   (`diplomacy.declined`) и стирает оффер — «висящий» оффер бывает только у людей.
   Прототип сеет всем парам `peace` в `newGame` и держит клиентский

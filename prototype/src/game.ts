@@ -31,14 +31,11 @@ import {
   technologyModule,
   espionageModule,
   stewardModule,
+  diplomacyModule,
   stewardActive,
   STEWARD_POSTURES,
   getStance,
-  getOffer,
-  setOffer,
   clearOffers,
-  STANCE_RANK,
-  isBotPair,
   setStance,
   pairKey,
   identifiedNodes,
@@ -1568,53 +1565,15 @@ export function hpOfLevel(type: string, level: number): number {
   return def.upgrades[level - 2]?.hp ?? def.hp;
 }
 
-// --- diplomacy (prototype) ---------------------------------------------------
-// Stances live in `state.diplomacy` (core D1). `combat.isHostile` now reads them, so
-// seeding `peace` (newGame) keeps two players from fighting until one declares war.
-// This module exposes the declaration action; `declareWar` is the action builder.
-export const diplomacyModule: GameModule = {
-  id: 'diplomacy',
-  version: '0.1.0',
-  setup(api) {
-    api.onAction('diplomacy.declare', (action, h) => {
-      const p = action.payload as { target?: string; stance?: DiplomaticStance };
-      if (typeof p?.target !== 'string' || p.target === action.playerId) {
-        return h.reject('E_BAD_TARGET');
-      }
-      if (!h.state.players[p.target]) return h.reject('E_NO_PLAYER');
-      const me = action.playerId;
-      const stance: DiplomaticStance = p.stance ?? 'war';
-      // A coalition is between humans only — a bot is never a valid alliance party
-      // (server-side rule; the menu greys the option out too).
-      if (stance === 'alliance' && isBotPair(h.state, me, p.target)) {
-        return h.reject('E_BOT_ALLIANCE');
-      }
-      const current = getStance(h.state, me, p.target);
-      if (stance === current) return h.reject('E_ALREADY');
-      // ESCALATION (toward war) is unilateral — you can't be kept in a friendship —
-      // and voids any negotiation in flight for the pair (core D2 semantics).
-      if (STANCE_RANK[stance] < STANCE_RANK[current]) {
-        clearOffers(h.state, me, p.target);
-        setStance(h.state, me, p.target, stance);
-        h.emit('diplomacy.changed', { a: me, b: p.target, stance });
-        return;
-      }
-      // SOFTENING needs consent (core D3): a matching counter-offer commits the pair;
-      // otherwise this declaration RECORDS an offer (stance unchanged) — the other
-      // side sees it (state.diplomacyOffers rides the delta, fogged to the pair)
-      // and answers with the same declaration to accept.
-      if (getOffer(h.state, p.target, me) === stance) {
-        clearOffers(h.state, me, p.target);
-        setStance(h.state, me, p.target, stance);
-        h.emit('diplomacy.changed', { a: me, b: p.target, stance });
-        return;
-      }
-      if (getOffer(h.state, me, p.target) === stance) return h.reject('E_ALREADY_OFFERED');
-      setOffer(h.state, me, p.target, stance);
-      h.emit('diplomacy.offered', { from: me, to: p.target, stance });
-    });
-  },
-};
+// --- diplomacy ---------------------------------------------------------------
+// D4: the prototype now runs the CORE `diplomacyModule` (imported above) — one
+// implementation of `diplomacy.declare` for the whole repo (D2 escalation, D3
+// consent offers, E_BOT_ALLIANCE, offer sweep on `player.eliminated`, plus the
+// `diplomacy` capability combat consults). Stances still live in `state.diplomacy`
+// (D1) and newGame seeds `peace`, so nothing changes at the table. Code deltas vs
+// the retired prototype module: same-stance → `E_SAME_STANCE` (was `E_ALREADY`),
+// malformed target → `E_BAD_PAYLOAD` (was `E_BAD_TARGET`), and `stance` is required
+// (the `declareWar` builder still defaults it to 'war').
 
 // --- bot diplomacy: the favour meter reacts to a player's aggression ----------
 // Bots are passive-friendly — they never start a war to expand (see aiOrders). This
@@ -2692,7 +2651,7 @@ export const MODULES: GameModule[] = [
   armyModule,
   victoryModule, // terminal match state from authoritative state (domination / elimination / score / timeout)
   fleetLaunchModule,
-  diplomacyModule, // peace-by-default + declare-war action (combat reads state.diplomacy)
+  diplomacyModule, // CORE D2+D3 (D4): escalation/consent offers; combat reads state.diplomacy
   espionageModule, // SPY-1 core module: espionage.spy → time-boxed intel windows (state.intel)
   botDiplomacyModule, // bots: friendly-by-default favour meter → embargo/war only when provoked
   marketModule, // session resource market: two-sided order book (sell/buy lots), embargo-gated
