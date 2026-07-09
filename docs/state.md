@@ -782,6 +782,18 @@ steward, espionage, orderQueue, subscription, standingOrders, heroEffects])` (27
   Билдеры действий — `castHeroAbility`/`spawnHero`/`unlockHeroSkill`/`fitHero` (`game.ts`);
   тесты `herostate.test.ts` (сид) + `heroactions.test.ts` (интеграция пяти действий,
   включая recall, против прототипных каталогов).
+- **Конструктор «Верфь» (`rail-constructor` → `renderConstructor`, оверлей `#constructor`):**
+  единый in-match таб-лоадаут со Stellaris-свитчером `[Корабли|Эскадрильи|Армия|Герои]`.
+  Панель **Корабли** рендерит framework-agnostic view-model `@void/client/loadoutEditor`
+  (переиспользован напрямую, без дублирования логики): типизированные слоты
+  (Оружие/Защита/Система), палитра с `installable`/причиной от `canEquip`, живой превью
+  base→derived (`effectiveStats`), разбивка стоимости (`loadoutCost`) и «Построить ×N» →
+  `buildShip` → `unit.build{modules}` (ядро валидирует/платит/штампует; лоадаут заморожен
+  на постройке — без переоснастки). Инлайн-данные `game.ts` дополнены каталогом `modules`
+  (6 модулей, зеркало `data/modules.json`) + типизированными `slots` на корпусах
+  (cruiser/siege/scout/dropship). Эскадрильи/Армия/Герои — панели-заглушки (переезд —
+  следующие кирпичи). Тесты `constructor.test.ts` (5): каталог+слоты, редактор над
+  прототип-данными, экип/дубль, `unit.build{modules}` принят/заряжен, кривой лоадаут → reject.
 - **Карта (квадратная 7×7, генерится в `game.ts::buildField`):** 49 провинций — ровно **12
   «планет»** (по 50 очков) + 37 не-планет (по 10) = **~970** базовых очков на доске; 4 старт-
   кандидата по углам (инсет), нейтральные планеты по центру. Квадратный аспект — чтобы карта

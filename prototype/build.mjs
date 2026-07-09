@@ -656,6 +656,99 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .mk-btn:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
 .mk-empty{padding:10px 2px;font-size:11px;color:var(--dim);opacity:.8;}
 
+/* === CONSTRUCTOR («Верфь») — unified loadout tab; two-column ship-outfit designer === */
+#constructor{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(1,5,9,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#constructor.show{display:flex;}
+#constructor .cnbox{display:flex;flex-direction:column;width:min(960px,96vw);max-height:90vh;overflow:hidden;
+  background:var(--glass);border:1px solid var(--cyan);border-radius:12px;
+  box-shadow:0 0 48px rgba(0,0,0,.66),inset 0 0 0 1px rgba(53,214,230,.06);}
+#constructor .cn-head{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);}
+#constructor .cn-head b{font:800 14px ui-monospace,monospace;letter-spacing:1.5px;color:#eafffb;}
+.cn-close{margin-left:auto;width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
+.cn-tabs{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+.cn-tab{padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);
+  font:700 11px ui-monospace,monospace;letter-spacing:.5px;cursor:pointer;}
+.cn-tab.on{color:var(--cyan);border-color:var(--cyan-dim);background:rgba(53,214,230,.1);}
+#constructorbody{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:14px 16px;}
+/* two columns: fitting editor (left) + live preview/cost/build (right); stacks on narrow */
+.cn-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;}
+@media (max-width:760px){.cn-grid{grid-template-columns:1fr;}}
+/* hull picker */
+.cn-hulls{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;}
+.cn-hbtn{padding:6px 11px;border-radius:8px;border:1px solid var(--line-hi);background:rgba(53,214,230,.03);color:var(--dim);
+  font:700 11px ui-monospace,monospace;cursor:pointer;}
+.cn-hbtn.on{color:var(--cyan);border-color:var(--cyan);background:rgba(53,214,230,.12);}
+/* hull card */
+.cn-hull{display:flex;align-items:center;gap:13px;padding:13px 15px;border:1px solid var(--cyan-dim);border-radius:11px;
+  background:linear-gradient(180deg,rgba(53,214,230,.08),rgba(53,214,230,.02));margin-bottom:12px;}
+.cn-hull .cn-hic{width:50px;height:50px;border-radius:10px;border:1px solid var(--cyan);display:flex;align-items:center;
+  justify-content:center;font-size:26px;color:var(--cyan);background:rgba(53,214,230,.06);}
+.cn-hull .cn-hn{font:800 16px ui-monospace,monospace;color:#eafffb;}
+.cn-hull .cn-hm{font-size:11px;color:var(--cyan);margin-top:2px;}
+/* typed slot bays */
+.cn-bay{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line-hi);border-radius:10px;margin-bottom:8px;
+  background:rgba(255,255,255,.02);}
+.cn-bay.empty{border-style:dashed;color:var(--dim);}
+.cn-bay .cn-bic{width:40px;height:40px;border-radius:9px;border:1px solid var(--line-hi);display:flex;align-items:center;
+  justify-content:center;font-size:19px;color:var(--cyan);}
+.cn-bay.empty .cn-bic{color:var(--cyan-dim);}
+.cn-bay .cn-bt{font-size:9.5px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);}
+.cn-bay .cn-bn{font:700 13px ui-monospace,monospace;color:var(--ink);margin-top:2px;}
+.cn-bay.empty .cn-bn{color:var(--dim);font-weight:400;}
+.cn-bay .cn-bd{margin-left:auto;font:700 12px ui-monospace,monospace;color:var(--grn);}
+.cn-bay.filled{cursor:pointer;}
+.cn-bay.filled:hover{border-color:var(--red);}
+/* palette */
+.cn-ph{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);margin:14px 0 8px;}
+.cn-ph em{color:var(--dim);font-style:normal;text-transform:none;letter-spacing:0;}
+.cn-pal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.cn-mod{text-align:left;padding:11px 11px;border:1px solid var(--line-hi);border-radius:10px;background:rgba(53,214,230,.04);
+  cursor:pointer;color:var(--ink);font:inherit;display:flex;flex-direction:column;gap:3px;}
+.cn-mod:hover:not(.locked){border-color:var(--cyan);box-shadow:0 0 12px rgba(53,214,230,.18);}
+.cn-mod .cn-mic{font-size:20px;line-height:1;color:var(--cyan);}
+.cn-mod .cn-mn{font:700 11.5px ui-monospace,monospace;color:#eafffb;}
+.cn-mod .cn-me{font-size:10.5px;color:var(--grn);}
+.cn-mod .cn-mc{font-size:10px;color:var(--dim);}
+.cn-mod.locked{opacity:.42;cursor:not-allowed;background:rgba(255,255,255,.015);}
+.cn-mod.locked .cn-mic,.cn-mod.locked .cn-mn{color:var(--dim);}
+.cn-mod.locked .cn-me{color:var(--dim);}
+.cn-note{margin-top:11px;font-size:10.5px;color:var(--dim);line-height:1.5;}
+.cn-note b{color:var(--cyan);}
+/* live stat preview bars (right column) */
+.cn-stat{margin-bottom:11px;}
+.cn-srow{display:flex;align-items:baseline;gap:8px;margin-bottom:5px;}
+.cn-snm{font:700 12px ui-monospace,monospace;color:#eafffb;}
+.cn-sval{margin-left:auto;font:12px ui-monospace,monospace;color:var(--dim);}
+.cn-sval b{color:#eafffb;}
+.cn-up{color:var(--grn);font-weight:700;}
+.cn-strack{position:relative;height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden;display:flex;}
+.cn-sbar{height:100%;background:var(--cyan);opacity:.75;}
+.cn-sdelta{height:100%;background:var(--grn);}
+/* right column: preview + cost + build */
+.cn-side .cn-ph{margin-top:0;}
+.cn-cost{margin:14px 0 4px;border-top:1px solid var(--line);padding-top:12px;}
+.cn-cost .cn-crow{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--dim);margin-bottom:5px;}
+.cn-cost .cn-crow .cn-cv{margin-left:auto;color:var(--ink);font:700 12px ui-monospace,monospace;}
+.cn-cost .cn-crow.total .cn-cl{color:#eafffb;font-weight:700;}
+.cn-cost .cn-crow.total .cn-cv{color:var(--amber);font-size:14px;}
+.cn-build{width:100%;margin-top:12px;padding:14px;border-radius:10px;border:1px solid var(--cyan);
+  background:rgba(53,214,230,.16);color:var(--cyan);font:800 14px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
+.cn-build:hover:not(:disabled){background:rgba(53,214,230,.24);box-shadow:0 0 20px rgba(53,214,230,.25);}
+.cn-build:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);background:transparent;}
+.cn-lock{margin-top:12px;display:flex;gap:8px;font-size:11px;color:var(--dim);line-height:1.5;}
+.cn-lock b{color:var(--amber);}
+/* count + planet steppers */
+.cn-row2{display:flex;align-items:center;gap:10px;margin:12px 0 4px;flex-wrap:wrap;}
+.cn-step{display:flex;align-items:center;border:1px solid var(--line-hi);border-radius:8px;overflow:hidden;}
+.cn-step button{width:32px;height:32px;border:0;background:transparent;color:var(--cyan);font-size:16px;cursor:pointer;}
+.cn-step button:disabled{opacity:.35;cursor:not-allowed;}
+.cn-step .cn-sv{min-width:34px;text-align:center;font:700 13px ui-monospace,monospace;color:#eafffb;}
+.cn-plan{flex:1;min-width:120px;padding:8px 10px;border:1px solid var(--line-hi);border-radius:8px;background:rgba(0,0,0,.25);
+  color:var(--ink);font:12px ui-monospace,monospace;}
+.cn-soon{padding:26px 14px;text-align:center;color:var(--dim);font-size:12.5px;line-height:1.6;}
+.cn-soon .cn-si{font-size:30px;margin-bottom:8px;opacity:.7;}
+
 /* === FLOATING CHAT (desktop) — sized/positioned/opacity inline by renderChat() === */
 .desk-only{} /* shown by default; the media query below hides it on phones */
 @media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){.desk-only{display:none!important;}}
@@ -1334,6 +1427,7 @@ const html = `<!doctype html>
     <button id="rail-diplo" title="Дипломатия" data-i18n-title>⬡<span class="rlbl" data-i18n>Дипло</span></button>
     <button id="rail-msgs" title="Сообщения" data-i18n-title>✉<span class="rlbl" data-i18n>Почта</span><b id="msgbadge" class="railbadge" style="display:none"></b></button>
     <button id="rail-tech" title="Технологии" data-i18n-title>⚛<span class="rlbl" data-i18n>Наука</span></button>
+    <button id="rail-constructor" title="Конструктор — оснащение кораблей, эскадрилий, армии и героев" data-i18n-title>⚒<span class="rlbl" data-i18n>Верфь</span></button>
     <button id="rail-hero" title="Герои — штаб: развёртывание, способности, скиллы, фиттинги" data-i18n-title>♔<span class="rlbl" data-i18n>Герои</span></button>
     <button id="rail-steward" title="Хранитель — передать ИИ на сон" data-i18n-title>😴<span class="rlbl" data-i18n>Сон</span></button>
     <button id="rail-market" title="Рынок" data-i18n-title>⇄<span class="rlbl" data-i18n>Рынок</span></button>
@@ -1356,6 +1450,8 @@ const html = `<!doctype html>
 <div id="scipick"><div class="twbox"><div class="lw-head"><b data-i18n>СОВЕТ УЧЁНЫХ</b><button class="sp-cancel" type="button" data-i18n>↩ В меню</button></div><div id="scipickbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
+<!-- constructor («Верфь») — unified loadout tab; whole box rendered by renderConstructor() -->
+<div id="constructor"></div>
 <aside id="side"></aside>
 <div id="toasts"></div>
 <div id="speedbar" class="spd">

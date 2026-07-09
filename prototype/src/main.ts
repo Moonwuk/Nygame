@@ -101,12 +101,21 @@ import {
   spawnHero,
   unlockHeroSkill,
   fitHero,
+  buildShip,
   type QStep,
   type Patrol,
 } from './game';
 import { OFFICERS } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
+// The «Оснащение корабля» loadout constructor reuses the framework-agnostic view-model
+// from @void/client (typed slots + canEquip/effectiveStats/loadoutCost via shared-core).
+import {
+  createLoadoutEditor,
+  applyLoadoutAction,
+  type LoadoutModel,
+  type LoadoutEditorResult,
+} from '../../packages/client/src/loadoutEditor';
 import {
   buildingLevel,
   buildingMaxLevel,
@@ -6875,6 +6884,232 @@ marketWin.addEventListener('click', (e) => {
     playerOrder(marketCancel(ME, cancelId));
     renderMarket();
   }
+});
+
+// --- constructor («Верфь»): the unified loadout tab --------------------------
+// One in-match screen that switches between the loadout constructors (ships now;
+// squadrons / army / heroes fold in next). The «Корабли» pane renders the shared
+// @void/client `loadoutEditor` view-model — typed slots + live derived-stats + cost —
+// and confirms into `unit.build{modules}` (the core validates/prices/stamps the set).
+const constructorWin = $('constructor');
+type ConTab = 'ships' | 'squads' | 'army' | 'heroes';
+let conTab: ConTab = 'ships';
+const CON_TABS: [ConTab, string][] = [
+  ['ships', 'Корабли'],
+  ['squads', 'Эскадрильи'],
+  ['army', 'Армия'],
+  ['heroes', 'Герои'],
+];
+// Buildable space hulls the ship pane fits (squadron/carrier hulls → the «Эскадрильи» pane).
+const CON_HULLS = ['cruiser', 'siege', 'scout', 'dropship'];
+let conHull = 'cruiser';
+let conModules: string[] = [];
+let conCount = 1;
+let conPlanet = '';
+const SLOT_RU: Record<string, string> = { weapon: 'Оружие', defense: 'Защита', utility: 'Система' };
+const SLOT_ICON: Record<string, string> = { weapon: '🎯', defense: '🛡', utility: '⊞' };
+const MODULE_ICON: Record<string, string> = {
+  targeting_array: '🎯',
+  shield_booster: '🛡',
+  ablative_plating: '🧱',
+  ion_engine: '🚀',
+  radar_module: '📡',
+  cargo_bay: '📦',
+};
+const RES_RU: Record<string, string> = {
+  metal: 'металла',
+  credits: 'кредитов',
+  energy: 'энергии',
+  food: 'еды',
+  microelectronics: 'микроэлектроники',
+};
+// Short stat labels for module-effect chips («+4 атака», «+15 щит»).
+const STAT_RU: Record<string, string> = {
+  attack: 'атака',
+  defense: 'оборона',
+  hp: 'корпус',
+  shield: 'щит',
+  speed: 'скорость',
+  cargoCapacity: 'трюм',
+  radarRange: 'радар',
+};
+function bagRu(bag: Record<string, number>): string {
+  const parts = Object.entries(bag)
+    .filter(([, n]) => n)
+    .map(([r, n]) => `${Math.round(n)} ${t(RES_RU[r] ?? r)}`);
+  return parts.length ? parts.join(' · ') : t('бесплатно');
+}
+function myRes(): Record<string, number> {
+  return (s.players[ME]?.resources ?? {}) as Record<string, number>;
+}
+/** One live stat row: label · base → effective (+delta) · track bar (base cyan, delta green). */
+function conBar(line: { label: string; base: number; effective: number; delta: number }, max: number): string {
+  const basePct = max > 0 ? Math.min(100, (line.base / max) * 100) : 0;
+  const deltaPct = max > 0 ? Math.min(100 - basePct, (Math.max(0, line.delta) / max) * 100) : 0;
+  const val =
+    line.delta !== 0
+      ? `${line.base} <span class="dim">→</span> <b>${line.effective}</b> <span class="cn-up">${line.delta > 0 ? '+' : ''}${line.delta}</span>`
+      : `<b>${line.effective}</b>`;
+  return (
+    `<div class="cn-stat"><div class="cn-srow"><span class="cn-snm">${esc(line.label)}</span><span class="cn-sval">${val}</span></div>` +
+    `<div class="cn-strack"><span class="cn-sbar" style="width:${basePct}%"></span><span class="cn-sdelta" style="width:${deltaPct}%"></span></div></div>`
+  );
+}
+/** The «Корабли» pane: the loadout constructor for one hull draft. */
+function conShipPane(): string {
+  const ed: LoadoutEditorResult = createLoadoutEditor(conHull, data, myRes(), {
+    modules: conModules,
+    count: conCount,
+  });
+  if (!ed.ok) return `<div class="cn-soon">${t('Корпус недоступен.')}</div>`;
+  const m: LoadoutModel = ed;
+  const hulls = CON_HULLS.map(
+    (h) =>
+      `<button class="cn-hbtn${h === conHull ? ' on' : ''}" data-cnhull="${h}">${UNIT_ICON[h] ?? '▲'} ${esc(displayUnit(h))}</button>`,
+  ).join('');
+  const freeTypes = [...new Set(m.slots.filter((sl) => !sl.moduleId).map((sl) => sl.type))];
+  const hullCard =
+    `<div class="cn-hull"><div class="cn-hic">${UNIT_ICON[conHull] ?? '▲'}</div><div><div class="cn-hn">${esc(displayUnit(conHull))}</div>` +
+    `<div class="cn-hm">${t('{n} слота под модули (по размеру корпуса)', { n: String(m.slots.length) })}</div></div></div>`;
+  const bays = m.slots
+    .map((sl) => {
+      if (sl.moduleId) {
+        const md = data.modules[sl.moduleId];
+        const eff = md ? Object.entries(md.effects.stats).map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`).join(' ') : '';
+        return (
+          `<div class="cn-bay filled" data-cnun="${sl.moduleId}" title="${t('снять модуль')}"><div class="cn-bic">${MODULE_ICON[sl.moduleId] ?? '▪'}</div>` +
+          `<div><div class="cn-bt">${t(SLOT_RU[sl.type])}</div><div class="cn-bn">${esc(tData(sl.moduleName ?? sl.moduleId))}</div></div><div class="cn-bd">${eff}</div></div>`
+        );
+      }
+      return (
+        `<div class="cn-bay empty"><div class="cn-bic">${SLOT_ICON[sl.type] ?? '＋'}</div>` +
+        `<div><div class="cn-bt">${t(SLOT_RU[sl.type])}</div><div class="cn-bn">${t('пусто — выбери модуль')}</div></div></div>`
+      );
+    })
+    .join('');
+  const palette = m.palette
+    .map((o) => {
+      const eff = Object.entries(o.effect).map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`).join(' ');
+      if (o.installable) {
+        return (
+          `<button class="cn-mod" data-cnmod="${o.id}"><span class="cn-mic">${MODULE_ICON[o.id] ?? '▪'}</span>` +
+          `<span class="cn-mn">${esc(tData(o.name))}</span><span class="cn-me">${eff}</span><span class="cn-mc">${bagRu(o.cost)}</span></button>`
+        );
+      }
+      return (
+        `<div class="cn-mod locked"><span class="cn-mic">${MODULE_ICON[o.id] ?? '▪'}</span>` +
+        `<span class="cn-mn">${esc(tData(o.name))}</span><span class="cn-me">${t('слот «{s}»', { s: t(SLOT_RU[o.slot]) })}</span><span class="cn-mc">${bagRu(o.cost)}</span></div>`
+      );
+    })
+    .join('');
+  const palHead = freeTypes.length
+    ? t('Доступные модули — для слота «{s}»', { s: freeTypes.map((ty) => t(SLOT_RU[ty])).join(' / ') })
+    : t('Доступные модули — все слоты заняты');
+  const left =
+    `<div class="cn-fit"><div class="cn-hulls">${hulls}</div>${hullCard}${bays}` +
+    `<div class="cn-ph">${palHead}</div><div class="cn-pal">${palette}</div>` +
+    `<div class="cn-note">${t('Типизированные слоты: модуль встаёт только в свой тип. <b>Серые</b> — не для свободного слота или уже стоят.')}</div></div>`;
+  // right: live preview + cost + build
+  const maxStat = Math.max(1, ...m.preview.map((p) => p.effective));
+  const bars = m.preview.map((p) => conBar(p, maxStat)).join('');
+  const owned = Object.values(s.planets).filter((p) => p.owner === ME && SECTOR_TYPES[p.kind ?? '']?.buildable);
+  if (!conPlanet || !owned.some((p) => p.id === conPlanet)) conPlanet = owned[0]?.id ?? '';
+  const planOpts = owned.map((p) => `<option value="${p.id}"${p.id === conPlanet ? ' selected' : ''}>${esc(p.id)}</option>`).join('');
+  const cost =
+    `<div class="cn-cost">` +
+    `<div class="cn-crow"><span class="cn-cl">${t('Корпус ×{n}', { n: String(m.count) })}</span><span class="cn-cv">${bagRu(m.hullCost)}</span></div>` +
+    (conModules.length
+      ? `<div class="cn-crow"><span class="cn-cl">${t('Модули ×{n}', { n: String(m.count) })}</span><span class="cn-cv">${bagRu(m.modulesCost)}</span></div>`
+      : '') +
+    `<div class="cn-crow total"><span class="cn-cl">${t('Итого')}</span><span class="cn-cv">${bagRu(m.totalCost)}</span></div></div>`;
+  const canBuild = m.affordable && conPlanet !== '';
+  const right =
+    `<div class="cn-side"><div class="cn-ph">${t('Итог с модулями')} — <em>${t('пересчёт вживую')}</em></div>${bars}${cost}` +
+    `<div class="cn-row2"><div class="cn-step"><button data-cncount="-" ${conCount <= 1 ? 'disabled' : ''}>−</button><span class="cn-sv">${conCount}</span><button data-cncount="+" ${conCount >= 20 ? 'disabled' : ''}>+</button></div>` +
+    `<select class="cn-plan" id="cn-planet"${owned.length ? '' : ' disabled'}>${planOpts || `<option>${t('нет своих миров')}</option>`}</select></div>` +
+    `<button class="cn-build" data-cnbuild ${canBuild ? '' : 'disabled'}>${t('Построить ×{n} →', { n: String(conCount) })}</button>` +
+    `<div class="cn-lock">🔒 <span>${t('Лоадаут фиксируется при постройке. Готовый корабль не переоснастить — только построить новый с другим набором.')}</span></div></div>`;
+  return `<div class="cn-grid">${left}${right}</div>`;
+}
+function conSoonPane(what: string): string {
+  return `<div class="cn-soon"><div class="cn-si">🚧</div>${t('«{what}» переезжает в конструктор следующим кирпичом.', { what })}</div>`;
+}
+function renderConstructor(): void {
+  const tabBtn = (k: ConTab, label: string) =>
+    `<button class="cn-tab${conTab === k ? ' on' : ''}" data-ctab="${k}">${t(label)}</button>`;
+  const body =
+    conTab === 'ships'
+      ? conShipPane()
+      : conTab === 'squads'
+        ? conSoonPane('Эскадрильи')
+        : conTab === 'army'
+          ? conSoonPane('Армия')
+          : conSoonPane('Герои');
+  constructorWin.innerHTML =
+    `<div class="cnbox"><div class="cn-head"><b>${t('КОНСТРУКТОР')}</b><button class="cn-close">✕</button></div>` +
+    `<div class="cn-tabs">${CON_TABS.map(([k, l]) => tabBtn(k, l)).join('')}</div>` +
+    `<div id="constructorbody">${body}</div></div>`;
+}
+/** Equip / unequip a module through the core-validated reducer, then re-render. */
+function conFit(moduleId: string, remove: boolean): void {
+  const ed = createLoadoutEditor(conHull, data, myRes(), { modules: conModules, count: conCount });
+  if (!ed.ok) return;
+  const r = applyLoadoutAction({ kind: remove ? 'unequip' : 'equip', moduleId }, ed, data, myRes());
+  if (r.ok) conModules = r.modules;
+  else note('✖ ' + errText(r.code));
+}
+document.getElementById('rail-constructor')?.addEventListener('click', () => {
+  constructorWin.classList.add('show');
+  renderConstructor();
+});
+constructorWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.id === 'constructor' || tg.closest('.cn-close')) {
+    constructorWin.classList.remove('show');
+    return;
+  }
+  const tab = (tg.closest('.cn-tab') as HTMLElement | null)?.dataset.ctab;
+  if (tab) {
+    conTab = tab as ConTab;
+    renderConstructor();
+    return;
+  }
+  const hull = (tg.closest('.cn-hbtn') as HTMLElement | null)?.dataset.cnhull;
+  if (hull) {
+    conHull = hull;
+    conModules = []; // a fresh draft per hull (its slot types differ)
+    renderConstructor();
+    return;
+  }
+  const mod = (tg.closest('.cn-mod') as HTMLElement | null)?.dataset.cnmod;
+  if (mod) {
+    conFit(mod, false);
+    renderConstructor();
+    return;
+  }
+  const un = (tg.closest('.cn-bay.filled') as HTMLElement | null)?.dataset.cnun;
+  if (un) {
+    conFit(un, true);
+    renderConstructor();
+    return;
+  }
+  const step = (tg.closest('[data-cncount]') as HTMLElement | null)?.dataset.cncount;
+  if (step) {
+    conCount = Math.max(1, Math.min(20, conCount + (step === '+' ? 1 : -1)));
+    renderConstructor();
+    return;
+  }
+  if (tg.closest('[data-cnbuild]')) {
+    if (conPlanet) {
+      playerOrder(buildShip(ME, conPlanet, conHull, conCount, conModules));
+      note(t('⚒ заказано: {n}× {hull}', { n: String(conCount), hull: displayUnit(conHull) }));
+    }
+    return;
+  }
+});
+constructorWin.addEventListener('change', (e) => {
+  const sel = e.target as HTMLSelectElement;
+  if (sel.id === 'cn-planet') conPlanet = sel.value;
 });
 
 // --- connect overlay (single-player vs join a live session) ------------------
