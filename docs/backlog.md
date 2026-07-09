@@ -535,8 +535,10 @@
   (`.semgrepignore` / `.gitleaks.toml` / `.trivyignore`), разобранные сканеры → блокирующие.
 - **SEC-2** ⏳ Кастомные Semgrep-правила под инварианты ядра: запрет `Math.random`/
   `Date.now` и Node-built-ins в `shared-core/src` (детерминизм/чистота как security-граница).
-- **SEC-3** ⏳ Безопасность самого пайплайна: пин образов сканеров по `sha256`,
-  masked+protected CI-переменные, least-privilege токены.
+- **SEC-3** ✅ Безопасность самого пайплайна: пин образов сканеров по `sha256`,
+  masked+protected CI-переменные, least-privilege токены. Реализовано: документация
+  (image-pinning.md / ci-variables.md / setup-github-secrets.md), скрипт обновления
+  дайджестов, комментарии в security.yml. Ready for PR.
 - **SEC-4** ⏳ Агрегация находок: SARIF → DefectDojo / GitHub Code Scanning (единая панель, трекинг).
 - **SEC-5** ✅ Container scanning: `Dockerfile` (multi-stage, пин distroless-базы) +
   живой job `trivy-image` в `security.yml` (сборка образа, `trivy image` + image-SBOM).
