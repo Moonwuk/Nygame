@@ -608,11 +608,16 @@ E_NOT_DESTRUCTIBLE, E_OUT_OF_RANGE, E_COOLDOWN`.
   типы — через **capability `hero.effect.<type>`** (контракт `HeroEffect`, экспортирован
   из пакета; impl обязан `h.reject` на своих отказах); тип без capability →
   `E_NO_EFFECT` (fail-secure: данные обещают только то, что движок умеет).
-  **Первый провайдер шва — `heroEffectsModule`** (`modules/heroEffects.ts`):
+  **Провайдеры шва — `heroEffectsModule`** (`modules/heroEffects.ts`):
   `hero.effect.recall` мгновенно телепортирует корабль героя в столицу (`Hero.home`),
   гейты `E_HERO_NOT_DEPLOYED`/`E_FLEET_BUSY` (не выдёргивать из боя)/`E_NO_CAPITAL`/
-  `E_SAME_LOCATION`; событие `hero.recalled`. Эффекты приходят добавлением провайдера,
-  ядро/диспетчер не трогаются. Оставшиеся типы (`aura`/`reveal`) — будущие провайдеры.
+  `E_SAME_LOCATION`; событие `hero.recalled`. `hero.effect.aura` (rally/bulwark) —
+  **таймбоксед** боевая аура: каст кладёт `{bonus, radius, until}` в `Hero.activeAuras`
+  (прунинг истёкших на касте), а собственный хук `combat.damage` модуля бафает флоты
+  владельца в `radius` от ноды героя, пока `until > now` — временный близнец пассивки
+  HERO-5 `rally_beacon`; кривая аура → `E_BAD_EFFECT`; событие `hero.aura`. Эффекты
+  приходят добавлением провайдера, ядро/диспетчер не трогаются. Осталось `reveal` (scan)
+  — будущий провайдер (нужен таймбоксед fog-шов в `visibility`).
   **Кулдаун-ключи**: встроенные типы делят ключ с legacy (`path`/`annihilate`) — generic
   и legacy маршруты нельзя скомбинировать в double-fire; кастомные типы — ключ `fx:<type>`
   (два каталожных id одного эффекта делят кулдаун; префикс не коллидирует с `respawn`).
@@ -770,8 +775,9 @@ steward, espionage, orderQueue, subscription, standingOrders, heroEffects])` (27
   архетипа). Окно «Герои» (`rail-hero` → `renderHero`, оверлей `#hero`) — весь цикл:
   развёртывание `hero.spawn` armed-тапом (свой мир / свой флот / мир союзника по
   маркерам), каст `hero.ability` (встроенные `temp_lane`/`annihilate` armed-тапом цели +
-  `recall` кнопкой «Активировать» — прототип-кернел несёт `heroEffectsModule`; типы без
-  провайдера — честное «скоро»/`E_NO_EFFECT`), дерево `hero.skill.unlock`, фиттинги
+  `recall`/`aura` (rally/bulwark) кнопкой «Активировать» — прототип-кернел несёт
+  `heroEffectsModule`; `reveal`/scan без провайдера — честное «скоро»/`E_NO_EFFECT`),
+  дерево `hero.skill.unlock`, фиттинги
   `hero.fit`. Кастуемость — `HERO_CASTABLE` (built-ins + провайдеры `hero.effect.*`).
   Билдеры действий — `castHeroAbility`/`spawnHero`/`unlockHeroSkill`/`fitHero` (`game.ts`);
   тесты `herostate.test.ts` (сид) + `heroactions.test.ts` (интеграция пяти действий,

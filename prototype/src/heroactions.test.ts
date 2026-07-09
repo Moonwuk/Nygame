@@ -55,9 +55,9 @@ describe('hero actions — the core engine over the prototype catalogs', () => {
   it('hero.ability on a typed-but-unwired effect fails secure (E_NO_EFFECT)', () => {
     const s = newGame();
     const main = mainOf(s, 'p1');
-    expect(main.abilities).toContain('rally'); // typed `aura` in data, no engine effect yet
+    expect(main.abilities).toContain('scan'); // type `reveal` — typed in data, no engine effect yet
     const origin = s.fleets[main.fleetId!]!.location!;
-    const r = order(s, castHeroAbility('p1', main.id, 'rally', origin), s.time);
+    const r = order(s, castHeroAbility('p1', main.id, 'scan', origin), s.time);
     expect(r.error).toBe('E_NO_EFFECT');
   });
 
@@ -102,5 +102,17 @@ describe('hero actions — the core engine over the prototype catalogs', () => {
     expect(r.error).toBeUndefined();
     expect(r.state.fleets[fleetId]?.location).toBe(hero.home); // warped back to the capital
     expect(r.state.heroes![rec!.id]?.cooldowns?.['fx:recall']).toBeGreaterThan(st.time);
+  });
+
+  it('hero.ability rally (hero.effect.aura capability) stores a live combat aura', () => {
+    const s = newGame();
+    const main = mainOf(s, 'p1'); // commander carries rally
+    expect(main.abilities).toContain('rally');
+    const r = order(s, castHeroAbility('p1', main.id, 'rally'), s.time); // range-0, no target
+    expect(r.error).toBeUndefined();
+    const auras = r.state.heroes![main.id]!.activeAuras;
+    expect(auras?.length).toBe(1);
+    expect(auras![0]!.bonus).toBe(0.1);
+    expect(r.state.heroes![main.id]?.cooldowns?.['fx:aura']).toBeGreaterThan(s.time);
   });
 });

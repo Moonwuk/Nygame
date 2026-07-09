@@ -1745,6 +1745,7 @@ const ERR_RU: Record<string, string> = {
   E_NO_HERO: 'герой не найден',
   E_HERO_NOT_DEPLOYED: 'герой не развёрнут — сначала поднимите корабль',
   E_NO_CAPITAL: 'нет столицы для отзыва',
+  E_BAD_EFFECT: 'способность настроена некорректно',
   E_HERO_DEAD: 'герой погиб — дождитесь возрождения',
   E_HERO_ALIVE: 'герой уже командует кораблём',
   E_HERO_CAP: 'достигнут предел развёрнутых героев',
@@ -6644,7 +6645,7 @@ const heroCdKey = (type: string): string =>
 // Ability types the prototype kernel can actually resolve: the two heroModule
 // built-ins + every `hero.effect.<type>` the kernel's MODULES provide (heroEffects →
 // recall). Types not here have no engine effect yet → the «скоро» badge.
-const HERO_CASTABLE = new Set(['temp_lane', 'annihilate', 'recall']);
+const HERO_CASTABLE = new Set(['temp_lane', 'annihilate', 'recall', 'aura']);
 function renderHero(): void {
   const body = $('herobody');
   const mine = Object.values(s.heroes ?? {}).filter((h) => h.owner === ME);

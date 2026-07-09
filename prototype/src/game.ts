@@ -629,8 +629,8 @@ export const data: GameData = parseGameData({
     rally: {
       name: 'Сбор',
       description: 'Боевой клич: временный бонус к боевой ауре для своих флотов рядом с героем.',
-      type: 'aura', cooldownHours: 18, range: 300,
-      params: { combatBonus: 0.1, durationHours: 2 },
+      type: 'aura', cooldownHours: 18, range: 0,
+      params: { combatBonus: 0.1, durationHours: 2, radius: 300 },
     },
     scan: {
       name: 'Разведка',
@@ -645,8 +645,8 @@ export const data: GameData = parseGameData({
     bulwark: {
       name: 'Бастион',
       description: 'Временный щит: бонус к обороне своим флотам рядом с героем.',
-      type: 'aura', cooldownHours: 20, range: 300,
-      params: { defenseBonus: 0.15, durationHours: 2 },
+      type: 'aura', cooldownHours: 20, range: 0,
+      params: { defenseBonus: 0.15, durationHours: 2, radius: 300 },
     },
     boarding_translocation: {
       name: 'Абордажная транслокация',

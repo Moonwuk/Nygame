@@ -474,6 +474,10 @@ export interface Hero {
   /** The fleet this hero commands (its ship) while deployed; cleared on death. Lets a
    *  death be attributed to the right hero when several share an owner. */
   fleetId?: FleetId;
+  /** Active time-boxed combat auras cast via `hero.effect.aura` (rally/bulwark) — each
+   *  adds `bonus` to the `combat.damage` of the owner's fleets within `radius` of the
+   *  hero's node until `until` (ms). Filtered by `until` at read time; pruned on cast. */
+  activeAuras?: { bonus: number; radius: number; until: number }[];
 }
 
 /** A temporary lane a hero opened: a real, routable graph edge between two nodes for
