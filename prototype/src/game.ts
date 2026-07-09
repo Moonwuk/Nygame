@@ -242,6 +242,7 @@ export const data: GameData = parseGameData({
       cost: { metal: 20 },
       buildTimeHours: 1,
       upkeep: { credits: 1 },
+      slots: { utility: 1 }, // a lone utility bay — a recon drone flexes its sensors
     },
     cruiser: {
       faction: 'blue',
@@ -251,6 +252,7 @@ export const data: GameData = parseGameData({
       cost: { metal: 60, credits: 20 },
       buildTimeHours: 3,
       upkeep: { credits: 4 },
+      slots: { weapon: 1, defense: 1, utility: 1 }, // the balanced warship: one of each bay
     },
     siege: {
       // Artillery: a backline platform that fires from range at one target —
@@ -263,6 +265,7 @@ export const data: GameData = parseGameData({
       cost: { metal: 90, credits: 40 },
       buildTimeHours: 5,
       upkeep: { credits: 6 },
+      slots: { weapon: 1, utility: 1 }, // a gun bay + a utility bay — a glass cannon
     },
     dropship: {
       // Carrier hull (GDD §6.1 / backlog SHIP): the biggest hold in the fleet but almost
@@ -273,6 +276,7 @@ export const data: GameData = parseGameData({
       cost: { metal: 70, credits: 20 },
       buildTimeHours: 4,
       upkeep: { credits: 3 },
+      slots: { defense: 1, utility: 2 }, // no guns — it armours up and carries утилиту
     },
     fighter_squadron: {
       // Carrier-borne strike wing (squadrons-roadmap SQ-0.1): very fast + hard-hitting
@@ -342,6 +346,36 @@ export const data: GameData = parseGameData({
       cost: { metal: 400, credits: 200 },
       buildTimeHours: 10,
       upkeep: { credits: 8 },
+    },
+  },
+  // Ship modules (mirror of data/modules.json) — the «Оснащение корабля» loadout
+  // constructor fits these into a hull's typed slots (weapon/defense/utility). The
+  // core `loadout.ts` engine (effectiveStats/canEquip/loadoutCost) validates and
+  // prices them; `unit.build{modules}` stamps the chosen set onto the built stack.
+  modules: {
+    cargo_bay: {
+      name: 'Грузовой отсек', slot: 'utility', tag: 'horizontal',
+      effects: { stats: { cargoCapacity: 6 } }, cost: { metal: 45 }, allowed: { domain: 'space' },
+    },
+    radar_module: {
+      name: 'Радар-модуль', slot: 'utility', tag: 'horizontal',
+      effects: { stats: { radarRange: 300 } }, cost: { metal: 55 }, allowed: { domain: 'space' },
+    },
+    ion_engine: {
+      name: 'Ионный двигатель', slot: 'utility', tag: 'vertical',
+      effects: { stats: { speed: 2 } }, cost: { metal: 40 }, allowed: { domain: 'space' },
+    },
+    targeting_array: {
+      name: 'Система наведения', slot: 'weapon', tag: 'vertical',
+      effects: { stats: { attack: 4 } }, cost: { metal: 60 }, allowed: { domain: 'space' },
+    },
+    ablative_plating: {
+      name: 'Броневые плиты', slot: 'defense', tag: 'vertical',
+      effects: { stats: { hp: 12 } }, cost: { metal: 50 }, allowed: { domain: 'space' },
+    },
+    shield_booster: {
+      name: 'Тяжёлый щит', slot: 'defense', tag: 'vertical',
+      effects: { stats: { shield: 15 } }, cost: { metal: 80 }, allowed: { domain: 'space' },
     },
   },
   factions: {},
@@ -2934,6 +2968,16 @@ export const upgradeBuilding = (playerId: string, planetId: string, building: st
   act(playerId, 'building.upgrade', { planetId, building });
 export const buildUnit = (playerId: string, planetId: string, unit: string, count = 1) =>
   act(playerId, 'unit.build', { planetId, unit, count });
+/** Build a hull with a chosen module loadout (the «Оснащение корабля» constructor).
+ *  The modules ride in the `unit.build` payload; the core stamps them onto the built
+ *  stack (validated + priced by `loadout.ts`), locked for good — no refit. */
+export const buildShip = (
+  playerId: string,
+  planetId: string,
+  unit: string,
+  count: number,
+  modules: string[],
+) => act(playerId, 'unit.build', { planetId, unit, count, modules });
 export const engageFleet = (playerId: string, fleetId: string, targetId: string) =>
   act(playerId, 'fleet.engage', { fleetId, targetId });
 /** Begin researching a session technology (one active at a time — technologyModule). */
