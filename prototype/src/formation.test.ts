@@ -13,30 +13,30 @@ const keys = (f: FormationStats): string[] => f.synergies.map((x) => x.key).sort
 
 describe('formationStats — division template = Σ slots × composition synergy', () => {
   it('sums the slots and excludes empty ones', () => {
-    const f = formationStats(tpl(['infantry', null, null, null, null, null]));
+    const f = formationStats(tpl(['heavy_infantry', null, null, null, null, null]));
     expect(f.count).toBe(1);
-    expect(f.byType).toEqual({ infantry: 1, tank: 0 });
-    expect(f.attack).toBe(8); // single infantry, no synergy
-    expect(f.defense).toBe(16);
-    expect(f.hp).toBe(24);
-    expect(f.cost).toEqual({ metal: 35 });
+    expect(f.byType).toEqual({ militia: 0, heavy_infantry: 1, special_forces: 0, tank: 0 });
+    expect(f.attack).toBe(8); // single heavy infantry, no synergy
+    expect(f.defense).toBe(20);
+    expect(f.hp).toBe(34);
+    expect(f.cost).toEqual({ metal: 55, credits: 15 });
     expect(f.synergies).toHaveLength(0);
   });
 
   it('combined-arms (infantry + tank together) gives +15% atk/def', () => {
-    const f = formationStats(tpl(['infantry', 'infantry', 'tank', null, null, null]));
+    const f = formationStats(tpl(['heavy_infantry', 'heavy_infantry', 'tank', null, null, null]));
     // base atk 8+8+22=38, def 16+16+14=46; combined ×1.15 both.
     expect(f.attack).toBe(44); // round(38 × 1.15)
-    expect(f.defense).toBe(53); // round(46 × 1.15)
-    expect(f.hp).toBe(94); // 24 + 24 + 46
-    expect(f.cost).toEqual({ metal: 190, credits: 30 });
+    expect(f.defense).toBe(62); // round(54 × 1.15)
+    expect(f.hp).toBe(114); // 34 + 34 + 46
+    expect(f.cost).toEqual({ metal: 230, credits: 60 });
     expect(keys(f)).toEqual(['combined']);
   });
 
   it('pure infantry entrenches (+25% defense), no other synergy', () => {
-    const f = formationStats(tpl(['infantry', 'infantry', 'infantry', 'infantry', 'infantry', 'infantry']));
+    const f = formationStats(tpl(['heavy_infantry', 'heavy_infantry', 'heavy_infantry', 'heavy_infantry', 'heavy_infantry', 'heavy_infantry']));
     expect(f.attack).toBe(48); // 6×8, no atk synergy
-    expect(f.defense).toBe(120); // round(6×16 × 1.25)
+    expect(f.defense).toBe(150); // round(6×20 × 1.25)
     expect(keys(f)).toEqual(['entrench']);
   });
 

@@ -772,6 +772,33 @@ export const en: Record<string, string> = {
   'Учёные совета — ещё +1 уровень.': 'Council scientists — another +1 level.',
   'Орбитальная кафедра': 'Orbital Faculty',
   '«Орбитальная логистика» изучена с первой секунды.': '"Orbital Logistics" is researched from the first second.',
+  // --- H4: ground-army designer (3 infantry lines + tank, officer premades) -------
+  'Мобилизация': 'Mobilization',
+  '⚙ Конструктор': '⚙ Designer',
+  'Переименовать': 'Rename',
+  'Урон по:': 'Damage vs:',
+  'живучесть': 'toughness',
+  'Ополчение': 'Militia',
+  'Тяжёлая пехота': 'Heavy Infantry',
+  'Спецназ': 'Special Forces',
+  'Рейд': 'Raid',
+  'Гвардия прорыва': 'Breakthrough Guard',
+  'Железный рубеж': 'Iron Line',
+  'Колонна снабжения': 'Supply Column',
+  'Штурмовик': 'Assault Leader',
+  'Командир обороны': 'Defense Commander',
+  'Снабженец': 'Quartermaster',
+  'Рейдовая доктрина': 'Raid Doctrine',
+  '+15% атака — ≥2 спецназа без ополчения': '+15% attack — ≥2 special forces, no militia',
+  'Людская волна': 'Human Wave',
+  '+10% оборона — ≥4 ополчения': '+10% defense — ≥4 militia',
+  '+25% оборона — ≥3 тяжёлой пехоты': '+25% defense — ≥3 heavy infantry',
+  'Именной шаблон офицера: состав закреплён, редактировать нельзя.':
+    "An officer's named template: composition locked, no editing.",
+  'Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.':
+    "A division is a snapshot of its template: editing a design never touches armies already fielded. On your own world it heals +1 HP/unit/day; wiped out, it disappears.",
+  'Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.':
+    'Tap a slot to cycle the unit type: militia → heavy infantry → special forces → tank. Tanks shred any infantry; special forces are the one infantry that threatens armour; heavy infantry holds the line.',
   '‹ назад': '‹ back',
   '🧪 Тесты · режим разработчика': '🧪 Tests · developer mode',
 
@@ -847,7 +874,6 @@ export const en: Record<string, string> = {
   'СОВЕТ УЧЁНЫХ': 'SCIENCE COUNCIL',
   '↩ В меню': '↩ Menu',
   'Выбрать учёного': 'Pick a scientist',
-  'убрать': 'remove',
   '⚠ Совет закрепляется на весь матч. Рекомендованная пара уже выбрана — замените по вкусу.':
     '⚠ The council locks in for the whole match. A recommended pair is pre-selected — swap to taste.',
   'Кандидаты · нажмите, чтобы занять слот': 'Candidates · tap to fill a slot',
@@ -865,10 +891,8 @@ export const en: Record<string, string> = {
   'data:Полимат': 'Polymath',
   // --- tech-branch labels (tabs / chips / section heads) ---------------------------
   'Космос': 'Space',
-  'Земля': 'Ground',
   'Эскадрильи': 'Squadrons',
   'Ракеты': 'Missiles',
-  'Командование': 'Command',
   'Дом: {home} — одиночная песочница, без соперников · тапните светящийся мир, чтобы сменить':
     'Home: {home} — a solo sandbox, no rivals · tap another glowing world to change',
   'Дом: {home} — тапните другой светящийся мир, чтобы сменить':
@@ -876,7 +900,6 @@ export const en: Record<string, string> = {
   // --- rail icon labels + window headers -------------------------------------------
   'Дипло': 'Diplo',
   'Почта': 'Mail',
-  'Наука': 'Tech',
   'Сон': 'Sleep',
   'Корп': 'Corp',
   'ДИПЛОМАТИЯ': 'DIPLOMACY',

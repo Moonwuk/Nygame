@@ -57,6 +57,8 @@ import {
   divisionsOf,
   templatesOf,
   mobilizeDivision,
+  renameDivisionTemplate,
+  OFFICER_TEMPLATES,
   setDivisionTemplate,
   loadDivision,
   unloadDivision,
@@ -100,7 +102,7 @@ import {
   type QStep,
   type Patrol,
 } from './game';
-import { OFFICERS } from './groundcombat';
+import { OFFICERS, GROUND_ROSTER } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
 import {
@@ -225,6 +227,10 @@ const UNIT_ICON: Record<string, string> = {
   strike_carrier: '◈', // a flat-top capital hull — hangar bays for the wing
   fighter_squadron: '△', // light strike wing (hollow, to read apart from the cruiser ▲)
   hero: '♔', // the player's projection — a crowned flagship
+  militia: '▿', // massed light foot
+  heavy_infantry: '◆', // the armoured line
+  special_forces: '✱', // the elite few
+  tank: '▰',
 };
 // A small glyph per province KIND, drawn above each province so its type reads at a
 // glance (planet / asteroid / nebula / wreck-field / storm / …). Text glyphs only.
@@ -1178,49 +1184,42 @@ function divisionsHtml(planetId: string): string {
       const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join(' ') || '—';
       const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
       const off = d.officer ? t(OFFICERS[d.officer]?.name ?? '') : '';
-      h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(d.name)}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
-      // Ground hero = the division's officer: an immutable aura-leader that buffs the
-      // division it fights with (passive; activatable skills are space heroes only).
-      h += `<div class="hint">★ Наземный герой — аура своим в бою:</div><div class="row">`;
-      for (const key of Object.keys(OFFICERS)) {
-        const on = d.officer === key;
-        h += btn('officer', `${d.id}|${key}`, `${on ? '● ' : ''}★ ${esc(t(OFFICERS[key]!.name))}`, !on);
-      }
-      if (d.officer) h += btn('officer', `${d.id}|`, t('Снять'), true);
-      h += `</div>`;
+      // Офицер — часть ИМЕННОГО шаблона (готовый, менять нельзя): показываем, не редактируем.
+      h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(t(d.name))}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
     }
   } else {
     h += `<div class="row dim">${t('Нет дивизий — мобилизуй по шаблону ниже.')}</div>`;
   }
   const tpls = templatesOf(s, ME);
   const res = s.players[ME]?.resources ?? {};
-  const idx = Math.max(0, Math.min(mobTplIdx, tpls.length - 1));
-  const cur = tpls[idx] ?? tpls[0]!;
-  h += `<div class="sec">${t('Сборка дивизии')}</div>`;
+  // Stellaris-style: the panel only PICKS a ready design and mobilises it; editing
+  // lives in the designer window («⚙ Конструктор»). Named officer templates ride
+  // after the custom three, marked ★ — ready-made, composition locked.
+  const officerBase = tpls.length;
+  const all: Array<{ tpl: FormationTemplate; officer?: string }> = [
+    ...tpls.map((tpl) => ({ tpl })),
+    ...OFFICER_TEMPLATES.map((tpl) => ({ tpl, officer: tpl.officer })),
+  ];
+  const idx = Math.max(0, Math.min(mobTplIdx, all.length - 1));
+  const pick = all[idx]!;
+  h += `<div class="sec">${t('Мобилизация')}</div>`;
   h += `<div class="row">`;
-  for (let i = 0; i < tpls.length; i++) {
-    h += btn('mobtpl', String(i), esc(tpls[i]!.name), i !== idx);
+  for (let i = 0; i < all.length; i++) {
+    const star = all[i]!.officer ? '★ ' : '';
+    h += btn('mobtpl', String(i), star + esc(t(all[i]!.tpl.name)), i !== idx);
   }
   h += `</div>`;
-  // Tap a slot to cycle its род войск (пусто → пехота → танк → пусто).
-  h += `<div class="row">`;
-  for (let i = 0; i < FORMATION_SLOTS; i++) {
-    const u = cur.slots[i] ?? null;
-    h += btn('divslot', `${idx}|${i}`, u ? `${FORM_ICON[u] ?? '▪'} ${esc(FORM_RU[u] ?? u)}` : '＋', true);
-  }
-  h += `</div>`;
-  const f = formationStats(cur);
-  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${r[0]}`).join(' ') || '—';
+  const f = formationStats(pick.tpl);
+  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
   const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
-  const syn = f.synergies.map((x) => esc(x.name)).join(' · ');
-  // Live influence on characteristics as you assemble (same bar preview as ships).
-  const bar = (label: string, val: number, max: number): string =>
-    `<div class="lstat"><div class="lrow"><span class="lnm">${label}</span><span class="lval">${val}</span></div>` +
-    `<div class="ltrack"><div class="lbar" style="width:${Math.round(Math.min(100, (val / max) * 100))}%"></div></div></div>`;
-  h += `<div class="lstats"><div class="lhd">${t('Влияние на характеристики')}</div>${bar(t('⚔ Урон в атаке'), f.attack, 300)}${bar(t('🛡 Урон в защите'), f.defense, 300)}${bar(t('❤ Корпус'), f.hp, 600)}</div>`;
-  h += `<div class="hint">${t('состав {n}/{s} · {rest}', { n: f.count, s: FORMATION_SLOTS, rest: cost + (syn ? ' · ' + syn : '') })}</div>`;
-  h += btn('mobilize', String(idx), t('Мобилизовать «{name}»', { name: esc(tData(cur.name)) }), afford && f.count > 0);
-  h += `<div class="hint">${t('Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.')}</div>`;
+  const comp = pick.tpl.slots.filter(Boolean).map((u) => FORM_ICON[u!] ?? '▪').join('') || '—';
+  const offLine = pick.officer ? ` · ★${esc(t(OFFICERS[pick.officer]?.name ?? ''))}` : '';
+  h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
+  h += `<div class="row">`;
+  h += btn('mobilize', pick.officer ? `o${idx - officerBase}` : String(idx), t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }), afford && f.count > 0);
+  h += btn('divdesign', '', t('⚙ Конструктор'), true);
+  h += `</div>`;
+  h += `<div class="hint">${t('Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.')}</div>`;
   return h;
 }
 
@@ -4597,7 +4596,7 @@ function panelHtml(): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} ${t('гарнизон')}</span><span>${unitIcon('infantry')} ${sumUnits(ground)} ${t('наземных')}</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ${t('кораблей')}</span><span>▣ ${p.buildings.length} ${t('построек')}</span></div>`;
+    `<div class="pstats"><span>⚔ ${gcount} ${t('гарнизон')}</span><span>${unitIcon('heavy_infantry')} ${sumUnits(ground)} ${t('наземных')}</span><span>${unitIcon('cruiser')} ${sumUnits(ships)} ${t('кораблей')}</span><span>▣ ${p.buildings.length} ${t('построек')}</span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -5685,14 +5684,14 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
   } else if (act === 'mobtpl') {
     mobTplIdx = Number(arg); // switch which template the assembler shows (local, re-renders)
-  } else if (act === 'divslot') {
-    const [ti, si] = arg.split('|').map(Number);
-    const cur = templatesOf(s, ME)[ti!]?.slots[si!] ?? null;
-    const order: (string | null)[] = [null, ...FORMATION_UNITS];
-    const next = order[(order.indexOf(cur) + 1) % order.length] ?? null;
-    playerOrder(setDivisionTemplate(ME, ti!, si!, next));
   } else if (act === 'mobilize') {
-    playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
+    // 'oN' = named officer premade (locked composition, officer attached server-side).
+    if (arg.startsWith('o')) playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg.slice(1)), true));
+    else playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
+  } else if (act === 'divdesign') {
+    ddIdx = Math.min(mobTplIdx, templatesOf(s, ME).length - 1);
+    divDesignWin.classList.add('show');
+    renderDivDesign();
   } else if (act === 'spyplanet') {
     playerOrder(spyOn(ME, arg, 'planet', selPlanet!)); // arg = the world's (last known) owner
   } else if (act === 'capital') {
@@ -6306,6 +6305,93 @@ logWin?.addEventListener('click', (e) => {
 // Session research (technologyModule): pick a tech to research (one at a time). Techs are
 // grouped by branch, show cost + status, and gate on prerequisites / day / affordability.
 const techWin = $('tech');
+
+// --- division template designer (H4, Stellaris-style) ------------------------------
+// Editing happens HERE, before building: the planet panel only picks a ready design.
+// Custom templates (3) are editable + renamable; named officer templates are locked
+// premades («готовый шаблон, менять нельзя») shown for reference. A mobilised division
+// is a snapshot — editing a template later never touches armies already in the field.
+const divDesignWin = $('divdesign');
+let ddIdx = 0; // selected design: 0..2 custom, 3+ officer premades
+function renderDivDesign(): void {
+  const tpls = templatesOf(s, ME);
+  const all: Array<{ tpl: FormationTemplate; officer?: string }> = [
+    ...tpls.map((tpl) => ({ tpl })),
+    ...OFFICER_TEMPLATES.map((tpl) => ({ tpl, officer: tpl.officer })),
+  ];
+  ddIdx = Math.max(0, Math.min(ddIdx, all.length - 1));
+  const pick = all[ddIdx]!;
+  const locked = pick.officer !== undefined;
+  let h = `<div class="dd-tabs">`;
+  for (let i = 0; i < all.length; i++) {
+    h += `<button data-ddtab="${i}" class="${i === ddIdx ? 'on' : ''}">${all[i]!.officer ? '★ ' : ''}${esc(t(all[i]!.tpl.name))}</button>`;
+  }
+  h += `</div>`;
+  if (locked) {
+    const off = OFFICERS[pick.officer!];
+    const bonus = [off?.atk ? `+${Math.round(off.atk * 100)}% ${t('атака')}` : '', off?.def ? `+${Math.round(off.def * 100)}% ${t('оборона')}` : '', off?.hp ? `+${Math.round(off.hp * 100)}% ${t('живучесть')}` : '']
+      .filter(Boolean)
+      .join(' · ');
+    h += `<div class="dd-lock">★ ${esc(t(off?.name ?? ''))} — ${bonus}</div>`;
+    h += `<div class="dd-lock">${t('Именной шаблон офицера: состав закреплён, редактировать нельзя.')}</div>`;
+  } else {
+    h += `<div class="dd-name"><input id="dd-name" maxlength="24" value="${esc(pick.tpl.name)}"><button class="b" data-ddrename>${t('Переименовать')}</button></div>`;
+  }
+  h += `<div class="dd-slots">`;
+  for (let i = 0; i < FORMATION_SLOTS; i++) {
+    const u = pick.tpl.slots[i] ?? null;
+    h += `<button data-ddslot="${i}"${locked ? ' disabled' : ''}>${u ? `${FORM_ICON[u] ?? '▪'} ${esc(t(FORM_RU[u] ?? u))}` : '＋'}</button>`;
+  }
+  h += `</div>`;
+  const f = formationStats(pick.tpl);
+  // Per-target damage preview: the counter matrix made visible — Σ atk of the
+  // composition against each of the four unit types.
+  const vs = (target: string): number =>
+    pick.tpl.slots.reduce((n, u) => n + (u ? (GROUND_ROSTER[u]?.atk[target as FormationUnit] ?? 0) : 0), 0);
+  h += `<div class="dd-vs">`;
+  for (const tgt of FORMATION_UNITS) {
+    const v = vs(tgt);
+    h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${FORM_ICON[tgt]} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
+  }
+  h += `</div>`;
+  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
+  const syn = f.synergies.map((x) => `${esc(t(x.name))} — ${esc(t(x.desc))}`).join('<br>');
+  h += `<div class="row dim">⚔${f.attack} 🛡${f.defense} ❤${f.hp} · ${t('состав {n}/{s} · {rest}', { n: f.count, s: FORMATION_SLOTS, rest: cost })}</div>`;
+  if (syn) h += `<div class="hint2">${syn}</div>`;
+  h += `<div class="hint2">${t('Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.')}</div>`;
+  $('divdesignbody').innerHTML = h;
+}
+divDesignWin.addEventListener('click', (e) => {
+  const tg = e.target as HTMLElement;
+  if (tg.id === 'divdesign' || tg.closest('.tw-close')) {
+    divDesignWin.classList.remove('show');
+    lastPanelHtml = ''; // the mobilise picker mirrors the templates — refresh it
+    return;
+  }
+  const tab = tg.closest('[data-ddtab]') as HTMLElement | null;
+  if (tab) {
+    ddIdx = Number(tab.dataset.ddtab);
+    renderDivDesign();
+    return;
+  }
+  const slot = tg.closest('[data-ddslot]') as HTMLButtonElement | null;
+  if (slot && !slot.disabled && ddIdx < templatesOf(s, ME).length) {
+    const si = Number(slot.dataset.ddslot);
+    const cur = templatesOf(s, ME)[ddIdx]?.slots[si] ?? null;
+    const order: (string | null)[] = [null, ...FORMATION_UNITS];
+    const next = order[(order.indexOf(cur) + 1) % order.length] ?? null;
+    playerOrder(setDivisionTemplate(ME, ddIdx, si, next));
+    renderDivDesign();
+    return;
+  }
+  if (tg.closest('[data-ddrename]')) {
+    const name = ($('dd-name') as HTMLInputElement).value.trim();
+    if (name && ddIdx < templatesOf(s, ME).length) {
+      playerOrder(renameDivisionTemplate(ME, ddIdx, name));
+      renderDivDesign();
+    }
+  }
+});
 const TECH_CUR: Record<string, string> = {
   credits: '¤', food: '❖', metal: '⬢', energy: '↯', microelectronics: '▦',
 };
@@ -6861,8 +6947,8 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 /** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк' };
+const FORM_ICON: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
+const FORM_RU: Record<string, string> = { militia: 'Ополчение', heavy_infantry: 'Тяжёлая пехота', special_forces: 'Спецназ', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 
 /** The hero's display name — the главный hero shows the player's callsign (nick),
@@ -7675,6 +7761,7 @@ function topLayerOpen(): boolean {
       codexEl?.classList.contains('show') ||
       logWin?.classList.contains('show') ||
       techWin.classList.contains('show') ||
+      divDesignWin.classList.contains('show') ||
       marketWin.classList.contains('show') ||
       diploOpen ||
       chatOpen ||
@@ -7720,6 +7807,11 @@ function closeTopLayer(): boolean {
   }
   if (techWin.classList.contains('show')) {
     techWin.classList.remove('show');
+    return true;
+  }
+  if (divDesignWin.classList.contains('show')) {
+    divDesignWin.classList.remove('show');
+    lastPanelHtml = '';
     return true;
   }
   if (marketWin.classList.contains('show')) {

@@ -298,15 +298,38 @@ export const data: GameData = parseGameData({
     // (formation.ts). Each has a distinct role; the template's SUM + composition
     // synergies (combined-arms / entrenched / armour / air) set the division's stats.
     // Пехота — cheap, defensive front line; the backbone that holds ground.
-    infantry: {
+    // Пехота в трёх вариантах (H4): ополчение — дешёвое мясо, тяжёлая пехота — щит
+    // обороны, спецназ — элита с противотанковыми средствами (см. GROUND_ROSTER —
+    // матрица «кто кого бьёт» живёт там; здесь агрегатные статы, цена и содержание).
+    militia: {
       faction: 'blue',
-      stats: { attack: 8, defense: 16, speed: 48, hp: 24, cargoSize: 1 },
+      stats: { attack: 4, defense: 8, speed: 44, hp: 14, cargoSize: 1 },
       domain: 'ground',
       traits: ['ground'],
       signature: 1,
-      cost: { metal: 35 },
+      cost: { metal: 15 },
+      buildTimeHours: 1,
+      upkeep: { credits: 1, food: 1 },
+    },
+    heavy_infantry: {
+      faction: 'blue',
+      stats: { attack: 8, defense: 20, speed: 40, hp: 34, cargoSize: 2 },
+      domain: 'ground',
+      traits: ['ground'],
+      signature: 1,
+      cost: { metal: 55, credits: 15 },
       buildTimeHours: 2,
       upkeep: { credits: 2, food: 1 },
+    },
+    special_forces: {
+      faction: 'blue',
+      stats: { attack: 18, defense: 12, speed: 52, hp: 26, cargoSize: 1 },
+      domain: 'ground',
+      traits: ['ground'],
+      signature: 1,
+      cost: { metal: 60, credits: 45, microelectronics: 5 },
+      buildTimeHours: 3,
+      upkeep: { credits: 4, food: 1 },
     },
     // Танк — heavy front line: high attack and hull, but pricey and bulky to lift.
     tank: {
@@ -1228,7 +1251,7 @@ export interface SetupConfig {
 // menu and frozen for the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
-export const FORMATION_UNITS = ['infantry', 'tank'] as const;
+export const FORMATION_UNITS = ['militia', 'heavy_infantry', 'special_forces', 'tank'] as const;
 export type FormationUnit = (typeof FORMATION_UNITS)[number];
 /** Slots per template, and templates per player. */
 export const FORMATION_SLOTS = 6;
@@ -1242,9 +1265,21 @@ export interface FormationTemplate {
 
 /** The three starter templates a player gets before customising them. */
 export const DEFAULT_TEMPLATES: FormationTemplate[] = [
-  { name: 'Линия', slots: ['infantry', 'infantry', 'infantry', 'infantry', 'tank', 'tank'] },
-  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'infantry', 'infantry', 'infantry'] },
-  { name: 'Клин', slots: ['tank', 'tank', 'tank', 'tank', 'infantry', null] },
+  { name: 'Линия', slots: ['heavy_infantry', 'heavy_infantry', 'militia', 'militia', 'tank', 'tank'] },
+  { name: 'Кулак', slots: ['tank', 'tank', 'tank', 'special_forces', 'heavy_infantry', 'heavy_infantry'] },
+  { name: 'Рейд', slots: ['special_forces', 'special_forces', 'special_forces', 'militia', 'militia', null] },
+];
+
+/** Именные офицерские дивизии (H4): ГОТОВЫЕ шаблоны с встроенным офицером — состав
+ *  закреплён, редактировать нельзя (конструктор их только показывает). Мобилизация
+ *  сразу прикрепляет офицера. */
+export interface OfficerTemplate extends FormationTemplate {
+  officer: string; // OFFICERS key
+}
+export const OFFICER_TEMPLATES: OfficerTemplate[] = [
+  { name: 'Гвардия прорыва', officer: 'assault', slots: ['tank', 'tank', 'special_forces', 'special_forces', 'heavy_infantry', 'heavy_infantry'] },
+  { name: 'Железный рубеж', officer: 'defender', slots: ['heavy_infantry', 'heavy_infantry', 'heavy_infantry', 'heavy_infantry', 'militia', 'militia'] },
+  { name: 'Колонна снабжения', officer: 'quartermaster', slots: ['militia', 'militia', 'militia', 'heavy_infantry', 'heavy_infantry', 'tank'] },
 ];
 
 /** An active composition synergy (a doctrine bonus the template's mix unlocks). */
@@ -1269,7 +1304,7 @@ export interface FormationStats {
  *  (combined-arms / entrenched / armour / air-support). Pure + deterministic; used by
  *  the menu preview and (later) by mobilisation. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
-  const byType: Record<FormationUnit, number> = { infantry: 0, tank: 0 };
+  const byType: Record<FormationUnit, number> = { militia: 0, heavy_infantry: 0, special_forces: 0, tank: 0 };
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -1284,12 +1319,15 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
-  const count = byType.infantry + byType.tank;
-  // Composition synergies — additive multipliers on attack / defense.
+  const infantry = byType.militia + byType.heavy_infantry + byType.special_forces;
+  const count = infantry + byType.tank;
+  // Composition synergies — additive multipliers on attack / defense. Doctrines follow
+  // the H4 roster: combined arms, an entrenched heavy line, an armoured fist, a
+  // spec-ops raid and the cheap human wave.
   let atkMul = 1;
   let defMul = 1;
   const synergies: FormationSynergy[] = [];
-  if (byType.infantry > 0 && byType.tank > 0) {
+  if (infantry > 0 && byType.tank > 0) {
     atkMul += 0.15;
     defMul += 0.15;
     synergies.push({
@@ -1298,9 +1336,9 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
       desc: '+15% атака и оборона — пехота и танки вместе',
     });
   }
-  if (byType.infantry >= 4 && byType.tank === 0) {
+  if (byType.heavy_infantry >= 3) {
     defMul += 0.25;
-    synergies.push({ key: 'entrench', name: 'Окопались', desc: '+25% оборона — чистая пехота' });
+    synergies.push({ key: 'entrench', name: 'Окопались', desc: '+25% оборона — ≥3 тяжёлой пехоты' });
   }
   if (byType.tank >= 3) {
     atkMul += 0.2;
@@ -1309,6 +1347,18 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
       name: 'Танковый кулак',
       desc: '+20% атака — ≥3 танков (прорыв)',
     });
+  }
+  if (byType.special_forces >= 2 && byType.militia === 0) {
+    atkMul += 0.15;
+    synergies.push({
+      key: 'raid',
+      name: 'Рейдовая доктрина',
+      desc: '+15% атака — ≥2 спецназа без ополчения',
+    });
+  }
+  if (byType.militia >= 4) {
+    defMul += 0.1;
+    synergies.push({ key: 'wave', name: 'Людская волна', desc: '+10% оборона — ≥4 ополчения' });
   }
   return {
     count,
@@ -1395,7 +1445,10 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
     // Ground defence is what holds a world against capture (an AA battery bleeds a fleet
     // but can't stop a landing — only ground troops do). Seed a starting infantry garrison
     // so the homeworld isn't a free walk-in; mobile ground beyond it comes via divisions.
-    home.garrison = [{ unit: 'infantry', count: 3 }];
+    home.garrison = [
+      { unit: 'militia', count: 2 },
+      { unit: 'heavy_infantry', count: 1 },
+    ];
     players[seat.id] = player(
       seat.id,
       seat.name,
@@ -2126,7 +2179,10 @@ export const divisionModule: GameModule = {
       const planet = h.state.planets[p.planetId];
       if (!planet) return h.reject('E_NO_PLANET');
       if (planet.owner !== action.playerId) return h.reject('E_FORBIDDEN');
-      const tpl = templatesOf(h.state, action.playerId)[p.template];
+      const fromOfficer = (action.payload as { officer?: unknown }).officer === true;
+      const tpl = fromOfficer
+        ? OFFICER_TEMPLATES[p.template]
+        : templatesOf(h.state, action.playerId)[p.template];
       if (!tpl) return h.reject('E_NO_TEMPLATE');
       const stats = formationStats(tpl);
       if (stats.count <= 0) return h.reject('E_EMPTY_TEMPLATE');
@@ -2147,6 +2203,8 @@ export const divisionModule: GameModule = {
         max: { ...stats.byType },
         units: makeSide(GROUND_ROSTER, stats.byType),
         location: p.planetId,
+        // Именной шаблон приходит со своим офицером — «готовый шаблон, менять нельзя».
+        ...(fromOfficer ? { officer: (tpl as OfficerTemplate).officer } : {}),
       };
       h.emit('division.mobilized', {
         id,
@@ -2178,6 +2236,24 @@ export const divisionModule: GameModule = {
       if (!tpl) return h.reject('E_NO_TEMPLATE');
       tpl.slots[p.slot] = unit as FormationUnit | null;
       h.emit('division.retemplated', { template: p.template, slot: p.slot, unit });
+    });
+
+    // Rename a CUSTOM template (Stellaris-style designer). Officer premades are not
+    // player templates, so they are unreachable here — their name is locked by data.
+    api.onAction('division.rename', (action, h) => {
+      const p = action.payload as { template?: number; name?: unknown };
+      if (typeof p?.template !== 'number' || typeof p?.name !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const name = p.name.trim().slice(0, 24);
+      if (!name) return h.reject('E_BAD_PAYLOAD');
+      const ds = h.state as DivState;
+      const all = (ds.templates ??= {});
+      const mine = (all[action.playerId] ??= DEFAULT_TEMPLATES.map((t) => ({
+        name: t.name,
+        slots: [...t.slots],
+      })));
+      const tpl = mine[p.template];
+      if (!tpl) return h.reject('E_NO_TEMPLATE');
+      tpl.name = name;
     });
 
     /** Own-key division lookup owned by `playerId` (rejects a poisoned id / a foreign
@@ -3287,9 +3363,13 @@ export const marketTake = (playerId: string, id: string, amount?: number) =>
 /** Reclaim your own lot, refunding its remaining escrow. */
 export const marketCancel = (playerId: string, id: string) =>
   act(playerId, 'market.cancel', { id });
-/** Mobilise division template `template` (0-based) on your world `planetId`. */
-export const mobilizeDivision = (playerId: string, planetId: string, template: number) =>
-  act(playerId, 'division.mobilize', { planetId, template });
+/** Mobilise division template `template` (0-based) on your world `planetId`.
+ *  `officer` = build from the named OFFICER_TEMPLATES roster instead (locked premades). */
+export const mobilizeDivision = (playerId: string, planetId: string, template: number, officer = false) =>
+  act(playerId, 'division.mobilize', officer ? { planetId, template, officer: true } : { planetId, template });
+/** Rename your CUSTOM division template (designer menu). */
+export const renameDivisionTemplate = (playerId: string, template: number, name: string) =>
+  act(playerId, 'division.rename', { template, name });
 /** Assemble a template: set slot `slot` of your template `template` to `unit` (null = clear). */
 export const setDivisionTemplate = (
   playerId: string,

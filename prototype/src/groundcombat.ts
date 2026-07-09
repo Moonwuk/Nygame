@@ -31,9 +31,31 @@ export const COMBAT_WIDTH = 12;
 /** The default roster — two types: tanks crush infantry (armour breakthrough), infantry
  *  are the cheap, resilient generalist that trades well in numbers. Defence ≥ attack (a
  *  defender's edge). Pure content — tune freely; the resolver reads these. */
+// Rock-paper-scissors by DESIGN (H4): tanks shred every infantry line; special forces
+// are the one infantry that seriously bites armour (man-portable AT); heavy infantry
+// out-tanks everyone on DEFENCE but hits soft; militia is cheap filler that dies fast.
+// atk/def are damage PER TARGET TYPE — the counter matrix is data, not code.
 export const GROUND_ROSTER: GroundRoster = {
-  infantry: { hp: 24, atk: { infantry: 6, tank: 3 }, def: { infantry: 8, tank: 4 } },
-  tank: { hp: 46, atk: { infantry: 14, tank: 8 }, def: { infantry: 16, tank: 9 } },
+  militia: {
+    hp: 14,
+    atk: { militia: 4, heavy_infantry: 3, special_forces: 3, tank: 1 },
+    def: { militia: 5, heavy_infantry: 4, special_forces: 4, tank: 2 },
+  },
+  heavy_infantry: {
+    hp: 34,
+    atk: { militia: 7, heavy_infantry: 5, special_forces: 5, tank: 3 },
+    def: { militia: 10, heavy_infantry: 8, special_forces: 8, tank: 6 },
+  },
+  special_forces: {
+    hp: 26,
+    atk: { militia: 12, heavy_infantry: 9, special_forces: 9, tank: 10 },
+    def: { militia: 11, heavy_infantry: 8, special_forces: 8, tank: 7 },
+  },
+  tank: {
+    hp: 46,
+    atk: { militia: 16, heavy_infantry: 12, special_forces: 12, tank: 8 },
+    def: { militia: 18, heavy_infantry: 14, special_forces: 12, tank: 9 },
+  },
 };
 
 /** An officer attached to a division — a hero-like leader granting flexible, TUNABLE

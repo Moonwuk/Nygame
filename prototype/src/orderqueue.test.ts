@@ -320,7 +320,7 @@ describe('serverQueueActions — the server-side chain driver core (CC-server)',
     const dock = (st: ReturnType<typeof withOrders>) =>
       ({ ...st, planets: { p1: { id: 'p1' } as never } }) as typeof st;
     const full = dock(
-      withOrders([fleet('F', { landing: [{ unit: 'infantry', count: 2 }] } as Partial<Fleet>)], {
+      withOrders([fleet('F', { landing: [{ unit: 'heavy_infantry', count: 2 }] } as Partial<Fleet>)], {
         F: [{ kind: 'unload' }],
       }),
     );

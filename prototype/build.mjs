@@ -525,7 +525,25 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #tech,#steward{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:16px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
 #tech.show,#steward.show{display:flex;}
-#tech .twbox,#steward .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
+/* division designer (H4) */
+#divdesign{position:fixed;inset:0;z-index:44;display:none;align-items:center;justify-content:center;background:rgba(2,8,11,.62);}
+#divdesign.show{display:flex;}
+#divdesign .dd-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+#divdesign .dd-tabs button{padding:7px 10px;border:1px solid var(--line-hi);border-radius:8px;background:transparent;color:var(--ink);font:700 11px ui-monospace,monospace;cursor:pointer;}
+#divdesign .dd-tabs button.on{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.12);}
+#divdesign .dd-name{display:flex;gap:8px;margin-bottom:10px;}
+#divdesign .dd-name input{flex:1;padding:7px 9px;border:1px solid var(--line-hi);border-radius:8px;background:rgba(2,10,14,.6);color:#eafffb;font:700 12px ui-monospace,monospace;}
+#divdesign .dd-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;}
+#divdesign .dd-slots button{padding:10px 6px;border:1px dashed var(--line-hi);border-radius:9px;background:rgba(53,214,230,.04);color:#cfeeea;font:700 11px ui-monospace,monospace;cursor:pointer;}
+#divdesign .dd-slots button:disabled{cursor:default;opacity:.75;border-style:solid;}
+#divdesign .dd-vs{display:flex;flex-direction:column;gap:4px;margin:8px 0;}
+#divdesign .dd-vs .vrow{display:flex;align-items:center;gap:8px;font-size:11px;color:#9fc9c4;}
+#divdesign .dd-vs .vnm{flex:0 0 130px;}
+#divdesign .dd-vs .vtrack{flex:1;height:5px;border-radius:3px;background:rgba(53,214,230,.1);overflow:hidden;}
+#divdesign .dd-vs .vbar{height:100%;background:var(--amber);}
+#divdesign .dd-lock{color:var(--amber);font-size:11px;margin:6px 0;}
+#divdesign .hint2{color:#74b0aa;font-size:11px;line-height:1.5;margin-top:8px;}
+#tech .twbox,#steward .twbox,#divdesign .twbox{display:flex;flex-direction:column;width:min(460px,94vw);max-height:82vh;overflow:hidden;
   background:var(--glass);border:1px solid var(--cyan);border-radius:10px;
   box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
 .tw-close{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
@@ -1333,6 +1351,8 @@ const html = `<!doctype html>
 <div id="steward"><div class="twbox"><div class="lw-head"><b data-i18n>ХРАНИТЕЛЬ · ИИ НА СОН</b><button class="tw-close">✕</button></div><div id="stewardbody"></div></div></div>
 <!-- scientist council picker (setup-time, before the start-point) — rendered by renderSciPick() -->
 <div id="scipick"><div class="twbox"><div class="lw-head"><b data-i18n>СОВЕТ УЧЁНЫХ</b><button class="sp-cancel" type="button" data-i18n>↩ В меню</button></div><div id="scipickbody"></div></div></div>
+<!-- division template designer (H4, Stellaris-style) — rendered by renderDivDesign() -->
+<div id="divdesign"><div class="twbox"><div class="lw-head"><b data-i18n>КОНСТРУКТОР ДИВИЗИЙ</b><button class="tw-close">✕</button></div><div id="divdesignbody"></div></div></div>
 <!-- session market — whole box rendered by renderMarket() in main.ts -->
 <div id="market"></div>
 <aside id="side"></aside>
