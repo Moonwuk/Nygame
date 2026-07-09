@@ -760,6 +760,19 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .cn-fslot .cn-fn.dim,.cn-fslot .cn-fic.dim{color:var(--dim);font-weight:400;}
 .cn-syn{display:flex;gap:7px;align-items:center;padding:7px 10px;margin-bottom:6px;border:1px solid var(--cyan-dim);
   border-radius:8px;background:rgba(53,214,230,.06);font-size:11.5px;color:var(--cyan);}
+/* --- phone: reclaim width, roomier tap targets, and a 2-col module palette so tiles
+   stop wrapping their names (the .cn-grid already stacks to one column at 760px) --- */
+@media (max-width:560px){
+  #constructor{padding:9px;}
+  #constructorbody{padding:13px 12px;}
+  .cn-tabs{gap:5px;padding:9px 10px;}
+  .cn-tab{padding:9px 12px;font-size:11.5px;}
+  .cn-close{width:36px;height:36px;}
+  .cn-pal{grid-template-columns:repeat(2,1fr);}
+  .cn-hbtn{padding:9px 12px;}
+  .cn-step button{width:38px;height:38px;}
+  .cn-build{padding:15px;}
+}
 
 /* === FLOATING CHAT (desktop) — sized/positioned/opacity inline by renderChat() === */
 .desk-only{} /* shown by default; the media query below hides it on phones */
@@ -1215,7 +1228,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 /* --- short viewports (landscape phones, split-screen): overlays scroll instead of
    clipping off-screen; the welcome card compacts and stacks its chip/footer in-flow --- */
 @media (max-height:680px){
-  #connect,#setup,#codex,#playercard,#settings,#warprompt,#diplo,#splitdlg,#pingmenu{
+  #connect,#setup,#codex,#playercard,#settings,#warprompt,#diplo,#splitdlg,#pingmenu,#constructor,#market{
     align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   #connect{padding:14px 18px;}
   #connect .cwrap{display:flex;flex-direction:column;margin:auto;}
