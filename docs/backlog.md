@@ -372,6 +372,18 @@
   (`hero:{player}:{n}`, якорь `home`/`location` = первый владеемый мир слота, лоадаут =
   `startAbilities`/`startPassives` архетипа); корабли поднимает `hero.spawn` (HERO-3).
   Найм по ходу матча — отдельная будущая механика, не этот кирпич. 2 теста.
+- **HERO-FX1** ✅ `[core]` Первый провайдер шва `hero.effect.<type>` — `heroEffectsModule`
+  (`modules/heroEffects.ts`, экспортирован из пакета): `hero.effect.recall` мгновенно
+  телепортирует корабль героя в столицу (`Hero.home`, якорь HERO-2 следует за кораблём).
+  Гейты: `E_HERO_NOT_DEPLOYED` (нечего отзывать — резервный герой), `E_FLEET_BUSY` (не
+  выдёргивать из активного боя; stale-`battleId` не блокирует), `E_NO_CAPITAL`,
+  `E_SAME_LOCATION` (no-op у столицы — не тратить кулдаун). Кулдаун 24ч по `fx:recall`
+  ведёт диспетчер HERO-4; событие `hero.recalled`. Доказывает шов end-to-end (контракт
+  `HeroEffect` был экспортирован-но-неиспользован); новые эффекты = новый провайдер, ядро
+  не трогается. Прототип: `heroEffectsModule` в кернел, `recall` — кнопка «Активировать»
+  (`HERO_CASTABLE`) вместо «скоро». 8 core + 1 proto теста. Оставшиеся типы `aura`
+  (rally/bulwark — нужен таймбоксед-баф на `combat.damage`) и `reveal` (scan — таймбоксед
+  fog-открытие через `visibility`) — следующие провайдеры (⏳).
 
 ## Блок SHIP · Модульность кораблей `[proto]` `[core]` `[data]`
 

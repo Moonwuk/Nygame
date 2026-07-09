@@ -79,7 +79,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology)
-  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, espionage, faction, hero, intercept, market, movement, orbital, planetType, scientist, sector, station, steward, technology, victory, visibility  (22 модуля, + *.test.ts)
+  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, espionage, faction, hero, heroEffects, intercept, market, movement, orbital, planetType, scientist, sector, station, steward, technology, victory, visibility  (23 модуля, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -608,6 +608,11 @@ E_NOT_DESTRUCTIBLE, E_OUT_OF_RANGE, E_COOLDOWN`.
   типы — через **capability `hero.effect.<type>`** (контракт `HeroEffect`, экспортирован
   из пакета; impl обязан `h.reject` на своих отказах); тип без capability →
   `E_NO_EFFECT` (fail-secure: данные обещают только то, что движок умеет).
+  **Первый провайдер шва — `heroEffectsModule`** (`modules/heroEffects.ts`):
+  `hero.effect.recall` мгновенно телепортирует корабль героя в столицу (`Hero.home`),
+  гейты `E_HERO_NOT_DEPLOYED`/`E_FLEET_BUSY` (не выдёргивать из боя)/`E_NO_CAPITAL`/
+  `E_SAME_LOCATION`; событие `hero.recalled`. Эффекты приходят добавлением провайдера,
+  ядро/диспетчер не трогаются. Оставшиеся типы (`aura`/`reveal`) — будущие провайдеры.
   **Кулдаун-ключи**: встроенные типы делят ключ с legacy (`path`/`annihilate`) — generic
   и legacy маршруты нельзя скомбинировать в double-fire; кастомные типы — ключ `fx:<type>`
   (два каталожных id одного эффекта делят кулдаун; префикс не коллидирует с `respawn`).
@@ -752,7 +757,7 @@ self-contained `dist/void-dominion.html` (открывается с диска, 
 - **Реальное ядро** в браузере: `createKernel([sector, planetType, tax, economy, movement,
 hero, combat, captureOnArrival, construction, technology, army, victory, fleetLaunch,
 diplomacy, botDiplomacy, market, division, capital, orbital, artillery, intercept,
-steward, espionage, orderQueue, subscription, standingOrders])` (26 модулей), тик в реальном
+steward, espionage, orderQueue, subscription, standingOrders, heroEffects])` (27 модулей), тик в реальном
   времени (скорость ⏸/▶/⏩). Концовка матча — из авторитетного `state.match` (`victoryModule`),
   баннер победы/поражения/ничьи (а не хардкод по узлам).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
@@ -764,11 +769,13 @@ steward, espionage, orderQueue, subscription, standingOrders])` (26 модуле
   остальные — резерв как в `buildFromMap`; способности = выбор меню + маркер-перки
   архетипа). Окно «Герои» (`rail-hero` → `renderHero`, оверлей `#hero`) — весь цикл:
   развёртывание `hero.spawn` armed-тапом (свой мир / свой флот / мир союзника по
-  маркерам), каст `hero.ability` armed-тапом цели (встроенные `temp_lane`/`annihilate`
-  live; типизированные без эффекта — честное «скоро»/`E_NO_EFFECT`), дерево
-  `hero.skill.unlock`, фиттинги `hero.fit`. Билдеры действий — `castHeroAbility`/
-  `spawnHero`/`unlockHeroSkill`/`fitHero` (`game.ts`); тесты `herostate.test.ts` (сид) +
-  `heroactions.test.ts` (интеграция всех четырёх действий против прототипных каталогов).
+  маркерам), каст `hero.ability` (встроенные `temp_lane`/`annihilate` armed-тапом цели +
+  `recall` кнопкой «Активировать» — прототип-кернел несёт `heroEffectsModule`; типы без
+  провайдера — честное «скоро»/`E_NO_EFFECT`), дерево `hero.skill.unlock`, фиттинги
+  `hero.fit`. Кастуемость — `HERO_CASTABLE` (built-ins + провайдеры `hero.effect.*`).
+  Билдеры действий — `castHeroAbility`/`spawnHero`/`unlockHeroSkill`/`fitHero` (`game.ts`);
+  тесты `herostate.test.ts` (сид) + `heroactions.test.ts` (интеграция пяти действий,
+  включая recall, против прототипных каталогов).
 - **Карта (квадратная 7×7, генерится в `game.ts::buildField`):** 49 провинций — ровно **12
   «планет»** (по 50 очков) + 37 не-планет (по 10) = **~970** базовых очков на доске; 4 старт-
   кандидата по углам (инсет), нейтральные планеты по центру. Квадратный аспект — чтобы карта
@@ -887,7 +894,7 @@ steward, espionage, orderQueue, subscription, standingOrders])` (26 модуле
 > Компактный агрегат; помашинная матрица — [`readiness.md`](readiness.md),
 > запуск для живых игроков — [`launch-runbook.md`](launch-runbook.md).
 
-**✅ Этап 1 (ядро) — готово целиком:** 22 модуля на микроядре (шина/хуки/манифест,
+**✅ Этап 1 (ядро) — готово целиком:** 23 модуля на микроядре (шина/хуки/манифест,
 seeded RNG + golden, `advanceTo`): экономика + рынок, карта/движение/перехват, типы
 секторов и планет, бой (мелэ + орбитальное ПВО/бомбардировка + артиллерия) с двухфазным
 захватом, здания + станции, флот ⊕ армия + транспорт, технологии + учёные, фракции,

@@ -18,6 +18,7 @@ import {
   BROWNOUT,
   movementModule,
   heroModule,
+  heroEffectsModule,
   combatModule,
   orbitalModule,
   artilleryModule,
@@ -2816,6 +2817,7 @@ export const MODULES: GameModule[] = [
   economyModule,
   movementModule,
   heroModule, // projection hero: fleet combat aura (+5%) + death/respawn
+  heroEffectsModule, // first hero.effect.<type> capability provider: recall (warp ship home)
   // The combat family (split along the bus seams). Order matters (invariant #6):
   // orbital stamps orbit on fleet.arrived BEFORE combat engages, and runs its
   // AA/bombard span BEFORE artillery's standoff span — the old internal sequence.

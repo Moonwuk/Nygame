@@ -237,6 +237,7 @@ export { victoryModule } from './modules/victory';
 export { visibilityModule } from './modules/visibility';
 export { heroModule } from './modules/hero';
 export type { HeroEffect, HeroEffectArgs } from './modules/hero';
+export { heroEffectsModule } from './modules/heroEffects';
 export {
   stewardModule,
   stewardActive,

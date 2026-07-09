@@ -84,4 +84,23 @@ describe('hero actions — the core engine over the prototype catalogs', () => {
     expect(h.fittings).toContain('psi_amplifier');
     expect(h.abilities).toContain('scan'); // the fitting's ability grant landed
   });
+
+  it('hero.ability recall (hero.effect.recall capability) warps a deployed ship home', () => {
+    const s = newGame();
+    // the ravager reserve (legendary «Разрушитель») carries recall — raise its ship first
+    const rec = benched(s, 'p1').find((h) => (h.abilities ?? []).includes('recall'));
+    expect(rec).toBeTruthy();
+    const spawned = order(s, spawnHero('p1', rec!.id, rec!.home!), s.time);
+    expect(spawned.error).toBeUndefined();
+    const hero = spawned.state.heroes![rec!.id]!;
+    const fleetId = hero.fleetId!;
+    // pretend the ship travelled off to another node, then recall it (range-0, no target)
+    const st = structuredClone(spawned.state);
+    const away = Object.keys(st.planets).find((p) => p !== hero.home)!;
+    st.fleets[fleetId]!.location = away;
+    const r = order(st, castHeroAbility('p1', rec!.id, 'recall'), st.time);
+    expect(r.error).toBeUndefined();
+    expect(r.state.fleets[fleetId]?.location).toBe(hero.home); // warped back to the capital
+    expect(r.state.heroes![rec!.id]?.cooldowns?.['fx:recall']).toBeGreaterThan(st.time);
+  });
 });
