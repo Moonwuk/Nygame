@@ -771,12 +771,19 @@ nebula(score 3)`. **planetTypes** дают `scoreValue` (terran 40, oceanic 35,
 `pnpm run prototype` → esbuild собирает всё (ядро + zod + UI) в один
 self-contained `dist/void-dominion.html` (открывается с диска, без сервера).
 
-- **Реальное ядро** в браузере: `createKernel([sector, planetType, tax, economy, movement,
-hero, combat, captureOnArrival, construction, technology, army, victory, fleetLaunch,
-diplomacy, botDiplomacy, market, division, capital, orbital, artillery, intercept,
-steward, espionage, orderQueue, subscription, standingOrders, heroEffects])` (27 модулей), тик в реальном
+- **Реальное ядро** в браузере: `createKernel([sector, planetType, tax, faction, economy,
+movement, hero, heroEffects, orbital, combat, artillery, intercept, captureOnArrival,
+construction, technology, steward, army, victory, fleetLaunch, diplomacy, espionage,
+botDiplomacy, market, division, capital, orderQueue, subscription, standingOrders])` (28 модулей), тик в реальном
   времени (скорость ⏸/▶/⏩). Концовка матча — из авторитетного `state.match` (`victoryModule`),
   баннер победы/поражения/ничьи (а не хардкод по узлам).
+- **Фракции (H3):** setup-экран несёт **пикер из 4 лор-домов** (`data.factions`:
+  blue «Azure Compact» +12% экономика · red «Crimson Hegemony» +10% урон · amber
+  «Amber Concord» +15% скорость флотов · violet «Violet Ascendancy» +5%/+5%) — пока
+  фракция это **чисто пассивный бонус к экономике или юнитам**, применяемый ядровым
+  `factionModule` через те же хуки, что и технологии. Человек выбирает дом, ИИ-места
+  разбирают оставшиеся (имя места = имя дома; цвет остаётся за местом); карточка
+  игрока показывает дом + пассив. Тесты `factions.test.ts` (3).
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты
   показывает тип и его бонусы (prod/def), `netIncome` учитывает множитель производства.
 - **Герои — полная новая модель в прототипе:** 5 hero-каталогов инлайн в данных `game.ts`

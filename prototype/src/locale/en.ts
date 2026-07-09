@@ -320,6 +320,12 @@ export const en: Record<string, string> = {
   'Флот': 'Fleet',
   'Флоты на орбите': 'Fleets in orbit',
   'Фракция': 'Faction',
+  // H3 — setup faction picker (pure passive house bonuses)
+  'Фракция — пассивный бонус дома': 'Faction — the house passive bonus',
+  '+{n}% экономика': '+{n}% economy',
+  '+{n}% урон': '+{n}% damage',
+  '+{n}% скорость флотов': '+{n}% fleet speed',
+  '+{n}% радар': '+{n}% radar',
   'ХОСТ': 'HOST',
   'ХП': 'HP',
   'Цвет шрифта': 'Font color',

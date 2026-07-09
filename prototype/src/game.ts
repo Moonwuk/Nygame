@@ -17,6 +17,7 @@ import {
   economyModule,
   BROWNOUT,
   movementModule,
+  factionModule,
   heroModule,
   heroEffectsModule,
   combatModule,
@@ -380,7 +381,33 @@ export const data: GameData = parseGameData({
       effects: { stats: { shield: 15 } }, cost: { metal: 80 }, allowed: { domain: 'space' },
     },
   },
-  factions: {},
+  // --- фракции (H3): четыре лор-дома. Пока фракция — ЧИСТО пассивные бонусы к
+  // экономике или юнитам (никаких уникальных юнитов/способностей) — их применяет
+  // ядровый factionModule через те же хуки, что и технологии
+  // (economy.production / fleet.speed / combat.damage). Человек выбирает дом на
+  // setup-экране; ИИ-места разбирают оставшиеся.
+  factions: {
+    blue: {
+      name: 'Azure Compact',
+      description: 'Торгово-промышленный договор: вся планетарная экономика даёт +12%.',
+      passives: { productionBonus: 0.12 },
+    },
+    red: {
+      name: 'Crimson Hegemony',
+      description: 'Милитаристская гегемония: весь исходящий урон флотов и армий +10%.',
+      passives: { combatDamageBonus: 0.1 },
+    },
+    amber: {
+      name: 'Amber Concord',
+      description: 'Кочевой конкорд логистов: флоты идут по лейнам на +15% быстрее.',
+      passives: { fleetSpeedBonus: 0.15 },
+    },
+    violet: {
+      name: 'Violet Ascendancy',
+      description: 'Универсалисты восхода: понемногу всюду — экономика +5% и урон +5%.',
+      passives: { productionBonus: 0.05, combatDamageBonus: 0.05 },
+    },
+  },
   buildings: {
     // Every building is worth victory points by TIER — the score module multiplies
     // `scoreValue` by the instance's level, so investing in upgrades (and losing them)
@@ -2850,6 +2877,7 @@ export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
   taxModule, // civic tax on inhabited worlds (hooks economy.production, after planetType)
+  factionModule, // H3: чисто пассивные бонусы дома (production / fleet.speed / combat.damage)
   economyModule,
   movementModule,
   heroModule, // projection hero: fleet combat aura (+5%) + death/respawn

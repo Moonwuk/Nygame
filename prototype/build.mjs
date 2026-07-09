@@ -1039,6 +1039,15 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .smap .cand{cursor:pointer;}
 #setup .smaphint{text-align:center;color:var(--dim);font-size:11px;margin:0 0 14px;}
 #setup .sslots{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+/* H3 faction picker: four houses, each a pure passive bonus (economy or units) */
+#setup .fph{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:0 0 6px;}
+#setup .fpick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
+#setup .fchip{display:flex;flex-direction:column;gap:3px;text-align:left;padding:9px 11px;border:1px solid var(--line-hi);
+  border-radius:9px;background:rgba(255,255,255,.02);color:var(--dim);cursor:pointer;font:inherit;}
+#setup .fchip b{font:700 12px ui-monospace,monospace;color:#eafffb;}
+#setup .fchip span{font:10.5px ui-monospace,monospace;color:var(--grn);}
+#setup .fchip.on{border-color:var(--cyan);background:rgba(53,214,230,.1);}
+#setup .fchip.on b{color:var(--cyan);}
 #setup .srow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-hi);
   border-radius:8px;font:13px ui-monospace,monospace;color:var(--ink);}
 #setup .srow .dot{width:10px;height:10px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor;}

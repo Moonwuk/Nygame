@@ -503,6 +503,7 @@ const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
 let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
+let setupFaction = 'blue'; // H3: the house the HUMAN plays; AI seats take the remaining ones
 // Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
 // normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
 const SETUP_SPEEDS = [1, 2, 5, 10, 50];
@@ -5009,7 +5010,11 @@ function codexHtml(kind: string, id: string): string {
 function playerCardHtml(): string {
   const pl = s.players[ME];
   const name = pl?.name ?? NAME[ME] ?? ME;
-  const faction = SEAT_META.find((m) => m.id === ME)?.faction ?? pl?.faction ?? '—';
+  // H3: the LIVE faction (chosen at setup, stamped on the player) — name + its passive.
+  const fid = pl?.faction ?? SEAT_META.find((m) => m.id === ME)?.faction ?? '';
+  const fdef = data.factions[fid];
+  const bonus = factionBonusLine(fid);
+  const faction = fdef ? `${tData(fdef.name)}${bonus ? ` · ${bonus}` : ''}` : (fid || '—');
   const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
   // Total units you command: ships + carried troops across your fleets, plus every
   // garrison on your worlds.
@@ -7487,20 +7492,50 @@ function renderSetupMap(): void {
   setupMapEl.innerHTML = svg;
 }
 
+/** H3 — which house each seat plays: seat 0 (you) = `setupFaction`, the AI seats
+ *  take the remaining houses in SEAT_META order. Colors stay per-seat (player id). */
+function seatFactionIds(): string[] {
+  const rest = SEAT_META.map((m) => m.faction).filter((f) => f !== setupFaction);
+  return SEAT_META.map((_, i) => (i === 0 ? setupFaction : rest[i - 1]!));
+}
+/** A faction's passive-bonus readout, straight from the data (economy or units). */
+function factionBonusLine(fid: string): string {
+  const p = data.factions[fid]?.passives;
+  if (!p) return '';
+  const parts: string[] = [];
+  if (p.productionBonus) parts.push(t('+{n}% экономика', { n: Math.round(p.productionBonus * 100) }));
+  if (p.combatDamageBonus) parts.push(t('+{n}% урон', { n: Math.round(p.combatDamageBonus * 100) }));
+  if (p.fleetSpeedBonus) parts.push(t('+{n}% скорость флотов', { n: Math.round(p.fleetSpeedBonus * 100) }));
+  if (p.radarRangeBonus) parts.push(t('+{n}% радар', { n: Math.round(p.radarRangeBonus * 100) }));
+  return parts.join(' · ');
+}
+
 function renderSetupSlots(): void {
-  let h = '';
+  // The faction picker (H3): four houses, each a pure passive bonus — pick yours.
+  let h = `<div class="fph">${t('Фракция — пассивный бонус дома')}</div><div class="fpick">`;
+  for (const m of SEAT_META) {
+    const f = data.factions[m.faction];
+    if (!f) continue;
+    const on = m.faction === setupFaction;
+    h +=
+      `<button class="fchip${on ? ' on' : ''}" data-fpick="${m.faction}"><b>${esc(tData(f.name))}</b>` +
+      `<span>${factionBonusLine(m.faction)}</span></button>`;
+  }
+  h += `</div>`;
+  const fids = seatFactionIds();
   for (let i = 0; i < SEAT_META.length; i++) {
     const m = SEAT_META[i]!;
     const role = setupSlots[i]!;
+    const house = esc(tData(data.factions[fids[i]!]?.name ?? m.name));
     if (i === 0) {
       h +=
         `<div class="srow"><span class="dot" style="background:${m.color};color:${m.color}"></span>` +
-        `<span class="nm">${esc(m.name)}</span><span class="you">${t('ВЫ')}</span></div>`;
+        `<span class="nm">${house}</span><span class="you">${t('ВЫ')}</span></div>`;
     } else {
       const aiOn = role === 'ai';
       h +=
         `<div class="srow ${aiOn ? '' : 'off'}"><span class="dot" style="background:${m.color};color:${m.color}"></span>` +
-        `<span class="nm">${esc(m.name)}</span>` +
+        `<span class="nm">${house}</span>` +
         `<button class="stog ${aiOn ? 'ai' : ''}" data-slot="${i}">${aiOn ? t('ИИ') : t('ВЫКЛ')}</button></div>`;
     }
   }
@@ -7648,8 +7683,18 @@ function saveMeta(st: MetaState): void {
 let xpAwarded = false; // one award per installed match
 
 function buildSetupConfig(): SetupConfig {
+  // Seats play the HOUSES assigned at setup (H3): you = setupFaction, AI = the rest.
+  // Seat name follows the house (its canonical data name); color stays per-seat.
+  const fids = seatFactionIds();
+  const houseName = (fid: string, fallback: string): string => data.factions[fid]?.name ?? fallback;
   const seats: SeatConfig[] = [
-    { id: SEAT_META[0]!.id, name: SEAT_META[0]!.name, faction: SEAT_META[0]!.faction, start: setupStart, ai: false },
+    {
+      id: SEAT_META[0]!.id,
+      name: houseName(fids[0]!, SEAT_META[0]!.name),
+      faction: fids[0]!,
+      start: setupStart,
+      ai: false,
+    },
   ];
   // Hand each active AI seat one of the remaining candidate worlds, in order.
   const free = START_CANDIDATES.filter((c) => c !== setupStart);
@@ -7659,7 +7704,7 @@ function buildSetupConfig(): SetupConfig {
     const start = free[fi++];
     if (!start) break; // ran out of candidate worlds
     const m = SEAT_META[i]!;
-    seats.push({ id: m.id, name: m.name, faction: m.faction, start, ai: true });
+    seats.push({ id: m.id, name: houseName(fids[i]!, m.name), faction: fids[i]!, start, ai: true });
   }
   // Carry the player's division templates + hero roster into the match (deep-cloned),
   // plus the meta-progression grant (snapshot — no live account reads mid-match).
@@ -7782,6 +7827,12 @@ setupMapEl.addEventListener('click', (ev) => {
   renderSetup();
 });
 setupSlotsEl.addEventListener('click', (ev) => {
+  const fp = (ev.target as Element).closest('[data-fpick]');
+  if (fp) {
+    setupFaction = fp.getAttribute('data-fpick') ?? setupFaction;
+    renderSetup();
+    return;
+  }
   const t = (ev.target as Element).closest('[data-slot]');
   if (!t) return;
   const i = Number(t.getAttribute('data-slot'));
