@@ -154,6 +154,14 @@ export class Kernel {
     if (ctx.now < state.time) {
       return { ok: false, code: 'E_TIME_BACKWARDS' };
     }
+    // A due-but-unfired scheduled event must not be jumped over (bug-hunt MAJOR):
+    // stamping the draft at ctx.now would strand a PAST event in the queue, and the
+    // next advanceTo would fire it with a rewound clock and re-accrue an already-
+    // lived span (resource inflation). The real-time flow advances first; a gap
+    // here means the catch-up is lagging — reject transiently, caller advances.
+    if (state.scheduled.some((e) => e.at < ctx.now)) {
+      return { ok: false, code: 'E_TIME_GAP' };
+    }
 
     const outcome = this.runStep(state, ctx, ctx.now, (h) => handler(action, h));
     if (!outcome.ok) {
@@ -221,17 +229,22 @@ export class Kernel {
         }
         // Head is due now (at === committed.time): remove it (index 0 in sorted
         // order) before dispatch so a failing handler cannot wedge the timeline.
+        // Clamp the step instant to the committed clock: an event stranded in the
+        // PAST (a host that jumped the clock over it, or an old persisted state)
+        // fires LATE, never rewinding time — a rewound step would re-accrue a span
+        // the economy already settled.
+        const stepTime = Math.max(next.at, committed.time);
         const base: GameState = {
           ...committed,
           scheduled: committed.scheduled.slice(1),
         };
-        const step = this.runStep(base, ctx, next.at, (h) => h.emit(next.type, next.payload));
+        const step = this.runStep(base, ctx, stepTime, (h) => h.emit(next.type, next.payload));
         if (step.ok) {
           committed = step.state;
           events.push(...step.events);
         } else {
-          failures.push({ at: next.at, type: next.type, code: step.code });
-          committed = { ...base, time: next.at };
+          failures.push({ at: stepTime, type: next.type, code: step.code });
+          committed = { ...base, time: stepTime };
         }
         continue;
       }
@@ -294,6 +307,13 @@ export class Kernel {
         emitted.push({ type, payload: payload ?? null });
       },
       schedule: (at, type, payload) => {
+        // Fail-secure (invariant #4): a non-finite instant would corrupt the (at,seq)
+        // sort (NaN defeats every comparison → an immortal zombie event the dead-
+        // letter never sees) and break GameState JSON round-trips (NaN/Infinity →
+        // null in JSONB). Reject the whole step atomically instead.
+        if (!Number.isFinite(at)) {
+          throw new Rejection('E_BAD_SCHEDULE');
+        }
         // Clamp against THIS step's instant, not draft.time (which is only stamped
         // to stepTime at the end of runStep — during the handler it's still the
         // previous committed time, which would let an event land in the past).

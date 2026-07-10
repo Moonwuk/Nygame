@@ -154,7 +154,11 @@ export type RoomObservation =
    *  work (`throttled` — it will finish on the next advance) from a same-instant
    *  runaway where the clock stopped progressing (`stalled` — a content/module bug
    *  that needs attention). Ops should alert on `stalled`. */
-  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' };
+  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' }
+  /** Scheduled events dead-lettered during a catch-up (their handler threw). The
+   *  timeline kept moving (by design), but silence here hid real module bugs —
+   *  the record must reach the host's logs (bug-hunt: failures had NO consumer). */
+  | { kind: 'dead_letter'; failures: Array<{ at: number; type: string; code: string }> };
 
 export interface SubmitResult {
   ok: boolean;
@@ -891,6 +895,12 @@ export class MatchRoom {
       const before = state.time;
       const result = this.kernel.advanceTo(state, this.context(now));
       if (!result.ok) return { ok: false, code: result.code };
+      if (result.failures.length > 0) {
+        // Dead-lettered events must not vanish silently — surface them to the host's
+        // observation stream (JSONL log / metrics), the "details belong in server
+        // logs" half of invariant #4.
+        this.observe?.({ kind: 'dead_letter', failures: result.failures });
+      }
       state = result.state;
       events.push(...result.events);
       if (!result.partial) return { ok: true, state, events }; // reached `now`

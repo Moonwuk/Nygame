@@ -315,3 +315,97 @@ describe('advanceTo — real-time timeline (docs/architecture.md §4.1)', () => 
     expect(r.state.scheduled.every((e) => e.at >= r.state.time)).toBe(true); // none in the past
   });
 });
+
+// Регрессии батча баг-охоты 2026-07-10 (ядро/время).
+describe('bug-hunt batch — time-gap guard, no clock rewind, finite schedule', () => {
+  it('applyAction refuses to jump over a due scheduled event (E_TIME_GAP)', () => {
+    const spans: Array<{ from: number; to: number }> = [];
+    const mod: GameModule = {
+      id: 'gap-test',
+      version: '1.0.0',
+      setup(api) {
+        api.onAction('noop', () => {});
+        api.on('time.advanced', (e) => {
+          spans.push(e.payload as { from: number; to: number });
+        });
+        api.on('due.event', () => {});
+      },
+    };
+    const kernel = createKernel([mod]);
+    const state = stateWith({ time: 0, scheduled: [sched(0, 50, 'due.event')] });
+    // The buggy path: applying at now=100 WITHOUT advancing first. The old kernel
+    // stamped time=100 and stranded the t=50 event in the past; the next advanceTo
+    // then fired it with a REWOUND clock and re-accrued the [50,200] span on top of
+    // an already-lived window. Now: transient reject — the caller must advance.
+    const r = kernel.applyAction(
+      state,
+      { id: 'a:1', type: 'noop', playerId: 'p1', payload: {}, issuedAt: 0 },
+      ctx(100),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('E_TIME_GAP');
+    // The legitimate flow (advance first, then apply) still works.
+    const adv = kernel.advanceTo(state, ctx(100));
+    expect(adv.ok).toBe(true);
+    if (!adv.ok) return;
+    const ok = kernel.applyAction(
+      adv.state,
+      { id: 'a:2', type: 'noop', playerId: 'p1', payload: {}, issuedAt: 0 },
+      ctx(100),
+    );
+    expect(ok.ok).toBe(true);
+  });
+
+  it('advanceTo fires a PAST-stranded event LATE, never rewinding the clock', () => {
+    const firedAt: number[] = [];
+    const spans: Array<{ from: number; to: number }> = [];
+    const mod: GameModule = {
+      id: 'rewind-test',
+      version: '1.0.0',
+      setup(api) {
+        api.on('due.event', (_e, h) => {
+          firedAt.push(h.ctx.now);
+        });
+        api.on('time.advanced', (e) => {
+          spans.push(e.payload as { from: number; to: number });
+        });
+      },
+    };
+    const kernel = createKernel([mod]);
+    // An old persisted state that a buggy host left with a past event: time=100,
+    // event stranded at t=50.
+    const state = stateWith({ time: 100, scheduled: [sched(0, 50, 'due.event')] });
+    const r = kernel.advanceTo(state, ctx(200));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(firedAt).toEqual([100]); // fired LATE at the committed clock, not at 50
+    // Spans never start before the committed time — no re-accrual of [50,100].
+    for (const s of spans) expect(s.from).toBeGreaterThanOrEqual(100);
+    expect(r.state.time).toBe(200);
+  });
+
+  it('schedule(NaN/Infinity) rejects the step (E_BAD_SCHEDULE), keeping state serializable', () => {
+    const mod: GameModule = {
+      id: 'nan-test',
+      version: '1.0.0',
+      setup(api) {
+        api.onAction('plant', (a, h) => {
+          h.schedule((a.payload as { at: number }).at, 'zombie.event', null);
+        });
+      },
+    };
+    const kernel = createKernel([mod]);
+    const state = stateWith({ time: 0 });
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const r = kernel.applyAction(
+        state,
+        { id: `a:${bad}`, type: 'plant', playerId: 'p1', payload: { at: bad }, issuedAt: 0 },
+        ctx(0),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.code).toBe('E_BAD_SCHEDULE');
+    }
+    // Nothing landed in the queue — the step failed atomically.
+    expect(state.scheduled).toHaveLength(0);
+  });
+});

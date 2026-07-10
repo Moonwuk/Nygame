@@ -2860,9 +2860,22 @@ export interface StepOut {
 /** Advance the world to `now`, collecting events. */
 export function advance(state: GameState, now: number): StepOut {
   if (now <= state.time) return { state, events: [] };
-  const r = kernel.advanceTo(state, ctx(now));
-  if (!r.ok) return { state, events: [], error: r.code };
-  return { state: r.state, events: r.events };
+  // Chain partial catch-ups (mirrors matchRoom.computeAdvance): a long-idle world
+  // may exceed MAX_ADVANCE_STEPS per call; stopping short would leave due events in
+  // the queue and `order()` would then hit the kernel's E_TIME_GAP guard. A chunk
+  // that makes NO progress (same-instant runaway) breaks out — the frame loop
+  // retries next tick rather than spinning here.
+  let cur = state;
+  const events: StepOut['events'] = [];
+  for (let i = 0; i < 10; i++) {
+    const r = kernel.advanceTo(cur, ctx(now));
+    if (!r.ok) return { state: cur, events, error: r.code };
+    const progressed = r.state.time > cur.time;
+    cur = r.state;
+    events.push(...r.events);
+    if (!r.partial || !progressed) break;
+  }
+  return { state: cur, events };
 }
 
 /** Apply a player order at the current world time (advancing first if needed). */
