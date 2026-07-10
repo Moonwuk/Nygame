@@ -1980,6 +1980,16 @@ export const botDiplomacyModule: GameModule = {
       if (!meter || meter[spy] === undefined) return; // the victim isn't a tracked bot
       meter[spy] = Math.max(0, meter[spy]! - FAVOUR_SPY_CAUGHT_HIT);
     });
+    // An eliminated seat leaves the favour ledger entirely: its own meter dies with
+    // it, and no surviving bot keeps tracking (or later declaring on) a corpse —
+    // the same sweep diplomacy does for standing offers (BF-33).
+    api.on('player.eliminated', (event, h) => {
+      const playerId = (event.payload as { playerId?: string })?.playerId;
+      const approval = (h.state as DivState).approval;
+      if (typeof playerId !== 'string' || !approval) return;
+      delete approval[playerId];
+      for (const meter of Object.values(approval)) delete meter[playerId];
+    });
     // Per span: sustained war erodes favour, peace mends it; a bottomed-out meter makes
     // the bot commit to war (once), then vents so it won't thrash war/peace every tick.
     api.on('time.advanced', (event, h) => {
@@ -1990,9 +2000,12 @@ export const botDiplomacyModule: GameModule = {
       const approval = (h.state as DivState).approval;
       if (!approval) return;
       for (const bot of Object.keys(approval)) {
-        if (!h.state.players[bot]) continue; // eliminated seat
+        // Elimination marks the seat 'defeated' (the record STAYS) — a dead bot
+        // must not keep venting favour or declare war from the grave (BF-33).
+        if (h.state.players[bot]?.status !== 'active') continue;
         const meter = approval[bot]!;
         for (const player of Object.keys(meter)) {
+          if (h.state.players[player]?.status !== 'active') continue; // no grudges vs the dead
           const atWar = getStance(h.state, bot, player) === 'war';
           meter[player] = atWar
             ? Math.max(0, meter[player]! - FAVOUR_WAR_DECAY_PER_DAY * days)

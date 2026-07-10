@@ -292,3 +292,28 @@ describe('diplomacy — an eliminated player leaves no zombie offers', () => {
     expect(r.state.diplomacyOffers).toBeUndefined(); // the dead letter is gone
   });
 });
+
+// BF-32: elimination removes a seat from the political game too. Without these
+// gates a defeated player stayed a full diplomatic actor (declaring wars,
+// receiving offers that then hang forever against a seat that can never answer).
+describe('diplomacyModule — eliminated seats are out of the game (BF-32)', () => {
+  const kernel = createKernel([diplomacyModule]);
+
+  it('a defeated actor cannot declare', () => {
+    const state = baseState();
+    setStance(state, 'p1', 'p2', 'peace');
+    state.players.p1!.status = 'defeated';
+    expect(errCode(kernel.applyAction(state, declare('p1', 'p2', 'war'), ctx()))).toBe(
+      'E_FORBIDDEN',
+    );
+  });
+
+  it('a defeated target can be neither declared upon nor offered to', () => {
+    const state = baseState();
+    setStance(state, 'p1', 'p2', 'war');
+    state.players.p2!.status = 'defeated';
+    expect(errCode(kernel.applyAction(state, declare('p1', 'p2', 'peace'), ctx()))).toBe(
+      'E_NO_PLAYER',
+    );
+  });
+});
