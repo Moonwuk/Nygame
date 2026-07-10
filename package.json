@@ -22,6 +22,7 @@
     "dev:proto-server": "node prototype/netserver.mjs",
     "host": "node prototype/host.mjs",
     "serve": "bash deploy/serve.sh",
+    "stack": "docker compose -f deploy/docker-compose.yml up -d --build",
     "doctor": "node prototype/doctor.mjs",
     "dev:client": "node testclient/build.mjs",
     "audit": "pnpm audit --audit-level=high",
