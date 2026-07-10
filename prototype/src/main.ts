@@ -644,6 +644,18 @@ function setSweepOpacity(v: number): void {
     /* private-mode / storage-full: keep the in-memory value, just don't persist */
   }
 }
+// Player display preference (client-only, localStorage): show YOUR OWN ping markers
+// on the map. Purely visual — the ping itself (chat line, allies' view, the server
+// relay) is untouched; allies' pins are always drawn. Default on.
+let showOwnPings = typeof localStorage === 'undefined' || localStorage.getItem('void.showOwnPings') !== '0';
+function setShowOwnPings(v: boolean): void {
+  showOwnPings = v;
+  try {
+    localStorage.setItem('void.showOwnPings', v ? '1' : '0');
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
 /** Radar contacts as PAINTED BY THE SWEEP: a signature is refreshed only as the arm
@@ -6915,6 +6927,10 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Радарная развёртка')}<span class="set-sub">${t('вращающийся луч на карте — только вид, не влияет на обнаружение')}</span></div>` +
     `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="${t('Прозрачность радарной развёртки')}"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
     `</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Свои метки на карте')}<span class="set-sub">${t('булавки 📍 ваших пингов — метки союзников видны всегда')}</span></div>` +
+    `<div class="set-ctl"><label class="set-switch"><input id="set-ownpings" type="checkbox"${showOwnPings ? ' checked' : ''} aria-label="${t('Свои метки на карте')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-ownpings-val" class="set-val">${showOwnPings ? t('вкл') : t('выкл')}</span></div>` +
+    `</div>` +
     `<button class="pc-close" id="set-close" type="button">${t('ГОТОВО')}</button>` +
     `</div>`;
   const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
@@ -6922,6 +6938,12 @@ function renderSettings(): void {
   slider?.addEventListener('input', () => {
     setSweepOpacity(Number(slider.value) / 100);
     if (val) val.textContent = `${Math.round(sweepOpacity * 100)}%`; // 0% reads as hidden
+  });
+  const own = document.getElementById('set-ownpings') as HTMLInputElement | null;
+  const ownVal = document.getElementById('set-ownpings-val');
+  own?.addEventListener('change', () => {
+    setShowOwnPings(own.checked);
+    if (ownVal) ownVal.textContent = own.checked ? t('вкл') : t('выкл');
   });
   document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
 }
@@ -8732,10 +8754,14 @@ function closePingPop(): void {
   document.getElementById('pingpop')?.classList.remove('show');
 }
 /** Draw a pin per active coalition ping (owner-coloured), recording screen hit-boxes
- *  for tap detection. Pins float just above the node, tip pointing at it. */
+ *  for tap detection. Pins float just above the node, tip pointing at it. Two sonar
+ *  rings expand from the marked node (half a period apart) and the pin head breathes
+ *  an owner-coloured glow — a "look here" you can catch from across the map. Your
+ *  own pins can be hidden with the settings switch (allies' are always drawn). */
 function drawPings(now: number): void {
   pingHits = [];
   for (const m of activePings()) {
+    if (m.from === ME && !showOwnPings) continue; // hidden by «Свои метки» switch
     const pl = s.planets[m.ping!];
     if (!pl) continue;
     const c = world(pl.position);
@@ -8743,10 +8769,34 @@ function drawPings(now: number): void {
     const x = c.x;
     const y = c.y - 18; // pin head floats above the node
     const col = ownerColor(m.from);
-    const pulse = 0.7 + 0.3 * Math.sin(now / 360 + x * 0.05);
+    const phase = x * 0.05; // de-syncs neighbouring pins so they don't blink in unison
+    const pulse = 0.7 + 0.3 * Math.sin(now / 360 + phase);
     cx.save();
-    cx.shadowColor = 'rgba(0,0,0,.7)';
-    cx.shadowBlur = 4;
+    // sonar waves: rings born at the node, growing and thinning out as they fade;
+    // a newborn ring flashes a soft filled core so each wave visibly "drops in"
+    cx.shadowColor = rgba(col, 0.7);
+    for (const off of [0, 0.5]) {
+      // 0 → 1 over one 2.2s period; double-mod keeps k positive when phase is
+      // negative (a pin near the screen's left edge has x < 0 → JS % keeps sign,
+      // and a negative k would feed cx.arc a negative radius = a thrown frame)
+      const k = (((now / 2200 + off + phase) % 1) + 1) % 1;
+      const rr = 5 + k * 30;
+      if (k < 0.18) {
+        cx.fillStyle = rgba(col, (1 - k / 0.18) * 0.28); // the drop-in flash
+        cx.beginPath();
+        cx.arc(c.x, c.y, rr, 0, TAU);
+        cx.fill();
+      }
+      cx.shadowBlur = 6 * (1 - k);
+      cx.strokeStyle = rgba(col, (1 - k) * 0.8);
+      cx.lineWidth = 2.6 - k * 1.8;
+      cx.beginPath();
+      cx.arc(c.x, c.y, rr, 0, TAU);
+      cx.stroke();
+    }
+    // the pin itself, breathing an owner-coloured glow (the dark stroke keeps contrast)
+    cx.shadowColor = rgba(col, 0.85);
+    cx.shadowBlur = 4 + 8 * pulse;
     cx.fillStyle = rgba(col, pulse);
     cx.strokeStyle = 'rgba(4,10,12,.85)';
     cx.lineWidth = 1.4;
@@ -8761,6 +8811,10 @@ function drawPings(now: number): void {
     cx.fillStyle = 'rgba(6,18,22,.95)';
     cx.beginPath();
     cx.arc(x, y - 1, 2.1, 0, TAU);
+    cx.fill();
+    cx.fillStyle = rgba(col, pulse); // a blinking ember in the pin's eye
+    cx.beginPath();
+    cx.arc(x, y - 1, 1.1, 0, TAU);
     cx.fill();
     cx.restore();
     pingHits.push({ loc: m.ping!, x, y: y - 1 });

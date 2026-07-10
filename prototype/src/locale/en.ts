@@ -948,6 +948,10 @@ export const en: Record<string, string> = {
   'вращающийся луч на карте — только вид, не влияет на обнаружение':
     'the rotating beam on the map — visual only, does not affect detection',
   'Прозрачность радарной развёртки': 'Radar sweep opacity',
+  'Свои метки на карте': 'My map markers',
+  'булавки 📍 ваших пингов — метки союзников видны всегда': "your own 📍 ping pins — allies' markers always show",
+  'вкл': 'on',
+  'выкл': 'off',
   'ГОТОВО': 'DONE',
   '⟳ К выбору ботов': '⟳ Back to setup',
 

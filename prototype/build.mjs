@@ -210,6 +210,16 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .set-ctl{display:flex;align-items:center;gap:10px;}
 .set-ctl input[type=range]{flex:1;accent-color:var(--cyan);height:22px;cursor:pointer;}
 .set-val{min-width:42px;text-align:right;font-variant-numeric:tabular-nums;color:var(--cyan);font-weight:700;}
+.set-switch{position:relative;width:46px;height:24px;flex:0 0 auto;cursor:pointer;margin-right:auto;}
+.set-switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;}
+.set-switch .sw-track{position:absolute;inset:0;border-radius:12px;border:1px solid var(--line-hi);
+  background:rgba(6,18,22,.9);transition:border-color .18s,background .18s,box-shadow .18s;pointer-events:none;}
+.set-switch .sw-knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;
+  background:var(--dim);transition:left .18s,background .18s,box-shadow .18s;pointer-events:none;}
+.set-switch input:checked ~ .sw-track{border-color:var(--cyan);background:rgba(53,214,230,.16);
+  box-shadow:inset 0 0 10px rgba(53,214,230,.25);}
+.set-switch input:checked ~ .sw-knob{left:25px;background:var(--cyan);box-shadow:0 0 8px rgba(53,214,230,.6);}
+.set-switch input:focus-visible ~ .sw-track{border-color:var(--cyan);box-shadow:0 0 0 2px rgba(53,214,230,.35);}
 
 /* war prompt — confirm before a move declares war on a player you're at peace with */
 #warprompt{position:fixed;inset:0;z-index:48;display:none;align-items:center;justify-content:center;padding:18px;
