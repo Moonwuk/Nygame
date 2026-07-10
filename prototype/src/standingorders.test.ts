@@ -238,3 +238,37 @@ describe('serverPatrolActions — the CC-4 server driver core', () => {
     expect(serverPatrolActions(gone, 0)[0]).toMatchObject({ fleetId: 'W', drop: true });
   });
 });
+
+// BF-26: the scramble toggle must not refuel a wing. OFF stashes the sortie
+// (fuel/rearm) on the state; ON resumes it — only a never-flown wing starts full.
+describe('order.scramble — OFF→ON resumes the sortie instead of refuelling (BF-26)', () => {
+  type WSState = SOState & { wingSorties?: Record<string, SortieState> };
+
+  it('a dry wing stays dry across the toggle', () => {
+    let s = ok(kernel.applyAction(stateWith([wing('W')]), orderScramble('green', 'W', true), ctx()));
+    // Burn the tank down to 0 and start the rearm cooldown (the driver's stamp).
+    s = ok(kernel.applyAction(s, patrolStamp('green', 'W', { fuel: 0, rearming: WING_REARM }), ctx()));
+    s = ok(kernel.applyAction(s, orderScramble('green', 'W', false), ctx()));
+    expect((s as WSState).patrols).toBeUndefined();
+    expect((s as WSState).wingSorties?.W).toEqual({ fuel: 0, rearming: WING_REARM }); // stashed
+    s = ok(kernel.applyAction(s, orderScramble('green', 'W', true), ctx()));
+    // The re-enabled patrol resumes the dry sortie — no free tank.
+    expect((s as WSState).patrols?.W?.sortie).toEqual({ fuel: 0, rearming: WING_REARM });
+    expect((s as WSState).wingSorties).toBeUndefined(); // stash consumed
+  });
+
+  it('a never-flown wing still starts with a full tank', () => {
+    const s = ok(kernel.applyAction(stateWith([wing('W')]), orderScramble('green', 'W', true), ctx()));
+    expect((s as SOState).patrols?.W?.sortie).toEqual({ fuel: WING_FUEL, rearming: 0 });
+  });
+
+  it('the stash of a dead fleet is swept by housekeeping', () => {
+    let s = ok(kernel.applyAction(stateWith([wing('W')]), orderScramble('green', 'W', true), ctx()));
+    s = ok(kernel.applyAction(s, patrolStamp('green', 'W', { fuel: 1, rearming: 0 }), ctx()));
+    s = ok(kernel.applyAction(s, orderScramble('green', 'W', false), ctx()));
+    delete s.fleets.W; // the wing dies while off-patrol
+    const r = kernel.advanceTo({ ...s, time: 0 }, ctx(HOUR));
+    if (!r.ok) throw new Error('advance failed');
+    expect((r.state as WSState).wingSorties).toBeUndefined();
+  });
+});

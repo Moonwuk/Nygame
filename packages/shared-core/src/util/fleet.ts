@@ -1,4 +1,4 @@
-import type { Fleet, PlanetId } from '../state/gameState';
+import type { Fleet, GameState, PlanetId } from '../state/gameState';
 import type { HandlerContext } from '../kernel/module';
 
 /** A fleet that has been validated as stationed at a planet and idle (not
@@ -26,4 +26,16 @@ export function requireOwnedIdleFleet(
     h.reject('E_FLEET_BUSY');
   }
   return fleet as IdleFleet;
+}
+
+/** Whether a LIVE battle references this world's garrison as a side. While the
+ *  assault runs the garrison is locked in: it can neither evacuate onto ships
+ *  (`army.load`, the prototype's `fleet.launch`) nor otherwise dodge the resolve —
+ *  else the defender escapes unbloodied and the attacker wins an empty rock. */
+export function garrisonUnderAssault(state: GameState, planetId: PlanetId): boolean {
+  return Object.values(state.battles).some((b) =>
+    [b.attacker, b.defender].some(
+      (side) => side.ref.kind === 'garrison' && side.ref.planetId === planetId,
+    ),
+  );
 }

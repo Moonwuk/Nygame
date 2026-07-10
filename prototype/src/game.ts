@@ -60,7 +60,7 @@ import {
 } from '../../packages/shared-core/src/index';
 import { canAfford, payCost } from '../../packages/shared-core/src/util/treasury';
 import { sumUnitStat } from '../../packages/shared-core/src/util/stacks';
-import { requireOwnedIdleFleet } from '../../packages/shared-core/src/util/fleet';
+import { garrisonUnderAssault, requireOwnedIdleFleet } from '../../packages/shared-core/src/util/fleet';
 import type { HandlerContext } from '../../packages/shared-core/src/kernel/module';
 import {
   GROUND_ROSTER,
@@ -1211,6 +1211,18 @@ export const taxModule: GameModule = {
 // player scramble those into a new fleet (ships → units, ground troops →
 // landing) so production feeds offense, and fuse two co-located fleets into one.
 // A natural next addition to the core.
+
+/** Monotonic fleet-id counter (mirrors battleSeq/divisionSeq). The old
+ *  `Object.keys(fleets).length` recycled freed numbers: a delete + re-mint in the
+ *  same ms regenerated a LIVE id and silently overwrote that fleet (BF-25).
+ *  Seeds from the current count so pre-counter saves keep minting unique ids. */
+function nextFleetSeq(state: GameState): number {
+  const s = state as DivState;
+  const seq = (s.fleetSeq ?? Object.keys(state.fleets).length) + 1;
+  s.fleetSeq = seq;
+  return seq;
+}
+
 export const fleetLaunchModule: GameModule = {
   id: 'fleet-ops',
   version: '0.1.0',
@@ -1230,6 +1242,11 @@ export const fleetLaunchModule: GameModule = {
       if (planet.garrison.length === 0) {
         return h.reject('E_EMPTY_GARRISON');
       }
+      // No mid-assault evacuation (BF-27): while a battle holds this garrison,
+      // scrambling it onto ships would dodge the resolve — same lock as army.load.
+      if (garrisonUnderAssault(h.state, planet.id)) {
+        return h.reject('E_UNDER_ASSAULT');
+      }
       // A fleet can't sit where one is already stationed-and-idle? Allow stacking.
       const units = planet.garrison.filter(
         (s) => !h.ctx.data.units[s.unit]?.traits.includes('ground'),
@@ -1238,7 +1255,7 @@ export const fleetLaunchModule: GameModule = {
       // fixed installations: they can't be lifted onto a fleet — the same rule the
       // core army.load enforces with E_IMMOBILE. They are neither ships nor liftable
       // cargo, so they stay behind in the garrison (see the garrison reset below).
-      const landing = planet.garrison.filter(
+      const liftable = planet.garrison.filter(
         (s) =>
           h.ctx.data.units[s.unit]?.traits.includes('ground') &&
           !h.ctx.data.units[s.unit]?.traits.includes('immobile'),
@@ -1246,7 +1263,22 @@ export const fleetLaunchModule: GameModule = {
       if (units.length === 0) {
         return h.reject('E_NO_SHIPS'); // need at least one ship to form a fleet
       }
-      const seq = Object.keys(h.state.fleets).length;
+      // Cargo cap (BF-28): the new fleet lifts ground troops only up to its ships'
+      // summed cargoCapacity — the same bound army.load enforces — in garrison
+      // order; whatever doesn't fit stays planetside.
+      let free = sumUnitStat(units, h.ctx.data, 'cargoCapacity');
+      const landing: UnitStack[] = [];
+      const stayBehind: UnitStack[] = [];
+      for (const s of liftable) {
+        const size = h.ctx.data.units[s.unit]?.stats.cargoSize ?? 1;
+        const take = size > 0 ? Math.min(s.count, Math.floor(free / size)) : s.count;
+        if (take > 0) {
+          landing.push({ unit: s.unit, count: take });
+          free -= take * size;
+        }
+        if (take < s.count) stayBehind.push({ unit: s.unit, count: s.count - take });
+      }
+      const seq = nextFleetSeq(h.state);
       const id = `fleet:${action.playerId}:${h.ctx.now}:${seq}`;
       h.state.fleets[id] = {
         id,
@@ -1254,14 +1286,15 @@ export const fleetLaunchModule: GameModule = {
         location: planet.id,
         movement: null,
         units: units.map((s) => ({ unit: s.unit, count: s.count })),
-        landing: landing.map((s) => ({ unit: s.unit, count: s.count })),
+        landing,
         traits: [],
         battleId: null,
       };
-      // Keep immobile emplacements behind; only ships + liftable ground cargo left.
-      planet.garrison = planet.garrison.filter((s) =>
-        h.ctx.data.units[s.unit]?.traits.includes('immobile'),
-      );
+      // Keep immobile emplacements + the over-cap troops behind; ships and the
+      // lifted cargo are aboard now.
+      planet.garrison = planet.garrison
+        .filter((s) => h.ctx.data.units[s.unit]?.traits.includes('immobile'))
+        .concat(stayBehind);
       h.emit('fleet.launched', { fleetId: id, planetId: planet.id, owner: action.playerId });
     });
 
@@ -1277,6 +1310,7 @@ export const fleetLaunchModule: GameModule = {
         unit?: string;
         count?: number;
         owner?: string;
+        modules?: unknown;
       };
       if (
         typeof p?.planetId !== 'string' ||
@@ -1290,7 +1324,16 @@ export const fleetLaunchModule: GameModule = {
       const planet = h.state.planets[p.planetId];
       if (!planet || planet.owner !== p.owner) return;
       const want = p.count ?? 0;
-      const gi = planet.garrison.findIndex((st) => st.unit === p.unit);
+      // The build's paid loadout rides along (BF-29): pull the EXACT fitted stack
+      // out of the garrison (loadout-keyed, like fleet.split) and re-stamp the
+      // modules on the rally stack — auto-rally must not strip «Оснащение».
+      const mods = Array.isArray(p.modules)
+        ? p.modules.filter((m): m is string => typeof m === 'string')
+        : undefined;
+      const key = loadoutKey(mods);
+      const gi = planet.garrison.findIndex(
+        (st) => st.unit === p.unit && loadoutKey(st.modules) === key,
+      );
       if (want <= 0 || gi < 0) return;
       const take = Math.min(want, planet.garrison[gi].count);
       if (take <= 0) return;
@@ -1306,7 +1349,7 @@ export const fleetLaunchModule: GameModule = {
           f.traits.includes('rally'),
       );
       if (!rally) {
-        const seq = Object.keys(h.state.fleets).length;
+        const seq = nextFleetSeq(h.state);
         rally = {
           id: `fleet:${p.owner}:${h.ctx.now}:${seq}`,
           owner: p.owner,
@@ -1319,9 +1362,17 @@ export const fleetLaunchModule: GameModule = {
         };
         h.state.fleets[rally.id] = rally;
       }
-      const si = rally.units.findIndex((st) => st.unit === p.unit);
+      const si = rally.units.findIndex(
+        (st) => st.unit === p.unit && loadoutKey(st.modules) === key,
+      );
       if (si >= 0) rally.units[si].count += take;
-      else rally.units.push({ unit: p.unit, count: take });
+      else {
+        rally.units.push({
+          unit: p.unit,
+          count: take,
+          ...(mods && mods.length > 0 ? { modules: [...mods] } : {}),
+        });
+      }
     });
 
     // Fuse `from` into `into` when both are docked, idle and in the same sector.
@@ -1426,7 +1477,7 @@ export const fleetLaunchModule: GameModule = {
       let taken: UnitStack[] = [];
       for (const [unit, n] of want) taken = taken.concat(takeFromStacks(fleet.units, unit, n));
       fleet.units = fleet.units.filter((st) => st.count > 0);
-      const seq = Object.keys(h.state.fleets).length;
+      const seq = nextFleetSeq(h.state);
       const id = `fleet:${action.playerId}:${h.ctx.now}:${seq}`;
       h.state.fleets[id] = {
         id,
@@ -2177,6 +2228,11 @@ export interface Division {
 type DivState = GameState & {
   divisions?: Record<string, Division>;
   divisionSeq?: number;
+  /** Monotonic fleet-id counter (BF-25) — never recycles a freed number. */
+  fleetSeq?: number;
+  /** Sortie state of wings whose patrol is currently OFF (BF-26): fuel/rearm
+   *  survive the scramble toggle, so OFF→ON never refuels a dry wing for free. */
+  wingSorties?: Record<string, SortieState>;
   templates?: Record<string, FormationTemplate[]>;
   groundBattles?: Record<string, number>;
   heroRoster?: Record<string, HeroLoadout[]>;
@@ -2759,7 +2815,10 @@ export const standingOrdersModule: GameModule = {
       if (typeof p.on !== 'boolean') return h.reject('E_BAD_PAYLOAD');
       const st = h.state as DivState;
       if (!p.on) {
-        if (st.patrols) {
+        if (st.patrols?.[f.id]) {
+          // The wing's fuel/rearm survive the toggle (BF-26): stash the sortie so
+          // OFF→ON resumes where it left off instead of handing back a full tank.
+          (st.wingSorties ??= {})[f.id] = st.patrols[f.id]!.sortie;
           delete st.patrols[f.id];
           if (Object.keys(st.patrols).length === 0) delete st.patrols;
         }
@@ -2768,12 +2827,25 @@ export const standingOrdersModule: GameModule = {
       if (!fleetHasSquadron(f)) return h.reject('E_NO_SHIPS');
       const pos = f.location !== null ? h.state.planets[f.location]?.position : undefined;
       if (!pos || !fleetIdle(f)) return h.reject('E_CONDITIONS_UNMET'); // patrols stand from a parked node
+      const spec = sortieSpec(f);
+      const stashed = st.wingSorties?.[f.id];
       (st.patrols ??= {})[f.id] = {
         center: { x: pos.x, y: pos.y },
         radius: squadronStrikeRange(f),
-        sortie: freshSortie(sortieSpec(f).maxFuel),
+        // Resume the stashed sortie (clamped to the CURRENT wing's spec — the
+        // composition may have changed); only a never-flown wing starts fresh.
+        sortie: stashed
+          ? {
+              fuel: Math.min(stashed.fuel, spec.maxFuel),
+              rearming: Math.min(stashed.rearming, spec.rearmRounds),
+            }
+          : freshSortie(spec.maxFuel),
         rearmAt: h.ctx.now + HOUR, // rearm cadence: one round per game-hour from now
       };
+      if (st.wingSorties) {
+        delete st.wingSorties[f.id];
+        if (Object.keys(st.wingSorties).length === 0) delete st.wingSorties;
+      }
     });
     api.onAction('patrol.stamp', (action, h) => {
       // The DRIVER's runtime stamp (burned fuel / ticked rearm / next cadence mark) —
@@ -2802,7 +2874,7 @@ export const standingOrdersModule: GameModule = {
     // snapshot) forever. Same deterministic sweep as the order chains'.
     api.on('time.advanced', (_ev, h) => {
       const st = h.state as DivState;
-      for (const key of ['autoAssault', 'patrols'] as const) {
+      for (const key of ['autoAssault', 'patrols', 'wingSorties'] as const) {
         const map = st[key];
         if (!map) continue;
         for (const fid of Object.keys(map)) if (!h.state.fleets[fid]) delete map[fid];

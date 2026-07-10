@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { newGame, order, splitFleet, mergeFleet, spawnHero } from './game';
-import type { GameState, Fleet, UnitStack } from '../../packages/shared-core/src/index';
+import { newGame, order, advance, splitFleet, mergeFleet, spawnHero, buildShip, launchFleet, HOUR } from './game';
+import type { GameState, Fleet, UnitStack, Battle } from '../../packages/shared-core/src/index';
 
 // BF-4 / BF-5 (bug-hunt 2026-07-10): fleet.split/merge mishandled per-stack POOLS
 // (hp/shieldHp are whole-stack pools) and ignored loadout identity — a split copied
@@ -119,5 +119,81 @@ describe('BF-3 — the hero entity follows its ship through merge; no duplicate 
     const s = newGame();
     const out = order(s, splitFleet('p1', 'p1-1', [{ unit: 'hero', count: 1 }]), s.time);
     expect(out.error).toBe('E_HERO_UNIT');
+  });
+});
+
+// --- fleet-batch regressions (bug-hunt 2026-07-10) ---------------------------
+
+describe('BF-25 — fleet ids never collide (monotonic fleetSeq)', () => {
+  it('split → merge → split in the same ms mints unique ids, no fleet overwritten', () => {
+    const s = withFleets({ 'p1-1': { units: [{ unit: 'cruiser', count: 10 }] } as Fleet });
+    // Two wings out, first wing merged back, a third wing out — all at t = s.time.
+    // The old keys.length counter regenerated the second wing's id here and
+    // silently overwrote it (2 cruisers vanished).
+    let st = order(s, splitFleet('p1', 'p1-1', [{ unit: 'cruiser', count: 2 }]), s.time).state;
+    const wing1 = Object.values(st.fleets).find((f) => f.id !== 'p1-1')!.id;
+    st = order(st, splitFleet('p1', 'p1-1', [{ unit: 'cruiser', count: 2 }]), st.time).state;
+    st = order(st, mergeFleet('p1', wing1, 'p1-1'), st.time).state;
+    st = order(st, splitFleet('p1', 'p1-1', [{ unit: 'cruiser', count: 2 }]), st.time).state;
+    const total = Object.values(st.fleets).reduce(
+      (n, f) => n + (f.units.find((u) => u.unit === 'cruiser')?.count ?? 0),
+      0,
+    );
+    expect(total).toBe(10); // nothing overwritten, every hull accounted for
+    expect(Object.keys(st.fleets)).toHaveLength(3); // p1-1 + two live wings
+  });
+});
+
+describe('BF-27/BF-28 — fleet.launch: assault lock + cargo cap', () => {
+  it('rejects launching a garrison that is under ground assault', () => {
+    const s = newGame();
+    const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
+    home.garrison = [{ unit: 'cruiser', count: 1 }];
+    s.battles['battle:t'] = {
+      id: 'battle:t',
+      location: home.id,
+      phase: 'ground',
+      attacker: { ref: { kind: 'landing', fleetId: 'X' }, owner: 'p2' },
+      defender: { ref: { kind: 'garrison', planetId: home.id }, owner: 'p1' },
+      round: 1,
+    } as Battle;
+    expect(order(s, launchFleet('p1', home.id), s.time).error).toBe('E_UNDER_ASSAULT');
+  });
+
+  it('lifts ground troops only up to the ships’ cargo capacity; the rest stays', () => {
+    const s = newGame();
+    const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
+    // cruiser capacity 5; three tanks are 3×3 = 9 cargo → only ONE tank fits.
+    home.garrison = [
+      { unit: 'cruiser', count: 1 },
+      { unit: 'tank', count: 3 },
+    ];
+    const before = new Set(Object.keys(s.fleets));
+    const out = order(s, launchFleet('p1', home.id), s.time);
+    expect(out.error).toBeUndefined();
+    const fleet = Object.values(out.state.fleets).find((f) => !before.has(f.id))!;
+    expect(fleet.landing?.find((u) => u.unit === 'tank')?.count).toBe(1);
+    const left = out.state.planets[home.id]!.garrison.find((u) => u.unit === 'tank');
+    expect(left?.count).toBe(2); // over-cap troops stay planetside, nothing vanished
+  });
+});
+
+describe('BF-29 — auto-rally keeps the paid ship loadout', () => {
+  it('a fitted build rides to the rally fleet WITH its modules; a bare stack stays', () => {
+    const s = newGame();
+    const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
+    // A bare cruiser already sits in the garrison — the loadout-blind take used to
+    // grab THIS stack and strip the paid modules from the build.
+    home.garrison.push({ unit: 'cruiser', count: 1 });
+    s.players.p1!.resources.metal = 5000;
+    s.players.p1!.resources.credits = 5000;
+    let st = order(s, buildShip('p1', home.id, 'cruiser', 1, ['targeting_array']), s.time).state;
+    st = advance(st, st.time + 4 * HOUR).state; // cruiser buildTime 3h → unit.built fires
+    const rally = Object.values(st.fleets).find((f) => f.traits.includes('rally'))!;
+    const fitted = rally.units.find((u) => u.unit === 'cruiser');
+    expect(fitted?.modules).toEqual(['targeting_array']); // «Оснащение» not stripped
+    expect(fitted?.count).toBe(1);
+    const bare = st.planets[home.id]!.garrison.find((u) => u.unit === 'cruiser');
+    expect(bare?.count).toBe(1); // the pre-existing bare hull untouched
   });
 });
