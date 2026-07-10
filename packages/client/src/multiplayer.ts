@@ -101,7 +101,17 @@ export interface MultiplayerClientHandlers {
    *  will require it (`?ticket=`) on every later join. Fired once, from the welcome
    *  that carries it — persist it; the server keeps only a hash and cannot re-issue. */
   onSeatTicket?(ticket: string): void;
+  /** A delta arrived whose `seq` went BACKWARDS (CP1.4) — our baseline can no longer
+   *  be trusted, so the delta was dropped. The transport's remedy is a reconnect:
+   *  the fresh `welcome` is the full resync. (Forward gaps are legal in this
+   *  protocol — a rejected action bumps the server seq without a broadcast — and
+   *  equal seqs are legal too: lobby flips re-broadcast under the current seq.) */
+  onDesync?(lastSeq: number, gotSeq: number): void;
 }
+
+/** Cap on actions queued while disconnected (CP1.4) — beyond it new actions are
+ *  dropped with `E_OUTBOX_FULL` rather than growing memory without bound. */
+const OUTBOX_MAX = 64;
 
 interface InboundBase {
   type: string;
@@ -155,6 +165,14 @@ export class MultiplayerClient {
   private readonly retryCounts = new Map<string, number>();
   private readonly resendQueue = new Map<string, ActionEnvelope>();
   private resendTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Seq of the last applied full frame or delta — desync guard (CP1.4). */
+  private lastSeq: number | null = null;
+  /** Actions issued while disconnected, flushed after the reconnect `welcome` (CP1.4).
+   *  Only never-sent actions are queued, so the flush cannot duplicate an action the
+   *  server already applied (an in-flight send that DID land is visible in the
+   *  welcome state; re-sent envelopes are deduped server-side by receipts anyway). */
+  private readonly outbox: Action[] = [];
+  private queueing = false;
 
   constructor(
     private readonly socket: MultiplayerSocket,
@@ -173,11 +191,29 @@ export class MultiplayerClient {
     this.setStatus('closed');
   }
 
+  /** The transport lost its socket (CP1.4): flip back to 'connecting' and queue
+   *  outgoing actions until the reconnect `welcome` rebinds the session — the gated
+   *  envelope needs the FRESH sessionId/clientSeq, so flushing any earlier would be
+   *  rejected by the gate. A no-op after a deliberate close(). */
+  connectionLost(): void {
+    if (this.status === 'closed') return;
+    this.queueing = true;
+    this.setStatus('connecting');
+  }
+
   /** Submit a player intent. On a GATED room (welcome carried `gated` + a `sessionId`)
    *  this wraps it in an `action.v1` envelope — echoing the session id, stamping the next
    *  strict `clientSeq`, and deriving the `actionId` the sequence gate keys on — so the
    *  action-layer gate admits it. Otherwise it sends the bare action (un-gated dev room). */
   sendAction(action: Action): void {
+    if (this.queueing) {
+      if (this.outbox.length >= OUTBOX_MAX) {
+        this.handlers.onError?.('E_OUTBOX_FULL');
+        return;
+      }
+      this.outbox.push(action);
+      return;
+    }
     if (this.gated && this.sessionId && this.matchId && this.playerId) {
       const envelope = createActionEnvelope({
         schemaVersion: 1,
@@ -301,6 +337,7 @@ export class MultiplayerClient {
     ) {
       // Full snapshot — resets the local baseline (join / resync).
       this.lastState = message.state;
+      this.lastSeq = message.seq;
       this.matchId = message.matchId;
       this.playerId = message.playerId ?? this.playerId;
       if (message.type === 'welcome') {
@@ -325,6 +362,13 @@ export class MultiplayerClient {
         hash: message.hash,
         lobby: message.lobby,
       });
+      // Reconnect resume (CP1.4): the welcome above rebound the session, so actions
+      // queued while offline can flush now — through the normal send path, minting
+      // fresh envelopes under the new sessionId/clientSeq.
+      if (message.type === 'welcome' && this.queueing) {
+        this.queueing = false;
+        for (const queued of this.outbox.splice(0)) this.sendAction(queued);
+      }
       return;
     }
     if (
@@ -334,8 +378,18 @@ export class MultiplayerClient {
       this.lastState &&
       this.matchId
     ) {
+      // Desync guard (CP1.4): deltas chain against OUR last applied view, and within
+      // one connection the server delivers them in order — seq may legally skip
+      // forward (rejections bump it without a broadcast) or repeat (lobby flips),
+      // but it can never go BACKWARDS. If it did, the baseline is untrustworthy:
+      // drop the delta and let the transport resync via reconnect (fresh welcome).
+      if (this.lastSeq !== null && message.seq < this.lastSeq) {
+        this.handlers.onDesync?.(this.lastSeq, message.seq);
+        return;
+      }
       // Incremental update — patch the baseline and surface the new full state.
       this.lastState = applyDelta(this.lastState, message.delta);
+      this.lastSeq = message.seq;
       this.handlers.onSnapshot?.({
         matchId: this.matchId,
         playerId: this.playerId,

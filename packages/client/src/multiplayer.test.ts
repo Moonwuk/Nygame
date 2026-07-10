@@ -371,3 +371,98 @@ describe('MultiplayerClient · transient-rejection resend (BF-2)', () => {
     expect(socket.sent).toHaveLength(1); // no resend
   });
 });
+
+// CP1.4 — reconnect resume: actions issued while the socket is down are queued and
+// flushed after the reconnect welcome (fresh session ⇒ gate-valid envelopes, no dupes);
+// a delta whose seq goes backwards is dropped and surfaced as a desync.
+describe('MultiplayerClient · reconnect resume (CP1.4)', () => {
+  it('queues actions while disconnected and flushes them after the reconnect welcome', () => {
+    const socket = new FakeSocket();
+    const statuses: MultiplayerStatus[] = [];
+    const client = new MultiplayerClient(socket, { onStatus: (s) => statuses.push(s) });
+    client.open();
+    client.receive(gatedWelcome(baseState(10), 'sess-A'));
+    client.sendAction(orbit()); // sess-A:p1:1 — sent live
+    expect(socket.sent).toHaveLength(1);
+
+    client.connectionLost(); // mobile network dropped
+    expect(statuses.at(-1)).toBe('connecting');
+    client.sendAction(orbit()); // issued offline → queued, NOT sent
+    client.sendAction(orbit());
+    expect(socket.sent).toHaveLength(1);
+
+    client.open(); // socket re-opened — still queued: the gated envelope needs the NEW session
+    expect(socket.sent).toHaveLength(1);
+
+    client.receive(gatedWelcome(baseState(10), 'sess-B')); // reconnect welcome = resync
+    expect(socket.sent).toHaveLength(3); // both queued actions flushed, in order
+    const flushed = socket.sent.slice(1).map(
+      (raw) => (JSON.parse(raw) as { envelope: ActionEnvelope }).envelope,
+    );
+    // Fresh session, fresh strict clientSeq — exactly what the sequence gate admits.
+    expect(flushed.map((e) => e.actionId)).toEqual(['sess-B:p1:1', 'sess-B:p1:2']);
+  });
+
+  it('flushes queued bare actions on an un-gated room too', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket, {});
+    client.receive(welcome(baseState(10)));
+    client.connectionLost();
+    client.sendAction(orbit());
+    expect(socket.sent).toHaveLength(0);
+    client.receive(welcome(baseState(11)));
+    expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0]!)).toMatchObject({ type: 'action', action: { type: 'fleet.orbit' } });
+  });
+
+  it('caps the offline queue and surfaces E_OUTBOX_FULL instead of growing unbounded', () => {
+    const socket = new FakeSocket();
+    const errors: string[] = [];
+    const client = new MultiplayerClient(socket, { onError: (c) => errors.push(c) });
+    client.receive(welcome(baseState(10)));
+    client.connectionLost();
+    for (let i = 0; i < 70; i += 1) client.sendAction(orbit());
+    expect(errors.filter((c) => c === 'E_OUTBOX_FULL')).toHaveLength(6); // 70 − 64
+    client.receive(welcome(baseState(10)));
+    expect(socket.sent).toHaveLength(64); // the cap flushed, the overflow dropped loudly
+  });
+
+  it('connectionLost after a deliberate close stays closed (no phantom reconnect state)', () => {
+    const socket = new FakeSocket();
+    const statuses: MultiplayerStatus[] = [];
+    const client = new MultiplayerClient(socket, { onStatus: (s) => statuses.push(s) });
+    client.close();
+    client.connectionLost();
+    expect(statuses.at(-1)).toBe('closed');
+  });
+
+  it('applies forward-gap and equal-seq deltas (legal) but drops a backwards delta as desync', () => {
+    const socket = new FakeSocket();
+    const snaps: MultiplayerSnapshot[] = [];
+    const desyncs: [number, number][] = [];
+    const client = new MultiplayerClient(socket, {
+      onSnapshot: (s) => snaps.push(s),
+      onDesync: (last, got) => desyncs.push([last, got]),
+    });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+    const s2 = baseState(30);
+    client.receive(welcome(s0, 5));
+
+    // Forward gap (seq 5 → 8) is legal: rejected actions bump the server seq
+    // without a broadcast, so the delta still chains against our view.
+    client.receive(deltaMsg(diffState(s0, s1), 8));
+    expect(snaps.at(-1)?.state).toEqual(s1);
+
+    // Equal seq is legal too (lobby flips re-broadcast under the current seq).
+    client.receive(deltaMsg(diffState(s1, s2), 8));
+    expect(snaps.at(-1)?.state).toEqual(s2);
+
+    // Backwards seq = untrustworthy baseline: dropped, surfaced as desync.
+    const before = snaps.length;
+    client.receive(deltaMsg(diffState(s2, s0), 3));
+    expect(snaps).toHaveLength(before);
+    expect(snaps.at(-1)?.state).toEqual(s2); // state untouched
+    expect(desyncs).toEqual([[8, 3]]);
+  });
+});
