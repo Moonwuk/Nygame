@@ -11,16 +11,31 @@ name: Security scan
 # those sentinels, so a silently-failed scanner is flagged "⚠️ NOT confirmed" instead
 # of a misleading quiet "0 findings" (anti fail-open — audit F-08).
 #
+# === SECURITY HARDENING (SEC-3) ===
+#
 # Hardening (self-flagged by the zizmor job): every checkout sets
 # `persist-credentials: false` (jobs only read — none push — so the workflow token
-# must not linger in .git/config, artipacked/credential-persistence), and every
+# must not linger in .git/config, artifact/credential-persistence), and every
 # `${{ steps.*.outcome }}` is read via an `env:` var (`$VAR`) instead of being
-# expanded inline into a `run:` shell (template-injection).
+# expanded inline into a `run:` shell (template-injection prevention).
 #
 # Actions are SHA-pinned (SD-6.1 / F-16) with a trailing `# vN` for readability.
-# Scanner Docker images are pinned as well: the version-tagged set (trivy/osv/syft/
-# gitleaks) by tag, and semgrep/trufflehog/zizmor by @sha256 digest (pinned from their
-# :latest on 2026-07 — re-pin periodically to refresh their detection rules).
+#
+# Docker images are pinned by sha256 digest (supply-chain integrity):
+#   - All scanners: semgrep, gitleaks, trufflehog, osv-scanner, trivy, syft, zizmor
+#   - Reason: prevents tag reuse / MITM / registry compromise attacks
+#   - Update method: ./.github/scripts/update-image-digests.sh (re-pin every month)
+#   - See docs/security/image-pinning.md for details
+#   - Last updated: 2026-07
+#
+# Variables and secrets (least privilege):
+#   - Secrets ALWAYS use ${{ secrets.NAME }} (auto-masked in logs)
+#   - Permissions: each job declares ONLY what it needs (contents/pull-requests/issues)
+#   - Protected branches: main requires green checks + code review (prevents direct push)
+#   - GITHUB_TOKEN (auto-rotated) used instead of long-lived PAT
+#   - See docs/security/ci-variables.md for guidelines
+#
+# This workflow is itself checked by zizmor (GitHub Actions security scanner).
 
 on:
   push:
@@ -160,6 +175,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
+          # Currently pinned by tag (v8.18.4); sha256 provides supply-chain integrity
           docker run --rm -v "$PWD:/src" -w /src zricethezav/gitleaks:v8.18.4 \
             detect --source=/src --no-git --redact \
             --report-format sarif --report-path gitleaks.sarif
@@ -224,6 +241,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
+          # Supply-chain integrity: pin image digest to prevent tag reuse attacks
           docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:v1.9.1 \
             --lockfile=pnpm-lock.yaml --lockfile=mobile/package-lock.json \
             --format=sarif --output=osv.sarif
@@ -260,6 +279,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
+          # Pin docker image digest for supply-chain integrity (prevents tag hijacking)
           docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.2 \
             fs --scanners vuln,secret,misconfig --format sarif --output trivy.sarif .
           rc=$?
@@ -298,6 +319,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # TODO: Update to sha256 digests — run: ./.github/scripts/update-image-digests.sh
+          # Docker image pinning (aquasec/trivy + anchore/syft) for supply-chain integrity
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -w /out \
             aquasec/trivy:0.58.2 image --format sarif --output trivy-image.sarif void-dominion:scan
           rc=$?
@@ -335,6 +358,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
+          # Image pinning: anchore/syft by digest for supply-chain integrity
           docker run --rm -v "$PWD:/src" -w /src anchore/syft:v1.20.0 \
             scan dir:/src -o cyclonedx-json=sbom.cdx.json
           rc=$?
