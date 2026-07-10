@@ -46,6 +46,8 @@ import {
   orderScramble,
   patrolStamp,
 } from './src/game';
+import { ActionGate } from '../packages/action-layer/src/index';
+import { isValidActionPayload } from '../packages/shared-core/src/actions/payloadSchemas';
 const { Pool } = pgPkg;
 
 // --- M0 playtest log: append every room event (join/leave/lobby/action/end) to a
@@ -115,6 +117,10 @@ const port = Number(process.env.PORT ?? 8788);
 // Playtest fast-forward: wall→game clock multiplier. TIME_SCALE=100 ⇒ a real minute
 // is ~1.7 game-hours, so fleets/builds/economy resolve on-screen instead of over real
 // hours. 1 (default) = real-time. Compresses the clock itself, not just durations.
+// GATE=1|true → only validated `action.v1` envelopes are accepted (bare `action`
+// messages are rejected); the bundled client self-configures from `welcome.gated`.
+// Mirrors packages/server serverConfig (per-room gate instance, shared validator).
+const GATE = process.env.GATE === '1' || process.env.GATE === 'true';
 const TIME_SCALE = Math.max(1, Number(process.env.TIME_SCALE ?? 1) || 1);
 
 // Serve the built prototype HTML at `/` so a peer just opens `http://host:port/`
@@ -209,6 +215,10 @@ const room = new MatchRoom({
     await receiptStore.save('proto', receipt);
   },
   timeScale: TIME_SCALE, // playtest fast-forward (1 = real-time)
+  // REL-4: the action-layer front-door — envelope validate→authorize→sequence→dedup
+  // with per-type payload schemas BEFORE the reducer. Server-internal drivers
+  // (AI / standing orders) submit via room.submitAction and are unaffected.
+  ...(GATE ? { gate: new ActionGate({ payloadValidator: isValidActionPayload }) } : {}),
 });
 
 // Snapshot the world after changes, debounced so a burst of actions is one write.
@@ -395,6 +405,9 @@ const lines = [
   DATABASE_URL
     ? `  store  : Postgres — durable${restored ? ' (resumed a saved match)' : ''}`
     : '  store  : in-memory — a restart loses the match (set DATABASE_URL for durability)',
+  GATE
+    ? '  gate   : ON — only validated action.v1 envelopes (clients auto-detect via welcome.gated)'
+    : '  gate   : off — bare actions accepted (set GATE=1 for the release posture)',
   TIME_SCALE > 1
     ? `  time   : ×${TIME_SCALE} fast-forward (1 real min ≈ ${(TIME_SCALE / 60).toFixed(1)} game-hours) — playtest mode`
     : '  time   : ×1 real-time (set TIME_SCALE=100 to fast-forward a playtest)',

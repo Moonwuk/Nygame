@@ -27,6 +27,9 @@ services:
       - '8788:8788'
     environment:
       PORT: 8788
+      # Release posture: only validated action.v1 envelopes are accepted (the bundled
+      # client auto-detects via welcome.gated). Set GATE=0 to fall back to bare actions.
+      GATE: ${GATE:-1}
       # Playtest fast-forward (wall→game clock multiplier); 1 = real-time 24/7.
       TIME_SCALE: ${TIME_SCALE:-1}
       # Durable matches: snapshots to the postgres service over the compose network.
