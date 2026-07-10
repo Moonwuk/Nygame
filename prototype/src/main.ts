@@ -667,6 +667,10 @@ const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the r
  *  crosses it, then lingers at that last-swept spot (a dim ghost) until the next
  *  pass repaints it — so radar gives periodic snapshots, never a live feed. */
 const radarMemory = new Map<string, { node: string; size: 'S' | 'M' | 'L'; at: number }>();
+/** NET radar picture (BF-18): the server's per-frame contact list. In a network
+ *  match the fogged state carries NO radar-only enemy fleets, so the sweep paints
+ *  these server-sent contacts instead of scanning `s.fleets`. */
+let netSignatures: Array<{ location: string; size: 'S' | 'M' | 'L' }> = [];
 
 /** How brightly a contact at screen-point `c` is lit by the sweep: 1 the instant
  *  the arm crosses it, fading linearly back to 0 just before the next pass (so the
@@ -766,11 +770,24 @@ function sweptThisFrame(target: number): boolean {
 function updateRadarContacts(now: number): void {
   if (!sweepOn) return;
   if (vision) {
-    for (const f of Object.values(s.fleets)) {
-      if (f.owner === ME) continue;
-      const fn = fleetNode(f);
-      if (!fn || known(fn) || !radarHas(fn)) continue; // identified or out of radar → not a signature
-      const node = s.planets[fn];
+    // What the sweep may paint. Solo scans the full state for radar-only enemy
+    // fleets; in NET those fleets are physically ABSENT from the fogged state —
+    // the server ships them as coarse contacts (snapshot.signatures, BF-18).
+    const contacts: Array<{ key: string; node: string; size: 'S' | 'M' | 'L' }> = [];
+    if (NET) {
+      netSignatures.forEach((c, i) => {
+        if (!known(c.location)) contacts.push({ key: `sig:${c.location}:${i}`, node: c.location, size: c.size });
+      });
+    } else {
+      for (const f of Object.values(s.fleets)) {
+        if (f.owner === ME) continue;
+        const fn = fleetNode(f);
+        if (!fn || known(fn) || !radarHas(fn)) continue; // identified or out of radar → not a signature
+        contacts.push({ key: f.id, node: fn, size: sigClass(fleetSignature(f)) });
+      }
+    }
+    for (const c of contacts) {
+      const node = s.planets[c.node];
       if (!node) continue;
       const pos = world(node.position);
       // painted only by an arm whose radar disc actually covers the blip
@@ -780,9 +797,8 @@ function updateRadarContacts(now: number): void {
         return dx * dx + dy * dy <= a.r * a.r && sweptThisFrame(Math.atan2(dy, dx));
       });
       if (painted) {
-        const size = sigClass(fleetSignature(f));
-        if (!radarMemory.has(f.id)) note(t('◆ новый радарный контакт ({size}) у {at}', { size, at: fn }), fn);
-        radarMemory.set(f.id, { node: fn, size, at: now });
+        if (!radarMemory.has(c.key)) note(t('◆ новый радарный контакт ({size}) у {at}', { size: c.size, at: c.node }), c.node);
+        radarMemory.set(c.key, { node: c.node, size: c.size, at: now });
       }
     }
   }
@@ -7661,6 +7677,10 @@ function connect(): void {
         }
         const diploShift = admitted && s !== snap.state && diffNetDiplomacy(s, snap.state);
         s = snap.state;
+        // Radar picture (BF-18): detected-but-unidentified enemy fleets are absent
+        // from the fogged state — the server sends them as coarse contacts beside
+        // each frame. The sweep paints THESE in NET (see updateRadarContacts).
+        netSignatures = snap.signatures ?? [];
         // Re-render the open roster only NOW — the new state is in place, so the
         // stance chips and offer affordances (✓ accept / ⏳ pending) paint fresh.
         if (diploShift && diploOpen && diploTab === 'diplo') renderDiplo();

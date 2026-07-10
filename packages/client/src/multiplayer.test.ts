@@ -466,3 +466,30 @@ describe('MultiplayerClient · reconnect resume (CP1.4)', () => {
     expect(desyncs).toEqual([[8, 3]]);
   });
 });
+
+// BF-18: radar contacts / memory-fog ids ride BESIDE the fogged state (a radar-only
+// enemy fleet is physically absent from state.fleets) — the snapshot must surface
+// them or the client can never draw radar blips in a network match.
+describe('MultiplayerClient · fog extras: signatures + remembered (BF-18)', () => {
+  it('surfaces signatures/remembered from both the welcome and each delta', () => {
+    const socket = new FakeSocket();
+    const snaps: MultiplayerSnapshot[] = [];
+    const client = new MultiplayerClient(socket, { onSnapshot: (snap) => snaps.push(snap) });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+
+    const w = JSON.parse(welcome(s0)) as Record<string, unknown>;
+    w.signatures = [{ location: 'B2', size: 'M' }];
+    w.remembered = ['C3'];
+    client.receive(JSON.stringify(w));
+    expect(snaps.at(-1)?.signatures).toEqual([{ location: 'B2', size: 'M' }]);
+    expect(snaps.at(-1)?.remembered).toEqual(['C3']);
+
+    const d = JSON.parse(deltaMsg(diffState(s0, s1), 1)) as Record<string, unknown>;
+    d.signatures = [{ location: 'D4', size: 'L' }];
+    d.remembered = [];
+    client.receive(JSON.stringify(d));
+    expect(snaps.at(-1)?.signatures).toEqual([{ location: 'D4', size: 'L' }]);
+    expect(snaps.at(-1)?.remembered).toEqual([]);
+  });
+});

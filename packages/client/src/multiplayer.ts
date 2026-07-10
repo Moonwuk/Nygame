@@ -1,4 +1,4 @@
-import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type StateDelta } from '@void/shared-core';
+import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type SignatureContact, type StateDelta } from '@void/shared-core';
 import { createActionEnvelope, type ActionEnvelope } from '@void/action-layer';
 
 // BF-2 (bug-hunt CRIT): the gate's sequence cursor is strict (1,2,3…) and a throttled
@@ -29,6 +29,13 @@ export interface MultiplayerSnapshot {
   hash?: string;
   /** Manual-start lobby roster (who's host, who's connected, has it started). */
   lobby?: LobbyRoster;
+  /** Radar-only enemy contacts (fog extras riding beside the fogged state) —
+   *  position + coarse size, no identity. Without these the client cannot draw
+   *  radar blips at all: detected-but-unidentified fleets are physically absent
+   *  from `state.fleets` (BF-18). */
+  signatures?: SignatureContact[];
+  /** Ids of worlds shown from MEMORY (stale last-known view, not live). */
+  remembered?: string[];
 }
 
 export interface LobbyRoster {
@@ -135,6 +142,8 @@ interface InboundBase {
   reason?: 'cleared' | 'expired';
   events?: DomainEvent[];
   message?: MultiplayerChatMessage;
+  signatures?: SignatureContact[];
+  remembered?: string[];
 }
 
 function decode(raw: string): InboundBase | null {
@@ -361,6 +370,8 @@ export class MultiplayerClient {
         waiting: message.waiting,
         hash: message.hash,
         lobby: message.lobby,
+        signatures: message.signatures,
+        remembered: message.remembered,
       });
       // Reconnect resume (CP1.4): the welcome above rebound the session, so actions
       // queued while offline can flush now — through the normal send path, minting
@@ -398,6 +409,8 @@ export class MultiplayerClient {
         waiting: message.waiting,
         hash: message.hash,
         lobby: message.lobby,
+        signatures: message.signatures,
+        remembered: message.remembered,
       });
       // Domain events ride the same delta (already fog-filtered server-side); deliver
       // them after the snapshot so consumers resolve ids against the updated state.
