@@ -122,29 +122,31 @@ function endMatch(
   });
 }
 
-/** Victory units for the score race: each ACTIVE player belongs to exactly one —
- *  their alliance-connected component (a coalition, humans-only by construction:
- *  `E_BOT_ALLIANCE` bars bots from ever holding an alliance stance) or themselves.
- *  Deterministic: players visited in sorted order, members kept sorted. */
+/** Victory units for the score race: a coalition is a mutually-allied CLIQUE (every
+ *  pair inside it holds the `alliance` stance), NOT a connected component — a chain
+ *  A–B, B–C with A–C at war must not let A and C share a win, and a treaty A was not
+ *  party to must not block A's own win (GDD §3.3: "недвусмысленный критерий 'чьи очки
+ *  суммируются'"). Coalitions are humans-only by construction (`E_BOT_ALLIANCE` bars
+ *  bots from the alliance stance). Cliques overlap, so a player may appear in several
+ *  candidate units — the caller looks for ANY unit over its threshold. Deterministic:
+ *  seeds and members visited in sorted order; greedy per seed; deduped by membership. */
 function victoryUnits(h: HandlerContext, active: readonly PlayerId[]): PlayerId[][] {
+  const sorted = [...active].sort();
   const units: PlayerId[][] = [];
-  const seen = new Set<PlayerId>();
-  for (const start of active) {
-    if (seen.has(start)) continue;
-    const members: PlayerId[] = [];
-    const queue: PlayerId[] = [start];
-    seen.add(start);
-    while (queue.length > 0) {
-      const current = queue.shift() as PlayerId;
-      members.push(current);
-      for (const other of active) {
-        if (!seen.has(other) && getStance(h.state, current, other) === 'alliance') {
-          seen.add(other);
-          queue.push(other);
-        }
-      }
+  const seenKeys = new Set<string>();
+  for (const seed of sorted) {
+    const members: PlayerId[] = [seed];
+    // Grow a clique: add a candidate only if it is allied with EVERY current member.
+    for (const cand of sorted) {
+      if (cand === seed) continue;
+      if (members.every((m) => getStance(h.state, m, cand) === 'alliance')) members.push(cand);
     }
-    units.push(members.sort());
+    members.sort(); // seed may not be the smallest member — sort so dedup keys match
+    const key = members.join('|');
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      units.push(members);
+    }
   }
   return units;
 }

@@ -721,6 +721,36 @@ export class MatchRoom {
     return this.applyAndBroadcast(playerId, action, peer);
   }
 
+  /** Server-internal submit (AI stand-ins / standing orders / steward drivers). On an
+   *  in-memory room it is the plain sync submit; on a DURABLE room it serializes
+   *  through the actor mailbox and commits-before-broadcast like any player action —
+   *  a raw sync `submitAction` there mutates `stateValue`/`seq` in the middle of a
+   *  `commitApply` persist await, and the await's resolution then overwrites the
+   *  driver's acked change and rewinds `seq` (bug-hunt CRIT: silent state loss). */
+  async submitServerAction(playerId: PlayerId, action: Action): Promise<{ ok: boolean; code?: string }> {
+    if (!this.persist) {
+      const r = this.submitAction(playerId, action);
+      return { ok: r.ok, ...(r.code !== undefined ? { code: r.code } : {}) };
+    }
+    let out: { ok: boolean; code?: string } = { ok: false, code: 'E_INTERNAL' };
+    await this.enqueue(async () => {
+      const cached = this.receipts.get(action.id);
+      if (cached) {
+        out = { ok: cached.ok, ...(cached.code !== undefined ? { code: cached.code } : {}) };
+        return;
+      }
+      if (this.rateLimited(playerId)) {
+        out = { ok: false, code: 'E_RATE_LIMIT' }; // transient — the driver's next pass retries
+        return;
+      }
+      const verdict = await this.commitApply(playerId, action);
+      out = verdict.ok ? { ok: true } : { ok: false, code: verdict.code ?? 'E_INTERNAL' };
+    }).catch(() => {
+      out = { ok: false, code: 'E_INTERNAL' };
+    });
+    return out;
+  }
+
   /**
    * The reducer core, AFTER the front gates (dedup, rate-limit, ownership): catch the
    * world up to now, apply the action, commit + broadcast. Shared by the bare
