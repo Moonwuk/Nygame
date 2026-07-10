@@ -454,7 +454,7 @@
   (`combat.ts`) и постройкой (`construction.ts` валидирует лоадаут на `unit.build`, платит
   `loadoutCost`, считает HP/щит от эффективных статов); каталог `data/modules.json`;
   `util/loadout.test.ts`. _(Статус выправлен аудитом доков — код был готов раньше пометки.)_
-- **SHIP-4** ⏳ _(SHIP-1 ✅ — замок снят)_ `[core]` Обобщить фиттинг-движок: один общий
+- **SHIP-4** ✅ `[core]` Обобщить фиттинг-движок: один общий
   «слоты+модули» механизм для героев и кораблей (и при желании зданий), вместо двух
   параллельных (ядровый ship-loadout уже есть; герои — отдельные `heroFittings`+`applyGrants`). Тесты.
 - **SHIP-5** 🔒(EC-1.1) `[srv]` Модули как **предметы мета-экономики** (data-driven схема,
@@ -535,7 +535,7 @@
   (`.semgrepignore` / `.gitleaks.toml` / `.trivyignore`), разобранные сканеры → блокирующие.
 - **SEC-2** ⏳ Кастомные Semgrep-правила под инварианты ядра: запрет `Math.random`/
   `Date.now` и Node-built-ins в `shared-core/src` (детерминизм/чистота как security-граница).
-- **SEC-3** ⏳ Безопасность самого пайплайна: пин образов сканеров по `sha256`,
+- **SEC-3** ✅ Безопасность самого пайплайна: пин образов сканеров по `sha256`,
   masked+protected CI-переменные, least-privilege токены.
 - **SEC-4** ⏳ Агрегация находок: SARIF → DefectDojo / GitHub Code Scanning (единая панель, трекинг).
 - **SEC-5** ✅ Container scanning: `Dockerfile` (multi-stage, пин distroless-базы) +
