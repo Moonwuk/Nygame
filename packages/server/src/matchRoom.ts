@@ -1204,7 +1204,17 @@ export class MatchRoom {
   private eventVisibleTo(event: DomainEvent, playerId: PlayerId, identify: Set<string>): boolean {
     if (event.type === 'time.advanced' || event.type.startsWith('match.')) return true;
     const p = (event.payload ?? {}) as Record<string, unknown>;
+    // Hero events are strictly owner-only: their payloads carry the hero's node
+    // (`at`) and fleet, which the fog projection deliberately hides from everyone
+    // else — an identified-node match must NOT reveal them.
+    if (event.type.startsWith('hero.')) return p.owner === playerId;
     if (p.owner === playerId) return true;
+    // Personal and bilateral events name their audience with these keys (research,
+    // steward, elimination, diplomacy offers/changes, market trades) — a named
+    // participant always sees their own event.
+    for (const key of ['playerId', 'a', 'b', 'from', 'to', 'buyer', 'seller'] as const) {
+      if (p[key] === playerId) return true;
+    }
     for (const key of ['location', 'planetId', 'at'] as const) {
       const node = p[key];
       if (typeof node === 'string' && identify.has(node)) return true;
