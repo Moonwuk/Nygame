@@ -40,9 +40,9 @@ const CLIENT_ACTION_TYPES = [
   'capital.designate',
   'division.mobilize',
   'division.template',
+  'division.rename',
   'division.load',
   'division.unload',
-  'division.officer',
   'steward.delegate',
   'steward.recall',
   'order.auto',
@@ -101,11 +101,12 @@ describe('SV-1.2 · action payload schemas', () => {
       ['fleet.engage', { fleetId: 'f1', targetId: 'f2' }],
       ['capital.designate', { planetId: 'p1' }],
       ['division.mobilize', { planetId: 'p1', template: 0 }],
+      ['division.mobilize', { planetId: 'p1', template: 1, officer: true }], // officer premade (BF-20)
       ['division.template', { template: 0, slot: 2, unit: 'tank' }],
       ['division.template', { template: 0, slot: 2, unit: null }], // clear the slot
+      ['division.rename', { template: 0, name: 'Гвардия' }], // custom-template rename (BF-20)
       ['division.load', { divisionId: 'div:1', fleetId: 'f1' }],
       ['division.unload', { divisionId: 'div:1' }],
-      ['division.officer', { divisionId: 'div:1', officer: null }],
       ['steward.delegate', { posture: 'defend', until: 123456 }],
       ['steward.recall', {}],
       ['order.auto', { fleetId: 'f1', on: true }],

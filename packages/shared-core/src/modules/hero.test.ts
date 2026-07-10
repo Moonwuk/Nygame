@@ -179,7 +179,8 @@ function world(): GameState {
       C: planet('C', 'p2', 400, 0, [], 'planet'),
       F: planet('F', 'p2', 700, 0, [], 'planet'),
     },
-    heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'A', cooldowns: {} } },
+    // Deployed (BF-24): an undeployed reserve can no longer act from the bench.
+    heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'A', cooldowns: {}, alive: true } },
   };
 }
 
@@ -994,7 +995,7 @@ describe('hero — data-driven passives (HERO-5)', () => {
           D: { id: 'D', owner: 'p2', location: 'P', movement: null, traits: [], units: [{ unit: 'warship', count: 1 }] },
         },
         heroes: {
-          'hero:p1': { id: 'hero:p1', owner: 'p1', location: heroAt, cooldowns: {}, passives: ['warcry'] },
+          'hero:p1': { id: 'hero:p1', owner: 'p1', location: heroAt, cooldowns: {}, passives: ['warcry'], alive: true },
         },
       };
     };
@@ -1014,6 +1015,13 @@ describe('hero — data-driven passives (HERO-5)', () => {
     const far = round(base('X'));
     expect(far.dmgToDefender).toBe(20);
     expect(far.dmgToAttacker).toBe(20);
+    // BF-24: the SAME hero as an undeployed reserve (alive undefined) radiates
+    // nothing, even in radius — no invulnerable bench buffer.
+    const benched = base('H');
+    delete benched.heroes!['hero:p1']!.alive;
+    const res = round(benched);
+    expect(res.dmgToDefender).toBe(20);
+    expect(res.dmgToAttacker).toBe(20);
   });
 });
 

@@ -2502,16 +2502,19 @@ export const divisionModule: GameModule = {
       const seq = (ds.divisionSeq ?? 0) + 1;
       ds.divisionSeq = seq;
       const id = `div:${action.playerId}:${seq}`;
+      // Именной шаблон приходит со своим офицером — «готовый шаблон, менять нельзя».
+      // Its HP bonus is baked into hpEach at birth, so the division is born AT its
+      // regen-max (unitMaxHp reads the same officer), not below it.
+      const officer = fromOfficer ? (tpl as OfficerTemplate).officer : undefined;
       divs[id] = {
         id,
         owner: action.playerId,
         name: tpl.name,
         template: p.template,
         max: { ...stats.byType },
-        units: makeSide(GROUND_ROSTER, stats.byType),
+        units: makeSide(GROUND_ROSTER, stats.byType, officer ? OFFICERS[officer] : undefined),
         location: p.planetId,
-        // Именной шаблон приходит со своим офицером — «готовый шаблон, менять нельзя».
-        ...(fromOfficer ? { officer: (tpl as OfficerTemplate).officer } : {}),
+        ...(officer ? { officer } : {}),
       };
       h.emit('division.mobilized', {
         id,
@@ -2633,24 +2636,10 @@ export const divisionModule: GameModule = {
       });
     });
 
-    // Attach / detach an officer (a hero-like leader granting tunable bonuses). The
-    // officer's toughness re-scales the current units' HP so attaching it never costs
-    // a unit. Pass `officer: null` to detach.
-    api.onAction('division.officer', (action, h) => {
-      const p = action.payload as { divisionId?: string; officer?: string | null };
-      const div = ownDivision(h, p?.divisionId, action.playerId);
-      const key = p?.officer ?? null;
-      if (key !== null && !Object.prototype.hasOwnProperty.call(OFFICERS, key)) {
-        return h.reject('E_NO_OFFICER');
-      }
-      div.officer = key ?? undefined;
-      for (const u of div.units) {
-        const newHpEach = unitMaxHp(div, u.type);
-        if (newHpEach > 0 && u.hpEach > 0) u.hp *= newHpEach / u.hpEach; // re-toughen, keep count
-        u.hpEach = newHpEach;
-      }
-      h.emit('division.officer', { id: div.id, officer: key, owner: action.playerId });
-    });
+    // NOTE: there is deliberately NO runtime officer attach/detach action. Officers
+    // arrive ONLY with their locked premade (`division.mobilize {officer: true}`) —
+    // a raw `division.officer` action used to attach any officer to any division for
+    // free, bypassing the premade lock (bughunt BF-19).
 
     // Per-span ground upkeep: lose divisions with their destroyed carrier, resolve
     // tick-based ground battles, then restore survivors on friendly soil.
@@ -2681,6 +2670,9 @@ export const divisionModule: GameModule = {
         if (div.carriedBy != null) continue; // in transit / in a hold — no restoration
         const planet = h.state.planets[div.location];
         if (!planet || planet.owner !== div.owner) continue; // own planet only
+        // No field repair under fire: regen while a ground battle rages would also
+        // make the outcome depend on how finely the span is stepped (BF-22).
+        if (groundContested(h.state, div.location)) continue;
         if (!div.units.some((s) => s.count > 0)) continue; // wiped → gone, never resurrected
         regenDivision(div, days);
       }
@@ -3305,9 +3297,6 @@ export const loadDivision = (playerId: string, divisionId: string, fleetId: stri
 /** Unload a carried division onto the world its carrier is docked over. */
 export const unloadDivision = (playerId: string, divisionId: string) =>
   act(playerId, 'division.unload', { divisionId });
-/** Attach an officer (OFFICERS key) to a division, or detach with `officer = null`. */
-export const setDivisionOfficer = (playerId: string, divisionId: string, officer: string | null) =>
-  act(playerId, 'division.officer', { divisionId, officer });
 /** Designate one of your inhabited worlds as your capital (hero respawn / re-fit anchor). */
 export const designateCapital = (playerId: string, planetId: string) =>
   act(playerId, 'capital.designate', { planetId });

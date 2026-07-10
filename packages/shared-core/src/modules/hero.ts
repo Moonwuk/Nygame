@@ -212,7 +212,9 @@ function passiveBonus(
   if (h.state.heroes === undefined) return 0; // hero-less match: keep the hot hooks free
   let total = 0;
   for (const hero of Object.values(h.state.heroes)) {
-    if (hero.owner !== owner || hero.alive === false) continue;
+    // DEPLOYED heroes only — a reserve hero (alive undefined) must not radiate
+    // passives from the bench (bughunt BF-24).
+    if (hero.owner !== owner || hero.alive !== true) continue;
     for (const id of hero.passives ?? []) {
       const def = h.ctx.data.heroPassives[id];
       if (!def || def.hook !== hook) continue;
@@ -426,7 +428,8 @@ export const heroModule: GameModule = {
       if (typeof to !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
       const from = heroNode(h.state, hero); // acts from its ship's node when deployed
       if (to === from) return h.reject('E_SAME_LOCATION');
       const a = h.state.planets[from];
@@ -468,7 +471,8 @@ export const heroModule: GameModule = {
       if (typeof planetId !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
       const planet = h.state.planets[planetId];
       if (!planet) return h.reject('E_NO_PLANET');
       if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
@@ -504,6 +508,10 @@ export const heroModule: GameModule = {
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
       if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      // DEPLOYED only (`alive` is stamped by deploy): a reserve hero (never deployed,
+      // `alive` undefined) must not cast from the bench — it would be an invulnerable
+      // caster outside HERO_ACTIVE_CAP (bughunt BF-24).
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED');
       const def = h.ctx.data.heroAbilities[abilityId];
       if (!def) return h.reject('E_NO_ABILITY');
       // The hero must actually carry the ability in a slot (its data-driven loadout).

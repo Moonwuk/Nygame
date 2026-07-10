@@ -91,7 +91,8 @@ function auraBonus(h: HandlerContext, owner: string, at: PlanetId): number {
   const now = h.ctx.now;
   let total = 0;
   for (const hero of Object.values(heroes)) {
-    if (hero.owner !== owner || hero.alive === false) continue;
+    // Deployed heroes only, mirroring passiveBonus (bughunt BF-24).
+    if (hero.owner !== owner || hero.alive !== true) continue;
     const auras = hero.activeAuras;
     if (auras === undefined || auras.length === 0) continue;
     const node = h.state.planets[heroNode(hero, h.state)]?.position;

@@ -10,7 +10,6 @@ import {
   renameDivisionTemplate,
   loadDivision,
   unloadDivision,
-  setDivisionOfficer,
   declareWar,
   mergeFleet,
   divisionCargo,
@@ -261,33 +260,59 @@ describe('divisions — tick-based ground battle + capture', () => {
   });
 });
 
-describe('divisions — officer attach / detach', () => {
-  it('re-toughens current units without costing a unit, and detaching restores', () => {
+describe('divisions — officers arrive ONLY with their locked premade', () => {
+  it('a raw division.officer action no longer exists (free attach exploit, BF-19)', () => {
     const st = order(richGame(), mobilizeDivision('p1', HOME, 0), 0).state;
     const id = Object.keys(divisionsOf(st))[0]!;
-    const inf0 = divisionsOf(st)[id]!.units.find((u) => u.type === 'heavy_infantry')!;
-    const baseHpEach = inf0.hpEach;
-    const baseCount = inf0.count;
-
-    // Attach the quartermaster (+20% HP): units get tougher, none are lost.
-    const buffed = order(st, setDivisionOfficer('p1', id, 'quartermaster'), st.time).state;
-    const infQ = divisionsOf(buffed)[id]!.units.find((u) => u.type === 'heavy_infantry')!;
-    expect(divisionsOf(buffed)[id]!.officer).toBe('quartermaster');
-    expect(infQ.hpEach).toBeCloseTo(baseHpEach * (1 + OFFICERS.quartermaster!.hp!));
-    expect(infQ.count).toBe(baseCount);
-
-    // Detach → toughness returns to base, still no unit lost.
-    const bare = order(buffed, setDivisionOfficer('p1', id, null), buffed.time).state;
-    const infBare = divisionsOf(bare)[id]!.units.find((u) => u.type === 'heavy_infantry')!;
-    expect(divisionsOf(bare)[id]!.officer).toBeUndefined();
-    expect(infBare.hpEach).toBeCloseTo(baseHpEach);
-    expect(infBare.count).toBe(baseCount);
+    const raw = {
+      id: 'raw:officer',
+      type: 'division.officer',
+      playerId: 'p1',
+      issuedAt: 0,
+      payload: { divisionId: id, officer: 'quartermaster' },
+    };
+    expect(order(st, raw, st.time).error).toBe('E_UNKNOWN_ACTION');
   });
 
-  it('rejects an unknown officer key', () => {
-    const st = order(richGame(), mobilizeDivision('p1', HOME, 0), 0).state;
-    const id = Object.keys(divisionsOf(st))[0]!;
-    expect(order(st, setDivisionOfficer('p1', id, 'nope'), st.time).error).toBe('E_NO_OFFICER');
+  it('an officer premade is born WITH its officer toughness baked in (BF-21)', () => {
+    const st = order(richGame(), mobilizeDivision('p1', HOME, 1, true), 0).state;
+    const div = Object.values(divisionsOf(st)).find((d) => d.owner === 'p1')!;
+    const officer = OFFICERS[div.officer!]!;
+    expect(officer.hp).toBeGreaterThan(0); // premade #1 carries a toughness officer
+    for (const u of div.units) {
+      // hpEach must equal the officer-buffed max — the same value regenDivision
+      // computes — so the division is born at full strength, not below its regen cap.
+      expect(u.hpEach).toBeCloseTo(GROUND_ROSTER[u.type]!.hp * (1 + officer.hp!));
+      expect(u.hp).toBeCloseTo(u.count * u.hpEach);
+    }
+  });
+});
+
+describe('divisions — no field repair under fire (BF-22)', () => {
+  it('daily regen skips a division while its world is contested', () => {
+    const s = richGame();
+    const W = ownedWorld(s, 'p2');
+    const defId = inject(s, 'p2', W, { heavy_infantry: 6 });
+    // Wound the defender well below max so regen would visibly heal it.
+    const def = divisionsOf(s)[defId]!;
+    def.units[0]!.hp = def.units[0]!.hpEach * 2; // 6 slots, 2 units' worth of HP
+    def.units[0]!.count = 2;
+    const woundedHp = def.units[0]!.hp;
+    const atWarState = order(s, declareWar('p1', 'p2'), 0).state;
+
+    // Advance LESS than one ground tick: combat deals no damage yet, so any HP
+    // change can only come from regen — a clean probe of the regen gate.
+    const subTick = atWarState.time + 1 * HOUR; // GROUND_TICK_HOURS = 3
+
+    // Contested (p1 attacker present): regen must NOT run — HP exactly unchanged.
+    const contested = structuredClone(atWarState);
+    inject(contested, 'p1', W, { heavy_infantry: 6 });
+    const afterContested = advance(contested, subTick).state;
+    expect(hpTotal(divisionsOf(afterContested)[defId]!.units)).toBe(woundedHp);
+
+    // Same wounded defender, NO attacker: the same hour of peace does heal it.
+    const peaceful = advance(atWarState, subTick).state;
+    expect(hpTotal(divisionsOf(peaceful)[defId]!.units)).toBeGreaterThan(woundedHp);
   });
 });
 

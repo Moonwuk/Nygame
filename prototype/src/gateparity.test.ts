@@ -29,10 +29,10 @@ import {
   marketTake,
   marketCancel,
   mobilizeDivision,
+  renameDivisionTemplate,
   setDivisionTemplate,
   loadDivision,
   unloadDivision,
-  setDivisionOfficer,
   designateCapital,
   delegateSteward,
   recallSteward,
@@ -79,12 +79,12 @@ const CLIENT_ACTIONS: Action[] = [
   marketTake(P, 'lot:1', 5),
   marketCancel(P, 'lot:1'),
   mobilizeDivision(P, 'C1R1', 0),
+  mobilizeDivision(P, 'C1R1', 1, true), // officer premade (BF-20)
+  renameDivisionTemplate(P, 0, 'Гвардия'), // designer rename (BF-20)
   setDivisionTemplate(P, 0, 2, 'tank'),
   setDivisionTemplate(P, 0, 2, null),
   loadDivision(P, 'div:1', 'f1'),
   unloadDivision(P, 'div:1'),
-  setDivisionOfficer(P, 'div:1', 'logist'),
-  setDivisionOfficer(P, 'div:1', null),
   designateCapital(P, 'C1R1'),
   delegateSteward(P, 123456789),
   recallSteward(P),
@@ -113,8 +113,14 @@ describe('gate parity (REL-2) — the schemas cover every prototype intent', () 
     }
   });
 
+  it('the retired officer attach/detach action is not client-submittable (BF-19)', () => {
+    expect(isValidActionPayload('division.officer', { divisionId: 'div:1', officer: 'assault' })).toBe(false);
+    expect(isValidActionPayload('division.officer', { divisionId: 'div:1', officer: null })).toBe(false);
+  });
+
   it('malformed payloads of the new types are refused (fail-secure spot checks)', () => {
     expect(isValidActionPayload('fleet.split', { fleetId: 'f1', take: [] })).toBe(false); // empty take
+    expect(isValidActionPayload('division.rename', { template: 0, name: '' })).toBe(false); // empty name
     expect(isValidActionPayload('division.template', { template: 0, slot: -1, unit: null })).toBe(false);
     expect(isValidActionPayload('steward.delegate', { posture: 'defend' })).toBe(false); // no until
     expect(isValidActionPayload('order.auto', { fleetId: 'f1', on: 'yes' })).toBe(false);

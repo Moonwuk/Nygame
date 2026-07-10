@@ -58,7 +58,6 @@ import {
   setDivisionTemplate,
   loadDivision,
   unloadDivision,
-  setDivisionOfficer,
   designateCapital,
   capitalOf,
   isInhabited,
@@ -5463,11 +5462,6 @@ side.addEventListener('click', (ev) => {
     playerOrder(loadDivision(ME, arg, selFleet!));
   } else if (act === 'divunload') {
     playerOrder(unloadDivision(ME, arg));
-  } else if (act === 'officer') {
-    const sep = arg.indexOf('|');
-    const divId = arg.slice(0, sep);
-    const key = arg.slice(sep + 1);
-    playerOrder(setDivisionOfficer(ME, divId, key || null));
   }
   lastPanelHtml = '';
   renderPanel();

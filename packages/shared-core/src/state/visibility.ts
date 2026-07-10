@@ -233,7 +233,7 @@ function coverageFor(state: GameState, viewerId: PlayerId, data: GameData): Cove
   const heroes = state.heroes;
   if (heroes) {
     for (const hero of Object.values(heroes)) {
-      if (hero.owner !== viewerId || hero.alive === false) continue;
+      if (hero.owner !== viewerId || hero.alive !== true) continue; // deployed only (BF-24)
       const reveals = hero.activeReveals;
       if (reveals === undefined) continue;
       for (const r of reveals) {
