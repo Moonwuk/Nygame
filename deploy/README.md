@@ -21,6 +21,9 @@ cd deploy && docker compose up -d --build
 Переменные (можно в `.env` рядом с `docker-compose.yml`):
 
 - `POSTGRES_PASSWORD` — пароль БД (обязательно смените вне локального теста);
+- `GATE` — action-гейт (REL-4): по умолчанию `1` — принимаются только валидированные
+  `action.v1`-конверты (клиент сам определяет по `welcome.gated`); `GATE=0` — дев-откат
+  к голым actions;
 - `TIME_SCALE` — множитель wall→game времени (по умолчанию `1` = real-time 24/7;
   для быстрых плейтестов удобно `200`).
 

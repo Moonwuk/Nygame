@@ -225,6 +225,17 @@
   дипломатия, чат, биржа, техи, конструкторы героя/корабля/дивизий, mock-кабинет
   корпорации, баннер победы, коды отказа ядра (`errText`) и т.д. Браузер-проверено на
   обоих языках (RU/EN) по каждому экрану; гейт 872 теста зелёный.
+- **REL-4** ✅ `[server]` `[ops]` **Action-гейт включён на играбельном пути (netserver).**
+  Прото-хост `prototype/netserver.ts` принимает `GATE=1|true` — комната получает тот же
+  `ActionGate({payloadValidator: isValidActionPayload})`, что и боевой вход `main.ts`
+  (зеркало serverConfig; баннер печатает `gate: ON/off`). В compose релиз-постура —
+  `GATE` по умолчанию **ON** (`${GATE:-1}`; `GATE=0` — дев-откат к голым actions).
+  Клиент менять не пришлось: `MultiplayerClient` самонастраивается по `welcome.gated`
+  (REL-2 дал полные 42 схемы — ни одна механика не режется). Серверные драйверы
+  (ИИ/Хранитель/стоячие приказы) идут через `room.submitAction` МИМО гейта — задумано:
+  гейт стоит на проводе, не внутри хоста. Верифицировано вживую в обе стороны:
+  gated — `welcome{gated:true, sessionId}`, голый `action` → `E_BAD_MESSAGE`,
+  `action.v1`-конверт применён (delta); ungated — голый `action` применён (back-compat).
 - **REL-3** ✅ `[ops]` **Сервер одной командой + отказоустойчивая инфраструктура.**
   `pnpm stack` (или `cd deploy && docker compose up -d --build`) поднимает ВЕСЬ стек:
   игровой сервер (existing distroless-образ: игра на `/`, WS-матч, `/health`) + Postgres.
