@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { newGame, netIncome, data, HOUR, advance } from './game';
-import { BROWNOUT, allowedBuildings } from '../../packages/shared-core/src/index';
+import { BROWNOUT, allowedBuildings, type GameState } from '../../packages/shared-core/src/index';
 
 describe('building economy — the prototype resource loop', () => {
   it('ships the loop-closing roster: farm / fusion plant / microelectronics fab', () => {
@@ -33,6 +33,31 @@ describe('building economy — the prototype resource loop', () => {
     const dimmed = netIncome(s, 'p1').credits ?? 0;
     // Only the refinery's 8/h line dims (civic tax etc. stay) — flow drops by half of it.
     expect(full - dimmed).toBeCloseTo(8 * (1 - BROWNOUT), 5);
+  });
+
+  it('netIncome (the HUD flow readout) reflects a ramping reactor past the 50% mark', () => {
+    const s = newGame();
+    const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
+    const totalMs = data.buildings.power_plant!.buildTimeHours * HOUR;
+    const withScheduled = (at: number): GameState => ({
+      ...s,
+      scheduled: [
+        ...s.scheduled,
+        {
+          id: 'x',
+          at,
+          type: 'construction.complete',
+          payload: { kind: 'building', planetId: home.id, building: 'power_plant', playerId: 'p1' },
+          seq: 999,
+        },
+      ],
+    });
+    const plantEnergy = data.buildings.power_plant!.produces.energy ?? 0;
+    const baseline = netIncome(s, 'p1').energy ?? 0; // no in-flight reactor at all
+    const below = netIncome(withScheduled(s.time + 0.7 * totalMs), 'p1').energy ?? 0; // 30% built
+    const above = netIncome(withScheduled(s.time + 0.25 * totalMs), 'p1').energy ?? 0; // 75% built
+    expect(below).toBeCloseTo(baseline); // still under the 50% mark → no bonus shown yet
+    expect(above).toBeCloseTo(baseline + plantEnergy * 0.75); // 75% of the plant's energy/h
   });
 
   it('the settlement actually runs the loop: no reactor → energy stock drains to arrears', () => {

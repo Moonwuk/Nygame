@@ -466,20 +466,30 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .asset-row:hover{border-color:var(--cyan-dim);background:rgba(53,214,230,.07);}
 .asset-row b{flex:1 1 auto;min-width:96px;font-size:12px;}
 .asset-row .b{margin-left:auto;}
+.asset-row .prod{color:var(--grn);}
 .bicon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:7px;
   border:1px solid var(--line-hi);background:rgba(53,214,230,.07);color:var(--cyan);font-size:12px;}
 .asset-row .bicon{margin-right:0;flex:0 0 auto;}
 .conveyor{margin:6px 0 8px;padding:8px;border:1px solid var(--line);background:rgba(53,214,230,.04);}
-.conveyor .current{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-size:11px;}
+.conveyor .current{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;font-size:11px;}
 .conveyor .current span{color:var(--grn);letter-spacing:1.5px;font-size:9px;}
 .conveyor .current.idle span{color:var(--dim);}
 .conveyor .current em{color:var(--cyan-dim);font-style:normal;}
 .conveyor .bar{height:4px;margin:7px 0;background:rgba(53,214,230,.08);overflow:hidden;}
 .conveyor .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--grn),var(--cyan));box-shadow:0 0 10px rgba(125,240,208,.6);}
 .conveyor .queue{display:flex;gap:6px;flex-wrap:wrap;}
-.conveyor .queue span{border:1px solid var(--line);background:rgba(2,9,13,.55);padding:3px 6px;font-size:10px;color:var(--ink);}
+.conveyor .queue span{display:flex;align-items:center;gap:4px;border:1px solid var(--line);background:rgba(2,9,13,.55);padding:3px 6px;font-size:10px;color:var(--ink);}
 .conveyor .queue em{font-style:normal;color:var(--grn-dim);margin-right:5px;}
 .conveyor .queue.empty{color:var(--dim);font-size:10px;}
+.conveyor .current button,.conveyor .queue button,.conveyor .paused button{
+  border:1px solid var(--line-hi);background:transparent;color:var(--dim);cursor:pointer;
+  font:11px ui-monospace,monospace;padding:2px 6px;border-radius:2px;line-height:1.3;}
+.conveyor .current button:hover,.conveyor .queue button:hover,.conveyor .paused button:hover{
+  color:var(--cyan);border-color:var(--cyan);}
+.conveyor .paused{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
+.conveyor .paused span{display:flex;align-items:center;gap:4px;border:1px solid var(--amber,#f0b429);
+  background:rgba(240,180,41,.08);padding:3px 6px;font-size:10px;color:var(--ink);}
+.conveyor .paused em{font-style:normal;color:var(--amber,#f0b429);margin-right:2px;}
 button.b{background:transparent;color:var(--cyan);border:1px solid var(--cyan-dim);border-radius:2px;
   padding:5px 10px;margin:3px 4px 2px 0;cursor:pointer;font:700 11px ui-monospace,monospace;letter-spacing:.4px;}
 button.b:hover:not(:disabled){background:rgba(53,214,230,.14);box-shadow:0 0 10px rgba(53,214,230,.35);}
@@ -1521,7 +1531,7 @@ const html = `<!doctype html>
 <aside id="side"></aside>
 <div id="toasts"></div>
 <div id="speedbar" class="spd">
-  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button>
+  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button><button class="spdmini" data-mult="100">×100</button>
   <span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" data-i18n-title style="display:none">⟳</button>
   <span class="sep"></span><button id="tomenu" title="Выход в меню" data-i18n-title>⌂</button>
 </div>
@@ -1691,13 +1701,14 @@ const html = `<!doctype html>
       <p class="smaphint" id="setuphint" data-i18n>Тапните светящийся мир, чтобы выбрать старт</p>
       <div id="setupslots" class="sslots"></div>
       <div class="sspeedlabel" data-i18n>Скорость времени</div>
-      <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×50.</p>
+      <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.</p>
       <div id="setupspeed" class="sspeed">
         <button class="spdchip" type="button" data-spd="1">×1</button>
         <button class="spdchip" type="button" data-spd="2">×2</button>
         <button class="spdchip" type="button" data-spd="5">×5</button>
         <button class="spdchip" type="button" data-spd="10">×10</button>
         <button class="spdchip" type="button" data-spd="50">×50</button>
+        <button class="spdchip" type="button" data-spd="100">×100</button>
       </div>
     </div>
     <button id="setupgo" class="sgo" disabled data-i18n>ЗАПУСК</button>

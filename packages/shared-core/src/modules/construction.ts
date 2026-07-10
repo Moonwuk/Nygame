@@ -1,5 +1,5 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { BuildingInstance, Planet, Player } from '../state/gameState';
+import type { BuildingInstance, Planet, PausedConstructionSite, Player } from '../state/gameState';
 import type { GameData, ResourceBag } from '../data/schemas';
 import { buildingLevel, buildingMaxLevel } from '../data/schemas';
 import { isBombarded } from '../state/orbit';
@@ -7,7 +7,8 @@ import { allowedBuildings } from '../state/sectorKind';
 import type { Action } from '../action/types';
 import { hoursToMs, timeScaleOf } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
-import { canAfford, payCost } from '../util/treasury';
+import { canAfford, payCost, refundCost } from '../util/treasury';
+import { buildProgress } from '../util/construction';
 import { addUnits } from '../util/stacks';
 import { effectiveStats, loadoutCost, validateLoadout } from '../util/loadout';
 
@@ -44,6 +45,17 @@ interface ConstructionRequirement {
   allowed: boolean;
   code?: string;
 }
+interface CancelConstructionPayload {
+  planetId: string;
+  /** The `scheduled` entry's `seq` — the same value the client already reads off
+   *  `construction.complete` events to identify "the active build". */
+  seq: number;
+}
+interface ResumeConstructionPayload {
+  planetId: string;
+  /** A `PausedConstructionSite.id` (= the original order's `seq`). */
+  id: number;
+}
 
 /** Sum two resource bags (`a + b`), for hull + loadout costs. */
 function sumBags(a: ResourceBag, b: ResourceBag): ResourceBag {
@@ -59,6 +71,33 @@ function scaleCost(cost: ResourceBag, count: number): ResourceBag {
     out[res] = (cost[res] ?? 0) * count;
   }
   return out;
+}
+
+/** Recomputes the (duration, cost) an in-flight `construction.complete` payload
+ *  represents, from data — the exact same lookups used when the order was first
+ *  placed. Null for a malformed/unrecognized payload (fail-secure: cancel/resume
+ *  reject rather than guess). */
+function orderSpec(data: GameData, p: CompletePayload): { hours: number; cost: ResourceBag } | null {
+  if (p.kind === 'building' && typeof p.building === 'string') {
+    const def = data.buildings[p.building];
+    if (!def) return null;
+    const level1 = buildingLevel(def, 1);
+    return { hours: level1.buildTimeHours, cost: level1.cost };
+  }
+  if (p.kind === 'upgrade' && typeof p.building === 'string' && typeof p.level === 'number') {
+    const def = data.buildings[p.building];
+    if (!def) return null;
+    const next = buildingLevel(def, p.level);
+    return { hours: next.buildTimeHours, cost: next.cost };
+  }
+  if (p.kind === 'unit' && typeof p.unit === 'string' && typeof p.count === 'number') {
+    const def = data.units[p.unit];
+    if (!def) return null;
+    const perShip =
+      p.modules && p.modules.length > 0 ? sumBags(def.cost, loadoutCost(p.modules, data)) : def.cost;
+    return { hours: def.buildTimeHours, cost: scaleCost(perShip, p.count) };
+  }
+  return null;
 }
 
 /** Schedules a build to finish after `hours`, scaled by the match timeScale
@@ -214,6 +253,9 @@ export const constructionModule: GameModule = {
       if (isQueued(h, 'building', planet.id, payload.building)) {
         return h.reject('E_ALREADY_QUEUED');
       }
+      if (planet.pausedConstruction?.some((s) => s.kind === 'building' && s.building === payload.building)) {
+        return h.reject('E_ALREADY_PAUSED'); // resume it instead of re-ordering fresh
+      }
       const level1 = buildingLevel(def, 1);
       if (!canAfford(player.resources, level1.cost)) {
         return h.reject('E_INSUFFICIENT');
@@ -256,6 +298,9 @@ export const constructionModule: GameModule = {
       }
       if (isQueued(h, 'upgrade', planet.id, instance.type)) {
         return h.reject('E_ALREADY_QUEUED');
+      }
+      if (planet.pausedConstruction?.some((s) => s.kind === 'upgrade' && s.building === instance.type)) {
+        return h.reject('E_ALREADY_PAUSED'); // resume it instead of re-ordering fresh
       }
       const next = buildingLevel(def, nextLevel);
       if (!canAfford(player.resources, next.cost)) {
@@ -327,6 +372,115 @@ export const constructionModule: GameModule = {
         planetId: planet.id,
         unit: payload.unit,
         count,
+        playerId: action.playerId,
+      });
+    });
+
+    // Cancel an ACTIVE (already paid, already ticking) build/upgrade/unit order:
+    // refunds the unbuilt share of its cost and parks it as a resumable paused site
+    // — the investment isn't lost, just halted (GDD: partial-refund cancel). The
+    // building never existed in `planet.buildings` to begin with (it only lands
+    // there on `construction.complete`), so there's nothing else to roll back.
+    api.onAction('construction.cancel', (action, h) => {
+      const payload = action.payload as Partial<CancelConstructionPayload>;
+      if (typeof payload?.planetId !== 'string' || typeof payload?.seq !== 'number') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const { planet, player } = ownedPlanet(h, action, payload.planetId);
+      const event = h.state.scheduled.find(
+        (e) => e.type === 'construction.complete' && e.seq === payload.seq,
+      );
+      if (!event) {
+        return h.reject('E_NOT_ACTIVE'); // already completed, or never existed
+      }
+      const p = event.payload as CompletePayload;
+      if (p.planetId !== planet.id || p.playerId !== action.playerId) {
+        return h.reject('E_FORBIDDEN'); // that seq belongs to someone else's order
+      }
+      const spec = orderSpec(h.ctx.data, p);
+      if (!spec) {
+        return h.reject('E_UNKNOWN_BUILDING');
+      }
+      const totalDurationMs = hoursToMs(h.ctx, spec.hours);
+      const progress = buildProgress(h.ctx.now, event.at, totalDurationMs);
+      const refund = scaleCost(spec.cost, 1 - progress); // linear, NOT the 50% output threshold
+      refundCost(player.resources, refund);
+      h.state.scheduled = h.state.scheduled.filter((e) => e.seq !== payload.seq);
+      const site: PausedConstructionSite = {
+        id: payload.seq,
+        kind: p.kind === 'unit' || p.kind === 'upgrade' ? p.kind : 'building',
+        playerId: action.playerId,
+        building: p.building,
+        level: p.level,
+        unit: p.unit,
+        count: p.count,
+        modules: p.modules,
+        progress,
+        remainingHours: spec.hours * (1 - progress),
+        remainingCost: refund,
+      };
+      planet.pausedConstruction = [...(planet.pausedConstruction ?? []), site];
+      h.emit('construction.cancelled', {
+        planetId: planet.id,
+        seq: payload.seq,
+        kind: site.kind,
+        progress,
+        playerId: action.playerId,
+      });
+    });
+
+    // Resume a paused site: pays exactly what was refunded, re-schedules exactly the
+    // remaining duration (not the full one) — the build continues from where it was
+    // paused, it does not restart.
+    api.onAction('construction.resume', (action, h) => {
+      const payload = action.payload as Partial<ResumeConstructionPayload>;
+      if (typeof payload?.planetId !== 'string' || typeof payload?.id !== 'number') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const { planet, player } = ownedPlanet(h, action, payload.planetId);
+      if (isBombarded(h.state, planet.id)) {
+        return h.reject('E_BOMBARDED');
+      }
+      const paused = planet.pausedConstruction ?? [];
+      const site = paused.find((s) => s.id === payload.id);
+      if (!site) {
+        return h.reject('E_NOT_PAUSED');
+      }
+      if (site.kind === 'building' && typeof site.building === 'string') {
+        if (planet.buildings.some((b) => b.type === site.building)) {
+          return h.reject('E_ALREADY_BUILT');
+        }
+        if (isQueued(h, 'building', planet.id, site.building)) {
+          return h.reject('E_ALREADY_QUEUED');
+        }
+      } else if (site.kind === 'upgrade' && typeof site.building === 'string' && typeof site.level === 'number') {
+        const instance = planet.buildings.find((b) => b.type === site.building);
+        if (!instance || instance.level !== site.level - 1) {
+          return h.reject('E_STALE_CONSTRUCTION'); // building moved on without this upgrade
+        }
+        if (isQueued(h, 'upgrade', planet.id, site.building)) {
+          return h.reject('E_ALREADY_QUEUED');
+        }
+      }
+      if (!canAfford(player.resources, site.remainingCost)) {
+        return h.reject('E_INSUFFICIENT');
+      }
+      payCost(player.resources, site.remainingCost);
+      planet.pausedConstruction = paused.filter((s) => s.id !== payload.id);
+      scheduleCompletion(h, site.remainingHours, {
+        kind: site.kind,
+        planetId: planet.id,
+        playerId: action.playerId,
+        building: site.building,
+        level: site.level,
+        unit: site.unit,
+        count: site.count,
+        modules: site.modules,
+      });
+      h.emit('construction.resumed', {
+        planetId: planet.id,
+        id: payload.id,
+        kind: site.kind,
         playerId: action.playerId,
       });
     });

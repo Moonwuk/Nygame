@@ -184,12 +184,16 @@ describe('construction module — buildings paid from the treasury', () => {
     const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
 
     const ordered = okApply(kernel.applyAction(st, construct('mine'), ctx(0)));
-    // While building (0→4h) the mine does not exist yet, so nothing is produced.
+    // While building (0→4h) the mine isn't in `planet.buildings` yet, but it DOES
+    // ramp in partial output from the 50% mark (2h) onward — see economy.ts
+    // `pendingProduction` — so this single 0→4h advance (nothing else scheduled, so
+    // it's ONE time.advanced span) integrates 0 for 0-2h then a 0.5→1.0 ramp for
+    // 2-4h: avg ramp 0.75 × 10/h × 2h = 15 metal on top of the 50 paid up-front.
     const built = okAdvance(kernel.advanceTo(ordered.state, ctx(4 * HOUR)));
-    expect(built.state.players.p1?.resources.metal).toBe(50);
-    // The hour after completion the mine yields 10 metal/h into the treasury.
+    expect(built.state.players.p1?.resources.metal).toBe(65);
+    // The hour after completion the mine yields its full 10 metal/h into the treasury.
     const later = okAdvance(kernel.advanceTo(built.state, ctx(5 * HOUR)));
-    expect(later.state.players.p1?.resources.metal).toBe(60);
+    expect(later.state.players.p1?.resources.metal).toBe(75);
   });
 
   it('charges every resource line of a multi-resource cost', () => {

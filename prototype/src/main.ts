@@ -35,6 +35,8 @@ import {
   buildBuilding,
   upgradeBuilding,
   buildUnit,
+  cancelConstruction,
+  resumeConstruction,
   aiOrders,
   declareWar,
   netIncome,
@@ -112,6 +114,8 @@ import {
   pairHas,
   hashState,
   planRoute,
+  thresholdRamp,
+  type PausedConstructionSite,
 } from '../../packages/shared-core/src/index';
 import { MultiplayerClient, type MultiplayerPing, type MultiplayerChatMessage, createBattleModel, type BattleSideView } from '../../packages/client/src/index';
 import {
@@ -489,9 +493,11 @@ let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
 let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
 let setupFaction = 'blue'; // H3: the house the HUMAN plays; AI seats take the remaining ones
-// Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
-// normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
-const SETUP_SPEEDS = [1, 2, 5, 10, 50];
+// Chosen time-flow multiplier for the launched match (×1/×2/×5/×10/×50/×100). ×1 = today's
+// normal play pace; the launch maps it onto the speedbar (applyTimeSpeed). ×100 is a
+// single-player-only sandbox pace — in net mode the server owns the clock, so this list
+// (and the in-match pace chips) only ever affect the local sim (see `frame()`'s `!NET` guard).
+const SETUP_SPEEDS = [1, 2, 5, 10, 50, 100];
 let setupSpeed = 10;
 let lastPanelHtml = '';
 let lastCmdHtml = '';
@@ -3960,9 +3966,16 @@ function unitRows(stacks: Array<{ unit: string; count: number }>): string {
     )
     .join('');
 }
+/** Localized one-line label for a paused site (shares `ConstructionPayload`'s field
+ *  names, so `constructionLabel` reads it directly — the extra `id`/`progress`/
+ *  `remainingHours`/`remainingCost` fields are simply ignored). */
+function pausedLabel(site: PausedConstructionSite): string {
+  return constructionLabel(site);
+}
 function conveyorHtml(planetId: string, lane: BuildLane): string {
   const active = activeConstruction(planetId, lane);
   const queued = queueOf(planetId)[lane];
+  const paused = (s.planets[planetId]?.pausedConstruction ?? []).filter((p) => laneOf(p.kind) === lane);
   let html = `<div class="conveyor">`;
   if (active) {
     // The live % / remaining-time are patched in each frame by updatePanelLive() and
@@ -3970,7 +3983,8 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
     // build buttons) would be rebuilt 60×/s, and a click whose down/up straddle a rebuild
     // is dropped (the bug where rapid build orders only queued one ship in real time).
     const dur = buildDurationHours(active.payload) * HOUR;
-    html += `<div class="current"><span>${t('СЕЙЧАС')}</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em></div>`;
+    html += `<div class="current" data-desc="c:${planetId}:${lane}:active:${active.seq}"><span>${t('СЕЙЧАС')}</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em>`;
+    html += `<button class="conv-cancel" data-act="cancelbuild" data-arg="${active.seq}" title="${t('Отменить — вернёт часть ресурсов и поставит на паузу')}">✕</button></div>`;
     html += `<div class="bar"><i class="conv-fill" data-at="${active.at}" data-dur="${dur}" style="width:0%"></i></div>`;
   } else {
     html += `<div class="current idle"><span>${t('ПРОСТОЙ')}</span><b>${t('готов к следующему заказу')}</b><em>—</em></div>`;
@@ -3978,10 +3992,21 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   }
   if (queued.length) {
     html += `<div class="queue">${queued
-      .map((q, i) => `<span><em>${i + 1}</em>${queuedLabel(q)}</span>`)
+      .map(
+        (q, i) =>
+          `<span data-desc="c:${planetId}:${lane}:queued:${i}"><em>${i + 1}</em>${queuedLabel(q)}<button class="q-x" data-act="dequeue" data-arg="${lane}:${i}" title="${t('Убрать из очереди')}">✕</button></span>`,
+      )
       .join('')}</div>`;
   } else {
     html += `<div class="queue empty">${t('очередь пуста')}</div>`;
+  }
+  if (paused.length) {
+    html += `<div class="paused">${paused
+      .map(
+        (p) =>
+          `<span data-desc="c:${planetId}:${lane}:paused:${p.id}"><em>${t('Приостановлено {n}%', { n: Math.round(p.progress * 100) })}</em>${pausedLabel(p)}<button class="p-go" data-act="resumebuild" data-arg="${p.id}" title="${t('Возобновить — доплатить остаток')}">▶</button></span>`,
+      )
+      .join('')}</div>`;
   }
   return html + `</div>`;
 }
@@ -4375,7 +4400,8 @@ function panelHtml(): string {
     for (const b of p.buildings) {
       const def = data.buildings[b.type];
       const max = def ? buildingMaxLevel(def) : 1;
-      blds += `<div class="asset-row" data-desc="b:${b.type}:${b.level}"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${buildingName(b.type)}</b><span class="dim">L${b.level}/${max} · ${t('хп')} ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
+      const prod = def ? producesLine(buildingLevel(def, b.level).produces) : '';
+      blds += `<div class="asset-row" data-desc="b:${b.type}:${b.level}"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${buildingName(b.type)}</b><span class="dim">L${b.level}/${max} · ${t('хп')} ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}${prod ? ` · <span class="prod">${prod}</span>` : ''}</span>`;
       if (mine && b.level < max) {
         const c = def?.upgrades[b.level - 1]?.cost;
         // hovering Upgrade previews the NEXT level's dossier (output it will unlock)
@@ -4521,6 +4547,115 @@ function unitDossier(id: string): Dossier | null {
   }
 }
 
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/** "+10 металл/ч, +5 кредиты/ч" — the always-visible output readout on a built
+ *  building's row (not just on hover). Empty string for a produces-less building
+ *  (defense/radar/etc.), so the row's dim-text separator (" · ") is skipped. */
+function producesLine(produces: Record<string, number>): string {
+  return Object.entries(produces)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([res, n]) => `+${round1(n ?? 0)} ${tData(res)}/ч`)
+    .join(', ');
+}
+
+/** Dossier for an in-flight/queued/paused construction/upgrade/unit order — "what is
+ *  this, what does it yield NOW vs once finished". `progress` is 0 for a not-yet-
+ *  started queued order, the live 0..1 fraction for an active one, or the frozen
+ *  `PausedConstructionSite.progress` for a paused one; `remainingH` is null only for
+ *  a queued order (it hasn't started, so there's no ETA yet). The same base+delta×ramp
+ *  formula construction.ts/economy.ts use: for a fresh building `base` is 0 (nothing
+ *  exists below the threshold), for an upgrade `base` is the CURRENT level's output
+ *  (already running in full) and only the delta to the target level ramps in. */
+function taskDossier(
+  planetId: string,
+  kind: BuildKind,
+  building: string | undefined,
+  unit: string | undefined,
+  count: number | undefined,
+  level: number | undefined,
+  progress: number,
+  remainingH: number | null,
+): Dossier {
+  const eta = remainingH !== null ? t('Осталось: {r}', { r: hl(fmtEta(remainingH)) }) : t('В очереди — ещё не начато.');
+  if (kind === 'unit' && unit) {
+    return {
+      name: `${count ?? 1}× ${unitIcon(unit)} ${displayUnit(unit)}`,
+      body: [eta, t('По готовности пополнит гарнизон/флот планеты.')].join('<br>'),
+    };
+  }
+  if (!building) return { name: t('Стройка'), body: eta };
+  const def = data.buildings[building];
+  if (!def) return { name: building, body: eta };
+  const name =
+    kind === 'upgrade'
+      ? `${BUILD_ICON[building] ?? '▣'} ${tData(def.name)} → L${level ?? '?'}`
+      : `${BUILD_ICON[building] ?? '▣'} ${tData(def.name)}`;
+  const ramp = thresholdRamp(progress);
+  let base: Record<string, number> = {};
+  let final: Record<string, number> = {};
+  if (kind === 'upgrade' && typeof level === 'number') {
+    const instance = s.planets[planetId]?.buildings.find((b) => b.type === building);
+    base = instance ? buildingLevel(def, instance.level).produces : {};
+    final = buildingLevel(def, level).produces;
+  } else {
+    final = buildingLevel(def, 1).produces;
+  }
+  const lines: string[] = [];
+  for (const res of new Set([...Object.keys(base), ...Object.keys(final)])) {
+    const b = base[res] ?? 0;
+    const f = final[res] ?? 0;
+    if (b === 0 && f === 0) continue;
+    const now = b + (f - b) * ramp;
+    lines.push(
+      t('{r}: {now}/ч сейчас → {final}/ч по готовности', { r: tData(res), now: hl(round1(now)), final: hl(round1(f)) }),
+    );
+  }
+  return { name, body: [eta, ...lines].join('<br>') };
+}
+
+function constructionDossier(key: string): Dossier | null {
+  const [, planetId, lane, state, ref] = key.split(':');
+  if (!planetId || !lane || !state || ref === undefined) return null;
+  if (state === 'active') {
+    const active = activeConstruction(planetId, lane as BuildLane);
+    if (!active || String(active.seq) !== ref) return null;
+    const p = active.payload;
+    return taskDossier(
+      planetId,
+      (p.kind ?? 'building') as BuildKind,
+      p.building,
+      p.unit,
+      p.count,
+      p.level,
+      progressPct(active) / 100,
+      Math.max(0, (active.at - s.time) / HOUR),
+    );
+  }
+  if (state === 'queued') {
+    const q = queueOf(planetId)[lane as BuildLane][Number(ref)];
+    if (!q) return null;
+    const level =
+      q.kind === 'upgrade' ? (s.planets[planetId]?.buildings.find((b) => b.type === q.id)?.level ?? 0) + 1 : undefined;
+    return taskDossier(
+      planetId,
+      q.kind,
+      q.kind === 'unit' ? undefined : q.id,
+      q.kind === 'unit' ? q.id : undefined,
+      q.count,
+      level,
+      0,
+      null,
+    );
+  }
+  if (state === 'paused') {
+    const site = (s.planets[planetId]?.pausedConstruction ?? []).find((p) => String(p.id) === ref);
+    if (!site) return null;
+    return taskDossier(planetId, site.kind, site.building, site.unit, site.count, site.level, site.progress, site.remainingHours);
+  }
+  return null;
+}
+
 function objDossier(key: string): Dossier | null {
   if (key === 'fleet') {
     return {
@@ -4528,6 +4663,7 @@ function objDossier(key: string): Dossier | null {
       body: t('Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.'),
     };
   }
+  if (key.startsWith('c:')) return constructionDossier(key);
   const [kind, id, lvl] = key.split(':');
   if (kind === 'b') return buildingDossier(id, Number(lvl) || 1);
   if (kind === 'u') return unitDossier(id);
@@ -5111,15 +5247,30 @@ function codexBuildBtn(kind: string, id: string): string {
   return '';
 }
 
+/** A `b:<id>:<lvl>` key embeds its building level in the title (as `hl(lvl)`) — shared
+ *  by the desktop hover pane and the mobile tap modal so both read identically. */
+function dossierTitleHtml(key: string, d: Dossier): string {
+  const lvl = key.startsWith('b:') ? Number(key.split(':')[2]) || 0 : 0;
+  return lvl ? `${esc(d.name)} ${hl(lvl)}` : esc(d.name);
+}
+
 /** Right-docked description pane HTML for the currently hovered menu object. */
 function objDescHtml(): string {
   const d = hoverObj ? objDossier(hoverObj) : null;
   if (!d) {
     return `<div class="pd-empty">${t('Наведи на объект слева — здесь появится его досье.')}</div>`;
   }
-  const lvl = hoverObj && hoverObj.startsWith('b:') ? Number(hoverObj.split(':')[2]) || 0 : 0;
-  const title = lvl ? `${esc(d.name)} ${hl(lvl)}` : esc(d.name);
-  return `<div class="pd-title">${title}</div><div class="pd-body">${d.body}</div>`;
+  return `<div class="pd-title">${dossierTitleHtml(hoverObj!, d)}</div><div class="pd-body">${d.body}</div>`;
+}
+
+/** Touch has no hover — a tap on a `[data-desc]` object opens the SAME dossier in the
+ *  codex overlay instead (reuses its box/close chrome; no "Build here" button here). */
+function openDossier(key: string): void {
+  const d = objDossier(key);
+  const el = document.getElementById('codex');
+  if (!el || !d) return;
+  el.innerHTML = `<div class="cxbox"><div class="cx-head"><b>${dossierTitleHtml(key, d)}</b></div><div class="cx-desc">${d.body}</div><button class="cx-close">${t('ЗАКРЫТЬ')}</button></div>`;
+  el.classList.add('show');
 }
 
 function renderObjDesc(): void {
@@ -5361,7 +5512,16 @@ side.addEventListener('click', (ev) => {
     return;
   }
   const bEl = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
-  if (!bEl || bEl.disabled) return;
+  if (!bEl || bEl.disabled) {
+    // Touch has no hover: a tap that lands on a dossier-able row (not one of its own
+    // action buttons, handled below) opens the same summary the desktop pane shows
+    // on hover — building/task name, current vs full output, ETA.
+    if (MOBILE) {
+      const key = (ev.target as HTMLElement).closest('[data-desc]')?.dataset.desc ?? null;
+      if (key !== null) openDossier(key);
+    }
+    return;
+  }
   if (bEl.dataset.codex) {
     openCodex(bEl.dataset.codex); // a build/ship tile → full specs (+ Build here)
     return;
@@ -5385,6 +5545,17 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
+  } else if (act === 'cancelbuild') {
+    // The active order only — refunds the unbuilt share and pauses it (resumable).
+    playerOrder(cancelConstruction(ME, selPlanet!, Number(arg)));
+  } else if (act === 'resumebuild') {
+    playerOrder(resumeConstruction(ME, selPlanet!, Number(arg)));
+  } else if (act === 'dequeue') {
+    // Nothing was ever paid for a not-yet-dispatched queued order (single-player
+    // local buffer only — net mode sends immediately, so there's nothing to dequeue
+    // there) — a plain local removal, no action needed.
+    const [qLane, qIdx] = arg.split(':');
+    queueOf(selPlanet!)[qLane as BuildLane].splice(Number(qIdx), 1);
   } else if (act === 'mobtpl') {
     mobTplIdx = Number(arg); // switch which template the assembler shows (local, re-renders)
   } else if (act === 'mobilize') {

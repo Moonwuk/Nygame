@@ -16,6 +16,10 @@ export const en: Record<string, string> = {
   '{n} {r}/день': '{n} {r}/day',
   '{n} {r}/ч': '{n} {r}/h',
   '{n} ФЛОТОВ': '{n} FLEETS',
+  'Осталось: {r}': 'Remaining: {r}',
+  'В очереди — ещё не начато.': 'Queued — not started yet.',
+  'По готовности пополнит гарнизон/флот планеты.': 'Joins the planet\'s garrison/fleet once finished.',
+  '{r}: {now}/ч сейчас → {final}/ч по готовности': '{r}: {now}/h now → {final}/h once finished',
   '{n} героя: главный (имя = твой ник) + по одному грейду. Грейд задаёт число слотов под модули (обычный {c} · редкий {r} · легендарный {l} · главный {m}) + базовая аура (+5% бой флоту). Бери модуль из инвентаря и вставляй в слот. В матче меняется в столице.':
     '{n} heroes: the main hero (name = your callsign) + one per grade. Grade sets the module slot count (common {c} · rare {r} · legendary {l} · main {m}) + a base aura (+5% combat to the fleet). Grab a module from the inventory and drop it in a slot. Re-fit at your capital mid-match.',
   '{n} кораблей': '{n} ships',
@@ -201,6 +205,10 @@ export const en: Record<string, string> = {
     'Splits the wing off into its own fast strike fleet — send it in while the carrier stays put. Needs at least one non-squadron ship left behind. Countered by orbital AA.',
   'Отмена': 'Cancel',
   'Отменить': 'Cancel',
+  'Отменить — вернёт часть ресурсов и поставит на паузу': 'Cancel — refunds part of the cost and pauses it',
+  'Убрать из очереди': 'Remove from the queue',
+  'Приостановлено {n}%': 'Paused {n}%',
+  'Возобновить — доплатить остаток': 'Resume — pay the remainder',
   'Перезапуск — к выбору ботов': 'Restart — back to bot selection',
   'Отметить выбранную провинцию пингом': 'Mark the selected province with a ping',
   'Отметьте провинцию и отправьте — метка станет кликабельной (↪ камера).':
@@ -678,8 +686,8 @@ export const en: Record<string, string> = {
   '🛰 орбита': '🛰 orbit',
 
   // --- static markup (build.mjs, data-i18n) -------------------------------------
-  '×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×50.':
-    "×1 — real time (an hour of travel = an hour of life, the world runs offline too). For a quick game pick ×10–×50.",
+  '×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.':
+    "×1 — real time (an hour of travel = an hour of life, the world runs offline too). For a quick game pick ×10–×100.",
   'Аккаунт': 'Account',
   'Активные': 'Active',
   'Альянсы': 'Alliances',

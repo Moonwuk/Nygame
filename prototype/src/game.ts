@@ -42,6 +42,8 @@ import {
   pairKey,
   identifiedNodes,
   timeScaleOf,
+  buildProgress,
+  thresholdRamp,
   type DiplomaticStance,
   type GameData,
   type GameModule,
@@ -1938,6 +1940,77 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
       // …and its running cost (daily → hourly), same drain the settlement applies.
       for (const res of Object.keys(level.upkeep)) out[res] = (out[res] ?? 0) - (level.upkeep[res] ?? 0) / 24;
     }
+    // Constructions in progress (≥50% built) chip in a partial/delta share too —
+    // mirrors economy.ts's `pendingProduction` ramp rule. Point-evaluated (not
+    // integrated) since this is a live HUD rate, not an accrual over a span; no
+    // upkeep is charged on an unfinished building either, so no brownout applies here.
+    for (const event of state.scheduled) {
+      if (event.type !== 'construction.complete') continue;
+      const cp = event.payload as {
+        kind?: 'building' | 'unit' | 'upgrade';
+        planetId?: string;
+        building?: string;
+        level?: number;
+      };
+      if (cp.planetId !== p.id) continue;
+      if (cp.kind === 'building' && typeof cp.building === 'string') {
+        const def = data.buildings[cp.building];
+        if (!def) continue;
+        const level1 = buildingLevel(def, 1);
+        const ramp = thresholdRamp(buildProgress(state.time, event.at, level1.buildTimeHours * HOUR));
+        if (ramp <= 0) continue;
+        for (const res of Object.keys(level1.produces)) {
+          const v = (level1.produces[res] ?? 0) * ramp * mult;
+          if (res === 'credits') credits += v;
+          else out[res] = (out[res] ?? 0) + v;
+        }
+      } else if (cp.kind === 'upgrade' && typeof cp.building === 'string' && typeof cp.level === 'number') {
+        const def = data.buildings[cp.building];
+        const instance = p.buildings.find((b) => b.type === cp.building);
+        if (!def || !instance) continue;
+        const current = buildingLevel(def, instance.level);
+        const target = buildingLevel(def, cp.level);
+        const ramp = thresholdRamp(buildProgress(state.time, event.at, target.buildTimeHours * HOUR));
+        if (ramp <= 0) continue;
+        const resources = new Set([...Object.keys(current.produces), ...Object.keys(target.produces)]);
+        for (const res of resources) {
+          const delta = ((target.produces[res] ?? 0) - (current.produces[res] ?? 0)) * ramp * mult;
+          if (delta === 0) continue;
+          if (res === 'credits') credits += delta;
+          else out[res] = (out[res] ?? 0) + delta;
+        }
+      }
+    }
+    // A PAUSED site keeps its frozen share too — pausing halts further construction,
+    // not the share of the building already standing (mirrors economy.ts's
+    // `pausedProduction`: same threshold rule, held flat at `site.progress`).
+    for (const site of p.pausedConstruction ?? []) {
+      const ramp = thresholdRamp(site.progress);
+      if (ramp <= 0) continue;
+      if (site.kind === 'building' && typeof site.building === 'string') {
+        const def = data.buildings[site.building];
+        if (!def) continue;
+        const level1 = buildingLevel(def, 1);
+        for (const res of Object.keys(level1.produces)) {
+          const v = (level1.produces[res] ?? 0) * ramp * mult;
+          if (res === 'credits') credits += v;
+          else out[res] = (out[res] ?? 0) + v;
+        }
+      } else if (site.kind === 'upgrade' && typeof site.building === 'string' && typeof site.level === 'number') {
+        const def = data.buildings[site.building];
+        const instance = p.buildings.find((b) => b.type === site.building);
+        if (!def || !instance) continue;
+        const current = buildingLevel(def, instance.level);
+        const target = buildingLevel(def, site.level);
+        const resources = new Set([...Object.keys(current.produces), ...Object.keys(target.produces)]);
+        for (const res of resources) {
+          const delta = ((target.produces[res] ?? 0) - (current.produces[res] ?? 0)) * ramp * mult;
+          if (delta === 0) continue;
+          if (res === 'credits') credits += delta;
+          else out[res] = (out[res] ?? 0) + delta;
+        }
+      }
+    }
     if (isInhabited(p)) {
       credits += civicTax(inhabited);
       if (p.buildings.some((b) => b.type === 'tax_office')) credits *= 1 + TAX_OFFICE_BONUS;
@@ -3030,6 +3103,16 @@ export const buildShip = (
   count: number,
   modules: string[],
 ) => act(playerId, 'unit.build', { planetId, unit, count, modules });
+/** Cancel an ACTIVE (already paid) building/upgrade/unit order: refunds the unbuilt
+ *  share of its cost and parks it as a resumable paused site — `seq` is the order's
+ *  `construction.complete` scheduled-event seq (already read off `s.scheduled`, e.g.
+ *  by `activeConstruction()`). */
+export const cancelConstruction = (playerId: string, planetId: string, seq: number) =>
+  act(playerId, 'construction.cancel', { planetId, seq });
+/** Resume a paused site: pays exactly what was refunded, continues from the same
+ *  progress. `id` is the `PausedConstructionSite.id` (= the original order's `seq`). */
+export const resumeConstruction = (playerId: string, planetId: string, id: number) =>
+  act(playerId, 'construction.resume', { planetId, id });
 export const engageFleet = (playerId: string, fleetId: string, targetId: string) =>
   act(playerId, 'fleet.engage', { fleetId, targetId });
 /** Begin researching a session technology (one active at a time — technologyModule). */

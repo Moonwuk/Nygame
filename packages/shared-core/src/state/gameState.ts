@@ -51,6 +51,30 @@ export interface BuildingInstance {
   hp: number;
 }
 
+/** A construction/upgrade/unit order cancelled mid-build: the paid-in-full order was
+ *  refunded its unbuilt share and halted rather than lost outright — `resume` pays
+ *  `remainingCost` (exactly what was refunded) to re-schedule the same
+ *  `remainingHours` and finish from here, not from scratch. `id` is the original
+ *  scheduled event's `seq` (stable across cancel → resume). Planet-scoped: buildings,
+ *  upgrades and unit orders are all placed against a specific planet. */
+export interface PausedConstructionSite {
+  id: number;
+  kind: 'building' | 'upgrade' | 'unit';
+  playerId: PlayerId;
+  building?: BuildingId;
+  /** Upgrade target level (kind: 'upgrade' only). */
+  level?: number;
+  unit?: UnitId;
+  count?: number;
+  modules?: ModuleId[];
+  /** Fraction (0..1) already complete at the moment of the pause. */
+  progress: number;
+  /** Game-hours still needed to finish, same units as `buildTimeHours`. */
+  remainingHours: number;
+  /** Exactly what was refunded; exactly what `resume` charges again. */
+  remainingCost: ResourceBag;
+}
+
 export interface Player {
   id: PlayerId;
   name: string;
@@ -195,6 +219,9 @@ export interface Planet {
   buildings: BuildingInstance[];
   garrison: UnitStack[];
   traits: TraitId[];
+  /** Cancelled-mid-build construction/upgrade/unit orders, paused and resumable
+   *  (see `PausedConstructionSite`). Undefined/empty = nothing paused here. */
+  pausedConstruction?: PausedConstructionSite[];
 }
 
 export interface FleetMovement {
