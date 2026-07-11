@@ -451,15 +451,26 @@
   (или чистый хелпер) сеет `state.diplomacy` из `slot.team` (та же сторона `alliance`,
   между — по `crossTeamStart`) — сейчас эта логика есть только в прото-`newGame`. Опора
   под серверный AvA-матч. Хвост: **NET-2v2** (прото-хост сеет командные seats).
-- **AVA-2** ⏳ `[srv]` **Очки влияния корпорации.** Корп-валюта в `CorpStore`
-  (`addInfluence`/`spendInfluence` атомарно, `E_INSUFFICIENT`, аудит) — тратится на вызов,
-  начисляется за победу. Отдельно от внутриматчевой казны игрока.
-- **AVA-3** ⏳ `[srv]` **Флаги готовности к AvA.** Корп-флаг (глава → пул готовых) +
-  игровой флаг (игрок → согласие на офлайн-развёртывание); `setCorpReady`/`setPlayerReady`,
-  `GET /ava/pool`. RBAC fail-secure.
-- **AVA-4** ⏳ `[srv]` **Вызов/принятие (S0–S2).** `challengeCorp` (тратит влияние,
-  истечение по таймеру) / `acceptChallenge` / `declineChallenge`; возврат влияния при
-  decline/expire; принятие → матчап (S2). State-машина, коды `E_*`.
+- **AVA-2** ✅ `[srv]` **Очки влияния корпорации.** Корп-валюта `influence` в `CorpStore`
+  (`addInfluence`/`spendInfluence` — списание атомарное, guard `influence >= cost` внутри
+  UPDATE, `E_INSUFFICIENT`, никогда < 0; аудит-действие `influence`). Отдельно от
+  внутриматчевой казны. Memory + Postgres (`ALTER … IF NOT EXISTS` backfill), контракт-тесты
+  обоих адаптеров.
+- **AVA-3** ✅ `[srv]` **Флаги готовности к AvA.** Корп-флаг (глава → пул готовых,
+  `setCorpReady`/`clearCorpReady`) + игровой флаг (член → согласие на офлайн-развёртывание,
+  `setPlayerReady`/`clearPlayerReady`, привязан к текущей корпе — выход/кик/роспуск чистит);
+  `GET /ava/pool`. RBAC fail-secure (`AvaService`). Memory + Postgres (`corp_ready`/
+  `player_ready`) + контракт-тесты.
+- **AVA-4** ✅ `[srv]` **Вызов/принятие (S0–S2).** `AvaService.challenge` (глава готовой
+  корпы, тратит влияние ПЕРЕД созданием заявки — возврат при отказе создания) /
+  `accept` (глава цели → `accepted` = S2-матчап) / `decline` (возврат влияния); истечение —
+  `sweepExpired(now)` на инжектируемом таймере, без клиентов. Инварианты в сторе: одна
+  `pending`-заявка на пару (partial unique index), exactly-once `pending→terminal`
+  (условный UPDATE — гонка double-accept закрыта, без двойного возврата). Коды `E_FORBIDDEN`/
+  `E_NOT_READY`/`E_SELF_CHALLENGE`/`E_ALREADY_CHALLENGED`/`E_INSUFFICIENT`/`E_NO_CHALLENGE`/
+  `E_CHALLENGE_CLOSED`. REST `POST /ava/challenge` + `/:id/(accept|decline)`,
+  `GET /ava/challenges`; session-gated, per-IP rate-limit; свип-интервал в `main.ts`. Memory
+  - Postgres + сервис-тесты (весь state-машинный набор) + HTTP-контракт.
 - **AVA-5** ⏳ `[core/data]` **Пул AvA-карт + eligibility.** Тег `ava{sides,slotsPerSide}`
   в `MatchMapSchema`, пометить `ava-duel-1`, добавить 2v2-карту; `pickAvaMap` (seeded).
 - **AVA-6** ⏳ `[srv]` **Сбор ростера + лок (S3).** Окно паузы; `setRoster` (глава/офицер

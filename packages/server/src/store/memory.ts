@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  AvaChallenge,
+  AvaChallengeStatus,
+  AvaChallengeStore,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -124,6 +127,9 @@ export class MemoryCorpStore implements CorpStore {
   /** `accountId → membership` — the map key IS the one-corp-per-account invariant. */
   private readonly members = new Map<string, CorpMembership>();
   private readonly audit: CorpAuditEntry[] = [];
+  /** AvA readiness (AVA-3): corp-flag `corpId → since`, player-flag `accountId → {corpId, since}`. */
+  private readonly corpReady = new Map<string, number>();
+  private readonly playerReady = new Map<string, { corpId: string; since: number }>();
 
   createCorp(
     name: string,
@@ -132,12 +138,18 @@ export class MemoryCorpStore implements CorpStore {
   ): Promise<{ ok: true; corpId: string } | { ok: false; code: 'E_NAME_TAKEN' | 'E_IN_CORP' }> {
     const key = name.toLowerCase();
     for (const corp of this.corps.values()) {
-      if (corp.name.toLowerCase() === key) return Promise.resolve({ ok: false, code: 'E_NAME_TAKEN' });
+      if (corp.name.toLowerCase() === key)
+        return Promise.resolve({ ok: false, code: 'E_NAME_TAKEN' });
     }
     if (this.members.has(headAccountId)) return Promise.resolve({ ok: false, code: 'E_IN_CORP' });
     const corpId = randomUUID();
-    this.corps.set(corpId, { corpId, name });
-    this.members.set(headAccountId, { corpId, accountId: headAccountId, login: headLogin, role: 'head' });
+    this.corps.set(corpId, { corpId, name, influence: 0 });
+    this.members.set(headAccountId, {
+      corpId,
+      accountId: headAccountId,
+      login: headLogin,
+      role: 'head',
+    });
     return Promise.resolve({ ok: true, corpId });
   }
 
@@ -187,7 +199,10 @@ export class MemoryCorpStore implements CorpStore {
 
   removeMember(corpId: string, accountId: string): Promise<void> {
     const row = this.members.get(accountId);
-    if (row && row.corpId === corpId) this.members.delete(accountId);
+    if (row && row.corpId === corpId) {
+      this.members.delete(accountId);
+      this.playerReady.delete(accountId); // leaving the corp revokes the consent (AVA-3)
+    }
     return Promise.resolve();
   }
 
@@ -203,10 +218,73 @@ export class MemoryCorpStore implements CorpStore {
 
   removeCorp(corpId: string): Promise<void> {
     this.corps.delete(corpId);
+    this.corpReady.delete(corpId);
     for (const [accountId, row] of this.members) {
-      if (row.corpId === corpId) this.members.delete(accountId);
+      if (row.corpId === corpId) {
+        this.members.delete(accountId);
+        this.playerReady.delete(accountId);
+      }
     }
     return Promise.resolve();
+  }
+
+  addInfluence(corpId: string, delta: number): Promise<void> {
+    const corp = this.corps.get(corpId);
+    if (corp && delta > 0) corp.influence += delta;
+    return Promise.resolve();
+  }
+
+  spendInfluence(
+    corpId: string,
+    cost: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_INSUFFICIENT' }> {
+    const corp = this.corps.get(corpId);
+    if (!corp || cost <= 0 || corp.influence < cost) {
+      return Promise.resolve({ ok: false, code: 'E_INSUFFICIENT' });
+    }
+    corp.influence -= cost;
+    return Promise.resolve({ ok: true });
+  }
+
+  setCorpReady(corpId: string, since: number): Promise<void> {
+    if (this.corps.has(corpId) && !this.corpReady.has(corpId)) this.corpReady.set(corpId, since);
+    return Promise.resolve();
+  }
+
+  clearCorpReady(corpId: string): Promise<void> {
+    this.corpReady.delete(corpId);
+    return Promise.resolve();
+  }
+
+  async listReadyCorps(): Promise<Array<CorpSummary & { readySince: number }>> {
+    const all = await this.listCorps();
+    return all
+      .filter((c) => this.corpReady.has(c.corpId))
+      .map((c) => ({ ...c, readySince: this.corpReady.get(c.corpId)! }));
+  }
+
+  isCorpReady(corpId: string): Promise<boolean> {
+    return Promise.resolve(this.corpReady.has(corpId));
+  }
+
+  setPlayerReady(accountId: string, corpId: string, since: number): Promise<void> {
+    const existing = this.playerReady.get(accountId);
+    this.playerReady.set(accountId, existing?.corpId === corpId ? existing : { corpId, since });
+    return Promise.resolve();
+  }
+
+  clearPlayerReady(accountId: string): Promise<void> {
+    this.playerReady.delete(accountId);
+    return Promise.resolve();
+  }
+
+  readyPlayersOf(corpId: string): Promise<string[]> {
+    return Promise.resolve(
+      [...this.playerReady.entries()]
+        .filter(([, v]) => v.corpId === corpId)
+        .map(([accountId]) => accountId)
+        .sort(),
+    );
   }
 
   appendAudit(entry: CorpAuditEntry): Promise<void> {
@@ -216,7 +294,62 @@ export class MemoryCorpStore implements CorpStore {
 
   auditOf(corpId: string, limit = 50): Promise<CorpAuditEntry[]> {
     const rows = this.audit.filter((e) => e.corpId === corpId);
-    return Promise.resolve(rows.slice(-limit).reverse().map((e) => ({ ...e })));
+    return Promise.resolve(
+      rows
+        .slice(-limit)
+        .reverse()
+        .map((e) => ({ ...e })),
+    );
+  }
+}
+
+/** In-memory AvA challenge store (AVA-4) — a map plus the two structural
+ *  invariants: one pending per challenger→target pair, exactly-once close. */
+export class MemoryAvaChallengeStore implements AvaChallengeStore {
+  private readonly rows = new Map<string, AvaChallenge>();
+
+  createChallenge(
+    challenge: AvaChallenge,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_CHALLENGED' }> {
+    for (const row of this.rows.values()) {
+      if (
+        row.status === 'pending' &&
+        row.challengerCorp === challenge.challengerCorp &&
+        row.targetCorp === challenge.targetCorp
+      ) {
+        return Promise.resolve({ ok: false, code: 'E_ALREADY_CHALLENGED' });
+      }
+    }
+    this.rows.set(challenge.id, { ...challenge });
+    return Promise.resolve({ ok: true });
+  }
+
+  getChallenge(id: string): Promise<AvaChallenge | null> {
+    const row = this.rows.get(id);
+    return Promise.resolve(row ? { ...row } : null);
+  }
+
+  challengesOf(corpId: string, limit = 50): Promise<AvaChallenge[]> {
+    const mine = [...this.rows.values()]
+      .filter((r) => r.challengerCorp === corpId || r.targetCorp === corpId)
+      .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? -1 : 1));
+    return Promise.resolve(mine.slice(0, limit).map((r) => ({ ...r })));
+  }
+
+  closeChallenge(id: string, status: Exclude<AvaChallengeStatus, 'pending'>): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'pending') return Promise.resolve(false);
+    row.status = status;
+    return Promise.resolve(true);
+  }
+
+  duePending(now: number): Promise<AvaChallenge[]> {
+    return Promise.resolve(
+      [...this.rows.values()]
+        .filter((r) => r.status === 'pending' && r.expiresAt <= now)
+        .sort((a, b) => a.expiresAt - b.expiresAt || (a.id < b.id ? -1 : 1))
+        .map((r) => ({ ...r })),
+    );
   }
 }
 

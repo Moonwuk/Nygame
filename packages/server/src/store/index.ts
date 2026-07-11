@@ -1,5 +1,8 @@
 export type {
   AccountStore,
+  AvaChallenge,
+  AvaChallengeStatus,
+  AvaChallengeStore,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -16,6 +19,7 @@ export type {
 } from './types';
 export {
   MemoryAccountStore,
+  MemoryAvaChallengeStore,
   MemoryCorpStore,
   MemoryMatchStore,
   MemoryReceiptStore,
@@ -24,6 +28,7 @@ export {
 export {
   migrate,
   PostgresAccountStore,
+  PostgresAvaChallengeStore,
   PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,

@@ -98,6 +98,9 @@ export type CorpRole = 'head' | 'officer' | 'member' | 'recruit';
 export interface CorpRecord {
   corpId: string;
   name: string;
+  /** AvA influence points (AVA-2) — the corp's inter-match currency: spent on a
+   *  challenge, earned by a war victory. Never negative (spend is atomic+guarded). */
+  influence: number;
 }
 
 /** One membership row. An account belongs to AT MOST one corporation (recruit rows
@@ -131,7 +134,9 @@ export interface CorpAuditEntry {
     | 'role'
     | 'transfer'
     | 'leave'
-    | 'disband';
+    | 'disband'
+    | 'influence'
+    | 'ready';
   /** Subject account id, when the action has one. */
   target?: string;
   /** Extra context, e.g. the new role for `role`. */
@@ -168,11 +173,70 @@ export interface CorpStore {
   /** Transfer headship atomically: `from` (the head) → officer, `to` → head — never
    *  a window with zero or two heads. */
   swapHead(corpId: string, fromAccountId: string, toAccountId: string): Promise<void>;
-  /** Disband: delete the corp and every membership row (audit history stays). */
+  /** Disband: delete the corp and every membership row (audit history stays);
+   *  AvA readiness flags of the corp and its players are cleared with it. */
   removeCorp(corpId: string): Promise<void>;
+  /** Credit influence (AVA-2). `delta` must be positive — earning only; spending
+   *  goes through the guarded `spendInfluence`. */
+  addInfluence(corpId: string, delta: number): Promise<void>;
+  /** Debit influence atomically (AVA-2): the check and the subtraction are one
+   *  storage-level operation, so two racing spends can't overdraw the balance. */
+  spendInfluence(
+    corpId: string,
+    cost: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_INSUFFICIENT' }>;
+  /** AvA readiness (AVA-3): the head's corp-flag puts the corp into the ready pool. */
+  setCorpReady(corpId: string, since: number): Promise<void>;
+  clearCorpReady(corpId: string): Promise<void>;
+  /** Ready-pool read-model: every corp-flagged corp (name + influence ride along). */
+  listReadyCorps(): Promise<Array<CorpSummary & { readySince: number }>>;
+  isCorpReady(corpId: string): Promise<boolean>;
+  /** AvA readiness (AVA-3): a player's standing consent to offline deployment,
+   *  bound to their CURRENT corp — leaving/kick/disband clears it. */
+  setPlayerReady(accountId: string, corpId: string, since: number): Promise<void>;
+  clearPlayerReady(accountId: string): Promise<void>;
+  /** The corp's ready players (account ids), sorted for determinism. */
+  readyPlayersOf(corpId: string): Promise<string[]>;
   appendAudit(entry: CorpAuditEntry): Promise<void>;
   /** Newest-first audit page. */
   auditOf(corpId: string, limit?: number): Promise<CorpAuditEntry[]>;
+  close?(): Promise<void>;
+}
+
+/** AvA challenge statuses (AVA-4). `pending` is the only live state; every other
+ *  status is terminal — transitions happen exactly once (atomic close). */
+export type AvaChallengeStatus = 'pending' | 'accepted' | 'declined' | 'expired';
+
+/** One S0→S2 challenge row (AVA-4). An ACCEPTED row IS the S2 matchup contract —
+ *  the roster phase (AVA-6) builds on it. */
+export interface AvaChallenge {
+  id: string;
+  challengerCorp: string;
+  targetCorp: string;
+  /** Influence spent by the challenger — refunded on decline/expiry. */
+  cost: number;
+  status: AvaChallengeStatus;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** Persistence for AvA challenges (AVA-4). Like CorpStore, deliberately dumb: the
+ *  state machine lives in AvaService; the store guards the two invariants that need
+ *  storage-level atomicity — ONE pending challenge per challenger→target pair, and
+ *  exactly-once status transitions (the double-accept race). */
+export interface AvaChallengeStore {
+  /** Insert a pending challenge; fails atomically when the pair already has one. */
+  createChallenge(
+    challenge: AvaChallenge,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_CHALLENGED' }>;
+  getChallenge(id: string): Promise<AvaChallenge | null>;
+  /** Every challenge the corp is a party to (either side), newest first. */
+  challengesOf(corpId: string, limit?: number): Promise<AvaChallenge[]>;
+  /** Atomic pending→terminal transition. False = the row was NOT pending (already
+   *  closed, or missing) and NOTHING changed — the caller must not refund twice. */
+  closeChallenge(id: string, status: Exclude<AvaChallengeStatus, 'pending'>): Promise<boolean>;
+  /** Pending challenges whose expiry is due at `now` (for the sweep). */
+  duePending(now: number): Promise<AvaChallenge[]>;
   close?(): Promise<void>;
 }
 

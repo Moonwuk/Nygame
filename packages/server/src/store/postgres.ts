@@ -3,6 +3,9 @@ import type { Pool } from 'pg';
 import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  AvaChallenge,
+  AvaChallengeStatus,
+  AvaChallengeStore,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -74,6 +77,9 @@ export async function migrate(pool: Pool): Promise<void> {
     );
     -- corp names are unique case-insensitively (CORP-0)
     CREATE UNIQUE INDEX IF NOT EXISTS corps_name_idx ON corps (lower(name));
+    -- AvA influence (AVA-2): inter-match corp currency; spend is atomic + guarded ≥0.
+    -- ALTER … IF NOT EXISTS backfills pre-AVA-2 corps rows with the 0 default.
+    ALTER TABLE corps ADD COLUMN IF NOT EXISTS influence bigint NOT NULL DEFAULT 0;
 
     -- account_id as the PRIMARY KEY is the one-corp-per-account invariant: a member
     -- (recruit rows included — a recruit row IS the pending application) can't join
@@ -99,6 +105,36 @@ export async function migrate(pool: Pool): Promise<void> {
       detail  text
     );
     CREATE INDEX IF NOT EXISTS corp_audit_corp_idx ON corp_audit (corp_id);
+
+    -- AvA readiness (AVA-3). Corp-flag: the corp is in the ready pool (head-set).
+    CREATE TABLE IF NOT EXISTS corp_ready (
+      corp_id text PRIMARY KEY,
+      since   bigint NOT NULL
+    );
+    -- Player-flag: a player's standing consent to offline deployment, bound to their
+    -- CURRENT corp (account_id PK = one consent per account; leaving the corp clears it).
+    CREATE TABLE IF NOT EXISTS player_ready (
+      account_id text PRIMARY KEY,
+      corp_id    text NOT NULL,
+      since      bigint NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS player_ready_corp_idx ON player_ready (corp_id);
+
+    -- AvA challenges (AVA-4): the S0→S2 state machine. A partial unique index enforces
+    -- ONE pending challenge per challenger→target pair (terminal rows don't collide).
+    CREATE TABLE IF NOT EXISTS ava_challenges (
+      id              text PRIMARY KEY,
+      challenger_corp text NOT NULL,
+      target_corp     text NOT NULL,
+      cost            bigint NOT NULL,
+      status          text NOT NULL,
+      created_at      bigint NOT NULL,
+      expires_at      bigint NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ava_challenges_pending_idx
+      ON ava_challenges (challenger_corp, target_corp) WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS ava_challenges_challenger_idx ON ava_challenges (challenger_corp);
+    CREATE INDEX IF NOT EXISTS ava_challenges_target_idx ON ava_challenges (target_corp);
   `);
 }
 
@@ -190,10 +226,11 @@ export class PostgresAccountStore implements AccountStore {
     for (const candidate of seats) {
       if (taken.has(candidate)) continue;
       try {
-        await this.pool.query(
-          `INSERT INTO seats (room, nick, player_id) VALUES ($1, $2, $3)`,
-          [room, nick, candidate],
-        );
+        await this.pool.query(`INSERT INTO seats (room, nick, player_id) VALUES ($1, $2, $3)`, [
+          room,
+          nick,
+          candidate,
+        ]);
         return { playerId: candidate, isNew: true };
       } catch {
         // (room, nick) or (room, player_id) was claimed concurrently — try the next.
@@ -340,24 +377,34 @@ export class PostgresCorpStore implements CorpStore {
   }
 
   async getCorp(corpId: string): Promise<CorpRecord | null> {
-    const r = await this.pool.query<{ id: string; name: string }>(
-      `SELECT id, name FROM corps WHERE id = $1`,
+    const r = await this.pool.query<{ id: string; name: string; influence: string }>(
+      `SELECT id, name, influence FROM corps WHERE id = $1`,
       [corpId],
     );
     const row = r.rows[0];
-    return row ? { corpId: row.id, name: row.name } : null;
+    return row ? { corpId: row.id, name: row.name, influence: Number(row.influence) } : null;
   }
 
   async listCorps(): Promise<CorpSummary[]> {
-    const r = await this.pool.query<{ id: string; name: string; members: string }>(
-      `SELECT c.id, c.name,
+    const r = await this.pool.query<{
+      id: string;
+      name: string;
+      influence: string;
+      members: string;
+    }>(
+      `SELECT c.id, c.name, c.influence,
               count(m.account_id) FILTER (WHERE m.role <> 'recruit') AS members
        FROM corps c
        LEFT JOIN corp_members m ON m.corp_id = c.id
-       GROUP BY c.id, c.name
+       GROUP BY c.id, c.name, c.influence
        ORDER BY lower(c.name)`,
     );
-    return r.rows.map((row) => ({ corpId: row.id, name: row.name, members: Number(row.members) }));
+    return r.rows.map((row) => ({
+      corpId: row.id,
+      name: row.name,
+      influence: Number(row.influence),
+      members: Number(row.members),
+    }));
   }
 
   async membershipOf(accountId: string): Promise<CorpMembership | null> {
@@ -399,10 +446,22 @@ export class PostgresCorpStore implements CorpStore {
   }
 
   async removeMember(corpId: string, accountId: string): Promise<void> {
-    await this.pool.query(`DELETE FROM corp_members WHERE corp_id = $1 AND account_id = $2`, [
-      corpId,
-      accountId,
-    ]);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM corp_members WHERE corp_id = $1 AND account_id = $2`, [
+        corpId,
+        accountId,
+      ]);
+      // Leaving the corp revokes the AvA player-ready consent (AVA-3).
+      await client.query(`DELETE FROM player_ready WHERE account_id = $1`, [accountId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async swapHead(corpId: string, fromAccountId: string, toAccountId: string): Promise<void> {
@@ -434,6 +493,9 @@ export class PostgresCorpStore implements CorpStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Clear the corp's AvA readiness (its own flag + every member's consent) with it.
+      await client.query(`DELETE FROM player_ready WHERE corp_id = $1`, [corpId]);
+      await client.query(`DELETE FROM corp_ready WHERE corp_id = $1`, [corpId]);
       await client.query(`DELETE FROM corp_members WHERE corp_id = $1`, [corpId]);
       await client.query(`DELETE FROM corps WHERE id = $1`, [corpId]);
       await client.query('COMMIT');
@@ -445,11 +507,107 @@ export class PostgresCorpStore implements CorpStore {
     }
   }
 
+  async addInfluence(corpId: string, delta: number): Promise<void> {
+    if (delta <= 0) return;
+    await this.pool.query(`UPDATE corps SET influence = influence + $2 WHERE id = $1`, [
+      corpId,
+      delta,
+    ]);
+  }
+
+  async spendInfluence(
+    corpId: string,
+    cost: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_INSUFFICIENT' }> {
+    if (cost <= 0) return { ok: false, code: 'E_INSUFFICIENT' };
+    // The `influence >= cost` guard rides IN the UPDATE, so the check and the debit are
+    // one atomic statement — two racing spends can't both pass and overdraw the balance.
+    const r = await this.pool.query(
+      `UPDATE corps SET influence = influence - $2 WHERE id = $1 AND influence >= $2`,
+      [corpId, cost],
+    );
+    return (r.rowCount ?? 0) > 0 ? { ok: true } : { ok: false, code: 'E_INSUFFICIENT' };
+  }
+
+  async setCorpReady(corpId: string, since: number): Promise<void> {
+    // Only a real corp joins the pool; keep the earliest `since` (idempotent set).
+    await this.pool.query(
+      `INSERT INTO corp_ready (corp_id, since)
+       SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM corps WHERE id = $1)
+       ON CONFLICT (corp_id) DO NOTHING`,
+      [corpId, since],
+    );
+  }
+
+  async clearCorpReady(corpId: string): Promise<void> {
+    await this.pool.query(`DELETE FROM corp_ready WHERE corp_id = $1`, [corpId]);
+  }
+
+  async listReadyCorps(): Promise<Array<CorpSummary & { readySince: number }>> {
+    const r = await this.pool.query<{
+      id: string;
+      name: string;
+      influence: string;
+      members: string;
+      since: string;
+    }>(
+      `SELECT c.id, c.name, c.influence, r.since,
+              count(m.account_id) FILTER (WHERE m.role <> 'recruit') AS members
+       FROM corp_ready r
+       JOIN corps c ON c.id = r.corp_id
+       LEFT JOIN corp_members m ON m.corp_id = c.id
+       GROUP BY c.id, c.name, c.influence, r.since
+       ORDER BY lower(c.name)`,
+    );
+    return r.rows.map((row) => ({
+      corpId: row.id,
+      name: row.name,
+      influence: Number(row.influence),
+      members: Number(row.members),
+      readySince: Number(row.since),
+    }));
+  }
+
+  async isCorpReady(corpId: string): Promise<boolean> {
+    const r = await this.pool.query(`SELECT 1 FROM corp_ready WHERE corp_id = $1`, [corpId]);
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async setPlayerReady(accountId: string, corpId: string, since: number): Promise<void> {
+    // Rebind to the current corp if the account moved; keep `since` when already set here.
+    await this.pool.query(
+      `INSERT INTO player_ready (account_id, corp_id, since) VALUES ($1, $2, $3)
+       ON CONFLICT (account_id) DO UPDATE SET corp_id = EXCLUDED.corp_id,
+         since = CASE WHEN player_ready.corp_id = EXCLUDED.corp_id THEN player_ready.since
+                      ELSE EXCLUDED.since END`,
+      [accountId, corpId, since],
+    );
+  }
+
+  async clearPlayerReady(accountId: string): Promise<void> {
+    await this.pool.query(`DELETE FROM player_ready WHERE account_id = $1`, [accountId]);
+  }
+
+  async readyPlayersOf(corpId: string): Promise<string[]> {
+    const r = await this.pool.query<{ account_id: string }>(
+      `SELECT account_id FROM player_ready WHERE corp_id = $1 ORDER BY account_id`,
+      [corpId],
+    );
+    return r.rows.map((row) => row.account_id);
+  }
+
   async appendAudit(entry: CorpAuditEntry): Promise<void> {
     await this.pool.query(
       `INSERT INTO corp_audit (corp_id, at, actor, action, target, detail)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [entry.corpId, entry.at, entry.actor, entry.action, entry.target ?? null, entry.detail ?? null],
+      [
+        entry.corpId,
+        entry.at,
+        entry.actor,
+        entry.action,
+        entry.target ?? null,
+        entry.detail ?? null,
+      ],
     );
   }
 
@@ -511,5 +669,102 @@ export class PostgresReceiptStore implements ReceiptStore {
        ON CONFLICT (match_id, action_id) DO NOTHING`,
       [matchId, receipt.actionId, receipt.playerId, receipt.seq, receipt.ok, receipt.code ?? null],
     );
+  }
+}
+
+interface ChallengeRow {
+  id: string;
+  challenger_corp: string;
+  target_corp: string;
+  cost: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+}
+
+function challengeOf(row: ChallengeRow): AvaChallenge {
+  return {
+    id: row.id,
+    challengerCorp: row.challenger_corp,
+    targetCorp: row.target_corp,
+    cost: Number(row.cost),
+    status: row.status as AvaChallengeStatus,
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+/** Postgres AvA challenge store (AVA-4). The partial unique index enforces one pending
+ *  per pair; the conditional UPDATE makes pending→terminal an exactly-once transition. */
+export class PostgresAvaChallengeStore implements AvaChallengeStore {
+  constructor(private readonly pool: Pool) {}
+
+  async createChallenge(
+    challenge: AvaChallenge,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_CHALLENGED' }> {
+    try {
+      await this.pool.query(
+        `INSERT INTO ava_challenges
+           (id, challenger_corp, target_corp, cost, status, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          challenge.id,
+          challenge.challengerCorp,
+          challenge.targetCorp,
+          challenge.cost,
+          challenge.status,
+          challenge.createdAt,
+          challenge.expiresAt,
+        ],
+      );
+      return { ok: true };
+    } catch {
+      // The partial unique index (challenger, target) WHERE pending rejected it.
+      return { ok: false, code: 'E_ALREADY_CHALLENGED' };
+    }
+  }
+
+  async getChallenge(id: string): Promise<AvaChallenge | null> {
+    const r = await this.pool.query<ChallengeRow>(
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+       FROM ava_challenges WHERE id = $1`,
+      [id],
+    );
+    return r.rows[0] ? challengeOf(r.rows[0]) : null;
+  }
+
+  async challengesOf(corpId: string, limit = 50): Promise<AvaChallenge[]> {
+    const r = await this.pool.query<ChallengeRow>(
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+       FROM ava_challenges
+       WHERE challenger_corp = $1 OR target_corp = $1
+       ORDER BY created_at DESC, id LIMIT $2`,
+      [corpId, limit],
+    );
+    return r.rows.map(challengeOf);
+  }
+
+  async closeChallenge(
+    id: string,
+    status: Exclude<AvaChallengeStatus, 'pending'>,
+  ): Promise<boolean> {
+    // Only a still-pending row transitions — so a lost double-accept race changes
+    // nothing and the caller (which keys the refund off this) can't double-refund.
+    const r = await this.pool.query(
+      `UPDATE ava_challenges SET status = $2 WHERE id = $1 AND status = 'pending'`,
+      [id, status],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async duePending(now: number): Promise<AvaChallenge[]> {
+    const r = await this.pool.query<ChallengeRow>(
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+       FROM ava_challenges
+       WHERE status = 'pending' AND expires_at <= $1
+       ORDER BY expires_at, id`,
+      [now],
+    );
+    return r.rows.map(challengeOf);
   }
 }

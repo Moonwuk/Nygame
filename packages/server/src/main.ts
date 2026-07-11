@@ -9,6 +9,8 @@ import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './
 import { registerAuthApi } from './authApi';
 import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
+import { registerAvaApi } from './avaApi';
+import { AvaService } from './avaService';
 import { MatchKeeper } from './matchFactory';
 import { LazyRoomRegistry, type LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
@@ -39,8 +41,9 @@ const bootTime = Date.now();
 // Security composition from the environment (all switches OFF by default → dev harness):
 // AUTH_JWT_SECRET (authenticated handshake + token minting + login/password accounts),
 // ALLOWED_ORIGINS (CSWSH), GATE=1 (validated action.v1 envelopes). See serverConfig.ts.
-const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory } =
-  configFromEnv(process.env);
+const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory } = configFromEnv(
+  process.env,
+);
 
 const data = loadShippedData();
 const stores = await createStores();
@@ -158,6 +161,13 @@ if (auth && !allowedOrigins) {
   );
 }
 
+// AvA service (AVA-2/3/4): readiness pool + challenge state machine over the durable
+// corp + challenge stores. One instance is shared by the HTTP API and the expiry sweep.
+const avaService = new AvaService({
+  corpStore: stores.corpStore,
+  challengeStore: stores.challengeStore,
+});
+
 // Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
 // never empty — when one fills or ends, seed another. The open count is read from the
 // durable store, so a restart reconciles instead of over-creating. OPEN_MATCHES=0 off.
@@ -221,6 +231,8 @@ const server = createMultiplayerServer({
             service: new CorpService({ store: stores.corpStore }),
             identify,
           });
+          // AvA readiness + challenges (AVA-2/3/4) — the same session gate.
+          registerAvaApi(scope, { service: avaService, identify });
         }
       });
     }
@@ -233,6 +245,18 @@ const httpUrl = wsBase.replace(/^ws/, 'http').replace(/\/matches.*$/, '');
 // Start the factory once the server is up: seed toward OPEN_MATCHES now, then reconcile
 // on an interval (a slow, cheap safety net; joins fill matches between ticks).
 keeper?.start(30_000);
+
+// AvA challenge expiry (AVA-4): close+refund unanswered challenges on an interval — the
+// same no-client-needed model as the offline scheduler. Unref'd so it never holds the
+// process open; errors are swallowed so one bad sweep can't crash the server.
+const avaSweep = setInterval(() => {
+  void avaService.sweepExpired().catch((err) => {
+    process.stderr.write(
+      `ava expiry sweep failed — ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  });
+}, 60_000);
+avaSweep.unref?.();
 
 process.stdout.write(
   [
@@ -249,6 +273,7 @@ process.stdout.write(
           `  join   : POST ${httpUrl}/matches  ·  GET ${httpUrl}/matches/dev/join  (Authorization: Bearer <session>)`,
           `           (the session's login is your nick; the seat is claimed for YOUR account)`,
           `  corps  : GET/POST ${httpUrl}/corps  ·  POST ${httpUrl}/corps/:id/<intent>  (session required)`,
+          `  ava    : GET ${httpUrl}/ava/pool  ·  POST ${httpUrl}/ava/ready/{corp,player}  ·  POST ${httpUrl}/ava/challenge  (session required)`,
         ]
       : [`  dev    : ${wsBase}/dev?player=green  ·  ${wsBase}/dev?player=red`]),
     host === '0.0.0.0'

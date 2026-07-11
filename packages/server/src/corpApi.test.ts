@@ -64,11 +64,13 @@ describe('CORP-0 · corp API', () => {
     const corpId = await createCorp(app, 'alice', 'Void Miners');
 
     const list = await app.inject({ method: 'GET', url: '/corps', headers: as('bob') });
-    expect(list.json()).toEqual({ corps: [{ corpId, name: 'Void Miners', members: 1 }] });
+    expect(list.json()).toEqual({
+      corps: [{ corpId, name: 'Void Miners', members: 1, influence: 0 }],
+    });
 
     const detail = await app.inject({ method: 'GET', url: `/corps/${corpId}`, headers: as('bob') });
     expect(detail.json()).toEqual({
-      corp: { corpId, name: 'Void Miners' },
+      corp: { corpId, name: 'Void Miners', influence: 0 },
       members: [{ corpId, accountId: 'acc-alice', login: 'alice', role: 'head' }],
     });
 
@@ -86,11 +88,18 @@ describe('CORP-0 · corp API', () => {
     const app = appWith();
     const corpId = await createCorp(app, 'alice', 'Void Miners');
     const post = (login: string, intent: string, payload?: object) =>
-      app.inject({ method: 'POST', url: `/corps/${corpId}/${intent}`, headers: as(login), payload });
+      app.inject({
+        method: 'POST',
+        url: `/corps/${corpId}/${intent}`,
+        headers: as(login),
+        payload,
+      });
 
     expect((await post('bob', 'apply')).statusCode).toBe(200);
     expect((await post('alice', 'accept', { target: 'acc-bob' })).statusCode).toBe(200);
-    expect((await post('alice', 'role', { target: 'acc-bob', role: 'officer' })).statusCode).toBe(200);
+    expect((await post('alice', 'role', { target: 'acc-bob', role: 'officer' })).statusCode).toBe(
+      200,
+    );
     expect((await post('alice', 'transfer', { target: 'acc-bob' })).statusCode).toBe(200);
     expect((await post('alice', 'leave')).statusCode).toBe(200);
 
@@ -193,7 +202,11 @@ describe('CORP-0 · corp API', () => {
       headers: as('alice'),
       payload: { target: 'acc-bob' },
     });
-    const res = await app.inject({ method: 'GET', url: `/corps/${corpId}/audit`, headers: as('alice') });
+    const res = await app.inject({
+      method: 'GET',
+      url: `/corps/${corpId}/audit`,
+      headers: as('alice'),
+    });
     expect(res.statusCode).toBe(200);
     const { audit } = res.json() as { audit: Array<{ action: string; actor: string }> };
     expect(audit.map((e) => e.action)).toEqual(['decline', 'create']); // newest first
@@ -204,8 +217,14 @@ describe('CORP-0 · corp API', () => {
   it('rate-limits the WRITE routes per IP; reads stay free', async () => {
     const app = appWith({ now: () => 1_000, rateMax: 2 });
     expect(
-      (await app.inject({ method: 'POST', url: '/corps', headers: as('a'), payload: { name: 'Corp One' } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/corps',
+          headers: as('a'),
+          payload: { name: 'Corp One' },
+        })
+      ).statusCode,
     ).toBe(201);
     expect(
       (await app.inject({ method: 'POST', url: '/corps/nope/apply', headers: as('b') })).statusCode,
@@ -219,7 +238,9 @@ describe('CORP-0 · corp API', () => {
     expect(throttled.statusCode).toBe(429);
     expect(throttled.json()).toEqual({ error: 'E_RATE_LIMIT' });
     // reads share no budget with writes
-    expect((await app.inject({ method: 'GET', url: '/corps', headers: as('a') })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/corps', headers: as('a') })).statusCode).toBe(
+      200,
+    );
     await app.close();
   });
 });

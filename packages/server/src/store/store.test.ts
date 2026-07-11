@@ -1,15 +1,30 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { createInitialState, type GameState } from '@void/shared-core';
-import { MemoryAccountStore, MemoryCorpStore, MemoryMatchStore, MemoryReceiptStore } from './memory';
+import {
+  MemoryAccountStore,
+  MemoryAvaChallengeStore,
+  MemoryCorpStore,
+  MemoryMatchStore,
+  MemoryReceiptStore,
+} from './memory';
 import {
   PostgresAccountStore,
+  PostgresAvaChallengeStore,
   PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,
   migrate,
 } from './postgres';
-import type { AccountStore, CorpStore, MatchSnapshot, MatchStore, ReceiptStore } from './types';
+import type {
+  AccountStore,
+  AvaChallenge,
+  AvaChallengeStore,
+  CorpStore,
+  MatchSnapshot,
+  MatchStore,
+  ReceiptStore,
+} from './types';
 
 function state(seed = 'store'): GameState {
   return createInitialState({ seed, version: { data: 't', manifest: 't' } });
@@ -122,8 +137,15 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       const corpName = uniq('Void Miners');
       const created = await store.createCorp(corpName, uniq('acc-a'), 'alice');
       if (!created.ok) throw new Error('expected ok');
-      expect(await store.getCorp(created.corpId)).toEqual({ corpId: created.corpId, name: corpName });
-      expect(await store.membershipOf(uniq('acc-a'))).toMatchObject({ role: 'head', login: 'alice' });
+      expect(await store.getCorp(created.corpId)).toEqual({
+        corpId: created.corpId,
+        name: corpName,
+        influence: 0,
+      });
+      expect(await store.membershipOf(uniq('acc-a'))).toMatchObject({
+        role: 'head',
+        login: 'alice',
+      });
       const dup = await store.createCorp(corpName.toUpperCase(), uniq('acc-b'), 'bob');
       expect(dup).toEqual({ ok: false, code: 'E_NAME_TAKEN' });
     });
@@ -178,7 +200,12 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       const created = await store.createCorp(uniq('Doomed'), uniq('acc-x'), 'xena');
       if (!created.ok) throw new Error('expected ok');
       await store.addMember(created.corpId, uniq('acc-y'), 'yuri', 'member');
-      await store.appendAudit({ corpId: created.corpId, at: 1, actor: uniq('acc-x'), action: 'create' });
+      await store.appendAudit({
+        corpId: created.corpId,
+        at: 1,
+        actor: uniq('acc-x'),
+        action: 'create',
+      });
       await store.appendAudit({
         corpId: created.corpId,
         at: 2,
@@ -193,7 +220,12 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       expect(await store.membershipOf(uniq('acc-y'))).toBeNull();
       const audit = await store.auditOf(created.corpId);
       expect(audit).toHaveLength(2);
-      expect(audit[0]).toMatchObject({ at: 2, action: 'disband', target: uniq('acc-y'), detail: 'why' });
+      expect(audit[0]).toMatchObject({
+        at: 2,
+        action: 'disband',
+        target: uniq('acc-y'),
+        detail: 'why',
+      });
       expect(audit[1]).toMatchObject({ at: 1, action: 'create' });
     });
 
@@ -207,13 +239,137 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       expect(summary).toMatchObject({ name: uniq('Counted'), members: 2 });
       expect(await store.membersOf(created.corpId)).toHaveLength(3);
     });
+
+    // AVA-2 — influence: credited on earn, debited atomically, never negative.
+    it('influence starts at 0, credits, and spends atomically without overdrawing', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Rich'), uniq('acc-inf'), 'r');
+      if (!created.ok) throw new Error('expected ok');
+      expect((await store.getCorp(created.corpId))?.influence).toBe(0);
+      await store.addInfluence(created.corpId, 250);
+      await store.addInfluence(created.corpId, -99); // non-positive credit is ignored
+      expect((await store.getCorp(created.corpId))?.influence).toBe(250);
+      expect(await store.spendInfluence(created.corpId, 100)).toEqual({ ok: true });
+      expect((await store.getCorp(created.corpId))?.influence).toBe(150);
+      // over-spend is refused and changes nothing
+      expect(await store.spendInfluence(created.corpId, 1000)).toEqual({
+        ok: false,
+        code: 'E_INSUFFICIENT',
+      });
+      expect((await store.getCorp(created.corpId))?.influence).toBe(150);
+    });
+
+    // AVA-3 — readiness flags: corp pool + player consent, cleared on leave/disband.
+    it('corp/player readiness flags populate the pool and clear on membership loss', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Ready'), uniq('acc-rdyh'), 'head');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-rdyp'), 'pat', 'member');
+      expect(await store.isCorpReady(created.corpId)).toBe(false);
+      await store.setCorpReady(created.corpId, 111);
+      expect(await store.isCorpReady(created.corpId)).toBe(true);
+      const pool = (await store.listReadyCorps()).find((c) => c.corpId === created.corpId);
+      expect(pool).toMatchObject({ name: uniq('Ready'), readySince: 111 });
+
+      await store.setPlayerReady(uniq('acc-rdyp'), created.corpId, 222);
+      await store.setPlayerReady(uniq('acc-rdyh'), created.corpId, 223);
+      expect(await store.readyPlayersOf(created.corpId)).toHaveLength(2);
+      // leaving the corp revokes the player's consent
+      await store.removeMember(created.corpId, uniq('acc-rdyp'));
+      expect(await store.readyPlayersOf(created.corpId)).toEqual([uniq('acc-rdyh')]);
+      // disband clears the corp flag AND remaining consents
+      await store.removeCorp(created.corpId);
+      expect(await store.isCorpReady(created.corpId)).toBe(false);
+      expect(await store.readyPlayersOf(created.corpId)).toHaveLength(0);
+    });
+  });
+}
+
+// AVA-4 — the challenge store: one pending per pair, exactly-once close, expiry sweep.
+function challenge(
+  id: string,
+  challenger: string,
+  target: string,
+  expiresAt: number,
+): AvaChallenge {
+  return {
+    id,
+    challengerCorp: challenger,
+    targetCorp: target,
+    cost: 100,
+    status: 'pending',
+    createdAt: 0,
+    expiresAt,
+  };
+}
+
+function avaChallengeStoreContract(
+  name: string,
+  make: () => AvaChallengeStore,
+  uniq: (p: string) => string,
+): void {
+  describe(`AvaChallengeStore — ${name}`, () => {
+    it('inserts a pending challenge and reads it back for either party', async () => {
+      const store = make();
+      const [a, b] = [uniq('corp-a'), uniq('corp-b')];
+      expect(await store.createChallenge(challenge(uniq('ch1'), a, b, 500))).toEqual({ ok: true });
+      expect(await store.getChallenge(uniq('ch1'))).toMatchObject({
+        challengerCorp: a,
+        targetCorp: b,
+        status: 'pending',
+      });
+      expect(await store.challengesOf(a)).toHaveLength(1);
+      expect(await store.challengesOf(b)).toHaveLength(1); // visible to the target too
+    });
+
+    it('rejects a second PENDING challenge for the same pair', async () => {
+      const store = make();
+      const [a, b] = [uniq('c-a2'), uniq('c-b2')];
+      await store.createChallenge(challenge(uniq('ch-a'), a, b, 500));
+      expect(await store.createChallenge(challenge(uniq('ch-b'), a, b, 600))).toEqual({
+        ok: false,
+        code: 'E_ALREADY_CHALLENGED',
+      });
+    });
+
+    it('closeChallenge is exactly-once: the second transition is a no-op', async () => {
+      const store = make();
+      const [a, b] = [uniq('c-a3'), uniq('c-b3')];
+      await store.createChallenge(challenge(uniq('ch-c'), a, b, 500));
+      expect(await store.closeChallenge(uniq('ch-c'), 'accepted')).toBe(true);
+      expect(await store.closeChallenge(uniq('ch-c'), 'declined')).toBe(false); // already closed
+      expect((await store.getChallenge(uniq('ch-c')))?.status).toBe('accepted');
+      // closing the pair is free again once the first is terminal
+      expect(await store.createChallenge(challenge(uniq('ch-d'), a, b, 700))).toEqual({ ok: true });
+    });
+
+    it('duePending returns only pending challenges past their expiry', async () => {
+      const store = make();
+      const [a, b] = [uniq('c-a4'), uniq('c-b4')];
+      await store.createChallenge(challenge(uniq('ch-e'), a, b, 1000));
+      // Membership checks (not absolute length) so the shared Postgres table's other
+      // rows don't perturb this: our own row is due only once `now` reaches its expiry.
+      expect((await store.duePending(500)).map((c) => c.id)).not.toContain(uniq('ch-e'));
+      expect((await store.duePending(1000)).map((c) => c.id)).toContain(uniq('ch-e'));
+      await store.closeChallenge(uniq('ch-e'), 'expired');
+      expect((await store.duePending(2000)).map((c) => c.id)).not.toContain(uniq('ch-e'));
+    });
   });
 }
 
 matchStoreContract('memory', () => new MemoryMatchStore());
 accountStoreContract('memory', () => new MemoryAccountStore());
 receiptStoreContract('memory', () => new MemoryReceiptStore());
-corpStoreContract('memory', () => new MemoryCorpStore(), (p) => p);
+corpStoreContract(
+  'memory',
+  () => new MemoryCorpStore(),
+  (p) => p,
+);
+avaChallengeStoreContract(
+  'memory',
+  () => new MemoryAvaChallengeStore(),
+  (p) => p,
+);
 
 // Postgres adapters — only when a DATABASE_URL is provided (skipped in CI without a
 // DB, so the gate stays green). Verified locally against a real Postgres 16.
@@ -235,7 +391,16 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   // account ids unique across runs (shared tables) while STABLE within one run — the
   // contract asks for the same key several times and must get the same id back.
   const stamp = `${process.pid}_${Date.now()}`;
-  corpStoreContract('postgres', () => new PostgresCorpStore(pool), (p) => `${p}_${stamp}`);
+  corpStoreContract(
+    'postgres',
+    () => new PostgresCorpStore(pool),
+    (p) => `${p}_${stamp}`,
+  );
+  avaChallengeStoreContract(
+    'postgres',
+    () => new PostgresAvaChallengeStore(pool),
+    (p) => `${p}_${stamp}`,
+  );
 
   it('migrates idempotently', async () => {
     await migrate(pool);
@@ -262,7 +427,7 @@ describe.skipIf(!DB)('Postgres adapters', () => {
     const room = uniq('r');
     const seats = ['p1', 'p2'] as const;
     expect((await store.resolveSeat(room, 'alice', seats))?.playerId).toBe('p1');
-    expect((await store.resolveSeat(room, 'alice', seats))).toEqual({ playerId: 'p1', isNew: false });
+    expect(await store.resolveSeat(room, 'alice', seats)).toEqual({ playerId: 'p1', isNew: false });
     expect((await store.resolveSeat(room, 'bob', seats))?.playerId).toBe('p2');
     expect(await store.resolveSeat(room, 'carol', seats)).toBeNull();
   });
