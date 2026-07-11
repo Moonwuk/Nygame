@@ -1014,4 +1014,44 @@ export const en: Record<string, string> = {
   'энергии': 'energy',
   'еды': 'food',
   'микроэлектроники': 'microelectronics',
+  // --- hero window / deploy flow (окно героя, развёртывание) --------------------
+  'Способности': 'Abilities',
+  'Дерево скиллов': 'Skill tree',
+  'Активировать': 'Activate',
+  'КД {h}': 'CD {h}',
+  'нет слотов': 'no slots',
+  'нужен пред. узел': 'needs the prior node',
+  'установлен': 'installed',
+  'погиб': 'lost',
+  'в пути': 'in transit',
+  'резерв · {at}': 'reserve · {at}',
+  'перк развёртывания': 'deploy perk',
+  'Развёрнуто {a}/{cap}. Герой действует со своего корабля; резерв разворачивается на своём мире (перки открывают свой флот / мир союзника).':
+    'Deployed {a}/{cap}. A hero acts from its ship; a reserve deploys at its own world (perks unlock own-fleet / ally-world deploys).',
+  '⚓ выберите свой мир{fl}{al} — там поднимется корабль героя':
+    '⚓ pick your world{fl}{al} — the hero\'s ship rises there',
+  ' / свой флот': ' / own fleet',
+  ' / мир союзника': ' / ally\'s world',
+  '✨ выберите мир-цель на карте': '✨ pick a target world on the map',
+  '✖ каст отменён': '✖ cast cancelled',
+  '✖ развёртывание отменено': '✖ deploy cancelled',
+  'Цель…': 'Target…',
+  // --- division / formation builder (конструктор дивизий) ----------------------
+  'Итог по формации': 'Formation summary',
+  'Синергии состава': 'Composition synergies',
+  'Стоимость мобилизации': 'Mobilization cost',
+  'Нет шаблонов.': 'No templates.',
+  'Смешай пехоту и танки для синергий.': 'Mix infantry and tanks for synergies.',
+  '{n}/{s} юнитов · тапни слот, чтобы менять род войск':
+    '{n}/{s} units · tap a slot to change the troop type',
+  'Тап по слоту: пусто → пехота → танк. Мобилизация дивизии — в панели своего мира (вкладка «Дивизии»).':
+    'Tap a slot: empty → infantry → tank. Mobilize the division in your world\'s panel (the «Divisions» tab).',
+  'Фиттинги · {u}/{n}': 'Fittings · {u}/{n}',
+  // --- build ETA / misc --------------------------------------------------------
+  'Стройка': 'Building',
+  'изучено': 'researched',
+  // --- static H4 headers / steward toggle (build.mjs [data-i18n]) --------------
+  'КОНСТРУКТОР ДИВИЗИЙ': 'DIVISION BUILDER',
+  'ХРАНИТЕЛЬ · ИИ НА СОН': 'STEWARD · AI WHILE ASLEEP',
+  'Хранитель — передать ИИ на сон': 'Steward — hand to the AI while asleep',
 };
