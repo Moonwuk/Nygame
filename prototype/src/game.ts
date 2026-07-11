@@ -15,6 +15,7 @@ import {
   isCapturable,
   isBombarded,
   economyModule,
+  effectsModule,
   BROWNOUT,
   movementModule,
   factionModule,
@@ -3022,6 +3023,7 @@ export const MODULES: GameModule[] = [
   divisionModule, // ground divisions: mobilise from a template + daily restoration
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
   standingOrdersModule, // CC-2/CC-4 standing orders (auto-storm / дежурный вылет), server-driven
+  effectsModule, // EFX-1: интерпретатор data.events (trigger→effect); инертен, пока events: {} пуст
 ];
 
 export const kernel = createKernel(MODULES);

@@ -3,6 +3,7 @@ import type { BarrageMode, Fleet, GameState, PlanetId } from '../state/gameState
 import type { GameData } from '../data/schemas';
 import { timeScaleOf } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
+import { defHasTrait } from '../data/traits';
 import { getStance } from '../state/diplomacy';
 import { distance } from '../state/route';
 import { applyDamageToSide, isHostile, ownFleet, removeIfWiped } from '../util/combat';
@@ -44,7 +45,7 @@ function artilleryPower(fleet: Fleet, data: GameData): number {
   let total = 0;
   for (const s of fleet.units) {
     const def = data.units[s.unit];
-    if (def && def.traits.includes('artillery')) {
+    if (def && defHasTrait(def, 'artillery')) {
       total += s.count * (effectiveStats(def, s, data).attack ?? 0);
     }
   }
@@ -58,7 +59,7 @@ function artilleryRange(fleet: Fleet, data: GameData): number {
   for (const s of fleet.units) {
     if (s.count <= 0) continue;
     const def = data.units[s.unit];
-    if (def && def.traits.includes('artillery')) {
+    if (def && defHasTrait(def, 'artillery')) {
       r = Math.max(r, effectiveStats(def, s, data).range ?? 0);
     }
   }

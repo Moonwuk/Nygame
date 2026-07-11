@@ -79,7 +79,7 @@ packages/action-layer/src/
   data/          schemas.ts (zod-схемы + parseGameData, buildingLevel/buildingMaxLevel)
   rng/           rng.ts (sfc32)
   util/          clone.ts (deepClone/deepFreeze), treasury.ts (canAfford/payCost — shared by construction & technology), fitting.ts (генерик-гейт «слоты+предметы», SHIP-4) + loadout.ts (ship-обёртка над ним)
-  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, espionage, faction, hero, heroEffects, intercept, market, movement, orbital, planetType, scientist, sector, station, steward, technology, victory, visibility  (23 модуля, + *.test.ts)
+  modules/       army, artillery, captureOnArrival, combat, construction, diplomacy, economy, effects, espionage, faction, hero, heroEffects, intercept, market, movement, orbital, planetType, scientist, sector, station, steward, technology, victory, visibility  (24 модуля, + *.test.ts)
   examples/      skirmish.test.ts (демо-сценарий + SVG)
   index.ts       баррель (экспорт публичного API)
 data/            manifest, resources, units, buildings, factions, events, sectors, planetTypes, technologies (.json)
@@ -517,17 +517,17 @@ score-гонка идёт по «юнитам победы» — соло-игр
 сублинейный) и **замещает** соло-порог участникам; коалиция побеждает вместе —
 `match.winners[]` + топ-скорер в `winner`, `winners` едет в `match.ended`; прототип
 начисляет XP каждому победителю.
-  **Экран конца матча** (прототип): при `match.status==='ended'` вместо тонкого баннера
-  открывается полноэкранный оверлей `#endscreen` (`endScreen`/`renderEndScreen`) —
-  исход (ПОБЕДА/ПОРАЖЕНИЕ/НИЧЬЯ, цвет по исходу) + причина, итоговый счёт и **место** (N-е
-  из M), провинции/флоты/юниты, длительность, начисленный XP + лэвел-ап. Числа читаются
-  из авторитетного `match.scores`, поэтому экран одинаков в соло и в сети. Кнопки честны
-  по режиму: соло — «⟳ Играть ещё» (новый сетап) · «⌂ В меню» · «Смотреть доску»
-  (скрыть оверлей, глядеть на замороженную доску); NET — «⟳ Новый матч» (браузер
-  матчей — рематч того же стола требует серверной части, отдельный кирпич) · «В меню» ·
-  «Смотреть доску». Мир замораживается (соло-симуляция стоит, пока оверлей активен),
-  `xpAwarded` метит конец обработанным (не открывается повторно над хабом), сброс — на
-  свежем матче / реджойне. Дев-хук `__vdFx.endMatch('win'|'lose'|'draw')` под `?dev`.
+**Экран конца матча** (прототип): при `match.status==='ended'` вместо тонкого баннера
+открывается полноэкранный оверлей `#endscreen` (`endScreen`/`renderEndScreen`) —
+исход (ПОБЕДА/ПОРАЖЕНИЕ/НИЧЬЯ, цвет по исходу) + причина, итоговый счёт и **место** (N-е
+из M), провинции/флоты/юниты, длительность, начисленный XP + лэвел-ап. Числа читаются
+из авторитетного `match.scores`, поэтому экран одинаков в соло и в сети. Кнопки честны
+по режиму: соло — «⟳ Играть ещё» (новый сетап) · «⌂ В меню» · «Смотреть доску»
+(скрыть оверлей, глядеть на замороженную доску); NET — «⟳ Новый матч» (браузер
+матчей — рематч того же стола требует серверной части, отдельный кирпич) · «В меню» ·
+«Смотреть доску». Мир замораживается (соло-симуляция стоит, пока оверлей активен),
+`xpAwarded` метит конец обработанным (не открывается повторно над хабом), сброс — на
+свежем матче / реджойне. Дев-хук `__vdFx.endMatch('win'|'lose'|'draw')` под `?dev`.
 
 **Счёт — data-driven, только территория** (GDD §8.1). База очков узла задаётся его
 **видом** (`sectorKinds[kind].scoreValue`): **планета — 50** (приз), любой другой вид —
@@ -974,12 +974,13 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
 > Компактный агрегат; помашинная матрица — [`readiness.md`](readiness.md),
 > запуск для живых игроков — [`launch-runbook.md`](launch-runbook.md).
 
-**✅ Этап 1 (ядро) — готово целиком:** 23 модуля на микроядре (шина/хуки/манифест,
+**✅ Этап 1 (ядро) — готово целиком:** 24 модуля на микроядре (шина/хуки/манифест,
 seeded RNG + golden, `advanceTo`): экономика + рынок, карта/движение/перехват, типы
 секторов и планет, бой (мелэ + орбитальное ПВО/бомбардировка + артиллерия) с двухфазным
 захватом, здания + станции, флот ⊕ армия + транспорт, технологии + учёные, фракции,
 дипломатия (стойки + consent-офферы), шпионаж + контрразведка, герои, «Хранитель»,
-победа/счёт, туман (`visibleState` + память + radar).
+победа/счёт, туман (`visibleState` + память + radar), движок эффектов (EFX-1:
+`data.events` trigger→effect, трейты читаются генерически).
 
 **✅ Этап 2 (action-layer) — готово и вшито в сервер** (`GATE=1`); клиент шлёт
 `action.v1`-конверты по `gated`-рукопожатию.
