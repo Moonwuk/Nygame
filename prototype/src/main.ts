@@ -324,6 +324,11 @@ const ORBIT_COLOR = '#7df0d0'; // the single orbit ring (GDD §7.4 — no near/f
 let s: GameState = newGame();
 let speed = 1 / 3600; // game-hours per real second (0 = paused); ×1 = wall-clock, overwritten at launch
 let banner: string | null = null;
+// Terminal end screen (the match-over overlay): outcome + reason + XP award, filled
+// once by checkEnd from the authoritative `match` state. `dismissed` lets the player
+// hide it to look at the final board (the match stays frozen). Reset on a fresh match
+// / reconnect so a new game never opens straight into the old result.
+let endScreen: { won: boolean; draw: boolean; why: string; xp: number; levelUp: number | null; dismissed: boolean } | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
@@ -2416,33 +2421,31 @@ function endReasonText(reason: string | undefined): string {
  *  in the kernel — local sim and the net server both run it), not a hand-rolled
  *  guess. Fires once; a draw (no winner on timeout) is its own line. */
 function checkEnd() {
-  if (banner) return;
+  // `xpAwarded` marks this match's end as already handled — it survives navigating
+  // away (hub/setup) while the match stays 'ended', so the overlay isn't re-created
+  // over the menu; only a fresh match / reconnect resets it.
+  if (endScreen || xpAwarded) return;
   if (s.match?.status !== 'ended') return;
   const why = endReasonText(s.match.reason);
   // A coalition wins together (SES-1): every member of match.winners is a victor,
   // not only the top scorer in match.winner.
   const iWon = s.match.winner === ME || (s.match.winners?.includes(ME) ?? false);
-  banner = iWon
-    ? s.match.winners && s.match.winners.length > 1
-      ? t('🏆 ПОБЕДА КОАЛИЦИИ ({who}) — {why}', {
-          who: s.match.winners.map((id) => NAME[id as string] ?? id).join(' + '),
-          why,
-        })
-      : t('🏆 ПОБЕДА — {why}', { why })
-    : s.match.winner === null
-      ? t('⚖️ НИЧЬЯ — {why}', { why })
-      : t('💀 ПОРАЖЕНИЕ — {why}', { why });
+  const draw = !iWon && s.match.winner === null;
   // Meta-progression: one XP award per finished match (прокачка командующего).
+  let gained = 0;
+  let levelUp: number | null = null;
   if (!xpAwarded) {
     xpAwarded = true;
     const st = loadMeta();
-    const gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
+    gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
     const before = metaLevel(st.xp);
     const after = { xp: st.xp + gained, spent: st.spent };
     saveMeta(after);
-    note(t('★ Опыт командующего: +{n}', { n: gained }));
-    if (metaLevel(after.xp) > before) note(t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: metaLevel(after.xp) }));
+    if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
   }
+  // The full end screen (renderEndScreen) reads this — outcome, reason, XP. The old
+  // thin victory `banner` is retired; `banner` now carries only NET-status lines.
+  endScreen = { won: iWon, draw, why, xp: gained, levelUp, dismissed: false };
 }
 
 // --- rendering ---------------------------------------------------------------
@@ -6125,6 +6128,104 @@ bannerEl.addEventListener('click', (ev) => {
   if ((ev.target as Element).closest('[data-restart]')) openSetup();
 });
 
+// --- end screen (match over): outcome + stats + rematch ----------------------
+const endscreenEl = $('endscreen');
+let lastEndHtml = '';
+/** Paint the terminal end screen from `endScreen` (set by checkEnd). Reads final
+ *  numbers straight from the AUTHORITATIVE `match` state, so the same panel serves a
+ *  solo match and a net one. Hidden while no match is over or the player dismissed it
+ *  to look at the board. */
+function renderEndScreen(): void {
+  if (!endScreen || endScreen.dismissed) {
+    if (endscreenEl.style.display !== 'none') {
+      endscreenEl.style.display = 'none';
+      lastEndHtml = '';
+    }
+    return;
+  }
+  const sc = s.match?.scores ?? {};
+  const mine = sc[ME];
+  // Placement: rank among all scored seats by total (1st of N).
+  const ranked = Object.keys(sc).sort((a, b) => (sc[b]?.total ?? 0) - (sc[a]?.total ?? 0));
+  const place = ranked.indexOf(ME) + 1;
+  const total = Math.round(mine?.total ?? 0);
+  const provinces = mine?.controlledPlanets ?? worldsOf(ME);
+  const fleets = mine?.fleets ?? 0;
+  const units = mine?.units ?? 0;
+  const elapsed = Math.max(0, (s.match?.endedAt ?? s.time) - (s.startedAt ?? 0));
+  const dur = fmtStamp(elapsed, { day: true, time: true });
+  const cls = endScreen.won ? 'win' : endScreen.draw ? 'draw' : 'lose';
+  const head = endScreen.won
+    ? s.match?.winners && s.match.winners.length > 1
+      ? t('🏆 ПОБЕДА КОАЛИЦИИ')
+      : t('🏆 ПОБЕДА')
+    : endScreen.draw
+      ? t('⚖️ НИЧЬЯ')
+      : t('💀 ПОРАЖЕНИЕ');
+  const cell = (k: string, v: string) => `<div class="es-cell"><span class="es-k">${k}</span><span class="es-v">${v}</span></div>`;
+  const xpLine =
+    endScreen.xp > 0
+      ? `<div class="es-xp">${t('★ Опыт командующего: +{n}', { n: endScreen.xp })}` +
+        (endScreen.levelUp !== null ? `<span class="lvl">${t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: endScreen.levelUp })}</span>` : '') +
+        `</div>`
+      : '';
+  // Rematch wording is honest per mode: solo restarts a skirmish; a NET match can't
+  // re-seat the same table client-side (server brick), so "again" opens the browser.
+  const againLabel = NET ? t('⟳ Новый матч') : t('⟳ Играть ещё');
+  const html =
+    `<div class="es-box">` +
+    `<div class="es-head ${cls}">${head}</div>` +
+    `<div class="es-why">${esc(endScreen.why)}</div>` +
+    `<div class="es-grid">` +
+    `<div class="es-cell wide"><span class="es-k">${t('Итоговый счёт')}</span><span class="es-v">✦ ${total} <small>· ${t('{p}-е место из {n}', { p: place, n: ranked.length })}</small></span></div>` +
+    cell(t('Провинции'), `⬣ ${provinces}`) +
+    cell(t('Флоты'), `⛴ ${fleets}`) +
+    cell(t('Юниты'), `⚔ ${units}`) +
+    cell(t('Длительность'), dur) +
+    `</div>` +
+    xpLine +
+    `<div class="es-acts">` +
+    `<button class="es-btn primary" data-es="again">${againLabel}</button>` +
+    `<button class="es-btn" data-es="menu">⌂ ${t('В меню')}</button>` +
+    `<button class="es-btn ghost" data-es="board">${t('Смотреть доску')}</button>` +
+    `</div></div>`;
+  if (html !== lastEndHtml) {
+    endscreenEl.innerHTML = html;
+    lastEndHtml = html;
+  }
+  endscreenEl.style.display = 'flex';
+}
+endscreenEl.addEventListener('click', (ev) => {
+  const act = (ev.target as Element).closest('[data-es]') as HTMLElement | null;
+  if (!act) return;
+  const which = act.dataset.es;
+  if (which === 'board') {
+    if (endScreen) endScreen.dismissed = true; // hide the panel, leave the frozen board
+    return;
+  }
+  // Leaving a net match is a deliberate disconnect (no auto-reconnect).
+  const wasNet = NET;
+  if (NET) {
+    userClosed = true;
+    NET = false;
+    if (netSock) netSock.close();
+  }
+  endScreen = null; // leaving the finished match — the overlay must not linger over the hub
+  lastEndHtml = '';
+  if (which === 'again') {
+    // Solo: straight back into a skirmish setup. Net: the match browser (a same-table
+    // rematch needs server support — a separate brick); either way, one tap to next game.
+    if (wasNet) {
+      openHub();
+      hubTab('games');
+    } else {
+      openSetup('hub');
+    }
+  } else {
+    openHub(); // "В меню"
+  }
+});
+
 // Speedbar "⌂ В меню": leave the current match back to the hub from anywhere in-game.
 // In net mode this is an intentional disconnect (userClosed → no auto-reconnect). The
 // sim keeps ticking underneath as the menu's live backdrop, same as the other overlays.
@@ -7573,6 +7674,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
+  endScreen = null; // a fresh match must not open into the previous result
   xpAwarded = false; // a fresh match earns its own meta-XP award
   // The match goal, written AFTER the wipe so it is the first line a player can read.
   // Kept honest against the kernel: victoryModule ends on score (SCORE_LIMIT), on
@@ -7696,6 +7798,8 @@ function connect(): void {
           NET = true;
           ME = snap.playerId ?? ME;
           clearSelection();
+          endScreen = null; // joining a match must not carry the previous result
+          xpAwarded = false;
           pendingLoads = []; // drop any queued loads from a prior/local session
           showConnect(false);
           note(t('● подключён как {who}', { who: NAME[ME] ?? ME }));
@@ -8125,6 +8229,22 @@ if (DEV_UI && typeof window !== 'undefined') {
       captureFlashes.set(node, { owner, at: performance.now() });
       return true;
     },
+    // Force the match to a terminal state so the end screen can be previewed without
+    // grinding to a score/elimination win. Seeds a plausible score if the victory
+    // module hasn't populated one yet; checkEnd then paints the overlay.
+    endMatch(outcome: 'win' | 'lose' | 'draw'): boolean {
+      const m = s.match;
+      if (!m) return false;
+      m.status = 'ended';
+      m.reason = 'score';
+      m.endedAt = s.time;
+      m.winner = outcome === 'draw' ? null : outcome === 'win' ? ME : ME === 'p1' ? 'p2' : 'p1';
+      m.scores ??= {};
+      for (const id of Object.keys(s.players)) {
+        m.scores[id] ??= { controlledPlanets: worldsOf(id), fleets: 0, units: 0, total: worldsOf(id) * 50 };
+      }
+      return true;
+    },
   };
 }
 let fpsEma = 60; // smoothed frames-per-second readout
@@ -8293,10 +8413,11 @@ function frame(nowReal: number) {
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane
   if (dt > 0 && dt < 1000) fpsEma = fpsEma * 0.9 + (1000 / dt) * 0.1;
-  if (!NET && speed > 0 && !banner) {
+  if (!NET && speed > 0 && !banner && !endScreen) {
     // Local single-player sim. In net mode the server owns the clock, combat,
     // construction and every rival — a connected human, or the server-side AI for
     // an empty seat — so we only render its snapshots (no local AI runs here).
+    // A finished match (endScreen set) freezes the world — no advancing a decided game.
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
     autoEngage();
@@ -8435,6 +8556,7 @@ function frame(nowReal: number) {
     bannerEl.style.display = 'none'; // banner cleared (e.g. a fresh match) → hide it
     lastBannerHtml = '';
   }
+  renderEndScreen();
   // Speedbar restart — only the no-bots sandbox (no match end to restart from); other
   // modes use the end-banner button instead. Toggle each frame as the mode can change.
   const soloNoBots = !NET && AI_PLAYERS.size === 0;
