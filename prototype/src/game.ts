@@ -316,12 +316,16 @@ export const data: GameData = parseGameData({
     //  system. Orbital AA is no longer a unit either: it's a defensive *building* now
     //  (see `orbital_aa` under buildings) — anti-ship, immobile, player-built.)
     // --- formation roster: the ground units that fill a division template's 6 slots
-    // (formation.ts). Each has a distinct role; the division's paper stats are the SUM of
-    // its slots — composition doctrines are organisational labels, not stat bonuses (BF-23).
+    // (formation.ts). Each has a distinct role. The division's aggregate attack/defense
+    // ratings come from GROUND_ROSTER (the per-target matrix combat uses); only hp/cost/
+    // upkeep are read from here (`stats.attack/defense/speed` on these four are legacy and
+    // now unread — kept as reference). Composition doctrines are organisational labels,
+    // not stat bonuses (BF-23).
     // Пехота — cheap, defensive front line; the backbone that holds ground.
     // Пехота в трёх вариантах (H4): ополчение — дешёвое мясо, тяжёлая пехота — щит
     // обороны, спецназ — элита с противотанковыми средствами (см. GROUND_ROSTER —
-    // матрица «кто кого бьёт» живёт там; здесь агрегатные статы, цена и содержание).
+    // матрица «кто кого бьёт» живёт там; агрегатный рейтинг ⚔/🛡 = среднее её строк,
+    // здесь же — hp, цена и содержание).
     militia: {
       faction: 'blue',
       stats: { attack: 4, defense: 8, speed: 44, hp: 14, cargoSize: 1 },
@@ -1586,10 +1590,11 @@ export interface SetupConfig {
 
 // --- ground formations (HOI4-style division templates) -----------------------
 // A "воинское объединение" is a TEMPLATE of 6 slots, each holding one formation unit
-// (or empty). Mobilising it builds those units as a ground army; the division's paper
-// stats are the SUM of its slots — composition doctrines are organisational LABELS only
-// and add nothing to the numbers (BF-23). Templates are composed in the menu and frozen
-// for the session, giving players a flexible, pre-committed doctrine.
+// (or empty). Mobilising it builds those units as a ground army; the division's aggregate
+// attack/defense rating is Σ over slots of the unit's mean per-target damage in GROUND_ROSTER
+// (the same table combat uses) — composition doctrines are organisational LABELS only and
+// add nothing to the numbers (BF-23). Templates are composed in the menu and frozen for
+// the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
 export const FORMATION_UNITS = ['militia', 'heavy_infantry', 'special_forces', 'tank'] as const;
@@ -1631,10 +1636,11 @@ export interface FormationSynergy {
   name: string;
   desc: string;
 }
-/** Aggregate characteristics of a division template — the designer's PAPER-STRENGTH
- *  readout. attack/defense are the raw Σ of slot stats; combat resolves per-target from
- *  the ground roster + officer (groundcombat.ts), never from these, so `synergies` are
- *  organisational doctrine labels only — no attack/defence multiplier (BF-23). */
+/** Aggregate characteristics of a division template — the designer's combat readout.
+ *  attack/defense are a compact rating: Σ over slots of each unit's MEAN per-target damage
+ *  in the SAME ground roster combat resolves from (groundcombat.ts) — an expected weight vs
+ *  an even enemy mix, so the preview tracks real combat instead of an unrelated paper stat.
+ *  `synergies` are organisational doctrine labels only — no combat multiplier (BF-23). */
 export interface FormationStats {
   count: number;
   byType: Record<FormationUnit, number>;
@@ -1645,12 +1651,17 @@ export interface FormationStats {
   synergies: FormationSynergy[];
 }
 
-/** Compute a template's aggregate paper stats = Σ(slot stats), plus the doctrine LABELS
- *  its composition unlocks (combined-arms / entrenched / armour / raid / human-wave).
- *  Pure + deterministic; a designer-preview readout only — combat resolves per-target
- *  from the ground roster + officer, so these doctrines carry no combat multiplier (BF-23). */
+/** Compute a template's aggregate combat rating + the doctrine LABELS its composition
+ *  unlocks (combined-arms / entrenched / armour / raid / human-wave). attack/defense are
+ *  Σ over slots of the unit's MEAN per-target damage in the ground roster — the SAME table
+ *  combat resolves from — so the preview is grounded in real combat, not an unrelated paper
+ *  stat (BF-23 tail). Doctrines are labels only, no multiplier. Pure + deterministic. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
   const byType: Record<FormationUnit, number> = { militia: 0, heavy_infantry: 0, special_forces: 0, tank: 0 };
+  // A unit's single-number weight = the mean of its per-target damage row in GROUND_ROSTER
+  // (expected damage vs an even enemy mix); `atk` when attacking, `def` on return fire.
+  const rosterMean = (row: DamageTable): number =>
+    FORMATION_UNITS.reduce((s, t) => s + (row[t] ?? 0), 0) / FORMATION_UNITS.length;
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -1660,8 +1671,9 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     const def = data.units[slot];
     if (!def) continue;
     byType[slot] += 1;
-    baseAtk += def.stats.attack ?? 0;
-    baseDef += def.stats.defense ?? 0;
+    const prof = GROUND_ROSTER[slot];
+    baseAtk += prof ? rosterMean(prof.atk) : 0;
+    baseDef += prof ? rosterMean(prof.def) : 0;
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
@@ -1702,8 +1714,8 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
   return {
     count,
     byType,
-    attack: baseAtk,
-    defense: baseDef,
+    attack: Math.round(baseAtk),
+    defense: Math.round(baseDef),
     hp,
     cost,
     synergies,
