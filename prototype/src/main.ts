@@ -8122,14 +8122,32 @@ const BUILD_TAG = (() => {
   const b = currentBuild();
   return b ? buildLabel(b) : '';
 })();
-// --- Android Back = close the top UI layer (APK convenience) ------------------
-// The APK's WebView maps the hardware Back to history.back(). While ANY closable
-// layer is open we keep ONE sentinel entry pushed: Back then pops the sentinel
-// (popstate), we close the topmost layer and re-arm. With nothing left to close
-// the sentinel stays un-armed, so the NEXT Back is the system's (exit) — after a
-// hint toast, the standard Android double-back pattern. Browser Back gets the
-// same behaviour for free.
+// --- Android Back / Escape = close the top UI layer (APK + desktop) -----------
+// The APK's WebView maps the hardware Back to history.back(); desktop maps Escape
+// (below). While ANY closable layer is open — OR a match is simply live — we keep
+// ONE sentinel entry pushed: Back pops the sentinel (popstate), we close the
+// topmost layer and re-arm. With nothing left to close AND a match running, the
+// first Back only shows a "press again to leave" hint (BF-17-adjacent: a bare
+// in-match Back used to silently unload the page and lose the solo match); a
+// second Back within the window is the system's (exit). Browser Back is the same.
 let backArmed = false;
+// Double-back-to-leave window: after the hint we stop re-arming the sentinel for
+// this long, so a second Back within the window is the system's. `performance.now()`
+// is fine here (prototype UI, not the deterministic core).
+const BACK_EXIT_WINDOW_MS = 2500;
+let backHintAt = -Infinity;
+
+/** In a live match (the map backdrop), i.e. none of the chrome SCREENS is up. The
+ *  three toggle `display` between 'flex'/'none'; on a fresh boot they read '' (CSS
+ *  default) ≠ 'none', so this is false until the player actually enters a match —
+ *  exactly when Back must stop silently unloading the page. */
+function inMatch(): boolean {
+  return (
+    connectEl.style.display === 'none' &&
+    hubEl.style.display === 'none' &&
+    setupEl.style.display === 'none'
+  );
+}
 
 /** Is any layer open that the Back button should close (probe only)? */
 function topLayerOpen(): boolean {
@@ -8221,10 +8239,18 @@ function closeTopLayer(): boolean {
 window.addEventListener('popstate', () => {
   backArmed = false;
   if (closeTopLayer()) {
-    if (topLayerOpen()) armBack(); // more layers underneath — stay resident
-  } else {
-    note(t('Ещё раз «Назад» — выход'));
+    if (topLayerOpen() || inMatch()) armBack(); // more layers / still in a match — stay
+    return;
   }
+  if (inMatch()) {
+    // Nothing left to close but a match is live — don't let one stray Back drop it.
+    // Show the hint and DON'T re-arm; during the exit window `frame()` won't re-arm
+    // either, so a second Back within it is the system's (leaves the match).
+    backHintAt = performance.now();
+    note(t('Ещё раз «Назад» — выход из матча'));
+    return;
+  }
+  note(t('Ещё раз «Назад» — выход')); // at the hub/welcome — the next Back exits
 });
 function armBack(): void {
   if (backArmed) return;
@@ -8232,10 +8258,21 @@ function armBack(): void {
   backArmed = true;
 }
 
+// Desktop parity: Escape closes the topmost layer, exactly like Back. Ignored while
+// typing (chat / nick / server inputs) so Escape still blurs a field the native way.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' && e.key !== 'Esc') return;
+  const el = e.target as HTMLElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  if (closeTopLayer()) e.preventDefault();
+});
+
 function frame(nowReal: number) {
-  // Keep the Back sentinel armed exactly while something closable is open — the
-  // frame loop sees every open path without instrumenting each one.
-  if (!backArmed && topLayerOpen()) armBack();
+  // Keep the Back sentinel armed while something is closable OR a match is live (so a
+  // bare in-match Back triggers the double-back hint instead of a silent unload) —
+  // but pause re-arming for the exit window after the hint, so the second Back leaves.
+  const matchGuard = inMatch() && performance.now() - backHintAt > BACK_EXIT_WINDOW_MS;
+  if (!backArmed && (topLayerOpen() || matchGuard)) armBack();
   const dt = nowReal - lastReal;
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane
