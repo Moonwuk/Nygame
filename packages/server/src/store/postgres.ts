@@ -3,6 +3,12 @@ import type { Pool } from 'pg';
 import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  CorpAuditEntry,
+  CorpMembership,
+  CorpRecord,
+  CorpRole,
+  CorpStore,
+  CorpSummary,
   MatchSnapshot,
   MatchStore,
   ReceiptStore,
@@ -60,6 +66,39 @@ export async function migrate(pool: Pool): Promise<void> {
     );
     -- logins are unique case-insensitively: Vasya and vasya are one account
     CREATE UNIQUE INDEX IF NOT EXISTS users_login_idx ON users (lower(login));
+
+    CREATE TABLE IF NOT EXISTS corps (
+      id         text PRIMARY KEY,
+      name       text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    -- corp names are unique case-insensitively (CORP-0)
+    CREATE UNIQUE INDEX IF NOT EXISTS corps_name_idx ON corps (lower(name));
+
+    -- account_id as the PRIMARY KEY is the one-corp-per-account invariant: a member
+    -- (recruit rows included — a recruit row IS the pending application) can't join
+    -- or apply to a second corp until the first row is gone.
+    CREATE TABLE IF NOT EXISTS corp_members (
+      account_id text PRIMARY KEY,
+      corp_id    text NOT NULL,
+      login      text NOT NULL,
+      role       text NOT NULL,
+      joined_at  timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS corp_members_corp_idx ON corp_members (corp_id);
+
+    -- audit rows are append-only and deliberately keep no FK to corps: they must
+    -- survive a disband (the record is the point)
+    CREATE TABLE IF NOT EXISTS corp_audit (
+      id      bigserial PRIMARY KEY,
+      corp_id text NOT NULL,
+      at      bigint NOT NULL,
+      actor   text NOT NULL,
+      action  text NOT NULL,
+      target  text,
+      detail  text
+    );
+    CREATE INDEX IF NOT EXISTS corp_audit_corp_idx ON corp_audit (corp_id);
   `);
 }
 
@@ -240,6 +279,202 @@ export class PostgresUserStore implements UserStore {
     );
     const row = r.rows[0];
     return row ? { userId: row.id, login: row.login, passHash: row.pass_hash } : null;
+  }
+}
+
+interface CorpMemberRow {
+  corp_id: string;
+  account_id: string;
+  login: string;
+  role: string;
+}
+
+function memberOf(row: CorpMemberRow): CorpMembership {
+  return {
+    corpId: row.corp_id,
+    accountId: row.account_id,
+    login: row.login,
+    role: row.role as CorpRole, // the store only ever writes CorpRole values
+  };
+}
+
+export class PostgresCorpStore implements CorpStore {
+  constructor(private readonly pool: Pool) {}
+
+  async createCorp(
+    name: string,
+    headAccountId: string,
+    headLogin: string,
+  ): Promise<{ ok: true; corpId: string } | { ok: false; code: 'E_NAME_TAKEN' | 'E_IN_CORP' }> {
+    // One transaction, two atomic claims: the corp_members PK is the one-corp-per-
+    // account claim, the lower(name) unique index is the name claim. ON CONFLICT
+    // probes the first without an exception; the second reports through the catch.
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const corpId = randomUUID();
+      const claim = await client.query(
+        `INSERT INTO corp_members (account_id, corp_id, login, role)
+         VALUES ($1, $2, $3, 'head')
+         ON CONFLICT (account_id) DO NOTHING`,
+        [headAccountId, corpId, headLogin],
+      );
+      if ((claim.rowCount ?? 0) === 0) {
+        await client.query('ROLLBACK');
+        return { ok: false, code: 'E_IN_CORP' };
+      }
+      try {
+        await client.query(`INSERT INTO corps (id, name) VALUES ($1, $2)`, [corpId, name]);
+      } catch {
+        await client.query('ROLLBACK');
+        return { ok: false, code: 'E_NAME_TAKEN' };
+      }
+      await client.query('COMMIT');
+      return { ok: true, corpId };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCorp(corpId: string): Promise<CorpRecord | null> {
+    const r = await this.pool.query<{ id: string; name: string }>(
+      `SELECT id, name FROM corps WHERE id = $1`,
+      [corpId],
+    );
+    const row = r.rows[0];
+    return row ? { corpId: row.id, name: row.name } : null;
+  }
+
+  async listCorps(): Promise<CorpSummary[]> {
+    const r = await this.pool.query<{ id: string; name: string; members: string }>(
+      `SELECT c.id, c.name,
+              count(m.account_id) FILTER (WHERE m.role <> 'recruit') AS members
+       FROM corps c
+       LEFT JOIN corp_members m ON m.corp_id = c.id
+       GROUP BY c.id, c.name
+       ORDER BY lower(c.name)`,
+    );
+    return r.rows.map((row) => ({ corpId: row.id, name: row.name, members: Number(row.members) }));
+  }
+
+  async membershipOf(accountId: string): Promise<CorpMembership | null> {
+    const r = await this.pool.query<CorpMemberRow>(
+      `SELECT corp_id, account_id, login, role FROM corp_members WHERE account_id = $1`,
+      [accountId],
+    );
+    return r.rows[0] ? memberOf(r.rows[0]) : null;
+  }
+
+  async membersOf(corpId: string): Promise<CorpMembership[]> {
+    const r = await this.pool.query<CorpMemberRow>(
+      `SELECT corp_id, account_id, login, role FROM corp_members WHERE corp_id = $1`,
+      [corpId],
+    );
+    return r.rows.map(memberOf);
+  }
+
+  async addMember(
+    corpId: string,
+    accountId: string,
+    login: string,
+    role: CorpRole,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_IN_CORP' }> {
+    const r = await this.pool.query(
+      `INSERT INTO corp_members (account_id, corp_id, login, role)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (account_id) DO NOTHING`,
+      [accountId, corpId, login, role],
+    );
+    return (r.rowCount ?? 0) > 0 ? { ok: true } : { ok: false, code: 'E_IN_CORP' };
+  }
+
+  async setRole(corpId: string, accountId: string, role: CorpRole): Promise<void> {
+    await this.pool.query(
+      `UPDATE corp_members SET role = $3 WHERE corp_id = $1 AND account_id = $2`,
+      [corpId, accountId, role],
+    );
+  }
+
+  async removeMember(corpId: string, accountId: string): Promise<void> {
+    await this.pool.query(`DELETE FROM corp_members WHERE corp_id = $1 AND account_id = $2`, [
+      corpId,
+      accountId,
+    ]);
+  }
+
+  async swapHead(corpId: string, fromAccountId: string, toAccountId: string): Promise<void> {
+    // One transaction so there is never a window with zero or two heads.
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const demoted = await client.query(
+        `UPDATE corp_members SET role = 'officer'
+         WHERE corp_id = $1 AND account_id = $2 AND role = 'head'`,
+        [corpId, fromAccountId],
+      );
+      if ((demoted.rowCount ?? 0) > 0) {
+        await client.query(
+          `UPDATE corp_members SET role = 'head' WHERE corp_id = $1 AND account_id = $2`,
+          [corpId, toAccountId],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async removeCorp(corpId: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM corp_members WHERE corp_id = $1`, [corpId]);
+      await client.query(`DELETE FROM corps WHERE id = $1`, [corpId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async appendAudit(entry: CorpAuditEntry): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO corp_audit (corp_id, at, actor, action, target, detail)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [entry.corpId, entry.at, entry.actor, entry.action, entry.target ?? null, entry.detail ?? null],
+    );
+  }
+
+  async auditOf(corpId: string, limit = 50): Promise<CorpAuditEntry[]> {
+    const r = await this.pool.query<{
+      corp_id: string;
+      at: string;
+      actor: string;
+      action: string;
+      target: string | null;
+      detail: string | null;
+    }>(
+      `SELECT corp_id, at, actor, action, target, detail
+       FROM corp_audit WHERE corp_id = $1
+       ORDER BY id DESC LIMIT $2`,
+      [corpId, limit],
+    );
+    return r.rows.map((row) => ({
+      corpId: row.corp_id,
+      at: Number(row.at), // bigint arrives as a string
+      actor: row.actor,
+      action: row.action as CorpAuditEntry['action'],
+      ...(row.target !== null ? { target: row.target } : {}),
+      ...(row.detail !== null ? { detail: row.detail } : {}),
+    }));
   }
 }
 

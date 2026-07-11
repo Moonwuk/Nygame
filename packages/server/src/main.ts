@@ -7,6 +7,8 @@ import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
 import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
 import { registerAuthApi } from './authApi';
+import { registerCorpApi } from './corpApi';
+import { CorpService } from './corpService';
 import { MatchKeeper } from './matchFactory';
 import { LazyRoomRegistry, type LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
@@ -114,6 +116,19 @@ const registry = new LazyRoomRegistry({ load: loadMatch });
 const accountStore = stores.accountStore; // durable alongside the match when DATABASE_URL is set
 const MAX_MATCHES = 1000;
 let matchCount = 1; // the seeded 'dev' match
+
+// Identity gate (SE-1.x): resolve the caller from the session token. Shared by the
+// match API (create/join claim seats for the session's account) and the corp API
+// (every corp intent acts as the session's account).
+const identify: MatchApiDeps['identify'] = verifySession
+  ? async (request) => {
+      const header = request.headers.authorization;
+      if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
+      const verified = await verifySession(header.slice('Bearer '.length).trim());
+      return verified.ok ? verified.claim : null;
+    }
+  : undefined;
+
 const matchApi: MatchApiDeps = {
   createMatch: async () => {
     if (matchCount >= MAX_MATCHES) throw new Error('match capacity reached'); // → 500, bounded
@@ -131,16 +146,9 @@ const matchApi: MatchApiDeps = {
     if (!seat) return { error: 'E_MATCH_FULL' };
     return { playerId: seat.playerId, token: await signToken(matchId, seat.playerId, accountId) };
   },
-  // Identity gate (SE-1.x): create/join require a session from /auth/login — the
-  // session's login IS the seat nick, so nobody claims a seat as somebody else.
-  identify: verifySession
-    ? async (request) => {
-        const header = request.headers.authorization;
-        if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
-        const verified = await verifySession(header.slice('Bearer '.length).trim());
-        return verified.ok ? verified.claim : null;
-      }
-    : undefined,
+  // Wired ⇒ create/join require a session from /auth/login — the session's login IS
+  // the seat nick, so nobody claims a seat as somebody else.
+  identify,
 };
 
 if (auth && !allowedOrigins) {
@@ -206,6 +214,14 @@ const server = createMultiplayerServer({
         await scope.register(rateLimit, { max: 100, timeWindow: '1 minute' });
         registerAuthApi(scope, { users: stores.userStore, signSession });
         registerMatchApi(scope, matchApi);
+        // Corporations (CORP-0) — session-gated on every route: the acting identity
+        // comes from the session, so the API only exists where sessions do.
+        if (identify) {
+          registerCorpApi(scope, {
+            service: new CorpService({ store: stores.corpStore }),
+            identify,
+          });
+        }
       });
     }
   },
@@ -232,6 +248,7 @@ process.stdout.write(
           `  account: POST ${httpUrl}/auth/register  ·  POST ${httpUrl}/auth/login  {login, password}`,
           `  join   : POST ${httpUrl}/matches  ·  GET ${httpUrl}/matches/dev/join  (Authorization: Bearer <session>)`,
           `           (the session's login is your nick; the seat is claimed for YOUR account)`,
+          `  corps  : GET/POST ${httpUrl}/corps  ·  POST ${httpUrl}/corps/:id/<intent>  (session required)`,
         ]
       : [`  dev    : ${wsBase}/dev?player=green  ·  ${wsBase}/dev?player=red`]),
     host === '0.0.0.0'

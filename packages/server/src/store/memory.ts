@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  CorpAuditEntry,
+  CorpMembership,
+  CorpRecord,
+  CorpRole,
+  CorpStore,
+  CorpSummary,
   MatchSnapshot,
   MatchStore,
   ReceiptStore,
@@ -109,6 +115,108 @@ export class MemoryUserStore implements UserStore {
 
   findUser(login: string): Promise<UserRecord | null> {
     return Promise.resolve(this.byLogin.get(login.toLowerCase()) ?? null);
+  }
+}
+
+/** In-memory corp store — membership keyed by account (one corp per account). */
+export class MemoryCorpStore implements CorpStore {
+  private readonly corps = new Map<string, CorpRecord>();
+  /** `accountId → membership` — the map key IS the one-corp-per-account invariant. */
+  private readonly members = new Map<string, CorpMembership>();
+  private readonly audit: CorpAuditEntry[] = [];
+
+  createCorp(
+    name: string,
+    headAccountId: string,
+    headLogin: string,
+  ): Promise<{ ok: true; corpId: string } | { ok: false; code: 'E_NAME_TAKEN' | 'E_IN_CORP' }> {
+    const key = name.toLowerCase();
+    for (const corp of this.corps.values()) {
+      if (corp.name.toLowerCase() === key) return Promise.resolve({ ok: false, code: 'E_NAME_TAKEN' });
+    }
+    if (this.members.has(headAccountId)) return Promise.resolve({ ok: false, code: 'E_IN_CORP' });
+    const corpId = randomUUID();
+    this.corps.set(corpId, { corpId, name });
+    this.members.set(headAccountId, { corpId, accountId: headAccountId, login: headLogin, role: 'head' });
+    return Promise.resolve({ ok: true, corpId });
+  }
+
+  getCorp(corpId: string): Promise<CorpRecord | null> {
+    const corp = this.corps.get(corpId);
+    return Promise.resolve(corp ? { ...corp } : null);
+  }
+
+  listCorps(): Promise<CorpSummary[]> {
+    const list = [...this.corps.values()].map((corp) => ({
+      ...corp,
+      members: [...this.members.values()].filter(
+        (m) => m.corpId === corp.corpId && m.role !== 'recruit',
+      ).length,
+    }));
+    list.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return Promise.resolve(list);
+  }
+
+  membershipOf(accountId: string): Promise<CorpMembership | null> {
+    const row = this.members.get(accountId);
+    return Promise.resolve(row ? { ...row } : null);
+  }
+
+  membersOf(corpId: string): Promise<CorpMembership[]> {
+    return Promise.resolve(
+      [...this.members.values()].filter((m) => m.corpId === corpId).map((m) => ({ ...m })),
+    );
+  }
+
+  addMember(
+    corpId: string,
+    accountId: string,
+    login: string,
+    role: CorpRole,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_IN_CORP' }> {
+    if (this.members.has(accountId)) return Promise.resolve({ ok: false, code: 'E_IN_CORP' });
+    this.members.set(accountId, { corpId, accountId, login, role });
+    return Promise.resolve({ ok: true });
+  }
+
+  setRole(corpId: string, accountId: string, role: CorpRole): Promise<void> {
+    const row = this.members.get(accountId);
+    if (row && row.corpId === corpId) row.role = role;
+    return Promise.resolve();
+  }
+
+  removeMember(corpId: string, accountId: string): Promise<void> {
+    const row = this.members.get(accountId);
+    if (row && row.corpId === corpId) this.members.delete(accountId);
+    return Promise.resolve();
+  }
+
+  swapHead(corpId: string, fromAccountId: string, toAccountId: string): Promise<void> {
+    const from = this.members.get(fromAccountId);
+    const to = this.members.get(toAccountId);
+    if (!from || !to || from.corpId !== corpId || to.corpId !== corpId) return Promise.resolve();
+    if (from.role !== 'head') return Promise.resolve();
+    from.role = 'officer';
+    to.role = 'head';
+    return Promise.resolve();
+  }
+
+  removeCorp(corpId: string): Promise<void> {
+    this.corps.delete(corpId);
+    for (const [accountId, row] of this.members) {
+      if (row.corpId === corpId) this.members.delete(accountId);
+    }
+    return Promise.resolve();
+  }
+
+  appendAudit(entry: CorpAuditEntry): Promise<void> {
+    this.audit.push({ ...entry });
+    return Promise.resolve();
+  }
+
+  auditOf(corpId: string, limit = 50): Promise<CorpAuditEntry[]> {
+    const rows = this.audit.filter((e) => e.corpId === corpId);
+    return Promise.resolve(rows.slice(-limit).reverse().map((e) => ({ ...e })));
   }
 }
 
