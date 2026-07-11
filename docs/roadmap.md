@@ -249,6 +249,11 @@ applyAction(state: GameState, action: Action, context: Context): GameState
   мета-галактики, корпорации, очки влияния, мета-шпионаж) — 🌌 north-star,
   зафиксирован в [`docs/metagame.md`](metagame.md). Сессионное ядро (Этап 1) —
   движок обоих контуров; сам мета-слой строится на сервере (Этап 3+), не раньше.
+  **Первый срез уже начат:** база корпораций (CORP-0 ✅ — членство/роли/аудит,
+  `packages/server`) и играбельный командный бой (AVA-0 ✅, прототип). Инженерная
+  сборка сессионной AvA (без ставки мета-сектора) — кирпичи AVA-1…AVA-9 в
+  [`docs/ava-lifecycle-roadmap.md`](ava-lifecycle-roadmap.md) (парная
+  [`docs/corporation-wars.md`](corporation-wars.md)).
 
 ---
 
