@@ -1052,6 +1052,7 @@ export const en: Record<string, string> = {
   // --- build ETA / misc --------------------------------------------------------
   'Стройка': 'Building',
   'изучено': 'researched',
+  'Ещё раз «Назад» — выход из матча': 'Press Back again to leave the match',
   // --- static H4 headers / steward toggle (build.mjs [data-i18n]) --------------
   'КОНСТРУКТОР ДИВИЗИЙ': 'DIVISION BUILDER',
   'ХРАНИТЕЛЬ · ИИ НА СОН': 'STEWARD · AI WHILE ASLEEP',

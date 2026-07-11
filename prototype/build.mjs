@@ -397,7 +397,15 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   align-items:flex-start;gap:8px;}
 #railtools{display:none;flex-direction:column;gap:5px;padding:6px;background:rgba(3,12,16,.82);
   border:1px solid var(--line-hi);border-radius:12px;box-shadow:0 0 16px rgba(0,0,0,.5);
-  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);
+  /* Short viewports (landscape / small phones): the bottom-anchored rail grows UP and
+     used to overrun the top bar (z-index 30 > 26), pushing «Дипло» off-screen / under
+     the top bar so a tap hit the top bar instead. Cap the tool list to the space above
+     the toggle+bottom and below the top bar, and scroll inside it. dvh overrides vh
+     where supported (mobile URL-bar aware); no effect on tall screens (list fits). */
+  max-height:calc(100vh - 120px);max-height:calc(100dvh - 120px);
+  overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;}
+#railtools::-webkit-scrollbar{display:none;}
 #rail.open #railtools{display:flex;}
 #railtools .rlbl{display:none;font:8px ui-monospace,monospace;letter-spacing:.4px;color:var(--cyan-dim);line-height:1;}
 #railtools button{position:relative;width:38px;height:38px;background:transparent;border:0;cursor:pointer;
