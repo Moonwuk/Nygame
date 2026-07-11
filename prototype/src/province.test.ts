@@ -35,8 +35,17 @@ function worstSwallow(seeds: Array<{ x: number; y: number; w: number }>): number
 }
 
 describe('province power-diagram weights — every node keeps its own cell', () => {
-  it('the raw size→weight map swallows at least one province (reproduces the bug)', () => {
-    expect(worstSwallow(mapSeeds())).toBeGreaterThan(0);
+  it('a raw size→weight disparity can swallow a province (the bug, synthetic pair)', () => {
+    // The original repro read the LIVE map, whose old asymmetric jitter packed two
+    // sites close enough to swallow. The symmetric field (M4 fairness) happens to
+    // keep every pair far enough apart, so the reproduction is a synthetic close,
+    // lopsided pair now — the geometry the clamp exists to defuse.
+    expect(
+      worstSwallow([
+        { x: 0, y: 0, w: 1 * 9000 },
+        { x: 30, y: 0, w: 1.5 * 9000 },
+      ]),
+    ).toBeGreaterThan(0);
   });
 
   it('clampPowerWeights removes every swallow (each node keeps a non-empty cell)', () => {

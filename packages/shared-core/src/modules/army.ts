@@ -1,6 +1,7 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Fleet } from '../state/gameState';
 import type { GameData } from '../data/schemas';
+import { defHasTrait } from '../data/traits';
 import { findHealthyStack, addUnits, sumUnitStat } from '../util/stacks';
 import { garrisonUnderAssault, requireOwnedIdleFleet } from '../util/fleet';
 
@@ -66,7 +67,7 @@ export const armyModule: GameModule = {
 
     api.onAction('army.load', (action, h) => {
       const { fleet, planet, def, unit, count } = resolve(action, h);
-      if (def.traits.includes('immobile')) {
+      if (defHasTrait(def, 'immobile')) {
         return h.reject('E_IMMOBILE'); // fixed emplacements (e.g. orbital AA) can't be lifted
       }
       // No mid-assault evacuation: while a battle holds this garrison, lifting it

@@ -139,6 +139,28 @@ export interface ClientChatSendMessage {
   text: string;
 }
 
+/** Desync report (M1): the client's reconstructed state hashed differently from the
+ *  `hash` the server attached to snapshot `seq`. The room logs it (observation) and
+ *  answers with a full `state` snapshot so the client recovers without reconnecting. */
+export interface ClientDesyncMessage {
+  type: 'desync';
+  /** The snapshot seq whose hash mismatched. */
+  seq: number;
+  /** The client's own `hashState` of its reconstructed view (for the server log). */
+  hash: string;
+}
+
+/** Lightweight client perf sample (M2): smoothed fps, round-trip and JS-heap during
+ *  a network match. Pure telemetry — the room only observes it (rate-limited, never
+ *  answered); it cannot touch the simulation. Values are validated to sane ranges at
+ *  parse so a hostile client can't write garbage into the metrics stream. */
+export interface ClientPerfMessage {
+  type: 'perf';
+  fps: number;
+  rttMs?: number;
+  memMb?: number;
+}
+
 export type ClientMessage =
   | ClientActionMessage
   | ClientActionEnvelopeMessage
@@ -146,7 +168,9 @@ export type ClientMessage =
   | ClientStartMessage
   | ClientPingPlaceMessage
   | ClientPingClearMessage
-  | ClientChatSendMessage;
+  | ClientChatSendMessage
+  | ClientDesyncMessage
+  | ClientPerfMessage;
 
 /** Roster shown on the pre-match lobby screen (manual-start mode). */
 export interface LobbyInfo {
@@ -356,6 +380,23 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       text: decoded.text as string,
     };
     if (typeof decoded.to === 'string') message.to = decoded.to;
+    return message;
+  }
+  if (
+    decoded.type === 'desync' &&
+    typeof decoded.seq === 'number' &&
+    Number.isFinite(decoded.seq) &&
+    typeof decoded.hash === 'string'
+  ) {
+    return { type: 'desync', seq: decoded.seq, hash: decoded.hash };
+  }
+  if (decoded.type === 'perf') {
+    const inRange = (v: unknown, max: number): v is number =>
+      typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max;
+    if (!inRange(decoded.fps, 1_000)) return null;
+    const message: ClientPerfMessage = { type: 'perf', fps: decoded.fps };
+    if (inRange(decoded.rttMs, 120_000)) message.rttMs = decoded.rttMs;
+    if (inRange(decoded.memMb, 1_000_000)) message.memMb = decoded.memMb;
     return message;
   }
   return null;

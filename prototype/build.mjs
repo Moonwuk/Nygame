@@ -159,6 +159,10 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .ptile:active{background:rgba(53,214,230,.24);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
+/* long-press name bubble over a codex tile (mobile — touch has no hover/title) */
+#holdtip{position:fixed;z-index:60;display:none;max-width:70vw;padding:6px 10px;pointer-events:none;
+  background:rgba(4,16,22,.96);border:1px solid var(--cyan);border-radius:7px;color:var(--cyan);
+  font-size:13px;font-weight:600;letter-spacing:.3px;box-shadow:0 4px 14px rgba(0,0,0,.5);}
 /* codex popup — full stats + description on tile click */
 #codex{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:18px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}

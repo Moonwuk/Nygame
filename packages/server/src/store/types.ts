@@ -89,6 +89,93 @@ export interface UserStore {
   close?(): Promise<void>;
 }
 
+/** Corporation roles — the fixed RBAC set from docs/corporations.md §2. A `recruit`
+ *  row IS the pending application: accept promotes it to `member`, decline (or the
+ *  player's cancel) removes it. Because membership is unique per account, this also
+ *  caps a player at one application at a time. */
+export type CorpRole = 'head' | 'officer' | 'member' | 'recruit';
+
+export interface CorpRecord {
+  corpId: string;
+  name: string;
+}
+
+/** One membership row. An account belongs to AT MOST one corporation (recruit rows
+ *  included). `login` is denormalized for member lists — logins never change. */
+export interface CorpMembership {
+  corpId: string;
+  accountId: string;
+  login: string;
+  role: CorpRole;
+}
+
+/** A corp as the browse list reports it — `members` counts accepted members only
+ *  (recruits are pending applications, not headcount). */
+export interface CorpSummary extends CorpRecord {
+  members: number;
+}
+
+/** An audit-log entry for a sensitive corp action (A01): who did what to whom.
+ *  `at` is the service clock in ms — injectable for deterministic tests. Audit rows
+ *  outlive the corp (they survive a disband — the record is the point). */
+export interface CorpAuditEntry {
+  corpId: string;
+  at: number;
+  /** Acting account id. */
+  actor: string;
+  action:
+    | 'create'
+    | 'accept'
+    | 'decline'
+    | 'kick'
+    | 'role'
+    | 'transfer'
+    | 'leave'
+    | 'disband';
+  /** Subject account id, when the action has one. */
+  target?: string;
+  /** Extra context, e.g. the new role for `role`. */
+  detail?: string;
+}
+
+/** Persistence for corporations (CORP-0). Deliberately dumb CRUD — the rights matrix
+ *  lives in `CorpService`; the store guards only the STRUCTURAL invariants that need
+ *  storage-level atomicity: unique corp name (case-insensitive) and one corp per
+ *  account. */
+export interface CorpStore {
+  /** Create a corp with `head` as its Глава — atomic, so a duplicate name or an
+   *  already-membered founder can't slip in between check and insert. */
+  createCorp(
+    name: string,
+    headAccountId: string,
+    headLogin: string,
+  ): Promise<{ ok: true; corpId: string } | { ok: false; code: 'E_NAME_TAKEN' | 'E_IN_CORP' }>;
+  getCorp(corpId: string): Promise<CorpRecord | null>;
+  /** Every corp with its accepted-member count, ordered by name (case-insensitive). */
+  listCorps(): Promise<CorpSummary[]>;
+  /** The one membership row for an account (any role, recruit included), or null. */
+  membershipOf(accountId: string): Promise<CorpMembership | null>;
+  membersOf(corpId: string): Promise<CorpMembership[]>;
+  /** Atomic one-corp-per-account claim — the application insert. */
+  addMember(
+    corpId: string,
+    accountId: string,
+    login: string,
+    role: CorpRole,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_IN_CORP' }>;
+  setRole(corpId: string, accountId: string, role: CorpRole): Promise<void>;
+  removeMember(corpId: string, accountId: string): Promise<void>;
+  /** Transfer headship atomically: `from` (the head) → officer, `to` → head — never
+   *  a window with zero or two heads. */
+  swapHead(corpId: string, fromAccountId: string, toAccountId: string): Promise<void>;
+  /** Disband: delete the corp and every membership row (audit history stays). */
+  removeCorp(corpId: string): Promise<void>;
+  appendAudit(entry: CorpAuditEntry): Promise<void>;
+  /** Newest-first audit page. */
+  auditOf(corpId: string, limit?: number): Promise<CorpAuditEntry[]>;
+  close?(): Promise<void>;
+}
+
 /** An action receipt as stored for idempotency — structurally an `ActionReceipt`. */
 export interface StoredReceipt {
   actionId: string;

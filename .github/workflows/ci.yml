@@ -63,3 +63,10 @@ jobs:
 
       - name: Dependency audit
         run: pnpm audit --audit-level=high
+
+      # M2 perf report (metrics-roadmap): CPU frame cost of the prototype's render
+      # loop (idle/pan/zoom) against the p95 budget. Non-blocking by design — the
+      # report shows up in the job log for review; flip to PERF_STRICT=1 to gate.
+      - name: Perf report (non-blocking)
+        run: pnpm run perf
+        continue-on-error: true

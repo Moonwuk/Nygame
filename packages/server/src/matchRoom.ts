@@ -158,7 +158,27 @@ export type RoomObservation =
   /** Scheduled events dead-lettered during a catch-up (their handler threw). The
    *  timeline kept moving (by design), but silence here hid real module bugs —
    *  the record must reach the host's logs (bug-hunt: failures had NO consumer). */
-  | { kind: 'dead_letter'; failures: Array<{ at: number; type: string; code: string }> };
+  | { kind: 'dead_letter'; failures: Array<{ at: number; type: string; code: string }> }
+  /** Domain events that accompanied a committed change (M1) — the raw bus output
+   *  BEFORE fog filtering (the observer is server-side and sees everything), so a
+   *  metrics consumer can count battles/captures/arrivals. `time.advanced` spans are
+   *  excluded (pure clock noise — one per broadcast would swamp the stream). */
+  | { kind: 'events'; seq: number; events: DomainEvent[] }
+  /** One broadcast round (M1): how long the fan-out took and the serialized size of
+   *  each player's delta payload (fog efficiency — the doc target is idle < 1 KB). */
+  | { kind: 'broadcast'; seq: number; ms: number; deltaBytes: Record<PlayerId, number> }
+  /** Wall-clock cost of one room operation (M1): a player/server action submit
+   *  (advance + apply + commit + broadcast, incl. the durable persist when configured)
+   *  or an offline-heartbeat advance (`tick`). */
+  | { kind: 'timing'; op: 'submit' | 'advance'; ms: number; seq: number; actionType?: string }
+  /** A client reported that its reconstructed state hashed differently from the
+   *  server's snapshot hash (M1). The room answers with a full resync snapshot;
+   *  this record is the log half (the doc's desync-rate target is 0). */
+  | { kind: 'desync'; playerId: PlayerId; atSeq: number; clientHash: string }
+  /** A client perf sample (M2): smoothed fps + round-trip + JS-heap as the player's
+   *  device experiences the match. Rate-limited at the room (floods are dropped
+   *  silently — telemetry, not a conversation); values already range-checked at parse. */
+  | { kind: 'client_perf'; playerId: PlayerId; fps: number; rttMs?: number; memMb?: number };
 
 export interface SubmitResult {
   ok: boolean;
@@ -222,6 +242,16 @@ const CHAT_HISTORY_MAX = 100;
 const RECEIPTS_MAX_DEFAULT = 10_000;
 const ACTION_RATE_MAX_DEFAULT = 20;
 const ACTION_RATE_WINDOW_MS_DEFAULT = 1_000;
+
+/** Desync-report cool-down per player (M1): a full resync snapshot is not free
+ *  (fog projection + full-state serialize), so a client claiming desync more often
+ *  than this is throttled — the report is still observed (the log must not miss a
+ *  real desync storm), only the resync reply is skipped. */
+const DESYNC_RESYNC_COOLDOWN_MS = 2_000;
+
+/** Min interval between accepted client perf samples (M2). The client sends every
+ *  ~30 s; anything faster is a bug or a flood — dropped silently (telemetry). */
+const PERF_SAMPLE_MIN_MS = 5_000;
 
 export class MatchRoom {
   readonly id: string;
@@ -290,6 +320,10 @@ export class MatchRoom {
   private readonly actionRateWindowMs: number;
   /** Per-player submit timestamps, for the action rate limit. */
   private readonly actionTimes = new Map<PlayerId, number[]>();
+  /** Per-player wall time of the last desync-triggered resync reply (cool-down). */
+  private readonly lastResyncAt = new Map<PlayerId, number>();
+  /** Per-player wall time of the last accepted perf sample (rate limit). */
+  private readonly lastPerfAt = new Map<PlayerId, number>();
   /** Wall→game clock multiplier (1 = real-time; >1 fast-forwards the match). */
   private readonly timeScale: number;
 
@@ -510,6 +544,8 @@ export class MatchRoom {
     if (playerPeers.size === 0) {
       this.peers.delete(playerId);
       this.lastVisible.delete(playerId); // reclaim the per-player snapshot — no leak after a leave
+      this.lastResyncAt.delete(playerId); // and the desync-resync cool-down stamp
+      this.lastPerfAt.delete(playerId); // and the perf-sample rate-limit stamp
       this.observe?.({ kind: 'leave', playerId });
       // Manual-start lobby: if the host leaves before starting, hand the Start
       // button to whoever's still here (insertion order) so the lobby isn't stuck.
@@ -568,6 +604,38 @@ export class MatchRoom {
     }
     if (message.type === 'chat.send') {
       this.handleChatSend(playerId, peer, message);
+      return;
+    }
+    if (message.type === 'desync') {
+      // M1 desync detector, server half: log the report (observation), answer with a
+      // full resync snapshot so the client recovers in place. The reply is cooled down
+      // per player (a resync costs a fog projection + full serialize); the observation
+      // is NOT — a desync storm must be visible in the metrics even while throttled.
+      this.observe?.({ kind: 'desync', playerId, atSeq: message.seq, clientHash: message.hash });
+      const wallNow = this.now();
+      const last = this.lastResyncAt.get(playerId);
+      if (last === undefined || wallNow - last >= DESYNC_RESYNC_COOLDOWN_MS) {
+        this.lastResyncAt.set(playerId, wallNow);
+        this.send(peer, this.stateMessageFor(playerId));
+      }
+      return;
+    }
+    if (message.type === 'perf') {
+      // M2 client perf telemetry: observe-and-forget. Rate-limited per player; a
+      // too-frequent sample is dropped silently (telemetry is not a conversation,
+      // and answering floods would be the amplification we're avoiding).
+      const wallNow = this.now();
+      const last = this.lastPerfAt.get(playerId);
+      if (last === undefined || wallNow - last >= PERF_SAMPLE_MIN_MS) {
+        this.lastPerfAt.set(playerId, wallNow);
+        this.observe?.({
+          kind: 'client_perf',
+          playerId,
+          fps: message.fps,
+          ...(message.rttMs !== undefined ? { rttMs: message.rttMs } : {}),
+          ...(message.memMb !== undefined ? { memMb: message.memMb } : {}),
+        });
+      }
       return;
     }
     if (message.type === 'action.v1') {
@@ -762,33 +830,46 @@ export class MatchRoom {
    * ActionGate), so neither re-runs a gate the other already applied.
    */
   private applyAndBroadcast(playerId: PlayerId, action: Action, peer?: RoomPeer): SubmitResult {
-    const serverNow = this.clock();
-    const advanced = this.advance(serverNow);
-    if (!advanced.ok) {
-      const receipt = this.recordReceipt(action, playerId, false, advanced.code);
-      if (peer) this.sendRejection(peer, receipt);
-      return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
-    }
+    const startedAt = this.observe ? performance.now() : 0;
+    try {
+      const serverNow = this.clock();
+      const advanced = this.advance(serverNow);
+      if (!advanced.ok) {
+        const receipt = this.recordReceipt(action, playerId, false, advanced.code);
+        if (peer) this.sendRejection(peer, receipt);
+        return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
+      }
 
-    const context = this.context(Math.max(serverNow, this.stateValue.time));
-    const result = this.kernel.applyAction(this.stateValue, action, context);
-    if (!result.ok) {
-      // SRV-1: the action is rejected, but `advance` above already COMMITTED the
-      // world forward and produced events (arrivals, battles, captures). Flush them
-      // so peers see the advanced world instead of losing it until the next accepted
-      // action — without a tick loop, that could be hours of game time.
-      if (advanced.events.length > 0) this.broadcastState(advanced.events);
-      const receipt = this.recordReceipt(action, playerId, false, result.code);
-      if (peer) this.sendRejection(peer, receipt);
-      return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
-    }
+      const context = this.context(Math.max(serverNow, this.stateValue.time));
+      const result = this.kernel.applyAction(this.stateValue, action, context);
+      if (!result.ok) {
+        // SRV-1: the action is rejected, but `advance` above already COMMITTED the
+        // world forward and produced events (arrivals, battles, captures). Flush them
+        // so peers see the advanced world instead of losing it until the next accepted
+        // action — without a tick loop, that could be hours of game time.
+        if (advanced.events.length > 0) this.broadcastState(advanced.events);
+        const receipt = this.recordReceipt(action, playerId, false, result.code);
+        if (peer) this.sendRejection(peer, receipt);
+        return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
+      }
 
-    this.stateValue = result.state;
-    const receipt = this.recordReceipt(action, playerId, true);
-    const events = [...advanced.events, ...result.events];
-    this.broadcastState(events);
-    this.observeEndIfNeeded();
-    return { ok: true, seq: receipt.seq, events };
+      this.stateValue = result.state;
+      const receipt = this.recordReceipt(action, playerId, true);
+      const events = [...advanced.events, ...result.events];
+      this.broadcastState(events);
+      this.observeEndIfNeeded();
+      return { ok: true, seq: receipt.seq, events };
+    } finally {
+      // M1 submit timing: the whole advance→apply→broadcast span (the doc's
+      // "submit → broadcast" latency; target p95 < 20 ms on the sync path).
+      this.observe?.({
+        kind: 'timing',
+        op: 'submit',
+        ms: performance.now() - startedAt,
+        seq: this.seq,
+        actionType: action.type,
+      });
+    }
   }
 
   /** Per-player action rate limit (F-03): true if `playerId` is over `actionRateMax`
@@ -818,10 +899,20 @@ export class MatchRoom {
     // driver idles rather than firing skipped ticks; the submit re-arms it on commit.
     if (this.waiting || this.committing) return false;
     const before = this.stateValue.time;
+    const startedAt = this.observe ? performance.now() : 0;
     const advanced = this.advance(this.clock());
     if (advanced.ok && advanced.events.length > 0) {
       this.broadcastState(advanced.events);
       this.observeEndIfNeeded();
+      // M1 advance timing: the cost of this heartbeat catch-up (advance + fan-out).
+      // Only ticks that actually fired events are reported — an idle heartbeat that
+      // moved nothing would just flood the stream with 0 ms noise.
+      this.observe?.({
+        kind: 'timing',
+        op: 'advance',
+        ms: performance.now() - startedAt,
+        seq: this.seq,
+      });
     }
     // Whether the world clock moved forward — a wakeup driver uses this to tell a
     // legit (progressing) catch-up from a same-instant runaway (stalled) and back off.
@@ -1049,6 +1140,7 @@ export class MatchRoom {
     peer?: RoomPeer,
   ): Promise<CommitVerdict> {
     this.committing = true;
+    const startedAt = this.observe ? performance.now() : 0;
     // Deferred to the `finally` (after `committing` clears): emitting the `action`
     // observation re-arms the clock driver, which reads `msUntilNextEvent` — null while
     // committing. Emitting mid-commit would leave the driver un-armed and stall the 24/7
@@ -1112,6 +1204,16 @@ export class MatchRoom {
     } finally {
       this.committing = false;
       observeCommitted?.(); // now that committing is false, the driver re-arm sees the real next event
+      // M1 submit timing for the durable path: advance→apply→persist→commit→broadcast —
+      // the client-felt submit latency INCLUDING the durable write. Emitted after
+      // `committing` clears, same as the action observation above.
+      this.observe?.({
+        kind: 'timing',
+        op: 'submit',
+        ms: performance.now() - startedAt,
+        seq: this.seq,
+        actionType: action.type,
+      });
     }
   }
 
@@ -1163,11 +1265,22 @@ export class MatchRoom {
   }
 
   private broadcastState(events: DomainEvent[]): void {
+    // M1 events observation: surface the raw (pre-fog) domain events of this committed
+    // change to the metrics stream — battles/captures/arrivals are countable even with
+    // no peer connected (the 24/7 world fights alone). Clock spans are pure noise here.
+    if (this.observe && events.length > 0) {
+      const observable = events.filter((e) => e.type !== 'time.advanced');
+      if (observable.length > 0) {
+        this.observe({ kind: 'events', seq: this.seq, events: observable });
+      }
+    }
     // Fog of war is a server boundary: each player gets a delta against THEIR own
     // last visible view, so hidden worlds/fleets are physically never sent. Only
     // what changed in that player's view goes out (an idle world ⇒ tiny payload).
     const now = this.clock();
     const lobby = this.lobbyField();
+    const startedAt = this.observe ? performance.now() : 0;
+    const deltaBytes: Record<PlayerId, number> = {};
     for (const [playerId, playerPeers] of this.peers) {
       // Broadcast is BEST-EFFORT and per-player isolated: computing one player's fogged
       // view (viewFor/diffState/identifiedNodes) must never abort delivery to the others,
@@ -1178,12 +1291,13 @@ export class MatchRoom {
         const view = this.viewFor(playerId);
         const baseline = this.lastVisible.get(playerId) ?? view.base;
         const identify = view.identified;
+        const delta = diffState(baseline, view.base);
         const message: ServerMessage = {
           type: 'delta',
           matchId: this.id,
           seq: this.seq,
           serverTime: now,
-          delta: diffState(baseline, view.base),
+          delta,
           events: events.filter((e) => this.eventVisibleTo(e, playerId, identify)),
           signatures: view.signatures,
           remembered: view.remembered,
@@ -1191,10 +1305,21 @@ export class MatchRoom {
           ...lobby,
         };
         this.lastVisible.set(playerId, view.base);
+        if (this.observe) deltaBytes[playerId] = JSON.stringify(delta).length;
         for (const peer of playerPeers) this.send(peer, message);
       } catch {
         /* skip this player's delta this round; a reconnect gets a fresh welcome */
       }
+    }
+    // M1 broadcast observation: fan-out cost + per-player delta size (fog efficiency).
+    // Only when someone actually received a delta — an empty room has nothing to report.
+    if (this.observe && this.peers.size > 0) {
+      this.observe({
+        kind: 'broadcast',
+        seq: this.seq,
+        ms: performance.now() - startedAt,
+        deltaBytes,
+      });
     }
   }
 

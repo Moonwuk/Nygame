@@ -1,15 +1,18 @@
 import type { MatchRoom } from './matchRoom';
 import {
   MemoryAccountStore,
+  MemoryCorpStore,
   MemoryMatchStore,
   MemoryReceiptStore,
   MemoryUserStore,
   PostgresAccountStore,
+  PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,
   PostgresUserStore,
   migrate,
   type AccountStore,
+  type CorpStore,
   type MatchSnapshot,
   type MatchStore,
   type ReceiptStore,
@@ -33,6 +36,8 @@ export interface Stores {
   accountStore: AccountStore;
   /** Login+password accounts (SE-1.x) — the identity the /auth API authenticates. */
   userStore: UserStore;
+  /** Corporations (CORP-0) — membership/roles between matches, the AvA org layer. */
+  corpStore: CorpStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -46,6 +51,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       receiptStore: new MemoryReceiptStore(),
       accountStore: new MemoryAccountStore(),
       userStore: new MemoryUserStore(),
+      corpStore: new MemoryCorpStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -60,6 +66,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     receiptStore: new PostgresReceiptStore(pool),
     accountStore: new PostgresAccountStore(pool), // shares the pool; closed by pool.end()
     userStore: new PostgresUserStore(pool),
+    corpStore: new PostgresCorpStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

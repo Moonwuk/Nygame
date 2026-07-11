@@ -1,9 +1,15 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { createInitialState, type GameState } from '@void/shared-core';
-import { MemoryAccountStore, MemoryMatchStore, MemoryReceiptStore } from './memory';
-import { PostgresAccountStore, PostgresMatchStore, PostgresReceiptStore, migrate } from './postgres';
-import type { AccountStore, MatchSnapshot, MatchStore, ReceiptStore } from './types';
+import { MemoryAccountStore, MemoryCorpStore, MemoryMatchStore, MemoryReceiptStore } from './memory';
+import {
+  PostgresAccountStore,
+  PostgresCorpStore,
+  PostgresMatchStore,
+  PostgresReceiptStore,
+  migrate,
+} from './postgres';
+import type { AccountStore, CorpStore, MatchSnapshot, MatchStore, ReceiptStore } from './types';
 
 function state(seed = 'store'): GameState {
   return createInitialState({ seed, version: { data: 't', manifest: 't' } });
@@ -107,9 +113,107 @@ function receiptStoreContract(name: string, make: () => ReceiptStore): void {
   });
 }
 
+/** CORP-0 — shared corp-store behaviour, run against BOTH adapters. `uniq` decouples
+ *  runs on the shared Postgres tables (names/accounts must not collide across tests). */
+function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string) => string): void {
+  describe(`CorpStore — ${name}`, () => {
+    it('creates a corp with the founder as head; the name is taken case-insensitively', async () => {
+      const store = make();
+      const corpName = uniq('Void Miners');
+      const created = await store.createCorp(corpName, uniq('acc-a'), 'alice');
+      if (!created.ok) throw new Error('expected ok');
+      expect(await store.getCorp(created.corpId)).toEqual({ corpId: created.corpId, name: corpName });
+      expect(await store.membershipOf(uniq('acc-a'))).toMatchObject({ role: 'head', login: 'alice' });
+      const dup = await store.createCorp(corpName.toUpperCase(), uniq('acc-b'), 'bob');
+      expect(dup).toEqual({ ok: false, code: 'E_NAME_TAKEN' });
+    });
+
+    it('one corp per account: a member (or recruit) cannot found or join another', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('First'), uniq('acc-1'), 'alice');
+      if (!created.ok) throw new Error('expected ok');
+      // the head can't found a second corp
+      expect(await store.createCorp(uniq('Second'), uniq('acc-1'), 'alice')).toEqual({
+        ok: false,
+        code: 'E_IN_CORP',
+      });
+      // a recruit row blocks a second application the same way
+      expect(await store.addMember(created.corpId, uniq('acc-2'), 'bob', 'recruit')).toEqual({
+        ok: true,
+      });
+      expect(await store.addMember(created.corpId, uniq('acc-2'), 'bob', 'member')).toEqual({
+        ok: false,
+        code: 'E_IN_CORP',
+      });
+    });
+
+    it('setRole/removeMember mutate only the addressed corp membership', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Movers'), uniq('acc-h'), 'head');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-m'), 'mira', 'recruit');
+      await store.setRole(created.corpId, uniq('acc-m'), 'member');
+      expect(await store.membershipOf(uniq('acc-m'))).toMatchObject({ role: 'member' });
+      await store.setRole('someone-elses-corp', uniq('acc-m'), 'officer'); // wrong corp → no-op
+      expect(await store.membershipOf(uniq('acc-m'))).toMatchObject({ role: 'member' });
+      await store.removeMember(created.corpId, uniq('acc-m'));
+      expect(await store.membershipOf(uniq('acc-m'))).toBeNull();
+    });
+
+    it('swapHead atomically demotes the head to officer and promotes the target', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Handover'), uniq('acc-old'), 'old');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-new'), 'new', 'member');
+      await store.swapHead(created.corpId, uniq('acc-old'), uniq('acc-new'));
+      expect(await store.membershipOf(uniq('acc-old'))).toMatchObject({ role: 'officer' });
+      expect(await store.membershipOf(uniq('acc-new'))).toMatchObject({ role: 'head' });
+      // a non-head `from` never steals headship
+      await store.swapHead(created.corpId, uniq('acc-old'), uniq('acc-old'));
+      expect(await store.membershipOf(uniq('acc-new'))).toMatchObject({ role: 'head' });
+    });
+
+    it('removeCorp releases every member; the audit trail survives, newest first', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Doomed'), uniq('acc-x'), 'xena');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-y'), 'yuri', 'member');
+      await store.appendAudit({ corpId: created.corpId, at: 1, actor: uniq('acc-x'), action: 'create' });
+      await store.appendAudit({
+        corpId: created.corpId,
+        at: 2,
+        actor: uniq('acc-x'),
+        action: 'disband',
+        target: uniq('acc-y'),
+        detail: 'why',
+      });
+      await store.removeCorp(created.corpId);
+      expect(await store.getCorp(created.corpId)).toBeNull();
+      expect(await store.membershipOf(uniq('acc-x'))).toBeNull();
+      expect(await store.membershipOf(uniq('acc-y'))).toBeNull();
+      const audit = await store.auditOf(created.corpId);
+      expect(audit).toHaveLength(2);
+      expect(audit[0]).toMatchObject({ at: 2, action: 'disband', target: uniq('acc-y'), detail: 'why' });
+      expect(audit[1]).toMatchObject({ at: 1, action: 'create' });
+    });
+
+    it('listCorps counts accepted members only (recruits pending)', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Counted'), uniq('acc-c1'), 'c1');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-c2'), 'c2', 'member');
+      await store.addMember(created.corpId, uniq('acc-c3'), 'c3', 'recruit');
+      const summary = (await store.listCorps()).find((c) => c.corpId === created.corpId);
+      expect(summary).toMatchObject({ name: uniq('Counted'), members: 2 });
+      expect(await store.membersOf(created.corpId)).toHaveLength(3);
+    });
+  });
+}
+
 matchStoreContract('memory', () => new MemoryMatchStore());
 accountStoreContract('memory', () => new MemoryAccountStore());
 receiptStoreContract('memory', () => new MemoryReceiptStore());
+corpStoreContract('memory', () => new MemoryCorpStore(), (p) => p);
 
 // Postgres adapters — only when a DATABASE_URL is provided (skipped in CI without a
 // DB, so the gate stays green). Verified locally against a real Postgres 16.
@@ -119,9 +223,19 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   let n = 0;
   const uniq = (p: string): string => `${p}_${process.pid}_${++n}`;
 
+  beforeAll(async () => {
+    await migrate(pool);
+  });
+
   afterAll(async () => {
     await pool.end();
   });
+
+  // The corp contract from above, against the real tables. The stamp keeps names and
+  // account ids unique across runs (shared tables) while STABLE within one run — the
+  // contract asks for the same key several times and must get the same id back.
+  const stamp = `${process.pid}_${Date.now()}`;
+  corpStoreContract('postgres', () => new PostgresCorpStore(pool), (p) => `${p}_${stamp}`);
 
   it('migrates idempotently', async () => {
     await migrate(pool);

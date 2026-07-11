@@ -220,7 +220,12 @@ describe('MatchRoom — observation & state hash (M0)', () => {
     r.submitAction('p1', action('a2', 'p1', ''), p1); // rejected (empty name)
     r.removePeer('p1', p1);
 
-    expect(events).toEqual([
+    // Lifecycle kinds only — the M1 metrics kinds (events/broadcast/timing) ride the
+    // same stream and have their own describe below.
+    const lifecycle = events.filter(
+      (e) => e.kind === 'join' || e.kind === 'action' || e.kind === 'leave',
+    );
+    expect(lifecycle).toEqual([
       { kind: 'join', playerId: 'p1' },
       { kind: 'action', actionId: 'a1', playerId: 'p1', type: 'player.rename', ok: true, seq: 1 },
       {
@@ -295,6 +300,150 @@ describe('MatchRoom — observation & state hash (M0)', () => {
     clientState = applyDelta(clientState, delta.delta);
     // the desync check the overlay runs: our rebuild hashes to the server's tag
     expect(hashState(clientState)).toBe((delta as { hash?: string }).hash);
+  });
+});
+
+describe('MatchRoom — M1 observations (events / broadcast / timing / desync)', () => {
+  function observed(): { r: MatchRoom; events: RoomObservation[]; peers: [MemoryPeer, MemoryPeer] } {
+    const events: RoomObservation[] = [];
+    const r = new MatchRoom({
+      id: 'obs-m1',
+      initialState: testState(),
+      kernel: createKernel([renameModule, surrenderModule]),
+      data: testData(),
+      now: () => 10,
+      observe: (e) => events.push(e),
+    });
+    const p1 = new MemoryPeer();
+    const p2 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    r.addPeer('p2', p2);
+    return { r, events, peers: [p1, p2] };
+  }
+
+  it('surfaces the domain events of a committed action, with clock spans excluded', () => {
+    const { r, events } = observed();
+    r.submitAction('p1', action('a1', 'p1', 'Commander'));
+
+    const ev = events.filter((e) => e.kind === 'events');
+    expect(ev).toHaveLength(1);
+    if (ev[0]?.kind !== 'events') throw new Error('expected an events observation');
+    expect(ev[0].seq).toBe(1);
+    const types = ev[0].events.map((e) => e.type);
+    expect(types).toContain('player.renamed');
+    // the world advanced 0 → 10 under this submit, but the clock span is noise
+    expect(types).not.toContain('time.advanced');
+  });
+
+  it('reports broadcast fan-out with a per-player delta size', () => {
+    const { r, events } = observed();
+    r.submitAction('p1', action('a1', 'p1', 'Commander'));
+
+    const b = events.filter((e) => e.kind === 'broadcast');
+    expect(b).toHaveLength(1);
+    if (b[0]?.kind !== 'broadcast') throw new Error('expected a broadcast observation');
+    expect(b[0].seq).toBe(1);
+    expect(b[0].ms).toBeGreaterThanOrEqual(0);
+    // both connected players got a measured delta payload
+    expect(Object.keys(b[0].deltaBytes).sort()).toEqual(['p1', 'p2']);
+    expect(b[0].deltaBytes.p1).toBeGreaterThan(0);
+  });
+
+  it('reports a submit timing for accepted and rejected actions alike', () => {
+    const { r, events } = observed();
+    r.submitAction('p1', action('a1', 'p1', 'Commander')); // ok
+    r.submitAction('p1', action('a2', 'p1', '')); // rejected
+
+    const timings = events.filter((e) => e.kind === 'timing');
+    expect(timings).toHaveLength(2);
+    expect(timings).toEqual([
+      expect.objectContaining({ op: 'submit', seq: 1, actionType: 'player.rename' }),
+      expect.objectContaining({ op: 'submit', seq: 2, actionType: 'player.rename' }),
+    ]);
+    for (const t of timings) if (t.kind === 'timing') expect(t.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('logs a desync report and answers it with a full resync snapshot', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    const before = p1.messages.length;
+
+    await r.receive('p1', p1, JSON.stringify({ type: 'desync', seq: 3, hash: 'client-hash' }));
+
+    expect(events.filter((e) => e.kind === 'desync')).toEqual([
+      { kind: 'desync', playerId: 'p1', atSeq: 3, clientHash: 'client-hash' },
+    ]);
+    const reply = p1.messages[before];
+    expect(reply).toMatchObject({ type: 'state', matchId: 'obs-m1' });
+  });
+
+  it('cools down repeat resync replies but never stops observing the reports', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    const before = p1.messages.length;
+
+    await r.receive('p1', p1, JSON.stringify({ type: 'desync', seq: 3, hash: 'h1' }));
+    await r.receive('p1', p1, JSON.stringify({ type: 'desync', seq: 4, hash: 'h2' })); // within cool-down
+
+    // both reports observed (a desync storm must be visible in the metrics) …
+    expect(events.filter((e) => e.kind === 'desync')).toHaveLength(2);
+    // … but only the first got the (costly) full-state reply
+    const states = p1.messages.slice(before).filter((m) => m.type === 'state');
+    expect(states).toHaveLength(1);
+  });
+
+  it('rejects a malformed desync report as E_BAD_MESSAGE', async () => {
+    const { r, peers } = observed();
+    const [p1] = peers;
+    await r.receive('p1', p1, JSON.stringify({ type: 'desync', seq: 'nope' }));
+    expect(p1.messages.at(-1)).toMatchObject({ type: 'error', code: 'E_BAD_MESSAGE' });
+  });
+
+  it('observes a client perf sample and never answers it (M2)', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    const before = p1.messages.length;
+
+    await r.receive('p1', p1, JSON.stringify({ type: 'perf', fps: 58, rttMs: 42, memMb: 120 }));
+
+    expect(events.filter((e) => e.kind === 'client_perf')).toEqual([
+      { kind: 'client_perf', playerId: 'p1', fps: 58, rttMs: 42, memMb: 120 },
+    ]);
+    expect(p1.messages).toHaveLength(before); // telemetry is not a conversation
+  });
+
+  it('rate-limits perf samples per player — a flood is dropped silently', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    const before = p1.messages.length;
+
+    await r.receive('p1', p1, JSON.stringify({ type: 'perf', fps: 60 }));
+    await r.receive('p1', p1, JSON.stringify({ type: 'perf', fps: 59 })); // same instant → dropped
+
+    expect(events.filter((e) => e.kind === 'client_perf')).toHaveLength(1);
+    expect(p1.messages).toHaveLength(before); // no error either — silent drop
+  });
+
+  it('rejects an out-of-range perf sample as E_BAD_MESSAGE (fail-secure)', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    await r.receive('p1', p1, JSON.stringify({ type: 'perf', fps: -5 }));
+    await r.receive('p1', p1, JSON.stringify({ type: 'perf', fps: Infinity }));
+    expect(events.filter((e) => e.kind === 'client_perf')).toHaveLength(0);
+    expect(p1.messages.at(-1)).toMatchObject({ type: 'error', code: 'E_BAD_MESSAGE' });
+  });
+
+  it('drops garbage optional fields but keeps the valid fps (parse clamps)', async () => {
+    const { r, events, peers } = observed();
+    const [p1] = peers;
+    await r.receive(
+      'p1',
+      p1,
+      JSON.stringify({ type: 'perf', fps: 30, rttMs: 'huge', memMb: -1 }),
+    );
+    expect(events.filter((e) => e.kind === 'client_perf')).toEqual([
+      { kind: 'client_perf', playerId: 'p1', fps: 30 },
+    ]);
   });
 });
 

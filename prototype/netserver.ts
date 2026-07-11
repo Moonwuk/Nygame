@@ -18,6 +18,7 @@ import pgPkg from 'pg';
 import {
   MatchRoom,
   MatchRegistry,
+  MetricsAggregator,
   createMultiplayerServer,
   registerBrowserApi,
   MemoryAccountStore,
@@ -50,20 +51,23 @@ import { ActionGate } from '../packages/action-layer/src/index';
 import { isValidActionPayload } from '../packages/shared-core/src/actions/payloadSchemas';
 const { Pool } = pgPkg;
 
-// --- M0 playtest log: append every room event (join/leave/lobby/action/end) to a
-// per-run JSONL, and keep counters for an on-exit summary. Pure observation.
+// --- M0/M1 playtest log: append room events to a per-run JSONL and feed every one
+// to the MetricsAggregator for the on-exit summary. Pure observation. The M1
+// high-frequency kinds are handled with care: `broadcast`/`timing` lines land in
+// the JSONL only when anomalous (slow or fat) — the aggregator still counts them
+// all — and `events` lines only fire on real activity (battles, arrivals).
 mkdirSync('playtest-logs', { recursive: true });
 const logFile = `playtest-logs/proto-${Date.now()}.jsonl`;
-const stats = {
-  joins: 0,
-  leaves: 0,
-  actions: 0,
-  ok: 0,
-  rejects: 0,
-  byCode: {} as Record<string, number>,
-  byType: {} as Record<string, number>,
-  end: null as RoomObservation | null,
-};
+const metrics = new MetricsAggregator();
+const SLOW_MS = 50; // a submit/broadcast slower than this is worth a JSONL line
+const FAT_DELTA_BYTES = 10_240; // a per-player delta fatter than this too (target: idle < 1 KB)
+function worthLogging(ev: RoomObservation): boolean {
+  if (ev.kind === 'timing') return ev.ms >= SLOW_MS;
+  if (ev.kind === 'broadcast') {
+    return ev.ms >= SLOW_MS || Object.values(ev.deltaBytes).some((b) => b >= FAT_DELTA_BYTES);
+  }
+  return true;
+}
 let connected = 0; // live players currently connected (drives the running-match heartbeat)
 // Seats with a live human peer. Any seat in the match NOT in here is "empty" and is
 // driven by the server-side AI (mirrors single-player: empty slots are taken by the AI).
@@ -76,26 +80,17 @@ const humans = new Set<string>();
 const AI_GRACE_MS = Number(process.env.AI_GRACE_MS ?? 10 * 60 * 1000);
 const aiEligibleAt = new Map<string, number>();
 const observe = (ev: RoomObservation): void => {
-  appendFileSync(logFile, JSON.stringify({ t: Date.now(), ...ev }) + '\n');
+  metrics.observe(ev);
+  if (worthLogging(ev)) appendFileSync(logFile, JSON.stringify({ t: Date.now(), ...ev }) + '\n');
   if (ev.kind === 'join') {
-    stats.joins++;
     connected++;
     humans.add(ev.playerId);
     aiEligibleAt.delete(ev.playerId); // the human is back — cancel any pending takeover
   } else if (ev.kind === 'leave') {
-    stats.leaves++;
     connected = Math.max(0, connected - 1);
     humans.delete(ev.playerId);
     aiEligibleAt.set(ev.playerId, Date.now() + AI_GRACE_MS); // reconnect window
-  } else if (ev.kind === 'end') stats.end = ev;
-  else if (ev.kind === 'action') {
-    stats.actions++;
-    stats.byType[ev.type] = (stats.byType[ev.type] ?? 0) + 1;
-    if (ev.ok) stats.ok++;
-    else {
-      stats.rejects++;
-      if (ev.code) stats.byCode[ev.code] = (stats.byCode[ev.code] ?? 0) + 1;
-    }
+  } else if (ev.kind === 'action') {
     // Persist the receipt so a retried action stays deduped across a restart.
     void receiptStore.save('proto', {
       actionId: ev.actionId,
@@ -114,8 +109,17 @@ const observe = (ev: RoomObservation): void => {
   // external event also gives the stall guard a fresh chance (the situation may have
   // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
   // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
-  // back-off in `onWake` (an eternal 0ms wake spin).
-  if (ev.kind !== 'advance_overflow') {
+  // back-off in `onWake` (an eternal 0ms wake spin). The M1 metrics kinds are excluded
+  // too: they describe work already done (fan-out size, timings, desync reports) and
+  // never move the next-event time — re-arming on every broadcast would churn the timer.
+  if (
+    ev.kind === 'join' ||
+    ev.kind === 'leave' ||
+    ev.kind === 'lobby' ||
+    ev.kind === 'action' ||
+    ev.kind === 'end' ||
+    ev.kind === 'dead_letter'
+  ) {
     wakeStalls = 0;
     armWakeup();
   }
@@ -486,20 +490,32 @@ armWakeup();
 // On Ctrl-C: print the playtest summary (counts gathered by `observe`) and where
 // the raw JSONL landed, then close cleanly — the per-match data survives the run.
 const printSummary = (): void => {
-  const end = stats.end;
+  const s = metrics.summary();
   const fmt = (m: Record<string, number>): string =>
     Object.entries(m)
       .map(([k, n]) => `${k}=${n}`)
       .join(' ') || '—';
+  const ms = (x: { avg: number; max: number; count: number }): string =>
+    x.count === 0 ? '—' : `avg ${x.avg.toFixed(1)}ms · max ${x.max.toFixed(1)}ms (${x.count})`;
+  const kb = (x: { avg: number; max: number; count: number }): string =>
+    x.count === 0 ? '—' : `avg ${(x.avg / 1024).toFixed(2)}KB · max ${(x.max / 1024).toFixed(2)}KB`;
   process.stdout.write(
     [
       '',
       '── playtest summary ──────────────────────────────',
-      `  joins ${stats.joins} · leaves ${stats.leaves} · actions ${stats.actions} (ok ${stats.ok} · rejects ${stats.rejects})`,
-      `  by type   : ${fmt(stats.byType)}`,
-      `  by reject : ${fmt(stats.byCode)}`,
-      end && end.kind === 'end'
-        ? `  match end : winner ${end.winner ?? '—'}${end.reason ? ` (${end.reason})` : ''}`
+      `  joins ${s.joins} · leaves ${s.leaves} · actions ${s.actions.total} (ok ${s.actions.ok} · rejects ${s.actions.rejected})`,
+      `  by type   : ${fmt(s.actions.byType)}`,
+      `  by reject : ${fmt(s.actions.rejectByCode)}`,
+      `  battles ${s.battles} · captures ${s.captures} · desyncs ${s.desyncs} · dead-letters ${s.deadLetters} · overflows ${s.advanceOverflows}`,
+      `  submit    : ${ms(s.submitMs)}`,
+      `  advance   : ${ms(s.advanceMs)}`,
+      `  broadcast : ${ms(s.broadcastMs)} · delta ${kb(s.deltaBytes)}`,
+      s.clientFps
+        ? `  client    : fps avg ${s.clientFps.avg.toFixed(0)} · min ${s.clientFps.min.toFixed(0)}` +
+          (s.clientRttMs ? ` · rtt avg ${s.clientRttMs.avg.toFixed(0)}ms · max ${s.clientRttMs.max.toFixed(0)}ms` : '')
+        : '  client    : — (перф-сэмплы не приходили)',
+      s.end
+        ? `  match end : winner ${s.end.winner ?? '—'}${s.end.reason ? ` (${s.end.reason})` : ''}`
         : '  match end : —',
       `  log file  : ${logFile}`,
       '──────────────────────────────────────────────────',
@@ -510,6 +526,14 @@ const printSummary = (): void => {
 
 const shutdown = (): void => {
   printSummary();
+  // M3: land the aggregated summary as the LAST JSONL line — the per-line log keeps
+  // only anomalous broadcast/timing entries, so without this the report script would
+  // have no full latency/delta aggregates to read.
+  try {
+    appendFileSync(logFile, JSON.stringify({ t: Date.now(), kind: 'summary', summary: metrics.summary() }) + '\n');
+  } catch {
+    /* the report just falls back to the partial per-line data */
+  }
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;

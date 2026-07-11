@@ -316,6 +316,7 @@ export const en: Record<string, string> = {
   'Стоп': 'Stop',
   'Строительный конвейер': 'Building conveyor',
   'Тапните мир.': 'Tap a world.',
+  'тап — полное досье': 'tap for full specs',
   'Тащите за шапку, чтобы переместить': 'Drag the title bar to move',
   'Трата влияния (объявление AvA) — только глава.': 'Spending influence (declaring AvA) — leader only.',
   'Тяжёлая осадная платформа: {a} урона с дистанции {r}, но тонкая броня ({d} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.':

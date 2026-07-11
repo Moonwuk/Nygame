@@ -1,5 +1,11 @@
 export type {
   AccountStore,
+  CorpAuditEntry,
+  CorpMembership,
+  CorpRecord,
+  CorpRole,
+  CorpStore,
+  CorpSummary,
   MatchSnapshot,
   MatchStore,
   ReceiptStore,
@@ -8,10 +14,17 @@ export type {
   UserRecord,
   UserStore,
 } from './types';
-export { MemoryAccountStore, MemoryMatchStore, MemoryReceiptStore, MemoryUserStore } from './memory';
+export {
+  MemoryAccountStore,
+  MemoryCorpStore,
+  MemoryMatchStore,
+  MemoryReceiptStore,
+  MemoryUserStore,
+} from './memory';
 export {
   migrate,
   PostgresAccountStore,
+  PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,
   PostgresUserStore,

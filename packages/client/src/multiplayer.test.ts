@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInitialState, diffState, type GameState } from '@void/shared-core';
+import { createInitialState, diffState, hashState, type GameState } from '@void/shared-core';
 import {
   authorizeActionEnvelope,
   validateActionEnvelope,
@@ -491,5 +491,112 @@ describe('MultiplayerClient · fog extras: signatures + remembered (BF-18)', () 
     client.receive(JSON.stringify(d));
     expect(snaps.at(-1)?.signatures).toEqual([{ location: 'D4', size: 'L' }]);
     expect(snaps.at(-1)?.remembered).toEqual([]);
+  });
+});
+
+// M1 hash-desync detector: the server tags snapshots with hashState(view); on a
+// mismatching delta the client reports it (`desync` message) and asks for a full
+// resync in the same breath — one in-flight request at a time.
+describe('MultiplayerClient · hash desync → report + resync (M1)', () => {
+  function hashedDelta(from: GameState, to: GameState, seq: number, hash: string): string {
+    return JSON.stringify({
+      type: 'delta',
+      matchId: 'm',
+      seq,
+      serverTime: 0,
+      delta: diffState(from, to),
+      events: [],
+      hash,
+    });
+  }
+  function stateMsg(state: GameState, seq: number): string {
+    return JSON.stringify({ type: 'state', matchId: 'm', seq, serverTime: 0, state, events: [] });
+  }
+
+  it('a matching hash passes silently — no report, no handler', () => {
+    const socket = new FakeSocket();
+    const desyncs: number[] = [];
+    const client = new MultiplayerClient(socket, { onHashDesync: (seq) => desyncs.push(seq) });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+    client.receive(welcome(s0));
+    client.receive(hashedDelta(s0, s1, 1, hashState(s1)));
+    expect(desyncs).toEqual([]);
+    expect(socket.sent).toEqual([]);
+  });
+
+  it('a mismatching hash sends ONE desync report and fires onHashDesync', () => {
+    const socket = new FakeSocket();
+    const desyncs: number[] = [];
+    const client = new MultiplayerClient(socket, { onHashDesync: (seq) => desyncs.push(seq) });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+    const s2 = baseState(30);
+    client.receive(welcome(s0));
+    client.receive(hashedDelta(s0, s1, 1, 'bogus'));
+    // a second mismatch while the resync is pending must NOT flood the wire
+    client.receive(hashedDelta(s1, s2, 2, 'still-bogus'));
+
+    expect(desyncs).toEqual([1]);
+    expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0] ?? '')).toEqual({
+      type: 'desync',
+      seq: 1,
+      hash: hashState(s1), // our reconstruction's hash, for the server log
+    });
+  });
+
+  it('the full resync snapshot settles the report and re-arms the detector', () => {
+    const socket = new FakeSocket();
+    const desyncs: number[] = [];
+    const client = new MultiplayerClient(socket, { onHashDesync: (seq) => desyncs.push(seq) });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+    const s2 = baseState(30);
+    client.receive(welcome(s0));
+    client.receive(hashedDelta(s0, s1, 1, 'bogus')); // report #1 → resync requested
+    client.receive(stateMsg(s1, 1)); // the server's full resync lands
+    client.receive(hashedDelta(s1, s2, 2, 'bogus-again')); // detector re-armed → report #2
+
+    expect(desyncs).toEqual([1, 2]);
+    expect(socket.sent).toHaveLength(2);
+  });
+
+  it('a delta without a hash is never checked (un-tagged room)', () => {
+    const socket = new FakeSocket();
+    const desyncs: number[] = [];
+    const client = new MultiplayerClient(socket, { onHashDesync: (seq) => desyncs.push(seq) });
+    const s0 = baseState(10);
+    const s1 = baseState(20);
+    client.receive(welcome(s0));
+    client.receive(deltaMsg(diffState(s0, s1), 1));
+    expect(desyncs).toEqual([]);
+    expect(socket.sent).toEqual([]);
+  });
+});
+
+// M2 perf telemetry: a light fps/rtt/mem sample the caller (the prototype's 30s
+// timer) pushes through the client — dropped while disconnected.
+describe('MultiplayerClient · perf sample (M2)', () => {
+  it('sends the sample as a perf message', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket);
+    client.open();
+    client.sendPerf({ fps: 58, rttMs: 42, memMb: 120 });
+    expect(JSON.parse(socket.sent[0] ?? '')).toEqual({
+      type: 'perf',
+      fps: 58,
+      rttMs: 42,
+      memMb: 120,
+    });
+  });
+
+  it('drops the sample while the connection is lost (queueing)', () => {
+    const socket = new FakeSocket();
+    const client = new MultiplayerClient(socket);
+    client.open();
+    client.connectionLost();
+    client.sendPerf({ fps: 60 });
+    expect(socket.sent).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import type {
   ResourceBag,
   TempLane,
 } from '../state/gameState';
+import { stacksHaveTrait } from '../data/traits';
 import { getStance, stanceToRelation } from '../state/diplomacy';
 import { distance } from '../state/route';
 import { isCapturable } from '../state/sectorKind';
@@ -143,9 +144,7 @@ function heroNode(state: GameState, hero: Hero): PlanetId {
 function fleetHasHero(h: HandlerContext, fleetId: string): boolean {
   const fleet = h.state.fleets[fleetId];
   if (!fleet) return false;
-  return fleet.units.some(
-    (s) => s.count > 0 && (h.ctx.data.units[s.unit]?.traits.includes(HERO_TRAIT) ?? false),
-  );
+  return stacksHaveTrait(h.ctx.data, fleet.units, HERO_TRAIT);
 }
 
 /** ms from now after `hours`, compressed by the match timeScale like every duration. */

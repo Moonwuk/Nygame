@@ -1,4 +1,4 @@
-import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type SignatureContact, type StateDelta } from '@void/shared-core';
+import { applyDelta, hashState, type Action, type DomainEvent, type GameState, type PlayerId, type SignatureContact, type StateDelta } from '@void/shared-core';
 import { createActionEnvelope, type ActionEnvelope } from '@void/action-layer';
 
 // BF-2 (bug-hunt CRIT): the gate's sequence cursor is strict (1,2,3…) and a throttled
@@ -114,6 +114,11 @@ export interface MultiplayerClientHandlers {
    *  protocol — a rejected action bumps the server seq without a broadcast — and
    *  equal seqs are legal too: lobby flips re-broadcast under the current seq.) */
   onDesync?(lastSeq: number, gotSeq: number): void;
+  /** Our reconstructed state hashed differently from the server's snapshot hash (M1).
+   *  The client already reported it (`desync` message — the server logs it) and asked
+   *  for a full resync snapshot in the same breath; this is the UI's chance to flag
+   *  it (overlay / diagnostics). Fired at most once per pending resync. */
+  onHashDesync?(seq: number): void;
 }
 
 /** Cap on actions queued while disconnected (CP1.4) — beyond it new actions are
@@ -176,6 +181,9 @@ export class MultiplayerClient {
   private resendTimer: ReturnType<typeof setTimeout> | null = null;
   /** Seq of the last applied full frame or delta — desync guard (CP1.4). */
   private lastSeq: number | null = null;
+  /** True while a hash-desync report is awaiting its full resync snapshot (M1) —
+   *  suppresses repeat reports so a persistent mismatch is one request, not a flood. */
+  private resyncPending = false;
   /** Actions issued while disconnected, flushed after the reconnect `welcome` (CP1.4).
    *  Only never-sent actions are queued, so the flush cannot duplicate an action the
    *  server already applied (an in-flight send that DID land is visible in the
@@ -302,6 +310,14 @@ export class MultiplayerClient {
     this.socket.send(JSON.stringify({ type: 'ping', clientTime }));
   }
 
+  /** Send a lightweight perf sample (M2): smoothed fps + optional rtt/mem. Pure
+   *  telemetry — the server observes it into the metrics stream (rate-limited) and
+   *  never answers. Dropped while disconnected (nothing to report a dead wire to). */
+  sendPerf(sample: { fps: number; rttMs?: number; memMb?: number }): void {
+    if (this.queueing) return;
+    this.socket.send(JSON.stringify({ type: 'perf', ...sample }));
+  }
+
   /** Host-only: ask the server to begin the match (manual-start lobby). */
   start(): void {
     this.socket.send(JSON.stringify({ type: 'start' }));
@@ -344,9 +360,11 @@ export class MultiplayerClient {
       typeof message.seq === 'number' &&
       message.state
     ) {
-      // Full snapshot — resets the local baseline (join / resync).
+      // Full snapshot — resets the local baseline (join / resync). It also settles a
+      // pending hash-desync report: the state IS the server's view, nothing to compare.
       this.lastState = message.state;
       this.lastSeq = message.seq;
+      this.resyncPending = false;
       this.matchId = message.matchId;
       this.playerId = message.playerId ?? this.playerId;
       if (message.type === 'welcome') {
@@ -401,6 +419,18 @@ export class MultiplayerClient {
       // Incremental update — patch the baseline and surface the new full state.
       this.lastState = applyDelta(this.lastState, message.delta);
       this.lastSeq = message.seq;
+      // M1 hash-desync detector: the server tagged this snapshot with hashState(view);
+      // hash our reconstruction and compare. On mismatch, report it (the server logs
+      // the metric) and ask for a full resync in the same message — one in-flight
+      // request at a time, so a persistent mismatch can't flood the wire.
+      if (message.hash !== undefined && !this.resyncPending && !this.queueing) {
+        const ours = hashState(this.lastState);
+        if (ours !== message.hash) {
+          this.resyncPending = true;
+          this.socket.send(JSON.stringify({ type: 'desync', seq: message.seq, hash: ours }));
+          this.handlers.onHashDesync?.(message.seq);
+        }
+      }
       this.handlers.onSnapshot?.({
         matchId: this.matchId,
         playerId: this.playerId,
