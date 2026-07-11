@@ -61,6 +61,7 @@ import {
   type StewardPosture,
 } from '../../packages/shared-core/src/index';
 import { canAfford, payCost } from '../../packages/shared-core/src/util/treasury';
+import { provinceScore } from '../../packages/shared-core/src/state/sectorKind';
 import { sumUnitStat } from '../../packages/shared-core/src/util/stacks';
 import { garrisonUnderAssault, requireOwnedIdleFleet } from '../../packages/shared-core/src/util/fleet';
 import type { HandlerContext } from '../../packages/shared-core/src/kernel/module';
@@ -953,6 +954,14 @@ type KeyNode = Omit<MapNode, 'links'>;
 // points (12×50 + 37×10); a solo win needs 450 (SCORE_LIMIT). All planets start NEUTRAL; newGame() seeds
 // owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
 // reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
+//
+// FAIRNESS (self-play M4 finding): the field is mirror-symmetric in BOTH axes — jitter,
+// terrain kinds and planet types are computed for the canonical quadrant cell and
+// mirrored out — so all four corner starts face an IDENTICAL neighbourhood. The first
+// asymmetric layout gave one corner ~6× the nearby province value (70 vs 410 points
+// within 3 hops) and that start won 100% of seeded bot matches regardless of slot
+// or faction. Competitive skirmish maps are symmetric for exactly this reason; the
+// per-quadrant jitter keeps the organic look.
 const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
 const NON_PLANET_KINDS = [
   'asteroid',
@@ -974,8 +983,10 @@ const NEUTRAL_PLANET_TYPES = [
 ];
 // 4 start candidates — one per corner region (inset), spread wide so starts don't crowd.
 const START_CELLS = ['1,1', '5,1', '1,5', '5,5'];
-// 8 neutral 'planet' worlds, spread through the middle.
-const NEUTRAL_PLANET_CELLS = ['3,3', '1,3', '5,3', '3,1', '3,5', '2,2', '4,4', '2,4'];
+// 8 neutral 'planet' worlds in axis-symmetric orbits: the edge pairs (1,3)/(5,3) and
+// (3,1)/(3,5) plus the diagonal four (2,2)/(4,2)/(2,4)/(4,4). The old list held an
+// unpaired (2,4) and a centre (3,3) — the source of the corner imbalance.
+const NEUTRAL_PLANET_CELLS = ['1,3', '5,3', '3,1', '3,5', '2,2', '4,2', '2,4', '4,4'];
 
 const cellId = (cell: string): string => {
   const [c, r] = cell.split(',');
@@ -990,40 +1001,49 @@ function jhash(n: number): number {
 function buildField(): KeyNode[] {
   const starts = new Set(START_CELLS);
   const neutralP = new Set(NEUTRAL_PLANET_CELLS);
+  // Canonical quadrant cell: fold (col,row) into col≤3,row≤3. Jitter, terrain and
+  // planet type are decided ONCE per canonical cell and mirrored to its orbit, which
+  // is what makes the four corners exactly equivalent (see the FIELD comment).
+  const canon = (c: number, r: number): string => `${Math.min(c, 6 - c)},${Math.min(r, 6 - r)}`;
+  const jx = new Map<string, number>();
+  const jy = new Map<string, number>();
+  const kindOf = new Map<string, string>();
+  const typeOf = new Map<string, string>();
+  let ptIdx = 0; // cycles neutral planet types (per orbit)
+  let npIdx = 0; // cycles non-planet terrains (per orbit)
+  let i = 0; // jitter index (per canonical cell)
+  for (let row = 0; row <= 3; row += 1) {
+    for (let col = 0; col <= 3; col += 1) {
+      const key = `${col},${row}`;
+      jx.set(key, (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx);
+      jy.set(key, (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy);
+      i += 1;
+      if (starts.has(key)) continue; // corner orbit — always the terran home
+      if (neutralP.has(key)) {
+        typeOf.set(key, NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length]!);
+      } else {
+        kindOf.set(key, NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]!);
+      }
+    }
+  }
   const nodes: KeyNode[] = [];
-  let ptIdx = 0; // cycles neutral planet types
-  let npIdx = 0; // cycles non-planet terrains
-  let i = 0; // jitter index
   for (let row = 0; row < FIELD.rows; row += 1) {
     for (let col = 0; col < FIELD.cols; col += 1) {
       const cell = `${col},${row}`;
-      const x = Math.round(
-        FIELD.x0 + col * FIELD.dx + (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx,
-      );
-      const y = Math.round(
-        FIELD.y0 + row * FIELD.dy + (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy,
-      );
-      i += 1;
+      const key = canon(col, row);
+      // Mirror the canonical jitter: flip its sign across each centre axis; a cell ON
+      // a centre axis is its own mirror there, so that component stays unjittered.
+      const sx = col < 3 ? 1 : col > 3 ? -1 : 0;
+      const sy = row < 3 ? 1 : row > 3 ? -1 : 0;
+      const x = Math.round(FIELD.x0 + col * FIELD.dx + sx * jx.get(key)!);
+      const y = Math.round(FIELD.y0 + row * FIELD.dy + sy * jy.get(key)!);
       const id = cellId(cell);
       if (starts.has(cell)) {
         nodes.push({ id, owner: null, x, y, sector: 'planet', type: 'terran' });
       } else if (neutralP.has(cell)) {
-        nodes.push({
-          id,
-          owner: null,
-          x,
-          y,
-          sector: 'planet',
-          type: NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length],
-        });
+        nodes.push({ id, owner: null, x, y, sector: 'planet', type: typeOf.get(key)! });
       } else {
-        nodes.push({
-          id,
-          owner: null,
-          x,
-          y,
-          sector: NON_PLANET_KINDS[npIdx++ % NON_PLANET_KINDS.length]!,
-        });
+        nodes.push({ id, owner: null, x, y, sector: kindOf.get(key)! });
       }
     }
   }
@@ -3553,9 +3573,64 @@ export function aiOrders(
   // Steward «Оборона» (a delegated human seat, posture 'defend') HOLDS: it skips this
   // offensive sweep entirely and only builds / reinforces / trades below — repelling an
   // attacker is automatic in combat. "Autopilot keeps you alive; active play wins."
+  // Named `warFooting` (not `atWar`) so the module-level pair helper stays visible.
+  const warFooting = Object.keys(state.players).some(
+    (pid) =>
+      pid !== ai &&
+      state.players[pid]?.status === 'active' &&
+      getStance(state, ai, pid) === 'war',
+  );
+  // The home base (build/launch anchor, and the rally point ships pool at during war).
+  const base =
+    Object.values(state.planets).find((p) => p.owner === ai && p.buildings.length > 0) ??
+    Object.values(state.planets).find((p) => p.owner === ai);
+  const shipCount = (f: Fleet): number =>
+    f.units.reduce((n, s) => n + (isShipUnit(s.unit) ? s.count : 0), 0);
   const expandFleets: Fleet[] = posture === 'defend' ? [] : Object.values(state.fleets);
+  // Consolidate BEFORE moving (self-play M4): two idle fleets sharing a location fuse
+  // into one — without this, battle remnants and rally leftovers accumulate into a
+  // hundreds-strong swarm of one-ship fleets that grinds the whole sim (and feeds
+  // enemy AA one hull at a time). The merged fleet sorties on the next tick.
+  const skipMove = new Set<string>();
+  {
+    const byLoc = new Map<string, Fleet[]>();
+    for (const f of expandFleets) {
+      if (f.owner !== ai || f.location == null || f.movement || f.battleId) continue;
+      const group = byLoc.get(f.location);
+      if (group) group.push(f);
+      else byLoc.set(f.location, [f]);
+    }
+    for (const group of byLoc.values()) {
+      if (group.length < 2) continue;
+      group.sort((a, b) => shipCount(b) - shipCount(a));
+      for (let k = 1; k < group.length; k++) {
+        out.push(mergeFleet(ai, group[k]!.id, group[0]!.id));
+        skipMove.add(group[k]!.id);
+      }
+      skipMove.add(group[0]!.id); // it grows this tick, sorties the next
+    }
+  }
   for (const f of expandFleets) {
     if (f.owner !== ai || f.location == null || f.movement || f.battleId) continue;
+    if (skipMove.has(f.id)) continue;
+    // Strike groups, not dribbles (self-play M4): auto-rally pools each new ship into
+    // the IDLE rally fleet at its build world — but only while one is parked there.
+    // Sending every single-ship fleet out at once therefore orphaned the rally point,
+    // spawned a fresh one-ship fleet per build (hundreds of fleets, the sim ground to
+    // a halt) and fed hulls into enemy AA one at a time. At war, ships HOLD at the
+    // home rally point until a strike group has formed; peacetime keeps the old
+    // race-to-claim behaviour (speed is everything, there is nothing to fight).
+    if (warFooting && f.location === base?.id) {
+      if (shipCount(f) < 3) continue;
+      // Lift a landing party before the sortie: only ground troops can take a
+      // garrisoned world (two-phase capture), so a strike group without a landing
+      // can raid provinces but never resolve the war. Load, then move — same tick.
+      const militia = base.garrison.find((s) => s.unit === 'militia' && s.count > 0);
+      const hasLanding = (f.landing ?? []).some((s) => s.count > 0);
+      if (!hasLanding && militia) {
+        out.push(loadArmy(ai, f.id, 'militia', Math.min(2, militia.count)));
+      }
+    }
     const here = state.planets[f.location];
     if (!here) continue;
     let best: Planet | null = null;
@@ -3571,14 +3646,41 @@ export function aiOrders(
     }
     if (best) out.push(moveFleet(ai, f.id, best.id));
   }
-  // NB: a passive bot never declares war just to keep expanding. Once neutral worlds run
-  // out it simply builds (below) — "тихо копит армию". It only turns hostile when a player
-  // sours its favour to rock bottom (botDiplomacyModule), then fights whoever it's at war
-  // with via the same expansion loop above (war territory is traversable/capturable).
+  // War when the race is being LOST (self-play M4 finding): a passive bot loses the
+  // score race to whoever expands faster — every bot-vs-bot match ended as a 2-day
+  // race with zero battles, and the military (and combat factions) never played. So
+  // a bot falling a planet's worth (≥ 50) behind the score leader — or merely behind
+  // once no capturable neutral is left — declares war on that leader; the expansion
+  // loop above then targets war territory (traversable/capturable) and contested
+  // provinces swing back. A bot that IS ahead stays quiet — it wins by holding.
+  // Declared only from a clean 'peace' stance: pacts/alliances are never betrayed,
+  // and favour-driven war (botDiplomacyModule) keeps working on top unchanged.
+  if (posture !== 'defend') {
+    const scoreOf = (who: string): number =>
+      Object.values(state.planets).reduce(
+        (s, p) => (p.owner === who ? s + provinceScore(data, p) : s),
+        0,
+      );
+    const mine = scoreOf(ai);
+    let leader: string | null = null;
+    let leaderScore = -1;
+    for (const pid of Object.keys(state.players)) {
+      if (pid === ai || state.players[pid]?.status !== 'active') continue;
+      const sc = scoreOf(pid);
+      if (sc > leaderScore) {
+        leaderScore = sc;
+        leader = pid;
+      }
+    }
+    const neutralLeft = Object.values(state.planets).some(
+      (p) => p.owner === null && capturable(p),
+    );
+    const losingRace = leaderScore - mine >= 50 || (!neutralLeft && leaderScore >= mine);
+    if (leader && losingRace && getStance(state, ai, leader) === 'peace') {
+      out.push(declareWar(ai, leader));
+    }
+  }
   // Build + launch from this AI's home base (its first developed owned world).
-  const base =
-    Object.values(state.planets).find((p) => p.owner === ai && p.buildings.length > 0) ??
-    Object.values(state.planets).find((p) => p.owner === ai);
   const pl = state.players[ai];
   if (base && pl) {
     // Keep the lights on first: a bot whose energy/food NET flow is negative (or already
@@ -3597,14 +3699,77 @@ export function aiOrders(
         out.push(buildBuilding(ai, base.id, b));
       }
     }
-    if ((pl.resources.metal ?? 0) > 220 && (pl.resources.credits ?? 0) > 120) {
+    // Economy chain (self-play M4: mine/refinery/tax office were DEAD content for the
+    // bot — it bought all its metal on the market): raise the first missing credit
+    // engine at the home base (refinery → tax office), and put a metal mine on each
+    // captured PRIZE world — one link at a time, only when comfortably affordable,
+    // and never over the same build already queued (no reject spam).
+    const pendingBuild = (planetId: string, b: string): boolean =>
+      state.scheduled.some((e) => {
+        if (e.type !== 'construction.complete') return false;
+        const q = e.payload as { kind?: string; planetId?: string; building?: string };
+        return q.kind === 'building' && q.planetId === planetId && q.building === b;
+      });
+    const affordable = (b: string): boolean => {
+      const cost = data.buildings[b]?.cost ?? {};
+      return Object.keys(cost).every((r) => (pl.resources[r] ?? 0) >= (cost[r] ?? 0) + 60);
+    };
+    for (const b of ['refinery', 'tax_office'] as const) {
+      if (has(b)) continue;
+      if (affordable(b) && !pendingBuild(base.id, b)) out.push(buildBuilding(ai, base.id, b));
+      break; // one link at a time — wait out the current one either way
+    }
+    for (const p of Object.values(state.planets)) {
+      if (p.owner !== ai || p.kind !== 'planet' || p.id === base.id) continue;
+      if (p.buildings.some((x) => x.type === 'mine') || pendingBuild(p.id, 'mine')) continue;
+      if (!affordable('mine')) break;
+      out.push(buildBuilding(ai, p.id, 'mine'));
+      break; // spread the economy one world per tick
+    }
+    // Ship production is CAPPED by the fleet count (self-play M4: endless building
+    // fed an ever-growing swarm — hundreds of fleets by mid-match). Enough fleets
+    // out ⇒ the metal flows to economy/garrisons instead.
+    const aiFleets = Object.values(state.fleets).filter((f) => f.owner === ai).length;
+    if (
+      aiFleets < (warFooting ? 8 : 4) &&
+      (pl.resources.metal ?? 0) > 220 &&
+      (pl.resources.credits ?? 0) > 120
+    ) {
       out.push(buildUnit(ai, base.id, 'cruiser', 1));
+    }
+    // Wartime posture (self-play M4: wars were free walk-in raids — the leader had no
+    // garrisons, so whoever attacked always came back and won): at war the bot
+    // (a) garrisons its undefended PRIZE worlds with militia — a garrisoned planet
+    // can't be walk-in captured, it takes a ground assault; the 10-point provinces
+    // stay an open raid zone by design; (b) adds fast scouts to the build mix
+    // (capture runners for that raid zone); (c) fields more fleets — and a launched
+    // fleet lifts home-built militia aboard as landing troops (fleet.launch), which
+    // is exactly what lets it assault a garrisoned world back.
+    if (warFooting) {
+      let garrisonOrders = 0;
+      for (const p of Object.values(state.planets)) {
+        if (garrisonOrders >= 2 || (pl.resources.metal ?? 0) < 90) break;
+        if (p.owner !== ai || p.kind !== 'planet') continue;
+        if (p.garrison.some((s) => s.count > 0)) continue;
+        out.push(buildUnit(ai, p.id, 'militia', 2));
+        garrisonOrders += 1;
+      }
+      // A landing stock at home: strike groups lift militia on sortie (above), so
+      // the base keeps a few spare beyond its seeded defenders.
+      const baseMilitia = base.garrison
+        .filter((s) => s.unit === 'militia')
+        .reduce((n, s) => n + s.count, 0);
+      if (baseMilitia < 4 && (pl.resources.metal ?? 0) > 120) {
+        out.push(buildUnit(ai, base.id, 'militia', 2));
+      }
+      if (aiFleets < 8 && (pl.resources.metal ?? 0) > 140) {
+        out.push(buildUnit(ai, base.id, 'scout', 1));
+      }
     }
     // (marine retired: the AI no longer cheap-builds a ground trooper. Its home keeps its
     //  seeded infantry garrison + orbital-AA building for defence; mobile ground via divisions.)
-    const aiFleets = Object.values(state.fleets).filter((f) => f.owner === ai).length;
     const baseHasShip = base.garrison.some((st) => isShipUnit(st.unit));
-    if (aiFleets < 2 && baseHasShip) out.push(launchFleet(ai, base.id));
+    if (aiFleets < (warFooting ? 4 : 2) && baseHasShip) out.push(launchFleet(ai, base.id));
   }
   // Trade on the session market: a passive bot liquidates the surplus goods it never
   // uses (food/energy/microelectronics) into the credits it always needs, and — when

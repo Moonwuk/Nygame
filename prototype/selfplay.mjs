@@ -27,9 +27,11 @@ new Function('module', 'exports', 'require', res.outputFiles[0].text)(mod, mod.e
 const { newGame, kernel, data, SCORE_LIMIT, aiOrders, HOUR, DAY, START_CANDIDATES } = mod.exports;
 
 const STEP = 2 * HOUR; // the AI decision cadence (mirrors the netserver driver)
-const CAP = 90 * DAY; // a match still undecided by then is scored as a draw
+const CAP = 90 * DAY; // harness safety net — victory's own timeout fires first (below)
 
-const config = { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } };
+// `endsAt` = the session's forced finale ranked by score (victory module 'timeout') —
+// a stalemated war ends with a winner instead of a harness draw, like a real session.
+const config = { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT, endsAt: 60 * DAY } };
 const ctx = (now) => ({ now, data, config });
 
 function leaderByPlanets(state) {
@@ -81,6 +83,15 @@ function runMatch(i) {
 
   const leaderTrail = []; // sampled (t, leader-by-planets) — the snowball input
   let now = 0;
+  // Seat-order coin, seeded per match (first-mover fairness WITH variance): a fixed
+  // order handed p1 75% of matches, and a strict alternation is still one global
+  // script — every seed replayed the same game, so "win rates" were binary. A
+  // seed-hashed coin per step keeps runs reproducible while different seeds explore
+  // different order interleavings — rates become rates.
+  let coin = 0;
+  for (const ch of `${BASE_SEED}-${i}`) coin = (coin * 31 + ch.charCodeAt(0)) >>> 0;
+  const reversedAt = (step) => (((coin ^ Math.imul(step, 2654435761)) >>> 16) & 1) === 1;
+  let stepIdx = 0;
   while (now < CAP && state.match.status !== 'ended') {
     now += STEP;
     // catch the world up (chunked — a partial advance keeps making progress)
@@ -93,8 +104,12 @@ function runMatch(i) {
       if (r.state.time <= state.time && c > 0) break; // same-instant runaway — bail
     }
     if (state.match.status === 'ended') break;
-    // each seat's AI issues its orders through the same pure reducer
-    for (const seat of Object.keys(state.players)) {
+    // Each seat's AI issues its orders through the same pure reducer; the iteration
+    // order per step comes from the seeded coin (see above).
+    const seatsInOrder = Object.keys(state.players);
+    if (reversedAt(stepIdx)) seatsInOrder.reverse();
+    stepIdx += 1;
+    for (const seat of seatsInOrder) {
       for (const a of aiOrders(state, seat, 'expand')) {
         const r = kernel.applyAction(state, a, ctx(now));
         if (r.ok) {
