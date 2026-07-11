@@ -60,9 +60,17 @@ export const diplomacyModule: GameModule = {
       if (typeof target !== 'string' || target === action.playerId || !isStance(stance)) {
         return h.reject('E_BAD_PAYLOAD');
       }
+      // A defeated seat is out of the game politically too (mirrors espionage):
+      // it can neither declare nor be declared upon — otherwise eliminated
+      // players stay full diplomatic actors and offers to the dead hang forever.
+      const actor = h.state.players[action.playerId];
+      if (!actor || actor.status !== 'active') {
+        return h.reject('E_FORBIDDEN');
+      }
       // The player roster is public (every projection keeps ids/names), so an
       // unknown-target reject leaks nothing fog-hidden (A06).
-      if (!h.state.players[target]) {
+      const victim = h.state.players[target];
+      if (!victim || victim.status !== 'active') {
         return h.reject('E_NO_PLAYER');
       }
       const me = action.playerId;

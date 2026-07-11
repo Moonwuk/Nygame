@@ -119,3 +119,29 @@ describe('diplomacy consent — offers, counters, bot answers', () => {
     expect(order(st0, declareWar('p1', 'p2', 'alliance'), 0).error).toBe('E_BOT_ALLIANCE');
   });
 });
+
+// BF-33: elimination marks a seat 'defeated' but keeps the record — the old
+// `if (!players[bot])` guard never fired, so a dead bot kept venting favour and
+// declared war from the grave. The fix gates on status AND sweeps the ledger.
+describe('bot diplomacy — the dead leave the table (BF-33)', () => {
+  it('a defeated bot never declares war from the grave', () => {
+    let st = order(newGame(), declareWar('p1', 'p2'), 0).state; // sour the bot: 60 → 30
+    st = structuredClone(st);
+    st.players.p2!.status = 'defeated'; // eliminated, record stays
+    st = advance(st, st.time + 20 * DAY).state; // would bottom out and war-back if alive
+    expect(botFavour(st, 'p2', 'p1')).toBe(FAVOUR_BASE - FAVOUR_WAR_DECLARED_HIT); // meter frozen
+  });
+
+  it('losing the last world sweeps the favour ledger both ways (player.eliminated)', () => {
+    let st = order(newGame(), declareWar('p1', 'p2'), 0).state; // p2 tracks p1 at 60 → 30
+    st = structuredClone(st);
+    // Strip the bot's territory; the victory sweep on the next span eliminates it.
+    for (const planet of Object.values(st.planets)) {
+      if (planet.owner === 'p2') planet.owner = 'p1';
+    }
+    st = advance(st, st.time + HOUR).state;
+    expect(st.players.p2!.status).toBe('defeated');
+    // The ledger entry is GONE (not merely frozen): favour reads the untracked default.
+    expect(botFavour(st, 'p2', 'p1')).toBe(FAVOUR_BASE);
+  });
+});

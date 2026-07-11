@@ -94,7 +94,10 @@ export const stewardModule: GameModule = {
     api.on('time.advanced', (event, h) => {
       const to = (event.payload as { to?: number }).to;
       if (typeof to !== 'number') return;
-      for (const [playerId, player] of Object.entries(h.state.players)) {
+      // Sorted (BF-13): expiry emits per player — event order must not follow
+      // JSONB key order after a hibernation round-trip.
+      for (const playerId of Object.keys(h.state.players).sort()) {
+        const player = h.state.players[playerId]!;
         if (player.steward && player.steward.until <= to) {
           const posture = player.steward.posture;
           delete player.steward;

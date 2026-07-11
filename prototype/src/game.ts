@@ -42,6 +42,8 @@ import {
   pairKey,
   identifiedNodes,
   timeScaleOf,
+  buildProgress,
+  thresholdRamp,
   type DiplomaticStance,
   type GameData,
   type GameModule,
@@ -60,7 +62,7 @@ import {
 } from '../../packages/shared-core/src/index';
 import { canAfford, payCost } from '../../packages/shared-core/src/util/treasury';
 import { sumUnitStat } from '../../packages/shared-core/src/util/stacks';
-import { requireOwnedIdleFleet } from '../../packages/shared-core/src/util/fleet';
+import { garrisonUnderAssault, requireOwnedIdleFleet } from '../../packages/shared-core/src/util/fleet';
 import type { HandlerContext } from '../../packages/shared-core/src/kernel/module';
 import {
   GROUND_ROSTER,
@@ -314,12 +316,16 @@ export const data: GameData = parseGameData({
     //  system. Orbital AA is no longer a unit either: it's a defensive *building* now
     //  (see `orbital_aa` under buildings) — anti-ship, immobile, player-built.)
     // --- formation roster: the ground units that fill a division template's 6 slots
-    // (formation.ts). Each has a distinct role; the template's SUM + composition
-    // synergies (combined-arms / entrenched / armour / air) set the division's stats.
+    // (formation.ts). Each has a distinct role. The division's aggregate attack/defense
+    // ratings come from GROUND_ROSTER (the per-target matrix combat uses); only hp/cost/
+    // upkeep are read from here (`stats.attack/defense/speed` on these four are legacy and
+    // now unread — kept as reference). Composition doctrines are organisational labels,
+    // not stat bonuses (BF-23).
     // Пехота — cheap, defensive front line; the backbone that holds ground.
     // Пехота в трёх вариантах (H4): ополчение — дешёвое мясо, тяжёлая пехота — щит
     // обороны, спецназ — элита с противотанковыми средствами (см. GROUND_ROSTER —
-    // матрица «кто кого бьёт» живёт там; здесь агрегатные статы, цена и содержание).
+    // матрица «кто кого бьёт» живёт там; агрегатный рейтинг ⚔/🛡 = среднее её строк,
+    // здесь же — hp, цена и содержание).
     militia: {
       faction: 'blue',
       stats: { attack: 4, defense: 8, speed: 44, hp: 14, cargoSize: 1 },
@@ -1089,30 +1095,64 @@ function fleet(
   };
 }
 
-/** Move up to `count` of `unit` out of `src` (mutates src, pruning emptied
- *  stacks) and return the removed stacks. Outside combat a unit type is a single
- *  full-health stack, but this stays correct if combat has split it by HP. */
+/** Canonical, order-independent loadout signature (mirrors shared-core `stacks.ts`):
+ *  one instance per module id, sorted+joined. Two stacks share a merge identity only
+ *  when this matches — a fitted stack never absorbs a bare one (SM-0.3). */
+function loadoutKey(modules?: readonly string[]): string {
+  return !modules || modules.length === 0 ? '' : [...modules].sort().join(',');
+}
+
+/** Move up to `count` of `unit` out of `src` (mutates src) and return the removed
+ *  stacks. `hp`/`shieldHp` are POOLS for the whole stack (gameState.ts), so a split
+ *  must APPORTION them pro-rata — copying the whole pool onto both halves duplicated
+ *  hull that combat then minted into extra ships (BF-4). The loadout rides onto the
+ *  taken stack so a routine split never strips paid modules (BF-5). */
 function takeFromStacks(src: UnitStack[], unit: string, count: number): UnitStack[] {
   let remaining = count;
   const taken: UnitStack[] = [];
   for (const st of src) {
     if (st.unit !== unit || remaining <= 0) continue;
     const move = Math.min(st.count, remaining);
-    st.count -= move;
     remaining -= move;
-    taken.push(st.hp === undefined ? { unit, count: move } : { unit, count: move, hp: st.hp });
+    const frac = move / st.count; // share of the pools that leaves with the taken ships
+    const t: UnitStack = { unit, count: move };
+    if (st.hp !== undefined) {
+      t.hp = st.hp * frac;
+      st.hp -= t.hp; // source keeps the remainder — total pool conserved
+    }
+    if (st.shieldHp !== undefined) {
+      t.shieldHp = st.shieldHp * frac;
+      st.shieldHp -= t.shieldHp;
+    }
+    if (st.modules && st.modules.length > 0) t.modules = [...st.modules];
+    st.count -= move;
+    taken.push(t);
   }
   return taken;
 }
 
-/** Fold one stack list into another, coalescing stacks that share the same unit
- *  type *and* HP pool (full-health stacks have `hp` undefined and combine). */
+/** Fold one stack list into another. Two stacks coalesce only when they share unit,
+ *  loadout AND are both full-health (no `hp`/`shieldHp` pool) — the shared-core
+ *  `findHealthyStack` rule. Merging on `hp` equality alone (the old code) fused two
+ *  damaged stacks into ONE pool (halving hull) and smeared a fitted stack's modules
+ *  over bare hulls, or destroyed them (BF-5); damaged/differently-fitted stacks now
+ *  stay separate (combat handles multiple stacks of one unit fine). */
 function mergeStacks(base: UnitStack[], add: UnitStack[]): UnitStack[] {
-  const out = base.map((st) => ({ ...st }));
+  const clone = (st: UnitStack): UnitStack => ({ ...st, ...(st.modules ? { modules: [...st.modules] } : {}) });
+  const out = base.map(clone);
   for (const st of add) {
-    const match = out.find((o) => o.unit === st.unit && o.hp === st.hp);
+    const healthy = st.hp === undefined && st.shieldHp === undefined;
+    const match = healthy
+      ? out.find(
+          (o) =>
+            o.unit === st.unit &&
+            o.hp === undefined &&
+            o.shieldHp === undefined &&
+            loadoutKey(o.modules) === loadoutKey(st.modules),
+        )
+      : undefined;
     if (match) match.count += st.count;
-    else out.push({ ...st });
+    else out.push(clone(st));
   }
   return out;
 }
@@ -1177,6 +1217,18 @@ export const taxModule: GameModule = {
 // player scramble those into a new fleet (ships → units, ground troops →
 // landing) so production feeds offense, and fuse two co-located fleets into one.
 // A natural next addition to the core.
+
+/** Monotonic fleet-id counter (mirrors battleSeq/divisionSeq). The old
+ *  `Object.keys(fleets).length` recycled freed numbers: a delete + re-mint in the
+ *  same ms regenerated a LIVE id and silently overwrote that fleet (BF-25).
+ *  Seeds from the current count so pre-counter saves keep minting unique ids. */
+function nextFleetSeq(state: GameState): number {
+  const s = state as DivState;
+  const seq = (s.fleetSeq ?? Object.keys(state.fleets).length) + 1;
+  s.fleetSeq = seq;
+  return seq;
+}
+
 export const fleetLaunchModule: GameModule = {
   id: 'fleet-ops',
   version: '0.1.0',
@@ -1196,6 +1248,11 @@ export const fleetLaunchModule: GameModule = {
       if (planet.garrison.length === 0) {
         return h.reject('E_EMPTY_GARRISON');
       }
+      // No mid-assault evacuation (BF-27): while a battle holds this garrison,
+      // scrambling it onto ships would dodge the resolve — same lock as army.load.
+      if (garrisonUnderAssault(h.state, planet.id)) {
+        return h.reject('E_UNDER_ASSAULT');
+      }
       // A fleet can't sit where one is already stationed-and-idle? Allow stacking.
       const units = planet.garrison.filter(
         (s) => !h.ctx.data.units[s.unit]?.traits.includes('ground'),
@@ -1204,7 +1261,7 @@ export const fleetLaunchModule: GameModule = {
       // fixed installations: they can't be lifted onto a fleet — the same rule the
       // core army.load enforces with E_IMMOBILE. They are neither ships nor liftable
       // cargo, so they stay behind in the garrison (see the garrison reset below).
-      const landing = planet.garrison.filter(
+      const liftable = planet.garrison.filter(
         (s) =>
           h.ctx.data.units[s.unit]?.traits.includes('ground') &&
           !h.ctx.data.units[s.unit]?.traits.includes('immobile'),
@@ -1212,7 +1269,22 @@ export const fleetLaunchModule: GameModule = {
       if (units.length === 0) {
         return h.reject('E_NO_SHIPS'); // need at least one ship to form a fleet
       }
-      const seq = Object.keys(h.state.fleets).length;
+      // Cargo cap (BF-28): the new fleet lifts ground troops only up to its ships'
+      // summed cargoCapacity — the same bound army.load enforces — in garrison
+      // order; whatever doesn't fit stays planetside.
+      let free = sumUnitStat(units, h.ctx.data, 'cargoCapacity');
+      const landing: UnitStack[] = [];
+      const stayBehind: UnitStack[] = [];
+      for (const s of liftable) {
+        const size = h.ctx.data.units[s.unit]?.stats.cargoSize ?? 1;
+        const take = size > 0 ? Math.min(s.count, Math.floor(free / size)) : s.count;
+        if (take > 0) {
+          landing.push({ unit: s.unit, count: take });
+          free -= take * size;
+        }
+        if (take < s.count) stayBehind.push({ unit: s.unit, count: s.count - take });
+      }
+      const seq = nextFleetSeq(h.state);
       const id = `fleet:${action.playerId}:${h.ctx.now}:${seq}`;
       h.state.fleets[id] = {
         id,
@@ -1220,14 +1292,15 @@ export const fleetLaunchModule: GameModule = {
         location: planet.id,
         movement: null,
         units: units.map((s) => ({ unit: s.unit, count: s.count })),
-        landing: landing.map((s) => ({ unit: s.unit, count: s.count })),
+        landing,
         traits: [],
         battleId: null,
       };
-      // Keep immobile emplacements behind; only ships + liftable ground cargo left.
-      planet.garrison = planet.garrison.filter((s) =>
-        h.ctx.data.units[s.unit]?.traits.includes('immobile'),
-      );
+      // Keep immobile emplacements + the over-cap troops behind; ships and the
+      // lifted cargo are aboard now.
+      planet.garrison = planet.garrison
+        .filter((s) => h.ctx.data.units[s.unit]?.traits.includes('immobile'))
+        .concat(stayBehind);
       h.emit('fleet.launched', { fleetId: id, planetId: planet.id, owner: action.playerId });
     });
 
@@ -1243,6 +1316,7 @@ export const fleetLaunchModule: GameModule = {
         unit?: string;
         count?: number;
         owner?: string;
+        modules?: unknown;
       };
       if (
         typeof p?.planetId !== 'string' ||
@@ -1256,7 +1330,16 @@ export const fleetLaunchModule: GameModule = {
       const planet = h.state.planets[p.planetId];
       if (!planet || planet.owner !== p.owner) return;
       const want = p.count ?? 0;
-      const gi = planet.garrison.findIndex((st) => st.unit === p.unit);
+      // The build's paid loadout rides along (BF-29): pull the EXACT fitted stack
+      // out of the garrison (loadout-keyed, like fleet.split) and re-stamp the
+      // modules on the rally stack — auto-rally must not strip «Оснащение».
+      const mods = Array.isArray(p.modules)
+        ? p.modules.filter((m): m is string => typeof m === 'string')
+        : undefined;
+      const key = loadoutKey(mods);
+      const gi = planet.garrison.findIndex(
+        (st) => st.unit === p.unit && loadoutKey(st.modules) === key,
+      );
       if (want <= 0 || gi < 0) return;
       const take = Math.min(want, planet.garrison[gi].count);
       if (take <= 0) return;
@@ -1272,7 +1355,7 @@ export const fleetLaunchModule: GameModule = {
           f.traits.includes('rally'),
       );
       if (!rally) {
-        const seq = Object.keys(h.state.fleets).length;
+        const seq = nextFleetSeq(h.state);
         rally = {
           id: `fleet:${p.owner}:${h.ctx.now}:${seq}`,
           owner: p.owner,
@@ -1285,9 +1368,17 @@ export const fleetLaunchModule: GameModule = {
         };
         h.state.fleets[rally.id] = rally;
       }
-      const si = rally.units.findIndex((st) => st.unit === p.unit);
+      const si = rally.units.findIndex(
+        (st) => st.unit === p.unit && loadoutKey(st.modules) === key,
+      );
       if (si >= 0) rally.units[si].count += take;
-      else rally.units.push({ unit: p.unit, count: take });
+      else {
+        rally.units.push({
+          unit: p.unit,
+          count: take,
+          ...(mods && mods.length > 0 ? { modules: [...mods] } : {}),
+        });
+      }
     });
 
     // Fuse `from` into `into` when both are docked, idle and in the same sector.
@@ -1322,6 +1413,12 @@ export const fleetLaunchModule: GameModule = {
       // with a sunk ship and delete them. Merge is the one fleet-removal that isn't a death.
       for (const d of Object.values(divisionsOf(h.state))) {
         if (d.carriedBy === payload.from) d.carriedBy = into.id;
+      }
+      // Heroes are bound by fleetId the same way (BF-3): the hero UNIT rides into the
+      // merged fleet, so the hero ENTITY must follow — a stale fleetId left the hero
+      // orphaned, and hero.spawn could then mint a duplicate free flagship.
+      for (const hr of Object.values(h.state.heroes ?? {})) {
+        if (hr.fleetId === payload.from) hr.fleetId = into.id;
       }
       delete h.state.fleets[payload.from];
       h.emit('fleet.merged', {
@@ -1361,6 +1458,12 @@ export const fleetLaunchModule: GameModule = {
         if (typeof t?.unit !== 'string' || typeof t?.count !== 'number' || t.count <= 0) {
           return h.reject('E_BAD_PAYLOAD');
         }
+        // The hero flagship can't be peeled off by a split (BF-3): the hero ENTITY is
+        // bound to the source fleet by fleetId, and moving its UNIT without the entity
+        // would orphan the binding (wrong-fleet aura, wrong-hero death attribution).
+        if (h.ctx.data.units[t.unit]?.traits.includes('hero')) {
+          return h.reject('E_HERO_UNIT');
+        }
         want.set(t.unit, (want.get(t.unit) ?? 0) + Math.floor(t.count));
       }
       const have = (unit: string) =>
@@ -1380,7 +1483,7 @@ export const fleetLaunchModule: GameModule = {
       let taken: UnitStack[] = [];
       for (const [unit, n] of want) taken = taken.concat(takeFromStacks(fleet.units, unit, n));
       fleet.units = fleet.units.filter((st) => st.count > 0);
-      const seq = Object.keys(h.state.fleets).length;
+      const seq = nextFleetSeq(h.state);
       const id = `fleet:${action.playerId}:${h.ctx.now}:${seq}`;
       h.state.fleets[id] = {
         id,
@@ -1412,11 +1515,21 @@ export const fleetLaunchModule: GameModule = {
       if (!f || !target) return h.reject('E_NO_FLEET');
       if (f.owner !== action.playerId) return h.reject('E_FORBIDDEN');
       if (f.owner === target.owner) return h.reject('E_FORBIDDEN');
+      // Combat needs a DECLARED war (BF-охота MAJOR): engage was the one attack path
+      // without a stance gate — a hand-crafted client action could open fire on a
+      // player at peace/pact/alliance, bypassing diplomacy entirely in multiplayer.
+      if (getStance(h.state, f.owner, target.owner) !== 'war') return h.reject('E_NOT_HOSTILE');
+      if (!f.units.some((s) => s.count > 0) || !target.units.some((s) => s.count > 0)) {
+        return h.reject('E_NO_FLEET'); // ghosts can't fight — no empty-side battles
+      }
       if (f.battleId || target.battleId) return h.reject('E_IN_BATTLE');
       if (!f.location || f.movement || target.movement || f.location !== target.location) {
         return h.reject('E_NOT_COLOCATED');
       }
       const battleId = `battle:${h.state.battleSeq++}`;
+      // Round cadence mirrors the core combat module: one round per GAME hour
+      // (÷timeScale on the wall clock), with nextRoundAt stamped for the HUD timer.
+      const roundAt = h.ctx.now + HOUR / timeScaleOf(h.ctx);
       const battle: Battle = {
         id: battleId,
         location: f.location,
@@ -1424,13 +1537,14 @@ export const fleetLaunchModule: GameModule = {
         attacker: { ref: { kind: 'fleet', fleetId: f.id }, owner: f.owner },
         defender: { ref: { kind: 'fleet', fleetId: target.id }, owner: target.owner },
         round: 0,
+        nextRoundAt: roundAt,
       };
       h.state.battles[battleId] = battle;
       f.battleId = battleId;
       f.movement = null;
       target.battleId = battleId;
       target.movement = null;
-      h.schedule(h.ctx.now + HOUR, 'combat.tick', { battleId });
+      h.schedule(roundAt, 'combat.tick', { battleId });
       h.emit('battle.started', {
         battleId,
         location: f.location,
@@ -1451,6 +1565,10 @@ export interface SeatConfig {
   faction: string;
   start: string; // a START_CANDIDATES world id
   ai: boolean;
+  /** Team side for a team battle (e.g. 'A' / 'B'). Seats sharing a team start ALLIED;
+   *  across teams they start at WAR. Absent on every seat ⇒ free-for-all (all pairs
+   *  seeded at peace, the classic skirmish). Mirrors the core map's slot `team`. */
+  team?: string;
 }
 export interface SetupConfig {
   seats: SeatConfig[];
@@ -1476,9 +1594,11 @@ export interface SetupConfig {
 
 // --- ground formations (HOI4-style division templates) -----------------------
 // A "воинское объединение" is a TEMPLATE of 6 slots, each holding one formation unit
-// (or empty). Mobilising it builds those units as a ground army; the division's stats
-// are the SUM of its slots PLUS composition synergies. Templates are composed in the
-// menu and frozen for the session, giving players a flexible, pre-committed doctrine.
+// (or empty). Mobilising it builds those units as a ground army; the division's aggregate
+// attack/defense rating is Σ over slots of the unit's mean per-target damage in GROUND_ROSTER
+// (the same table combat uses) — composition doctrines are organisational LABELS only and
+// add nothing to the numbers (BF-23). Templates are composed in the menu and frozen for
+// the session, giving players a flexible, pre-committed doctrine.
 
 /** The unit ids a template slot may hold — the formation roster (data.units above). */
 export const FORMATION_UNITS = ['militia', 'heavy_infantry', 'special_forces', 'tank'] as const;
@@ -1512,14 +1632,19 @@ export const OFFICER_TEMPLATES: OfficerTemplate[] = [
   { name: 'Колонна снабжения', officer: 'quartermaster', slots: ['militia', 'militia', 'militia', 'heavy_infantry', 'heavy_infantry', 'tank'] },
 ];
 
-/** An active composition synergy (a doctrine bonus the template's mix unlocks). */
+/** A composition doctrine the template's mix unlocks — an organisational LABEL
+ *  (combined-arms, entrenched, …), NOT a combat bonus: it carries no multiplier and
+ *  combat never reads it (BF-23). Purely descriptive flavour for the designer. */
 export interface FormationSynergy {
   key: string;
   name: string;
   desc: string;
 }
-/** Aggregate characteristics of a division template — what the designer previews and
- *  what mobilisation/combat read. attack/defense already include synergy multipliers. */
+/** Aggregate characteristics of a division template — the designer's combat readout.
+ *  attack/defense are a compact rating: Σ over slots of each unit's MEAN per-target damage
+ *  in the SAME ground roster combat resolves from (groundcombat.ts) — an expected weight vs
+ *  an even enemy mix, so the preview tracks real combat instead of an unrelated paper stat.
+ *  `synergies` are organisational doctrine labels only — no combat multiplier (BF-23). */
 export interface FormationStats {
   count: number;
   byType: Record<FormationUnit, number>;
@@ -1530,11 +1655,17 @@ export interface FormationStats {
   synergies: FormationSynergy[];
 }
 
-/** Compute a template's aggregate stats = Σ(slot stats) × composition synergies
- *  (combined-arms / entrenched / armour / air-support). Pure + deterministic; used by
- *  the menu preview and (later) by mobilisation. */
+/** Compute a template's aggregate combat rating + the doctrine LABELS its composition
+ *  unlocks (combined-arms / entrenched / armour / raid / human-wave). attack/defense are
+ *  Σ over slots of the unit's MEAN per-target damage in the ground roster — the SAME table
+ *  combat resolves from — so the preview is grounded in real combat, not an unrelated paper
+ *  stat (BF-23 tail). Doctrines are labels only, no multiplier. Pure + deterministic. */
 export function formationStats(tpl: FormationTemplate): FormationStats {
   const byType: Record<FormationUnit, number> = { militia: 0, heavy_infantry: 0, special_forces: 0, tank: 0 };
+  // A unit's single-number weight = the mean of its per-target damage row in GROUND_ROSTER
+  // (expected damage vs an even enemy mix); `atk` when attacking, `def` on return fire.
+  const rosterMean = (row: DamageTable): number =>
+    FORMATION_UNITS.reduce((s, t) => s + (row[t] ?? 0), 0) / FORMATION_UNITS.length;
   let baseAtk = 0;
   let baseDef = 0;
   let hp = 0;
@@ -1544,57 +1675,51 @@ export function formationStats(tpl: FormationTemplate): FormationStats {
     const def = data.units[slot];
     if (!def) continue;
     byType[slot] += 1;
-    baseAtk += def.stats.attack ?? 0;
-    baseDef += def.stats.defense ?? 0;
+    const prof = GROUND_ROSTER[slot];
+    baseAtk += prof ? rosterMean(prof.atk) : 0;
+    baseDef += prof ? rosterMean(prof.def) : 0;
     hp += def.stats.hp ?? 0;
     for (const [res, amt] of Object.entries(def.cost ?? {})) cost[res] = (cost[res] ?? 0) + amt;
   }
   const infantry = byType.militia + byType.heavy_infantry + byType.special_forces;
   const count = infantry + byType.tank;
-  // Composition synergies — additive multipliers on attack / defense. Doctrines follow
-  // the H4 roster: combined arms, an entrenched heavy line, an armoured fist, a
-  // spec-ops raid and the cheap human wave.
-  let atkMul = 1;
-  let defMul = 1;
+  // Composition doctrines — organisational LABELS the mix unlocks (combined arms, an
+  // entrenched heavy line, an armoured fist, a spec-ops raid, the cheap human wave).
+  // Descriptive ONLY: combat resolves per-target from the ground roster + officer, so a
+  // doctrine grants no attack/defence multiplier — the preview must not advertise one (BF-23).
   const synergies: FormationSynergy[] = [];
   if (infantry > 0 && byType.tank > 0) {
-    atkMul += 0.15;
-    defMul += 0.15;
     synergies.push({
       key: 'combined',
       name: 'Комбинированные войска',
-      desc: '+15% атака и оборона — пехота и танки вместе',
+      desc: 'Пехота и танки в одном строю',
     });
   }
   if (byType.heavy_infantry >= 3) {
-    defMul += 0.25;
-    synergies.push({ key: 'entrench', name: 'Окопались', desc: '+25% оборона — ≥3 тяжёлой пехоты' });
+    synergies.push({ key: 'entrench', name: 'Окопались', desc: '≥3 тяжёлой пехоты держат рубеж' });
   }
   if (byType.tank >= 3) {
-    atkMul += 0.2;
     synergies.push({
       key: 'armor',
       name: 'Танковый кулак',
-      desc: '+20% атака — ≥3 танков (прорыв)',
+      desc: '≥3 танков — ударный клин',
     });
   }
   if (byType.special_forces >= 2 && byType.militia === 0) {
-    atkMul += 0.15;
     synergies.push({
       key: 'raid',
       name: 'Рейдовая доктрина',
-      desc: '+15% атака — ≥2 спецназа без ополчения',
+      desc: '≥2 спецназа без ополчения',
     });
   }
   if (byType.militia >= 4) {
-    defMul += 0.1;
-    synergies.push({ key: 'wave', name: 'Людская волна', desc: '+10% оборона — ≥4 ополчения' });
+    synergies.push({ key: 'wave', name: 'Людская волна', desc: '≥4 ополчения — берут числом' });
   }
   return {
     count,
     byType,
-    attack: Math.round(baseAtk * atkMul),
-    defense: Math.round(baseDef * defMul),
+    attack: Math.round(baseAtk),
+    defense: Math.round(baseDef),
     hp,
     cost,
     synergies,
@@ -1754,12 +1879,27 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       };
     });
   }
-  // Everyone starts at PEACE (not the core's war default): no marching through another
-  // commander's space and no combat until war is declared (diplomacy.declare).
+  // Free-for-all seeds every pair at PEACE (not the core's war default): no marching
+  // through another commander's space and no combat until war is declared. A TEAM
+  // battle instead seeds by side — same team ALLIED (win together, no friendly fire),
+  // across teams at WAR (fight from the first hour). A team alliance is seeded state,
+  // so it bypasses the `E_BOT_ALLIANCE` declare-gate — an AI teammate is a real ally
+  // (the SES-1 victory clique reads the stance, so the coalition forms).
+  const teamed = setup.seats.some((seat) => seat.team !== undefined);
+  const teamOf = new Map(setup.seats.map((seat) => [seat.id, seat.team]));
   const diplomacy: Record<string, DiplomaticStance> = {};
   const ids = setup.seats.map((seat) => seat.id);
   for (let i = 0; i < ids.length; i++)
-    for (let j = i + 1; j < ids.length; j++) diplomacy[pairKey(ids[i]!, ids[j]!)] = 'peace';
+    for (let j = i + 1; j < ids.length; j++) {
+      const ta = teamOf.get(ids[i]!);
+      const tb = teamOf.get(ids[j]!);
+      const stance: DiplomaticStance = !teamed
+        ? 'peace'
+        : ta !== undefined && ta === tb
+          ? 'alliance'
+          : 'war';
+      diplomacy[pairKey(ids[i]!, ids[j]!)] = stance;
+    }
   // Bots track a favour meter toward every other seat (seeded neutral-friendly). Only a
   // player's aggression lowers it; a bot never wars for expansion (see botDiplomacyModule).
   const approval: Record<string, Record<string, number>> = {};
@@ -1829,6 +1969,77 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
       }
       // …and its running cost (daily → hourly), same drain the settlement applies.
       for (const res of Object.keys(level.upkeep)) out[res] = (out[res] ?? 0) - (level.upkeep[res] ?? 0) / 24;
+    }
+    // Constructions in progress (≥50% built) chip in a partial/delta share too —
+    // mirrors economy.ts's `pendingProduction` ramp rule. Point-evaluated (not
+    // integrated) since this is a live HUD rate, not an accrual over a span; no
+    // upkeep is charged on an unfinished building either, so no brownout applies here.
+    for (const event of state.scheduled) {
+      if (event.type !== 'construction.complete') continue;
+      const cp = event.payload as {
+        kind?: 'building' | 'unit' | 'upgrade';
+        planetId?: string;
+        building?: string;
+        level?: number;
+      };
+      if (cp.planetId !== p.id) continue;
+      if (cp.kind === 'building' && typeof cp.building === 'string') {
+        const def = data.buildings[cp.building];
+        if (!def) continue;
+        const level1 = buildingLevel(def, 1);
+        const ramp = thresholdRamp(buildProgress(state.time, event.at, level1.buildTimeHours * HOUR));
+        if (ramp <= 0) continue;
+        for (const res of Object.keys(level1.produces)) {
+          const v = (level1.produces[res] ?? 0) * ramp * mult;
+          if (res === 'credits') credits += v;
+          else out[res] = (out[res] ?? 0) + v;
+        }
+      } else if (cp.kind === 'upgrade' && typeof cp.building === 'string' && typeof cp.level === 'number') {
+        const def = data.buildings[cp.building];
+        const instance = p.buildings.find((b) => b.type === cp.building);
+        if (!def || !instance) continue;
+        const current = buildingLevel(def, instance.level);
+        const target = buildingLevel(def, cp.level);
+        const ramp = thresholdRamp(buildProgress(state.time, event.at, target.buildTimeHours * HOUR));
+        if (ramp <= 0) continue;
+        const resources = new Set([...Object.keys(current.produces), ...Object.keys(target.produces)]);
+        for (const res of resources) {
+          const delta = ((target.produces[res] ?? 0) - (current.produces[res] ?? 0)) * ramp * mult;
+          if (delta === 0) continue;
+          if (res === 'credits') credits += delta;
+          else out[res] = (out[res] ?? 0) + delta;
+        }
+      }
+    }
+    // A PAUSED site keeps its frozen share too — pausing halts further construction,
+    // not the share of the building already standing (mirrors economy.ts's
+    // `pausedProduction`: same threshold rule, held flat at `site.progress`).
+    for (const site of p.pausedConstruction ?? []) {
+      const ramp = thresholdRamp(site.progress);
+      if (ramp <= 0) continue;
+      if (site.kind === 'building' && typeof site.building === 'string') {
+        const def = data.buildings[site.building];
+        if (!def) continue;
+        const level1 = buildingLevel(def, 1);
+        for (const res of Object.keys(level1.produces)) {
+          const v = (level1.produces[res] ?? 0) * ramp * mult;
+          if (res === 'credits') credits += v;
+          else out[res] = (out[res] ?? 0) + v;
+        }
+      } else if (site.kind === 'upgrade' && typeof site.building === 'string' && typeof site.level === 'number') {
+        const def = data.buildings[site.building];
+        const instance = p.buildings.find((b) => b.type === site.building);
+        if (!def || !instance) continue;
+        const current = buildingLevel(def, instance.level);
+        const target = buildingLevel(def, site.level);
+        const resources = new Set([...Object.keys(current.produces), ...Object.keys(target.produces)]);
+        for (const res of resources) {
+          const delta = ((target.produces[res] ?? 0) - (current.produces[res] ?? 0)) * ramp * mult;
+          if (delta === 0) continue;
+          if (res === 'credits') credits += delta;
+          else out[res] = (out[res] ?? 0) + delta;
+        }
+      }
     }
     if (isInhabited(p)) {
       credits += civicTax(inhabited);
@@ -1923,6 +2134,16 @@ export const botDiplomacyModule: GameModule = {
       if (!meter || meter[spy] === undefined) return; // the victim isn't a tracked bot
       meter[spy] = Math.max(0, meter[spy]! - FAVOUR_SPY_CAUGHT_HIT);
     });
+    // An eliminated seat leaves the favour ledger entirely: its own meter dies with
+    // it, and no surviving bot keeps tracking (or later declaring on) a corpse —
+    // the same sweep diplomacy does for standing offers (BF-33).
+    api.on('player.eliminated', (event, h) => {
+      const playerId = (event.payload as { playerId?: string })?.playerId;
+      const approval = (h.state as DivState).approval;
+      if (typeof playerId !== 'string' || !approval) return;
+      delete approval[playerId];
+      for (const meter of Object.values(approval)) delete meter[playerId];
+    });
     // Per span: sustained war erodes favour, peace mends it; a bottomed-out meter makes
     // the bot commit to war (once), then vents so it won't thrash war/peace every tick.
     api.on('time.advanced', (event, h) => {
@@ -1933,9 +2154,12 @@ export const botDiplomacyModule: GameModule = {
       const approval = (h.state as DivState).approval;
       if (!approval) return;
       for (const bot of Object.keys(approval)) {
-        if (!h.state.players[bot]) continue; // eliminated seat
+        // Elimination marks the seat 'defeated' (the record STAYS) — a dead bot
+        // must not keep venting favour or declare war from the grave (BF-33).
+        if (h.state.players[bot]?.status !== 'active') continue;
         const meter = approval[bot]!;
         for (const player of Object.keys(meter)) {
+          if (h.state.players[player]?.status !== 'active') continue; // no grudges vs the dead
           const atWar = getStance(h.state, bot, player) === 'war';
           meter[player] = atWar
             ? Math.max(0, meter[player]! - FAVOUR_WAR_DECAY_PER_DAY * days)
@@ -1995,8 +2219,13 @@ export const marketModule: GameModule = {
       if (p?.side !== 'sell' && p?.side !== 'buy') return h.reject('E_BAD_PAYLOAD');
       if (typeof p.resource !== 'string' || !MARKET_GOODS.includes(p.resource))
         return h.reject('E_BAD_RESOURCE');
-      const amount = Math.floor(p.amount ?? 0);
-      const price = p.price ?? 0;
+      // typeof first: a numeric STRING passes `>`/`>=` through coercion and would
+      // otherwise reach the treasury math on the ungated path.
+      if (typeof p.amount !== 'number' || typeof p.price !== 'number') {
+        return h.reject('E_BAD_PAYLOAD');
+      }
+      const amount = Math.floor(p.amount);
+      const price = p.price;
       if (!(amount > 0) || !(price >= 0)) return h.reject('E_BAD_PAYLOAD');
       const player = h.state.players[action.playerId];
       if (!player) return h.reject('E_NO_PLAYER');
@@ -2107,6 +2336,11 @@ export interface Division {
 type DivState = GameState & {
   divisions?: Record<string, Division>;
   divisionSeq?: number;
+  /** Monotonic fleet-id counter (BF-25) — never recycles a freed number. */
+  fleetSeq?: number;
+  /** Sortie state of wings whose patrol is currently OFF (BF-26): fuel/rearm
+   *  survive the scramble toggle, so OFF→ON never refuels a dry wing for free. */
+  wingSorties?: Record<string, SortieState>;
   templates?: Record<string, FormationTemplate[]>;
   groundBattles?: Record<string, number>;
   heroRoster?: Record<string, HeroLoadout[]>;
@@ -2445,16 +2679,19 @@ export const divisionModule: GameModule = {
       const seq = (ds.divisionSeq ?? 0) + 1;
       ds.divisionSeq = seq;
       const id = `div:${action.playerId}:${seq}`;
+      // Именной шаблон приходит со своим офицером — «готовый шаблон, менять нельзя».
+      // Its HP bonus is baked into hpEach at birth, so the division is born AT its
+      // regen-max (unitMaxHp reads the same officer), not below it.
+      const officer = fromOfficer ? (tpl as OfficerTemplate).officer : undefined;
       divs[id] = {
         id,
         owner: action.playerId,
         name: tpl.name,
         template: p.template,
         max: { ...stats.byType },
-        units: makeSide(GROUND_ROSTER, stats.byType),
+        units: makeSide(GROUND_ROSTER, stats.byType, officer ? OFFICERS[officer] : undefined),
         location: p.planetId,
-        // Именной шаблон приходит со своим офицером — «готовый шаблон, менять нельзя».
-        ...(fromOfficer ? { officer: (tpl as OfficerTemplate).officer } : {}),
+        ...(officer ? { officer } : {}),
       };
       h.emit('division.mobilized', {
         id,
@@ -2576,24 +2813,10 @@ export const divisionModule: GameModule = {
       });
     });
 
-    // Attach / detach an officer (a hero-like leader granting tunable bonuses). The
-    // officer's toughness re-scales the current units' HP so attaching it never costs
-    // a unit. Pass `officer: null` to detach.
-    api.onAction('division.officer', (action, h) => {
-      const p = action.payload as { divisionId?: string; officer?: string | null };
-      const div = ownDivision(h, p?.divisionId, action.playerId);
-      const key = p?.officer ?? null;
-      if (key !== null && !Object.prototype.hasOwnProperty.call(OFFICERS, key)) {
-        return h.reject('E_NO_OFFICER');
-      }
-      div.officer = key ?? undefined;
-      for (const u of div.units) {
-        const newHpEach = unitMaxHp(div, u.type);
-        if (newHpEach > 0 && u.hpEach > 0) u.hp *= newHpEach / u.hpEach; // re-toughen, keep count
-        u.hpEach = newHpEach;
-      }
-      h.emit('division.officer', { id: div.id, officer: key, owner: action.playerId });
-    });
+    // NOTE: there is deliberately NO runtime officer attach/detach action. Officers
+    // arrive ONLY with their locked premade (`division.mobilize {officer: true}`) —
+    // a raw `division.officer` action used to attach any officer to any division for
+    // free, bypassing the premade lock (bughunt BF-19).
 
     // Per-span ground upkeep: lose divisions with their destroyed carrier, resolve
     // tick-based ground battles, then restore survivors on friendly soil.
@@ -2624,6 +2847,9 @@ export const divisionModule: GameModule = {
         if (div.carriedBy != null) continue; // in transit / in a hold — no restoration
         const planet = h.state.planets[div.location];
         if (!planet || planet.owner !== div.owner) continue; // own planet only
+        // No field repair under fire: regen while a ground battle rages would also
+        // make the outcome depend on how finely the span is stepped (BF-22).
+        if (groundContested(h.state, div.location)) continue;
         if (!div.units.some((s) => s.count > 0)) continue; // wiped → gone, never resurrected
         regenDivision(div, days);
       }
@@ -2697,7 +2923,10 @@ export const standingOrdersModule: GameModule = {
       if (typeof p.on !== 'boolean') return h.reject('E_BAD_PAYLOAD');
       const st = h.state as DivState;
       if (!p.on) {
-        if (st.patrols) {
+        if (st.patrols?.[f.id]) {
+          // The wing's fuel/rearm survive the toggle (BF-26): stash the sortie so
+          // OFF→ON resumes where it left off instead of handing back a full tank.
+          (st.wingSorties ??= {})[f.id] = st.patrols[f.id]!.sortie;
           delete st.patrols[f.id];
           if (Object.keys(st.patrols).length === 0) delete st.patrols;
         }
@@ -2706,12 +2935,25 @@ export const standingOrdersModule: GameModule = {
       if (!fleetHasSquadron(f)) return h.reject('E_NO_SHIPS');
       const pos = f.location !== null ? h.state.planets[f.location]?.position : undefined;
       if (!pos || !fleetIdle(f)) return h.reject('E_CONDITIONS_UNMET'); // patrols stand from a parked node
+      const spec = sortieSpec(f);
+      const stashed = st.wingSorties?.[f.id];
       (st.patrols ??= {})[f.id] = {
         center: { x: pos.x, y: pos.y },
         radius: squadronStrikeRange(f),
-        sortie: freshSortie(sortieSpec(f).maxFuel),
+        // Resume the stashed sortie (clamped to the CURRENT wing's spec — the
+        // composition may have changed); only a never-flown wing starts fresh.
+        sortie: stashed
+          ? {
+              fuel: Math.min(stashed.fuel, spec.maxFuel),
+              rearming: Math.min(stashed.rearming, spec.rearmRounds),
+            }
+          : freshSortie(spec.maxFuel),
         rearmAt: h.ctx.now + HOUR, // rearm cadence: one round per game-hour from now
       };
+      if (st.wingSorties) {
+        delete st.wingSorties[f.id];
+        if (Object.keys(st.wingSorties).length === 0) delete st.wingSorties;
+      }
     });
     api.onAction('patrol.stamp', (action, h) => {
       // The DRIVER's runtime stamp (burned fuel / ticked rearm / next cadence mark) —
@@ -2740,7 +2982,7 @@ export const standingOrdersModule: GameModule = {
     // snapshot) forever. Same deterministic sweep as the order chains'.
     api.on('time.advanced', (_ev, h) => {
       const st = h.state as DivState;
-      for (const key of ['autoAssault', 'patrols'] as const) {
+      for (const key of ['autoAssault', 'patrols', 'wingSorties'] as const) {
         const map = st[key];
         if (!map) continue;
         for (const fid of Object.keys(map)) if (!h.state.fleets[fid]) delete map[fid];
@@ -2803,9 +3045,22 @@ export interface StepOut {
 /** Advance the world to `now`, collecting events. */
 export function advance(state: GameState, now: number): StepOut {
   if (now <= state.time) return { state, events: [] };
-  const r = kernel.advanceTo(state, ctx(now));
-  if (!r.ok) return { state, events: [], error: r.code };
-  return { state: r.state, events: r.events };
+  // Chain partial catch-ups (mirrors matchRoom.computeAdvance): a long-idle world
+  // may exceed MAX_ADVANCE_STEPS per call; stopping short would leave due events in
+  // the queue and `order()` would then hit the kernel's E_TIME_GAP guard. A chunk
+  // that makes NO progress (same-instant runaway) breaks out — the frame loop
+  // retries next tick rather than spinning here.
+  let cur = state;
+  const events: StepOut['events'] = [];
+  for (let i = 0; i < 10; i++) {
+    const r = kernel.advanceTo(cur, ctx(now));
+    if (!r.ok) return { state: cur, events, error: r.code };
+    const progressed = r.state.time > cur.time;
+    cur = r.state;
+    events.push(...r.events);
+    if (!r.partial || !progressed) break;
+  }
+  return { state: cur, events };
 }
 
 /** Apply a player order at the current world time (advancing first if needed). */
@@ -2883,6 +3138,16 @@ export const buildShip = (
   count: number,
   modules: string[],
 ) => act(playerId, 'unit.build', { planetId, unit, count, modules });
+/** Cancel an ACTIVE (already paid) building/upgrade/unit order: refunds the unbuilt
+ *  share of its cost and parks it as a resumable paused site — `seq` is the order's
+ *  `construction.complete` scheduled-event seq (already read off `s.scheduled`, e.g.
+ *  by `activeConstruction()`). */
+export const cancelConstruction = (playerId: string, planetId: string, seq: number) =>
+  act(playerId, 'construction.cancel', { planetId, seq });
+/** Resume a paused site: pays exactly what was refunded, continues from the same
+ *  progress. `id` is the `PausedConstructionSite.id` (= the original order's `seq`). */
+export const resumeConstruction = (playerId: string, planetId: string, id: number) =>
+  act(playerId, 'construction.resume', { planetId, id });
 export const engageFleet = (playerId: string, fleetId: string, targetId: string) =>
   act(playerId, 'fleet.engage', { fleetId, targetId });
 /** Begin researching a session technology (one active at a time — technologyModule). */
@@ -3097,6 +3362,10 @@ export function serverAutoAssaultActions(
     if (!f || f.location === null || !fleetIdle(f)) continue;
     const here = state.planets[f.location];
     if (!here || !isCapturable(data, here) || here.owner === f.owner) continue;
+    // Auto-storm only worlds we are AT WAR with (bug-hunt MINOR): the core rejects a
+    // peaceful assault anyway (E_FORBIDDEN), but the driver re-issued the doomed pair
+    // on every wake — rejected-action churn, and the fleet.orbit half DID apply.
+    if (here.owner !== null && getStance(state, f.owner, here.owner) !== 'war') continue;
     const enemyHere = Object.values(state.fleets).some(
       (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
     );
@@ -3162,6 +3431,7 @@ export function serverPatrolActions(
       const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
       for (const g of Object.values(state.fleets)) {
         if (g.owner === f.owner || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+        if (g.battleId) continue; // already locked in a battle — engage would reject, yet the sortie fuel is spent (BF-30)
         if (getStance(state, f.owner, g.owner) !== 'war') continue; // declared enemies only — never auto-war
         if (!seen.has(g.location)) continue; // identified contacts only — fog-honest
         const pos = state.planets[g.location]?.position;
@@ -3230,9 +3500,6 @@ export const loadDivision = (playerId: string, divisionId: string, fleetId: stri
 /** Unload a carried division onto the world its carrier is docked over. */
 export const unloadDivision = (playerId: string, divisionId: string) =>
   act(playerId, 'division.unload', { divisionId });
-/** Attach an officer (OFFICERS key) to a division, or detach with `officer = null`. */
-export const setDivisionOfficer = (playerId: string, divisionId: string, officer: string | null) =>
-  act(playerId, 'division.officer', { divisionId, officer });
 /** Designate one of your inhabited worlds as your capital (hero respawn / re-fit anchor). */
 export const designateCapital = (playerId: string, planetId: string) =>
   act(playerId, 'capital.designate', { planetId });

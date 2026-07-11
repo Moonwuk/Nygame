@@ -25,6 +25,8 @@ const CLIENT_ACTION_TYPES = [
   'building.construct',
   'building.upgrade',
   'unit.build',
+  'construction.cancel',
+  'construction.resume',
   'technology.research',
   'diplomacy.declare',
   'espionage.spy',
@@ -40,9 +42,9 @@ const CLIENT_ACTION_TYPES = [
   'capital.designate',
   'division.mobilize',
   'division.template',
+  'division.rename',
   'division.load',
   'division.unload',
-  'division.officer',
   'steward.delegate',
   'steward.recall',
   'order.auto',
@@ -85,6 +87,8 @@ describe('SV-1.2 · action payload schemas', () => {
       ['building.upgrade', { planetId: 'p1', building: 'radar' }],
       ['unit.build', { planetId: 'p1', unit: 'cruiser', count: 2 }],
       ['unit.build', { planetId: 'p1', unit: 'cruiser' }], // count optional (defaults to 1)
+      ['construction.cancel', { planetId: 'p1', seq: 3 }],
+      ['construction.resume', { planetId: 'p1', id: 3 }],
       ['technology.research', { technology: 'railgun' }],
       ['diplomacy.declare', { target: 'p2', stance: 'war' }],
       ['diplomacy.declare', { target: 'p2', stance: 'alliance' }], // friendly declare = an offer
@@ -101,11 +105,12 @@ describe('SV-1.2 · action payload schemas', () => {
       ['fleet.engage', { fleetId: 'f1', targetId: 'f2' }],
       ['capital.designate', { planetId: 'p1' }],
       ['division.mobilize', { planetId: 'p1', template: 0 }],
+      ['division.mobilize', { planetId: 'p1', template: 1, officer: true }], // officer premade (BF-20)
       ['division.template', { template: 0, slot: 2, unit: 'tank' }],
       ['division.template', { template: 0, slot: 2, unit: null }], // clear the slot
+      ['division.rename', { template: 0, name: 'Гвардия' }], // custom-template rename (BF-20)
       ['division.load', { divisionId: 'div:1', fleetId: 'f1' }],
       ['division.unload', { divisionId: 'div:1' }],
-      ['division.officer', { divisionId: 'div:1', officer: null }],
       ['steward.delegate', { posture: 'defend', until: 123456 }],
       ['steward.recall', {}],
       ['order.auto', { fleetId: 'f1', on: true }],
@@ -136,6 +141,9 @@ describe('SV-1.2 · action payload schemas', () => {
       ['market.buy', { orderId: 'market:1' }], // missing amount
       ['unit.build', { planetId: 'p1', unit: 'c', count: 0 }], // count not positive
       ['unit.build', { planetId: 'p1', unit: 'c', count: 1.5 }], // count not an integer
+      ['construction.cancel', { planetId: 'p1', seq: -1 }], // negative seq
+      ['construction.cancel', { planetId: 'p1' }], // missing seq
+      ['construction.resume', { planetId: 'p1', id: 1.5 }], // id not an integer
       ['army.load', { fleetId: 'f1' }], // missing unit
       ['technology.research', {}], // missing technology
       ['station.deploy', { planetId: '' }], // empty id

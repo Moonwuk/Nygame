@@ -1,10 +1,22 @@
 name: Security scan
 
-# Informational, NON-BLOCKING security pipeline. Runs a DIVERSE set of scanners on
-# EVERY push (any branch) — different methods / data sources / surfaces, not clones —
-# aggregates everything into ONE report, and posts it back (sticky PR comment, or a
-# commit comment otherwise) + job summary + artifact. Never fails the build; NOT a
-# required check.
+# Security pipeline. Runs a DIVERSE set of scanners on EVERY push (any branch) —
+# different methods / data sources / surfaces, not clones — aggregates everything
+# into ONE report, and posts it back (sticky PR comment, or a commit comment
+# otherwise) + job summary + artifact.
+#
+# === GATING (SEC-1 ratchet) ===
+#
+# Triaged scanners are BLOCKING: semgrep, gitleaks, osv, trivy-fs, trivy-image.
+# Baseline was fixed at ZERO findings (triage 2026-07-10: local gitleaks v8.18.4 +
+# pnpm audit runs, CI runs of the pinned images — all clean; the only accepted
+# suppressions are the justified base-image CVEs in .trivyignore). Their gate step
+# fails the job on ANY non-zero scanner exit — findings AND scanner/infra failures
+# both block (fail-secure, OWASP A10): a scanner that couldn't run can't certify.
+# New suppressions go to .semgrepignore / .gitleaks.toml / .trivyignore WITH a
+# reason + date (see docs/security/pipeline.md).
+# Still informational (not yet triaged as bricks): codeql, trufflehog, zizmor,
+# scorecard, and the `check` job (its blocking twin lives in ci.yml).
 #
 # Each scan job writes a `status-<key>.json` sentinel AFTER the scan with the real
 # exit code / outcome. The summarizer LEADS with a scan-confirmation table built from
@@ -98,17 +110,19 @@ jobs:
         with:
           persist-credentials: false
       - name: semgrep
-        continue-on-error: true
+        id: scan
         run: |
           set +e
+          # --error → exit 1 on findings (blocking, SEC-1)
           docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
             semgrep scan --config=p/typescript --config=p/javascript --config=p/security-audit \
-            --sarif --output=semgrep.sarif --metrics=off
+            --error --sarif --output=semgrep.sarif --metrics=off
           rc=$?
           set -e
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
           [ -s semgrep.sarif ] || ok=false
           echo "{\"key\":\"semgrep\",\"ok\":$ok,\"exit\":$rc}" > status-semgrep.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-semgrep
@@ -122,6 +136,14 @@ jobs:
         with:
           sarif_file: semgrep.sarif
           category: semgrep
+      - name: gate — blocking on findings or scan failure (SEC-1)
+        env:
+          RC: ${{ steps.scan.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "::error::Semgrep is a blocking scanner (SEC-1): findings or scan failure (exit $RC). Fix the finding or suppress WITH justification (.semgrepignore / nosemgrep + reason)."
+            exit 1
+          fi
 
   codeql:
     name: SAST dataflow (CodeQL)
@@ -172,11 +194,12 @@ jobs:
         with:
           persist-credentials: false
       - name: gitleaks
-        continue-on-error: true
+        id: scan
         run: |
           set +e
           # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
           # Currently pinned by tag (v8.18.4); sha256 provides supply-chain integrity
+          # exits 1 on leaks by default (blocking, SEC-1)
           docker run --rm -v "$PWD:/src" -w /src zricethezav/gitleaks:v8.18.4 \
             detect --source=/src --no-git --redact \
             --report-format sarif --report-path gitleaks.sarif
@@ -185,6 +208,7 @@ jobs:
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
           [ -s gitleaks.sarif ] || ok=false
           echo "{\"key\":\"gitleaks\",\"ok\":$ok,\"exit\":$rc}" > status-gitleaks.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-gitleaks
@@ -198,6 +222,14 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
+      - name: gate — blocking on findings or scan failure (SEC-1)
+        env:
+          RC: ${{ steps.scan.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "::error::Gitleaks is a blocking scanner (SEC-1): leak found or scan failure (exit $RC). Rotate the secret; allowlist ONLY known-public fixtures via .gitleaks.toml WITH justification."
+            exit 1
+          fi
 
   trufflehog:
     name: Secrets — history + verify (TruffleHog)
@@ -238,11 +270,12 @@ jobs:
         with:
           persist-credentials: false
       - name: osv-scanner
-        continue-on-error: true
+        id: scan
         run: |
           set +e
           # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
           # Supply-chain integrity: pin image digest to prevent tag reuse attacks
+          # exits 1 on vulnerabilities by default (blocking, SEC-1)
           docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:v1.9.1 \
             --lockfile=pnpm-lock.yaml --lockfile=mobile/package-lock.json \
             --format=sarif --output=osv.sarif
@@ -251,6 +284,7 @@ jobs:
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
           [ -s osv.sarif ] || ok=false
           echo "{\"key\":\"osv\",\"ok\":$ok,\"exit\":$rc}" > status-osv.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-osv
@@ -264,6 +298,14 @@ jobs:
         with:
           sarif_file: osv.sarif
           category: osv-scanner
+      - name: gate — blocking on findings or scan failure (SEC-1)
+        env:
+          RC: ${{ steps.scan.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "::error::OSV-Scanner is a blocking scanner (SEC-1): vulnerability found or scan failure (exit $RC). Update the dependency; ignore ONLY with [[IgnoredVulns]] in osv-scanner.toml WITH justification + expiry."
+            exit 1
+          fi
 
   trivy-fs:
     name: Vuln + IaC — files (Trivy fs)
@@ -276,18 +318,20 @@ jobs:
         with:
           persist-credentials: false
       - name: trivy fs
-        continue-on-error: true
+        id: scan
         run: |
           set +e
           # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
           # Pin docker image digest for supply-chain integrity (prevents tag hijacking)
+          # --exit-code 1 → exit 1 on findings (blocking, SEC-1); .trivyignore applies
           docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.2 \
-            fs --scanners vuln,secret,misconfig --format sarif --output trivy.sarif .
+            fs --scanners vuln,secret,misconfig --exit-code 1 --format sarif --output trivy.sarif .
           rc=$?
           set -e
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
           [ -s trivy.sarif ] || ok=false
           echo "{\"key\":\"trivy-fs\",\"ok\":$ok,\"exit\":$rc}" > status-trivy-fs.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-trivy-fs
@@ -301,6 +345,14 @@ jobs:
         with:
           sarif_file: trivy.sarif
           category: trivy-fs
+      - name: gate — blocking on findings or scan failure (SEC-1)
+        env:
+          RC: ${{ steps.scan.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "::error::Trivy fs is a blocking scanner (SEC-1): finding or scan failure (exit $RC). Fix it; suppress ONLY via .trivyignore WITH CVE-id, reason and review date."
+            exit 1
+          fi
 
   trivy-image:
     name: Vuln — built image base OS (Trivy image)
@@ -316,13 +368,14 @@ jobs:
         continue-on-error: true
         run: docker build -t void-dominion:scan .
       - name: trivy image + image SBOM
-        continue-on-error: true
+        id: scan
         run: |
           set +e
           # TODO: Update to sha256 digests — run: ./.github/scripts/update-image-digests.sh
           # Docker image pinning (aquasec/trivy + anchore/syft) for supply-chain integrity
+          # --exit-code 1 → exit 1 on findings (blocking, SEC-1); .trivyignore applies
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -w /out \
-            aquasec/trivy:0.58.2 image --format sarif --output trivy-image.sarif void-dominion:scan
+            aquasec/trivy:0.58.2 image --exit-code 1 --format sarif --output trivy-image.sarif void-dominion:scan
           rc=$?
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -w /out \
             anchore/syft:v1.20.0 scan void-dominion:scan -o cyclonedx-json=sbom-image.cdx.json
@@ -330,6 +383,7 @@ jobs:
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
           [ -s trivy-image.sarif ] || ok=false
           echo "{\"key\":\"trivy-image\",\"ok\":$ok,\"exit\":$rc}" > status-trivy-image.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-trivy-image
@@ -344,6 +398,14 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
+      - name: gate — blocking on findings or scan failure (SEC-1)
+        env:
+          RC: ${{ steps.scan.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "::error::Trivy image is a blocking scanner (SEC-1): finding or scan/build failure (exit $RC). Fix the image; suppress ONLY via .trivyignore WITH CVE-id, reason and review date."
+            exit 1
+          fi
 
   sbom:
     name: SBOM — files (Syft / CycloneDX)

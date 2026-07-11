@@ -210,6 +210,16 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .set-ctl{display:flex;align-items:center;gap:10px;}
 .set-ctl input[type=range]{flex:1;accent-color:var(--cyan);height:22px;cursor:pointer;}
 .set-val{min-width:42px;text-align:right;font-variant-numeric:tabular-nums;color:var(--cyan);font-weight:700;}
+.set-switch{position:relative;width:46px;height:24px;flex:0 0 auto;cursor:pointer;margin-right:auto;}
+.set-switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;}
+.set-switch .sw-track{position:absolute;inset:0;border-radius:12px;border:1px solid var(--line-hi);
+  background:rgba(6,18,22,.9);transition:border-color .18s,background .18s,box-shadow .18s;pointer-events:none;}
+.set-switch .sw-knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;
+  background:var(--dim);transition:left .18s,background .18s,box-shadow .18s;pointer-events:none;}
+.set-switch input:checked ~ .sw-track{border-color:var(--cyan);background:rgba(53,214,230,.16);
+  box-shadow:inset 0 0 10px rgba(53,214,230,.25);}
+.set-switch input:checked ~ .sw-knob{left:25px;background:var(--cyan);box-shadow:0 0 8px rgba(53,214,230,.6);}
+.set-switch input:focus-visible ~ .sw-track{border-color:var(--cyan);box-shadow:0 0 0 2px rgba(53,214,230,.35);}
 
 /* war prompt — confirm before a move declares war on a player you're at peace with */
 #warprompt{position:fixed;inset:0;z-index:48;display:none;align-items:center;justify-content:center;padding:18px;
@@ -387,7 +397,15 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   align-items:flex-start;gap:8px;}
 #railtools{display:none;flex-direction:column;gap:5px;padding:6px;background:rgba(3,12,16,.82);
   border:1px solid var(--line-hi);border-radius:12px;box-shadow:0 0 16px rgba(0,0,0,.5);
-  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);
+  /* Short viewports (landscape / small phones): the bottom-anchored rail grows UP and
+     used to overrun the top bar (z-index 30 > 26), pushing «Дипло» off-screen / under
+     the top bar so a tap hit the top bar instead. Cap the tool list to the space above
+     the toggle+bottom and below the top bar, and scroll inside it. dvh overrides vh
+     where supported (mobile URL-bar aware); no effect on tall screens (list fits). */
+  max-height:calc(100vh - 120px);max-height:calc(100dvh - 120px);
+  overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;}
+#railtools::-webkit-scrollbar{display:none;}
 #rail.open #railtools{display:flex;}
 #railtools .rlbl{display:none;font:8px ui-monospace,monospace;letter-spacing:.4px;color:var(--cyan-dim);line-height:1;}
 #railtools button{position:relative;width:38px;height:38px;background:transparent;border:0;cursor:pointer;
@@ -456,20 +474,30 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .asset-row:hover{border-color:var(--cyan-dim);background:rgba(53,214,230,.07);}
 .asset-row b{flex:1 1 auto;min-width:96px;font-size:12px;}
 .asset-row .b{margin-left:auto;}
+.asset-row .prod{color:var(--grn);}
 .bicon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:7px;
   border:1px solid var(--line-hi);background:rgba(53,214,230,.07);color:var(--cyan);font-size:12px;}
 .asset-row .bicon{margin-right:0;flex:0 0 auto;}
 .conveyor{margin:6px 0 8px;padding:8px;border:1px solid var(--line);background:rgba(53,214,230,.04);}
-.conveyor .current{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-size:11px;}
+.conveyor .current{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;font-size:11px;}
 .conveyor .current span{color:var(--grn);letter-spacing:1.5px;font-size:9px;}
 .conveyor .current.idle span{color:var(--dim);}
 .conveyor .current em{color:var(--cyan-dim);font-style:normal;}
 .conveyor .bar{height:4px;margin:7px 0;background:rgba(53,214,230,.08);overflow:hidden;}
 .conveyor .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--grn),var(--cyan));box-shadow:0 0 10px rgba(125,240,208,.6);}
 .conveyor .queue{display:flex;gap:6px;flex-wrap:wrap;}
-.conveyor .queue span{border:1px solid var(--line);background:rgba(2,9,13,.55);padding:3px 6px;font-size:10px;color:var(--ink);}
+.conveyor .queue span{display:flex;align-items:center;gap:4px;border:1px solid var(--line);background:rgba(2,9,13,.55);padding:3px 6px;font-size:10px;color:var(--ink);}
 .conveyor .queue em{font-style:normal;color:var(--grn-dim);margin-right:5px;}
 .conveyor .queue.empty{color:var(--dim);font-size:10px;}
+.conveyor .current button,.conveyor .queue button,.conveyor .paused button{
+  border:1px solid var(--line-hi);background:transparent;color:var(--dim);cursor:pointer;
+  font:11px ui-monospace,monospace;padding:2px 6px;border-radius:2px;line-height:1.3;}
+.conveyor .current button:hover,.conveyor .queue button:hover,.conveyor .paused button:hover{
+  color:var(--cyan);border-color:var(--cyan);}
+.conveyor .paused{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
+.conveyor .paused span{display:flex;align-items:center;gap:4px;border:1px solid var(--amber,#f0b429);
+  background:rgba(240,180,41,.08);padding:3px 6px;font-size:10px;color:var(--ink);}
+.conveyor .paused em{font-style:normal;color:var(--amber,#f0b429);margin-right:2px;}
 button.b{background:transparent;color:var(--cyan);border:1px solid var(--cyan-dim);border-radius:2px;
   padding:5px 10px;margin:3px 4px 2px 0;cursor:pointer;font:700 11px ui-monospace,monospace;letter-spacing:.4px;}
 button.b:hover:not(:disabled){background:rgba(53,214,230,.14);box-shadow:0 0 10px rgba(53,214,230,.35);}
@@ -858,6 +886,36 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   font:700 13px ui-monospace,monospace;}
 #banner .bn-btn:hover{background:rgba(53,214,230,.26);box-shadow:0 0 12px rgba(53,214,230,.4);}
 
+/* end screen — the match-over overlay: outcome + stats + rematch. z above the banner. */
+#endscreen{display:none;position:fixed;inset:0;z-index:56;align-items:center;justify-content:center;
+  padding:20px;background:rgba(1,6,9,.78);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
+#endscreen.show{display:flex;}
+#endscreen .es-box{width:min(440px,94vw);max-height:92vh;overflow:auto;background:var(--glass);
+  border:1px solid var(--cyan);border-radius:12px;padding:22px 22px 18px;text-align:center;
+  box-shadow:0 0 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#endscreen .es-head{font-size:30px;font-weight:800;letter-spacing:3px;text-transform:uppercase;line-height:1.1;}
+#endscreen .es-head.win{color:#4fe0b0;text-shadow:0 0 18px rgba(79,224,176,.45);}
+#endscreen .es-head.lose{color:#e5484d;text-shadow:0 0 18px rgba(229,72,77,.4);}
+#endscreen .es-head.draw{color:var(--amber);text-shadow:0 0 18px rgba(232,178,74,.4);}
+#endscreen .es-why{margin-top:7px;font-size:12px;color:var(--dim);letter-spacing:.4px;}
+#endscreen .es-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:18px 0 6px;}
+#endscreen .es-cell{border:1px solid var(--line-hi);border-radius:8px;padding:9px 10px;background:rgba(6,18,22,.6);
+  display:flex;flex-direction:column;gap:3px;}
+#endscreen .es-cell.wide{grid-column:1 / -1;}
+#endscreen .es-k{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan-dim);}
+#endscreen .es-v{font-size:18px;font-weight:700;color:#eafffb;font-variant-numeric:tabular-nums;}
+#endscreen .es-v small{font-size:11px;color:var(--dim);font-weight:400;}
+#endscreen .es-xp{margin:8px 0 2px;font-size:13px;color:var(--amber);font-weight:700;}
+#endscreen .es-xp .lvl{display:block;margin-top:3px;font-size:11px;color:var(--cyan);font-weight:400;}
+#endscreen .es-acts{display:flex;flex-wrap:wrap;gap:9px;margin-top:16px;}
+#endscreen .es-btn{flex:1 1 45%;min-width:120px;padding:12px;border-radius:8px;cursor:pointer;
+  font:700 13px ui-monospace,monospace;letter-spacing:.5px;border:1px solid var(--line-hi);
+  background:transparent;color:var(--ink);}
+#endscreen .es-btn.primary{border-color:var(--cyan);background:rgba(53,214,230,.16);color:var(--cyan);}
+#endscreen .es-btn.primary:hover{background:rgba(53,214,230,.28);box-shadow:0 0 12px rgba(53,214,230,.35);}
+#endscreen .es-btn:hover{border-color:var(--cyan-dim);}
+#endscreen .es-btn.ghost{flex-basis:100%;background:transparent;color:var(--dim);border-color:var(--line);}
+
 @media (max-width:720px), ((hover: none) and (pointer: coarse) and (max-height: 520px)){
   #top{height:44px;}
   .who{display:none;}
@@ -968,6 +1026,11 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   color:var(--cyan);font:600 13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;min-height:46px;}
 #connect .cbtn:active{background:rgba(53,214,230,.24);}
 #connect .cbtn.ghost{border-color:var(--line-hi);background:transparent;color:var(--dim);}
+#connect .cwlogin{display:flex;gap:8px;margin-top:10px;}
+#connect .cwlogin input{flex:1;min-width:0;padding:11px 12px;background:rgba(2,10,14,.9);border:1px solid var(--line-hi);
+  border-radius:7px;color:var(--ink);font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.3px;}
+#connect .cwlogin input:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(53,214,230,.2);}
+#connect .cwlogin .cbtn{flex:0 0 auto;min-width:92px;}
 #connect .cstat{margin-top:14px;min-height:16px;font-size:12px;color:var(--amber);text-align:center;}
 #connect .mtabs{display:flex;gap:6px;margin-top:16px;}
 #connect .mtab{flex:1;padding:8px 6px;border-radius:7px;border:1px solid var(--line-hi);background:transparent;
@@ -1075,6 +1138,16 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #setup .srow .stog{font:11px ui-monospace,monospace;letter-spacing:1px;border:1px solid var(--line-hi);
   border-radius:6px;padding:6px 12px;min-width:64px;cursor:pointer;background:transparent;color:var(--dim);}
 #setup .srow .stog.ai{border-color:var(--cyan);color:var(--cyan);background:rgba(53,214,230,.12);}
+#setup .tmrow{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+#setup .tmtog{flex:1;padding:9px 12px;border-radius:8px;border:1px solid var(--line-hi);background:transparent;
+  color:var(--dim);font:700 12px ui-monospace,monospace;letter-spacing:.5px;cursor:pointer;text-align:left;}
+#setup .tmtog.on{border-color:var(--amber);color:var(--amber);background:rgba(232,178,74,.12);}
+#setup .tmhint{font-size:10px;color:var(--dim);letter-spacing:.3px;}
+#setup .srow .tmchip{width:30px;height:30px;flex:none;border-radius:7px;border:1px solid var(--line-hi);
+  background:transparent;font:800 13px ui-monospace,monospace;cursor:pointer;color:var(--dim);}
+#setup .srow .tmchip.sA{border-color:#4fe0b0;color:#4fe0b0;background:rgba(79,224,176,.14);}
+#setup .srow .tmchip.sB{border-color:#e5884a;color:#e5884a;background:rgba(229,136,74,.14);}
+#setup .srow .tmchip.lock{cursor:default;opacity:.85;}
 #setup .sspeedlabel{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:0 0 4px;}
 #setup .sspeedhint{font-size:11px;color:var(--dim);margin:0 0 8px;line-height:1.45;}
 #setup .sspeed{display:flex;gap:8px;margin-bottom:16px;}
@@ -1511,7 +1584,7 @@ const html = `<!doctype html>
 <aside id="side"></aside>
 <div id="toasts"></div>
 <div id="speedbar" class="spd">
-  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button>
+  <button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button><button class="spdmini" data-mult="100">×100</button>
   <span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" data-i18n-title style="display:none">⟳</button>
   <span class="sep"></span><button id="tomenu" title="Выход в меню" data-i18n-title>⌂</button>
 </div>
@@ -1526,6 +1599,7 @@ const html = `<!doctype html>
 <div id="pingmenu"></div>
 <div id="fps"></div>
 <div id="banner"></div>
+<div id="endscreen"></div>
 <div id="connect">
   <div class="cwrap">
     <button id="clang" class="clang" type="button">РУССКИЙ <span class="car">▼</span></button>
@@ -1545,6 +1619,10 @@ const html = `<!doctype html>
         <div class="cstack">
           <button id="clogin" class="cbtn ghost" type="button" data-i18n>Вход по позывному</button>
           <button id="csolo" class="cbtn ghost" type="button" data-i18n>Одиночная игра</button>
+        </div>
+        <div id="cwlogin" class="cwlogin" style="display:none">
+          <input id="cwnick" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="24" placeholder="позывной" data-i18n-ph>
+          <button id="cwgo" class="cbtn" type="button" data-i18n>Войти</button>
         </div>
       </div>
       <div id="cbrowse" style="display:none">
@@ -1681,13 +1759,14 @@ const html = `<!doctype html>
       <p class="smaphint" id="setuphint" data-i18n>Тапните светящийся мир, чтобы выбрать старт</p>
       <div id="setupslots" class="sslots"></div>
       <div class="sspeedlabel" data-i18n>Скорость времени</div>
-      <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×50.</p>
+      <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.</p>
       <div id="setupspeed" class="sspeed">
         <button class="spdchip" type="button" data-spd="1">×1</button>
         <button class="spdchip" type="button" data-spd="2">×2</button>
         <button class="spdchip" type="button" data-spd="5">×5</button>
         <button class="spdchip" type="button" data-spd="10">×10</button>
         <button class="spdchip" type="button" data-spd="50">×50</button>
+        <button class="spdchip" type="button" data-spd="100">×100</button>
       </div>
     </div>
     <button id="setupgo" class="sgo" disabled data-i18n>ЗАПУСК</button>

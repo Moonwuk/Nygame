@@ -262,9 +262,11 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
   for (const [slotId, a] of Object.entries(slotAssign)) {
     const slot = map.slots[slotId];
     if (!slot) continue; // ignore assignments for slots this map does not declare
-    if (a.playerId.includes('|')) {
-      // `|` is the diplomacy pair-key separator — an id carrying it would break
-      // the offer-fog participant check (see `pairKey`). Fail-secure at boot.
+    if (a.playerId.includes('|') || a.playerId.includes('>')) {
+      // `|` is the diplomacy pair-key separator and `>` the DIRECTED offer-key
+      // separator (see `pairKey`/`offerKey`) — an id carrying either would let two
+      // ids concatenate into an ambiguous key and misattribute a stance or offer.
+      // Fail-secure at boot.
       throw new Error(`E_BAD_PLAYER_ID: ${a.playerId}`);
     }
     const scientists = resolveScientists(a, data); // fail-secure: unknown / duplicate / >2

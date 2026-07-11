@@ -154,7 +154,11 @@ export type RoomObservation =
    *  work (`throttled` — it will finish on the next advance) from a same-instant
    *  runaway where the clock stopped progressing (`stalled` — a content/module bug
    *  that needs attention). Ops should alert on `stalled`. */
-  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' };
+  | { kind: 'advance_overflow'; reachedTime: number; targetTime: number; reason: 'throttled' | 'stalled' }
+  /** Scheduled events dead-lettered during a catch-up (their handler threw). The
+   *  timeline kept moving (by design), but silence here hid real module bugs —
+   *  the record must reach the host's logs (bug-hunt: failures had NO consumer). */
+  | { kind: 'dead_letter'; failures: Array<{ at: number; type: string; code: string }> };
 
 export interface SubmitResult {
   ok: boolean;
@@ -721,6 +725,36 @@ export class MatchRoom {
     return this.applyAndBroadcast(playerId, action, peer);
   }
 
+  /** Server-internal submit (AI stand-ins / standing orders / steward drivers). On an
+   *  in-memory room it is the plain sync submit; on a DURABLE room it serializes
+   *  through the actor mailbox and commits-before-broadcast like any player action —
+   *  a raw sync `submitAction` there mutates `stateValue`/`seq` in the middle of a
+   *  `commitApply` persist await, and the await's resolution then overwrites the
+   *  driver's acked change and rewinds `seq` (bug-hunt CRIT: silent state loss). */
+  async submitServerAction(playerId: PlayerId, action: Action): Promise<{ ok: boolean; code?: string }> {
+    if (!this.persist) {
+      const r = this.submitAction(playerId, action);
+      return { ok: r.ok, ...(r.code !== undefined ? { code: r.code } : {}) };
+    }
+    let out: { ok: boolean; code?: string } = { ok: false, code: 'E_INTERNAL' };
+    await this.enqueue(async () => {
+      const cached = this.receipts.get(action.id);
+      if (cached) {
+        out = { ok: cached.ok, ...(cached.code !== undefined ? { code: cached.code } : {}) };
+        return;
+      }
+      if (this.rateLimited(playerId)) {
+        out = { ok: false, code: 'E_RATE_LIMIT' }; // transient — the driver's next pass retries
+        return;
+      }
+      const verdict = await this.commitApply(playerId, action);
+      out = verdict.ok ? { ok: true } : { ok: false, code: verdict.code ?? 'E_INTERNAL' };
+    }).catch(() => {
+      out = { ok: false, code: 'E_INTERNAL' };
+    });
+    return out;
+  }
+
   /**
    * The reducer core, AFTER the front gates (dedup, rate-limit, ownership): catch the
    * world up to now, apply the action, commit + broadcast. Shared by the bare
@@ -861,6 +895,12 @@ export class MatchRoom {
       const before = state.time;
       const result = this.kernel.advanceTo(state, this.context(now));
       if (!result.ok) return { ok: false, code: result.code };
+      if (result.failures.length > 0) {
+        // Dead-lettered events must not vanish silently — surface them to the host's
+        // observation stream (JSONL log / metrics), the "details belong in server
+        // logs" half of invariant #4.
+        this.observe?.({ kind: 'dead_letter', failures: result.failures });
+      }
       state = result.state;
       events.push(...result.events);
       if (!result.partial) return { ok: true, state, events }; // reached `now`
@@ -1164,7 +1204,17 @@ export class MatchRoom {
   private eventVisibleTo(event: DomainEvent, playerId: PlayerId, identify: Set<string>): boolean {
     if (event.type === 'time.advanced' || event.type.startsWith('match.')) return true;
     const p = (event.payload ?? {}) as Record<string, unknown>;
+    // Hero events are strictly owner-only: their payloads carry the hero's node
+    // (`at`) and fleet, which the fog projection deliberately hides from everyone
+    // else — an identified-node match must NOT reveal them.
+    if (event.type.startsWith('hero.')) return p.owner === playerId;
     if (p.owner === playerId) return true;
+    // Personal and bilateral events name their audience with these keys (research,
+    // steward, elimination, diplomacy offers/changes, market trades) — a named
+    // participant always sees their own event.
+    for (const key of ['playerId', 'a', 'b', 'from', 'to', 'buyer', 'seller'] as const) {
+      if (p[key] === playerId) return true;
+    }
     for (const key of ['location', 'planetId', 'at'] as const) {
       const node = p[key];
       if (typeof node === 'string' && identify.has(node)) return true;

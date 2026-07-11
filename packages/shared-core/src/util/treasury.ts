@@ -25,3 +25,14 @@ export function payCost(treasury: ResourceBag, cost: ResourceBag): void {
     }
   }
 }
+
+/** Adds `amount` to the treasury in place — the symmetric inverse of `payCost`,
+ *  for refunding a cancelled/paused construction. */
+export function refundCost(treasury: ResourceBag, amount: ResourceBag): void {
+  for (const res of Object.keys(amount)) {
+    const value = amount[res] ?? 0;
+    if (value !== 0) {
+      treasury[res] = (treasury[res] ?? 0) + value;
+    }
+  }
+}

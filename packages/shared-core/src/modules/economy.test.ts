@@ -241,3 +241,36 @@ describe('economy module — building upkeep + arrears brownout (building econom
     expect(r.state.players.p1?.arrears).toBeUndefined();
   });
 });
+
+// BF-13: a Postgres JSONB round-trip (hibernation) re-orders object keys, so an
+// insertion-order walk sums floats in a different order than the replay — the
+// settlement must be key-order independent (sorted walks).
+describe('economy module — key-order independence (BF-13)', () => {
+  it('the same planets in a different insertion order settle to the BIT-identical treasury', () => {
+    const floaty: GameData = parseGameData({
+      version: '0.1.0',
+      resources: ['metal'],
+      units: {},
+      factions: {},
+      buildings: {
+        // 0.1 + 0.2 + 0.3 summed left-to-right ≠ right-to-left in IEEE 754 —
+        // exactly the divergence a JSONB re-order used to smuggle in.
+        m1: { name: 'M1', produces: { metal: 0.1 }, buildTimeHours: 0 },
+        m2: { name: 'M2', produces: { metal: 0.2 }, buildTimeHours: 0 },
+        m3: { name: 'M3', produces: { metal: 0.3 }, buildTimeHours: 0 },
+      },
+      events: {},
+    });
+    const kernel = createKernel([economyModule]);
+    const mk = (order: string[]): GameState => {
+      const planets: Record<string, Planet> = {};
+      const spec: Record<string, string> = { A: 'm1', B: 'm2', C: 'm3' };
+      for (const id of order) planets[id] = planet(id, 'p1', [spec[id]!]);
+      const s = stateWith({ players: [player('p1')] });
+      return { ...s, planets };
+    };
+    const abc = okAdvance(kernel.advanceTo(mk(['A', 'B', 'C']), { now: HOUR, data: floaty }));
+    const cba = okAdvance(kernel.advanceTo(mk(['C', 'B', 'A']), { now: HOUR, data: floaty }));
+    expect(cba.state.players.p1!.resources.metal).toBe(abc.state.players.p1!.resources.metal);
+  });
+});

@@ -322,6 +322,13 @@ describe('heroEffects — reveal (scan → time-boxed fog lift, owner-only)', ()
     expect(identifiedNodes(later, 'p1', data).has('NEAR')).toBe(false);
   });
 
+  it("a benched hero's reveal goes dark: only a DEPLOYED hero lights coverage (BF-24)", () => {
+    const r = okApply(kernel.applyAction(revealWorld(), scan, ctx(0)));
+    const benched: GameState = structuredClone(r.state);
+    delete benched.heroes!['hero:p1:1']!.alive; // back to the reserve shape
+    expect(identifiedNodes(benched, 'p1', data).has('NEAR')).toBe(false);
+  });
+
   it('rejects a malformed (no radius / no duration) reveal, charging nothing', () => {
     const st = revealWorld();
     st.heroes!['hero:p1:1']!.abilities = ['dudscan'];

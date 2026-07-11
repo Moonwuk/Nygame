@@ -7,7 +7,7 @@
 #   docker build -t void-dominion . && docker run -p 8788:8788 void-dominion
 #   (or one-click via render.yaml — see docs/multiplayer.md)
 #
-# Multi-stage: a full node:22-slim builder installs deps and bakes the prototype HTML,
+# Multi-stage: a full node:26-slim builder installs deps and bakes the prototype HTML,
 # then a distroless runtime carries only the installed /app and runs `node` as non-root.
 # Distroless drops the entire Debian userland (perl, pam, bsdutils, gpg, apt, …) that the
 # Node-only server never touches — that base-OS layer was the source of nearly all the
@@ -22,15 +22,18 @@
 # ---- Stage 1: build (full toolchain) ----
 # Both FROM lines are digest-pinned (audit F-15 / CWE-1357): a tag is mutable, a digest
 # names the exact multi-arch index that was reviewed. To bump: re-resolve the tag's
-# current digest (Docker Hub API `/v2/repositories/library/node/tags/22-slim` for node;
+# current digest (Docker Hub API `/v2/repositories/library/node/tags/26-slim` for node;
 # `gcr.io/v2/distroless/nodejs22-debian13/manifests/nonroot` Docker-Content-Digest for
 # distroless), update the digest + the refreshed-date below, and re-review .trivyignore.
 # The dates live in these comments, not inline: a `#` after FROM's args would be parsed
 # as extra arguments (Dockerfile comments only count at line start) and break the build.
-# node:22-slim digest refreshed 2026-07.
+# node:26-slim digest refreshed 2026-07.
 FROM node:26-slim@sha256:a1d9d671994fc2d26e297ac56b4b1522a8bc7fa71c43b14cd1b1fe6c5116f7dc AS build
 WORKDIR /app
-RUN corepack enable
+# Node ≥25 no longer ships corepack in the distribution (the 22→26 bump, PR #106,
+# silently broke this line — caught by the SEC-1 blocking trivy-image gate), so install
+# it explicitly (version-pinned; it then fetches the exact pnpm from `packageManager`).
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 # Install deps first (cached unless the lockfile/manifests change), then the source.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./

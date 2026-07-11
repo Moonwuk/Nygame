@@ -162,7 +162,11 @@
 > G2→CP4 (Pixi вместо Skia), G3→`@void/client`+CP1, G4→CP3. Бирки G1–G4 ниже —
 > исходный (RN) вариант.
 
-- **G1** ⏳ React Native оболочка + WS-подключение + graceful reconnect.
+- **G1** ✅ _(в PWA-варианте, G1→CP1)_ Оболочка — Vite-shell вместо RN (решение
+  `cross-platform-roadmap.md`); WS-подключение — CP1.1 (`net.ts`/`MultiplayerClient`);
+  **graceful reconnect — CP1.4**: авто-реконнект с экспоненциальным бэкоффом, ресинк
+  полным `welcome`, ограниченная очередь неотправленных интентов с флашем после
+  реконнекта (без дублей), дроп немонотонной дельты → форс-ресинк. Фаза CP1 закрыта.
 - **G2** 🔒(G1) Skia-рендер карты (зум / скролл / culling).
 - **G3** ✅ (в `@void/client`: `applyDelta`-применение серверных diff'ов уже зашиплено; RN-вариант не нужен).
 - **G4** 🔒(G1) Превью через `shared-core` («если атакую — что будет?»).
@@ -178,7 +182,7 @@
   (здания) бьёт раз в игровой час, **ближняя** (юниты гарнизона) — раз в 15 игровых
   минут четвертью часовой ставки; сетки по мировому времени, перецеливание на каждом
   залпе, нырок между залпами безнаказан. Ядро объявляет каждый залп событием `aa.fired
-  {planetId, owner, fleetId, by, damage}` (до применения урона — чтобы клиент дорисовал
+{planetId, owner, fleetId, by, damage}` (до применения урона — чтобы клиент дорисовал
   залп, даже если цель им же и уничтожена; жертве в тумане не уходит — фильтр по
   location/owner); прототип рисует трассер земля→орбита (штрих ползёт вверх) со вспышкой
   на цели, ~0.7с. Бонус: фазы боя различимы — орбита = красные расходящиеся кольца
@@ -355,6 +359,21 @@
   держит рабочий резерв перед распродажей излишков. +9 тестов (5 core economy, 4 proto);
   браузер-проверено. Гейт 913 зелёный.
 
+## Блок BF · Баг-охота 2026-07-10 (перед плейтестом) `[core]` `[srv]` `[proto]` `[cli]`
+
+> Полный триаж — **`docs/bughunt-2026-07-10.md`** (8 агентов-охотников, каждая находка
+> подтверждена временным тестом против реального ядра). Здесь — короткий индекс со
+> статусом; детали, сценарии и направления фиксов — в триаж-доке. Живая QA
+> (CDP-прогон клиента) дала 0 непойманных исключений в обоих локалях.
+
+- **BF-1** ✅ `[srv]` Гонка серверных драйверов на durable-комнате (sync submit посреди
+  commit-await затирал действие/seq) → `MatchRoom.submitServerAction` через mailbox.
+- **BF-31** ✅ `[core]` Коалиция считалась связной компонентой (транзитивно) вместо клики
+  → цепочка A–B–C при войне A–C побеждала вместе; правка свежего SES-1 на клику.
+- **BF-2..BF-35** ⏳ Остальные подтверждённые находки (4 CRIT + ~25 MAJOR + хвост) —
+  чинятся мелкими PR по зонам, каждый с регресс-тестом из репро. Индекс и приоритет —
+  в триаж-доке (порядок: CRIT → MAJOR сеть/бой/ядро → UI/локаль-хвост).
+
 ## Блок SES · Доделка сессионного слоя (GDD-пробелы, ревизия 2026-07-10)
 
 > Аудит «сессия vs GDD» показал 4 пробела, не покрытых кирпичами. Здесь они
@@ -369,6 +388,17 @@
   ВМЕСТЕ: `match.winners[]` (сортированный состав) + топ-скорер в `match.winner`;
   `winners` едет в `match.ended`. Прототип: баннер «🏆 ПОБЕДА КОАЛИЦИИ (A + B)», XP
   начисляется каждому победителю (RU/EN). Детерминизм: BFS по сортированным id. +3 теста.
+- **AVA-0** ✅ `[core]` `[proto]` **Играбельный командный бой (2v2 и т.п.) — первый шаг к
+  AvA без мета-слоя.** `SeatConfig.team?` + посев дипломатии по стороне в `newGame`:
+  одна сторона стартует ALLIED (побеждают вместе через SES-1, без дружественного огня),
+  между сторонами — WAR с первого часа; нет команд ни у кого → классический FFA (все
+  пары `peace`, обратная совместимость). Альянс — посеянное состояние, поэтому ИИ-союзник
+  реальный (в обход `E_BOT_ALLIANCE`-гейта; клика-победа читает стойку). Прототип: тумблер
+  «⚔ Командный бой» в сетапе + A/B-чипы на местах (ты залочен в A), стороны едут в
+  `SetupConfig`. Коалиционный чат/пинги/победа — из коробки. +4 теста ядра; e2e соло 2v2
+  (союзник=alliance, соперники=war, коалиция из двоих). **Дальше:** NET-2v2 (netserver
+  сеет команды), сгруппированный спавн союзников (общий фронт), полный AvA-жизненный цикл
+  (`corporation-wars.md`: вызов/принятие/ростер/фазы) — server/meta.
 - **SES-2** ⏳ `[core]` `[srv]` **Награды по итогам сессии (GDD §3.4).** При `match.ended`
   ядро считает чистую таблицу наград по местам (XP аккаунта / мета-ресурсы; масштаб —
   данными), сервер записывает на аккаунт (упирается в мета-экономику EC-*, поэтому
@@ -417,7 +447,7 @@
 - **HERO-1** ✅ `[data]` Схемы + `data/heroes.json` (архетипы: `commander/ravager/vanguard/warden`,
   `HeroArchetypeDef {name, branch?, ship{unit?|stats?}, slots, startAbilities[], startPassives[]}`,
   ветка героев `transhuman|psionic`) + `data/heroAbilities.json` (`HeroAbilityDef {name, type,
-  cooldownHours, range, cost, params}`: `corridor/annihilate/rally/scan/recall/bulwark`); загрузчик
+cooldownHours, range, cost, params}`: `corridor/annihilate/rally/scan/recall/bulwark`); загрузчик
   (`loadGameData`) дополнен; `parseGameData` валидирует; тесты схем + referential-integrity
   (`startAbilities`∈heroAbilities, `ship.unit`∈units) + дефолты + fail-closed. 4 теста.
 - **HERO-2** ✅ Движок: герой → **корабль**. Позиция героя = **нода его корабля** (`heroNode`:
@@ -446,7 +476,7 @@
   (`path`/`annihilate`) — анти-double-dip; кастомные — по `abilityId`. `params`-оверрайды
   (`durationHours`/`speedBonus`) из данных. Payload-схема `hero.ability` в гейте (SV-1.2). 6 тестов.
 - **HERO-5** ✅ Пассивки из данных → хуки. `data/heroPassives.json` + `HeroPassiveDefSchema
-  {hook: 'fleet.speed'|'combat.damage', scope: 'heroFleet'|'ownFleetsNear', params{bonus, radius}}`
+{hook: 'fleet.speed'|'combat.damage', scope: 'heroFleet'|'ownFleetsNear', params{bonus, radius}}`
   (enum-гейт хуков — как каталог tech-условий); `Hero.passives?: string[]` (сеется из
   `startPassives` архетипа); живой герой множит хук на ×(1+Σбонусов) поверх лейна/ауры —
   `heroFleet` бафает флот героя, `ownFleetsNear` — свои флоты в `radius` от ноды героя
@@ -454,7 +484,7 @@
   `vanguard_impulse` (+10% скорость флота героя) и `rally_beacon` (+8% урона в 300).
   Referential-integrity `startPassives`∈heroPassives. 4 теста.
 - **HERO-6** ✅ Фитинги корабля: `data/heroFittings.json` (`HeroFittingDef {statMods,
-  grants{ability?|passive?}, cost}`, анти-self-expansion рефайн как у ship-модулей) +
+grants{ability?|passive?}, cost}`, анти-self-expansion рефайн как у ship-модулей) +
   действие `hero.fit {heroId, fitting}`: слот-бюджет из архетипа (`slots`;
   `E_NO_SLOTS`, безархетипный герой — 0 слотов), `E_ALREADY_FITTED`/`E_NO_FITTING`,
   казна (nonnegative), **без refit** (owner-правило ship-модулей). `grants` живые
@@ -463,7 +493,7 @@
   (scan), «Матрица „Эгида"» (rally_beacon), «Абляционная обшивка» (hp+40, не live).
   3 теста.
 - **HERO-7** ✅ Дерево навыков: `data/heroSkillTrees.json` (`HeroSkillNode {name, branch?,
-  requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psionic**, по руту на
+requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psionic**, по руту на
   каждую: `neural_lace`/`overclocked_helm` и `void_attunement`/`psi_veil`) + действие
   `hero.skill.unlock {heroId, node}`: гейты владения/живости, каталога (`E_NO_NODE`),
   повтора (`E_ALREADY_UNLOCKED`), ветки архетипа (`E_WRONG_BRANCH`; узел без ветки — общий,
@@ -554,7 +584,7 @@
   `strike_carrier` `{defense:1,utility:2}` — space-домен, те же 6 модулей). +2 теста.
 - **CON-3** ✅ `[proto]` Панель **Армия**: редактор шаблона дивизии (`division.template`) —
   6 слотов (тап цикл пусто→пехота→танк), живой агрегат `formationStats` (атака/оборона/
-  корпус), синергии состава и стоимость мобилизации; сама мобилизация — в панели мира. +1 тест.
+  корпус), доктрина состава и стоимость мобилизации; сама мобилизация — в панели мира. +1 тест.
 - **CON-4** ✅ `[proto]` Панель **Герои**: штаб героев **свёрнут** в таб (`heroBodyHtml`:
   способности/дерево/фиттинги, клики роутятся конструктором). Рельс `rail-hero` и окно
   `#hero` **ретайрнуты** — разгрузка игрового HUD (исходная цель фичи).
@@ -667,8 +697,12 @@
 - **SEC-0** ✅ Базовый DevSecOps-пайплайн: SAST (Semgrep) + SCA (pnpm audit + osv-scanner)
   - секреты (Gitleaks) + Trivy fs + SBOM (Syft), ratcheting-гейт. Сейчас живёт в GitHub
     Actions (`security.yml`; мигрирован с GitLab — `docs/security/audit-2026-06-27.md`).
-- **SEC-1** ⏳ Триаж + baseline: разобрать находки, подавить ложные **с обоснованием**
-  (`.semgrepignore` / `.gitleaks.toml` / `.trivyignore`), разобранные сканеры → блокирующие.
+- **SEC-1** ✅ Триаж + baseline: находок — ноль (Gitleaks v8.18.4 локально + pnpm audit +
+  CI-прогоны пиненных образов; единственные подавления — обоснованные base-image CVE в
+  `.trivyignore`). Разобранные сканеры переведены в **блокирующие**: Semgrep (`--error`),
+  Gitleaks, OSV, Trivy fs/image (`--exit-code 1`) — gate-шаг валит джобу при находке ИЛИ
+  сбое скана (fail-secure), артефакты/отчёт собираются всегда. Запись триажа —
+  `docs/security/pipeline.md`.
 - **SEC-2** ⏳ Кастомные Semgrep-правила под инварианты ядра: запрет `Math.random`/
   `Date.now` и Node-built-ins в `shared-core/src` (детерминизм/чистота как security-граница).
 - **SEC-3** ✅ Безопасность самого пайплайна: пин образов сканеров по `sha256`,

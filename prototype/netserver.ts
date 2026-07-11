@@ -68,16 +68,25 @@ let connected = 0; // live players currently connected (drives the running-match
 // Seats with a live human peer. Any seat in the match NOT in here is "empty" and is
 // driven by the server-side AI (mirrors single-player: empty slots are taken by the AI).
 const humans = new Set<string>();
+// BF-17: the AI stand-in must not seize a seat the MOMENT it looks empty. `humans`
+// is in-memory — after a server restart it is empty for everyone, and a mobile
+// network blip drops a live player for seconds — so every "empty" seat gets a grace
+// window (per-seat wall-clock deadline) before the expand-AI starts commanding it.
+// Steward delegation bypasses the grace: handing the seat over was the player's call.
+const AI_GRACE_MS = Number(process.env.AI_GRACE_MS ?? 10 * 60 * 1000);
+const aiEligibleAt = new Map<string, number>();
 const observe = (ev: RoomObservation): void => {
   appendFileSync(logFile, JSON.stringify({ t: Date.now(), ...ev }) + '\n');
   if (ev.kind === 'join') {
     stats.joins++;
     connected++;
     humans.add(ev.playerId);
+    aiEligibleAt.delete(ev.playerId); // the human is back — cancel any pending takeover
   } else if (ev.kind === 'leave') {
     stats.leaves++;
     connected = Math.max(0, connected - 1);
     humans.delete(ev.playerId);
+    aiEligibleAt.set(ev.playerId, Date.now() + AI_GRACE_MS); // reconnect window
   } else if (ev.kind === 'end') stats.end = ev;
   else if (ev.kind === 'action') {
     stats.actions++;
@@ -225,6 +234,14 @@ const room = new MatchRoom({
   ...(GATE ? { gate: new ActionGate({ payloadValidator: isValidActionPayload }) } : {}),
 });
 
+// BF-17: after a (re)start `humans` is empty for EVERY seat — a restarted server
+// must not immediately hand every human's empire to the expand-AI. Seed the same
+// reconnect grace window for all seats; a joining human clears it, a delegated
+// steward bypasses it, and a genuinely empty chair starts playing once it lapses.
+for (const seat of Object.keys(room.state.players)) {
+  aiEligibleAt.set(seat, Date.now() + AI_GRACE_MS);
+}
+
 // Snapshot the world after changes, debounced so a burst of actions is one write.
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saving = false;
@@ -276,6 +293,7 @@ const HEARTBEAT_MS = 1_000;
 const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
 let wakeStalls = 0;
+let driversBusy = false; // re-entrancy guard: one async driver pass at a time
 function armWakeup(): void {
   if (wakeTimer) {
     clearTimeout(wakeTimer);
@@ -293,7 +311,10 @@ function armWakeup(): void {
 // someone is connected — otherwise the board just idles on its schedule. This is what
 // makes "empty multiplayer slots are taken by the AI" true: an unjoined seat plays.
 let aiLastAt = 0; // game-time of the last AI decision tick
-function runServerAI(): void {
+// Drivers submit via room.submitServerAction: on a DURABLE room a raw sync submit
+// would interleave with a commitApply persist await and be silently clobbered
+// (bug-hunt CRIT) — the server entry serializes through the room's actor mailbox.
+async function runServerAI(): Promise<void> {
   if (!room.isStarted || connected === 0) return;
   const now = room.state.time;
   if (now - aiLastAt < 2 * HOUR) return;
@@ -303,8 +324,14 @@ function runServerAI(): void {
     // its owner is connected but asleep; an unclaimed/empty seat gets the full expansion AI.
     const posture = stewardActive(room.state, seat, now);
     if (humans.has(seat) && !posture) continue; // a human is actively commanding this seat
+    // Grace window (BF-17): an empty seat without an explicit delegation waits for
+    // its human to come back (drop / server restart) before the AI takes the wheel.
+    if (!humans.has(seat) && !posture) {
+      const eligibleAt = aiEligibleAt.get(seat);
+      if (eligibleAt !== undefined && Date.now() < eligibleAt) continue;
+    }
     for (const action of aiOrders(room.state, seat, posture ?? 'expand')) {
-      room.submitAction(seat, action);
+      await room.submitServerAction(seat, action);
     }
   }
 }
@@ -314,18 +341,20 @@ function runServerAI(): void {
 // (serverAutoAssaultActions / serverPatrolActions, tested); this just applies them
 // through the authoritative room. A rejected storm is simply skipped (a standing
 // stance has no chain to block); patrol runtime state persists via patrol.stamp.
-function runServerStanding(): void {
+async function runServerStanding(): Promise<void> {
   if (!room.isStarted) return;
   for (const a of serverAutoAssaultActions(room.state)) {
-    for (const act of a.actions) if (!room.submitAction(a.owner, act).ok) break;
+    for (const act of a.actions) if (!(await room.submitServerAction(a.owner, act)).ok) break;
   }
   for (const p of serverPatrolActions(room.state, room.state.time)) {
     if (p.drop) {
-      if (p.owner) room.submitAction(p.owner, orderScramble(p.owner, p.fleetId, false));
+      if (p.owner) await room.submitServerAction(p.owner, orderScramble(p.owner, p.fleetId, false));
       continue;
     }
-    if (p.patch) room.submitAction(p.owner, patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt));
-    for (const act of p.actions) room.submitAction(p.owner, act);
+    if (p.patch) {
+      await room.submitServerAction(p.owner, patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt));
+    }
+    for (const act of p.actions) await room.submitServerAction(p.owner, act);
   }
 }
 
@@ -339,10 +368,19 @@ function onWake(): void {
   // an advance_overflow). A real player action re-arms via `observe`, which resets the
   // counter and gives it a fresh chance.
   const stalled = !progressed && room.msUntilNextEvent() === 0;
-  if (!stalled) {
+  if (!stalled && !driversBusy) {
     wakeStalls = 0;
-    runServerAI(); // drive any empty seat once the clock has moved
-    runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
+    // Async drivers (durable rooms await the mailbox); the busy flag stops a later
+    // heartbeat from double-running them while a slow persist is still in flight.
+    driversBusy = true;
+    void (async () => {
+      try {
+        await runServerAI(); // drive any empty seat once the clock has moved
+        await runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
+      } finally {
+        driversBusy = false;
+      }
+    })();
   }
   scheduleSave(); // persist the advanced world
   if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {

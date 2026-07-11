@@ -1175,3 +1175,111 @@ describe('fleet retreat', () => {
     expect(rej(kernel.applyAction(st, retreat('F'), ctx(0)))).toBe('E_CANNOT_RETREAT');
   });
 });
+
+// Регрессии батча баг-охоты 2026-07-10 (пять MAJOR боёвки).
+describe('combat — bug-hunt batch: assault guards, stalemate, ground chain-engage, pinned bombarder', () => {
+  const kernel = createKernel([...combatFamily, arrivalModule]);
+
+  it('a second assault on a garrison already under a live ground battle is refused', () => {
+    const a1 = fleet('A1', 'p1', 'P', [['fighter', 1]], [['marine', 2]]);
+    const a2 = fleet('A2', 'p1', 'P', [['fighter', 1]], [['marine', 2]]);
+    a1.orbit = 'near';
+    a2.orbit = 'near';
+    const st = baseState([a1, a2], [planet('P', 'p2', 0, 0, [['militia', 5]])]);
+    const first = okApply(kernel.applyAction(st, assault('A1'), ctx(0)));
+    expect(Object.keys(first.state.battles)).toHaveLength(1);
+    // The old code let this through: both battles SHARED the garrison defender ref
+    // (double return fire, stale second capture, garrison overwrite).
+    expect(rej(kernel.applyAction(first.state, assault('A2'), ctx(0)))).toBe('E_UNDER_ASSAULT');
+  });
+
+  it('a hostile fleet PINNED in a battle still contests the orbit (no early landing)', () => {
+    const f2 = fleet('F2', 'p1', 'P', [['fighter', 1]], [['marine', 2]]);
+    f2.orbit = 'near';
+    const st = baseState(
+      [
+        fleet('F1', 'p1', 'P', [['fighter', 3]]),
+        fleet('E', 'p2', 'P', [['shield', 5]]), // sturdy: the orbital fight lasts
+        f2,
+      ],
+      [planet('P', 'p2', 0, 0, [['militia', 1]])],
+    );
+    const engaged = okApply(kernel.applyAction(st, arrive('F1'), ctx(0)));
+    expect(engaged.state.fleets.F1?.battleId).not.toBeNull(); // orbital battle live
+    // GDD §7.4 — two SEQUENTIAL phases: the landing may not start while the orbital
+    // fight is undecided, even though the defender is battleId-locked.
+    expect(rej(kernel.applyAction(engaged.state, assault('F2'), ctx(0)))).toBe(
+      'E_ORBIT_CONTESTED',
+    );
+  });
+
+  it('a zero-damage stalemate releases both fleets and does NOT restart the battle', () => {
+    const st = baseState(
+      [fleet('A', 'p1', 'P', [['shield', 1]]), fleet('B', 'p2', 'P', [['shield', 1]])],
+      [planet('P', null)],
+    );
+    const engaged = okApply(kernel.applyAction(st, arrive('A'), ctx(0)));
+    expect(Object.keys(engaged.state.battles)).toHaveLength(1);
+    // Past the MAX_COMBAT_ROUNDS valve: the battle resolves as a stalemate…
+    const after = okAdvance(kernel.advanceTo(engaged.state, ctx(250 * HOUR)));
+    expect(Object.keys(after.state.battles)).toHaveLength(0);
+    // …and STAYS resolved: the old victor chain-engage restarted the identical
+    // zero-damage battle immediately — an unbounded livelock.
+    const later = okAdvance(kernel.advanceTo(after.state, ctx(300 * HOUR)));
+    expect(Object.keys(later.state.battles)).toHaveLength(0);
+    expect(later.state.fleets.A?.battleId).toBeNull();
+    expect(later.state.fleets.B?.battleId).toBeNull();
+  });
+
+  it('after a won ground assault the attacker chain-engages a relief fleet at the node', () => {
+    const a = fleet('A', 'p1', 'P', [['fighter', 1]], [['marine', 3]]);
+    a.orbit = 'near';
+    const st = baseState(
+      [
+        a,
+        fleet('R', 'p2', 'Q', [['fighter', 1]]), // relief, still en route at assault time
+      ],
+      [planet('P', 'p2', 0, 0, [['militia', 1]])],
+    );
+    const started = okApply(kernel.applyAction(st, assault('A'), ctx(0)));
+    expect(started.state.fleets.A?.battleId).not.toBeNull();
+    // The relief fleet arrives mid-assault — it can't engage (A is battleId-locked).
+    const mid = structuredClone(started.state);
+    mid.fleets.R!.location = 'P';
+    const relief = okApply(kernel.applyAction(mid, arrive('R', 'p2'), ctx(0)));
+    expect(relief.state.fleets.R?.battleId ?? null).toBeNull();
+    // Ground battle resolves at its first tick (militia falls in one round, ~1h) →
+    // the attacker must chain-engage the relief fleet instead of coexisting with it
+    // at the node forever. Peek at 1.5h: capture done, the CHAINED orbital battle is
+    // live (its own first round lands at 2h).
+    const r = okAdvance(kernel.advanceTo(relief.state, ctx(HOUR + HOUR / 2)));
+    expect(r.state.planets.P?.owner).toBe('p1');
+    expect(types(r.events)).toEqual(
+      expect.arrayContaining(['planet.captured', 'battle.resolved', 'battle.started']),
+    );
+    const battles = Object.values(r.state.battles);
+    expect(battles).toHaveLength(1);
+    expect(battles[0]?.phase).toBe('orbital');
+    expect(r.state.fleets.A?.battleId).toBe(battles[0]?.id);
+    expect(r.state.fleets.R?.battleId).toBe(battles[0]?.id);
+  });
+
+  it('a bombarding fleet pinned in a melee stops shelling until released', () => {
+    const bomber = fleet('B', 'p1', 'P', [['fighter', 3]]);
+    bomber.orbit = 'near';
+    bomber.bombarding = true;
+    const st = baseState([bomber, fleet('D', 'p2', 'P', [['shield', 5]])], [planet('P', 'p2')]);
+    // Control: alone, the bombardment accrues.
+    const solo = okAdvance(
+      kernel.advanceTo(baseState([{ ...bomber, units: stacks([['fighter', 3]]) }], [planet('P', 'p2')]), ctx(HOUR)),
+    );
+    expect(solo.events.some((e) => e.type === 'planet.bombarded')).toBe(true);
+    // Pinned: the defender engages the bomber; while battleId is set it must NOT
+    // shell (it is also invisible to AA — shelling from inside a melee made the
+    // defender's relief fleet PROTECT the bombarder).
+    const engaged = okApply(kernel.applyAction(st, arrive('D', 'p2'), ctx(0)));
+    expect(engaged.state.fleets.B?.battleId).not.toBeNull();
+    const r = okAdvance(kernel.advanceTo(engaged.state, ctx(HOUR)));
+    expect(r.events.some((e) => e.type === 'planet.bombarded')).toBe(false);
+  });
+});

@@ -65,6 +65,11 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
     // the reducer (validateLoadout); the schema only bounds well-formedness.
     modules: z.array(id).max(32).optional(),
   }),
+  // construction.ts — cancel an ACTIVE order (refund the unbuilt share, pause it) by
+  // the `scheduled` event's `seq`; resume a paused one (pay the remainder, continue
+  // from the same progress) by its `PausedConstructionSite.id` (= the original `seq`).
+  'construction.cancel': z.object({ planetId: id, seq: z.number().int().nonnegative() }),
+  'construction.resume': z.object({ planetId: id, id: z.number().int().nonnegative() }),
   // technology.ts
   'technology.research': z.object({ technology: id }),
   // espionage.ts — steal a time-boxed intel window; `planetId` only with kind 'planet'
@@ -110,16 +115,22 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'fleet.engage': z.object({ fleetId: id, targetId: id }),
   // capital (hero respawn / re-fit anchor)
   'capital.designate': z.object({ planetId: id }),
-  // ground divisions (formation system)
-  'division.mobilize': z.object({ planetId: id, template: z.number().int().nonnegative() }),
+  // ground divisions (formation system). `officer: true` mobilises a locked officer
+  // premade instead of the player's own template (the ONLY way an officer arrives —
+  // there is no runtime attach action). Renaming touches CUSTOM templates only.
+  'division.mobilize': z.object({
+    planetId: id,
+    template: z.number().int().nonnegative(),
+    officer: z.boolean().optional(),
+  }),
   'division.template': z.object({
     template: z.number().int().nonnegative(),
     slot: z.number().int().nonnegative(),
     unit: z.string().nullable(),
   }),
+  'division.rename': z.object({ template: z.number().int().nonnegative(), name: z.string().min(1) }),
   'division.load': z.object({ divisionId: id, fleetId: id }),
   'division.unload': z.object({ divisionId: id }),
-  'division.officer': z.object({ divisionId: id, officer: z.string().nullable() }),
   // steward («Хранитель») — postures are data-driven; the module gates the value
   'steward.delegate': z.object({ posture: z.string().min(1), until: z.number().finite() }),
   'steward.recall': z.object({}),

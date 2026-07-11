@@ -1,5 +1,15 @@
-import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type StateDelta } from '@void/shared-core';
-import { createActionEnvelope } from '@void/action-layer';
+import { applyDelta, type Action, type DomainEvent, type GameState, type PlayerId, type SignatureContact, type StateDelta } from '@void/shared-core';
+import { createActionEnvelope, type ActionEnvelope } from '@void/action-layer';
+
+// BF-2 (bug-hunt CRIT): the gate's sequence cursor is strict (1,2,3…) and a throttled
+// (`E_RATE_LIMIT`) or out-of-order action does NOT consume its clientSeq — the server
+// expects the SAME seq again. Burning a fresh seq on every send therefore wedged the
+// session forever after one throttle (every later action → E_OUT_OF_ORDER). The client
+// now remembers its recent envelopes and RE-SENDS the same envelope after a backoff.
+const RESEND_DELAY_MS = 400; // one flush per window — spreads a big burst below the rate cap
+const RESEND_BATCH = 10; // envelopes per flush, lowest clientSeq first (chain re-admits in order)
+const RESEND_MAX = 5; // give up after this many attempts and surface the rejection
+const SENT_CAP = 64; // remembered recent envelopes (retry window, not a full history)
 
 export type MultiplayerStatus = 'connecting' | 'open' | 'closed';
 
@@ -19,6 +29,13 @@ export interface MultiplayerSnapshot {
   hash?: string;
   /** Manual-start lobby roster (who's host, who's connected, has it started). */
   lobby?: LobbyRoster;
+  /** Radar-only enemy contacts (fog extras riding beside the fogged state) —
+   *  position + coarse size, no identity. Without these the client cannot draw
+   *  radar blips at all: detected-but-unidentified fleets are physically absent
+   *  from `state.fleets` (BF-18). */
+  signatures?: SignatureContact[];
+  /** Ids of worlds shown from MEMORY (stale last-known view, not live). */
+  remembered?: string[];
 }
 
 export interface LobbyRoster {
@@ -91,7 +108,17 @@ export interface MultiplayerClientHandlers {
    *  will require it (`?ticket=`) on every later join. Fired once, from the welcome
    *  that carries it — persist it; the server keeps only a hash and cannot re-issue. */
   onSeatTicket?(ticket: string): void;
+  /** A delta arrived whose `seq` went BACKWARDS (CP1.4) — our baseline can no longer
+   *  be trusted, so the delta was dropped. The transport's remedy is a reconnect:
+   *  the fresh `welcome` is the full resync. (Forward gaps are legal in this
+   *  protocol — a rejected action bumps the server seq without a broadcast — and
+   *  equal seqs are legal too: lobby flips re-broadcast under the current seq.) */
+  onDesync?(lastSeq: number, gotSeq: number): void;
 }
+
+/** Cap on actions queued while disconnected (CP1.4) — beyond it new actions are
+ *  dropped with `E_OUTBOX_FULL` rather than growing memory without bound. */
+const OUTBOX_MAX = 64;
 
 interface InboundBase {
   type: string;
@@ -115,6 +142,8 @@ interface InboundBase {
   reason?: 'cleared' | 'expired';
   events?: DomainEvent[];
   message?: MultiplayerChatMessage;
+  signatures?: SignatureContact[];
+  remembered?: string[];
 }
 
 function decode(raw: string): InboundBase | null {
@@ -140,6 +169,19 @@ export class MultiplayerClient {
   private sessionId?: string;
   private gated = false;
   private clientSeq = 0;
+  /** Recent gated envelopes by actionId — the resend window for transient rejections. */
+  private readonly sentEnvelopes = new Map<string, ActionEnvelope>();
+  private readonly retryCounts = new Map<string, number>();
+  private readonly resendQueue = new Map<string, ActionEnvelope>();
+  private resendTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Seq of the last applied full frame or delta — desync guard (CP1.4). */
+  private lastSeq: number | null = null;
+  /** Actions issued while disconnected, flushed after the reconnect `welcome` (CP1.4).
+   *  Only never-sent actions are queued, so the flush cannot duplicate an action the
+   *  server already applied (an in-flight send that DID land is visible in the
+   *  welcome state; re-sent envelopes are deduped server-side by receipts anyway). */
+  private readonly outbox: Action[] = [];
+  private queueing = false;
 
   constructor(
     private readonly socket: MultiplayerSocket,
@@ -153,8 +195,19 @@ export class MultiplayerClient {
   }
 
   close(): void {
+    this.clearRetryState();
     this.socket.close();
     this.setStatus('closed');
+  }
+
+  /** The transport lost its socket (CP1.4): flip back to 'connecting' and queue
+   *  outgoing actions until the reconnect `welcome` rebinds the session — the gated
+   *  envelope needs the FRESH sessionId/clientSeq, so flushing any earlier would be
+   *  rejected by the gate. A no-op after a deliberate close(). */
+  connectionLost(): void {
+    if (this.status === 'closed') return;
+    this.queueing = true;
+    this.setStatus('connecting');
   }
 
   /** Submit a player intent. On a GATED room (welcome carried `gated` + a `sessionId`)
@@ -162,6 +215,14 @@ export class MultiplayerClient {
    *  strict `clientSeq`, and deriving the `actionId` the sequence gate keys on — so the
    *  action-layer gate admits it. Otherwise it sends the bare action (un-gated dev room). */
   sendAction(action: Action): void {
+    if (this.queueing) {
+      if (this.outbox.length >= OUTBOX_MAX) {
+        this.handlers.onError?.('E_OUTBOX_FULL');
+        return;
+      }
+      this.outbox.push(action);
+      return;
+    }
     if (this.gated && this.sessionId && this.matchId && this.playerId) {
       const envelope = createActionEnvelope({
         schemaVersion: 1,
@@ -173,10 +234,68 @@ export class MultiplayerClient {
         type: action.type,
         payload: action.payload,
       });
+      // Remember for the transient-rejection resend window (BF-2), bounded FIFO.
+      this.sentEnvelopes.set(envelope.actionId, envelope);
+      while (this.sentEnvelopes.size > SENT_CAP) {
+        const oldest = this.sentEnvelopes.keys().next().value;
+        if (oldest === undefined) break;
+        this.sentEnvelopes.delete(oldest);
+      }
       this.socket.send(JSON.stringify({ type: 'action.v1', envelope }));
       return;
     }
     this.socket.send(JSON.stringify({ type: 'action', action }));
+  }
+
+  /** Transient rejection (throttle / ordering): the server did NOT consume this
+   *  clientSeq — queue the SAME envelope for a backed-off resend. Returns true when
+   *  the rejection was absorbed (a retry is scheduled) so it isn't surfaced yet. */
+  private queueResend(actionId: string): boolean {
+    const envelope = this.sentEnvelopes.get(actionId);
+    if (!envelope || envelope.sessionId !== this.sessionId) return false; // stale session
+    const attempts = (this.retryCounts.get(actionId) ?? 0) + 1;
+    if (attempts > RESEND_MAX) {
+      // Give up: drop the retry state and let the rejection reach the caller.
+      this.retryCounts.delete(actionId);
+      this.sentEnvelopes.delete(actionId);
+      this.resendQueue.delete(actionId);
+      return false;
+    }
+    this.retryCounts.set(actionId, attempts);
+    this.resendQueue.set(actionId, envelope);
+    this.resendTimer ??= setTimeout(() => {
+      this.resendTimer = null;
+      this.flushResend();
+    }, RESEND_DELAY_MS);
+    return true;
+  }
+
+  /** Re-send queued envelopes lowest clientSeq first (the strict cursor re-admits them
+   *  in order), a bounded batch per window so a big burst stays under the rate cap. */
+  private flushResend(): void {
+    const batch = [...this.resendQueue.values()]
+      .sort((a, b) => a.clientSeq - b.clientSeq)
+      .slice(0, RESEND_BATCH);
+    for (const envelope of batch) {
+      this.resendQueue.delete(envelope.actionId);
+      this.socket.send(JSON.stringify({ type: 'action.v1', envelope }));
+    }
+    if (this.resendQueue.size > 0) {
+      this.resendTimer ??= setTimeout(() => {
+        this.resendTimer = null;
+        this.flushResend();
+      }, RESEND_DELAY_MS);
+    }
+  }
+
+  private clearRetryState(): void {
+    if (this.resendTimer !== null) {
+      clearTimeout(this.resendTimer);
+      this.resendTimer = null;
+    }
+    this.sentEnvelopes.clear();
+    this.retryCounts.clear();
+    this.resendQueue.clear();
   }
 
   ping(clientTime: number): void {
@@ -227,12 +346,16 @@ export class MultiplayerClient {
     ) {
       // Full snapshot — resets the local baseline (join / resync).
       this.lastState = message.state;
+      this.lastSeq = message.seq;
       this.matchId = message.matchId;
       this.playerId = message.playerId ?? this.playerId;
       if (message.type === 'welcome') {
         // Bind the session for the gated send path. A reconnect mints a fresh sessionId
         // (server resets its cursor), so a changed id restarts our clientSeq at 0 → 1.
-        if (message.sessionId !== this.sessionId) this.clientSeq = 0;
+        if (message.sessionId !== this.sessionId) {
+          this.clientSeq = 0;
+          this.clearRetryState(); // stale-session envelopes are unauthorizable — drop them
+        }
         this.sessionId = message.sessionId;
         this.gated = message.gated ?? false;
         // Seat lock: a freshly-minted ticket rides the welcome exactly once — surface
@@ -247,7 +370,16 @@ export class MultiplayerClient {
         waiting: message.waiting,
         hash: message.hash,
         lobby: message.lobby,
+        signatures: message.signatures,
+        remembered: message.remembered,
       });
+      // Reconnect resume (CP1.4): the welcome above rebound the session, so actions
+      // queued while offline can flush now — through the normal send path, minting
+      // fresh envelopes under the new sessionId/clientSeq.
+      if (message.type === 'welcome' && this.queueing) {
+        this.queueing = false;
+        for (const queued of this.outbox.splice(0)) this.sendAction(queued);
+      }
       return;
     }
     if (
@@ -257,8 +389,18 @@ export class MultiplayerClient {
       this.lastState &&
       this.matchId
     ) {
+      // Desync guard (CP1.4): deltas chain against OUR last applied view, and within
+      // one connection the server delivers them in order — seq may legally skip
+      // forward (rejections bump it without a broadcast) or repeat (lobby flips),
+      // but it can never go BACKWARDS. If it did, the baseline is untrustworthy:
+      // drop the delta and let the transport resync via reconnect (fresh welcome).
+      if (this.lastSeq !== null && message.seq < this.lastSeq) {
+        this.handlers.onDesync?.(this.lastSeq, message.seq);
+        return;
+      }
       // Incremental update — patch the baseline and surface the new full state.
       this.lastState = applyDelta(this.lastState, message.delta);
+      this.lastSeq = message.seq;
       this.handlers.onSnapshot?.({
         matchId: this.matchId,
         playerId: this.playerId,
@@ -267,6 +409,8 @@ export class MultiplayerClient {
         waiting: message.waiting,
         hash: message.hash,
         lobby: message.lobby,
+        signatures: message.signatures,
+        remembered: message.remembered,
       });
       // Domain events ride the same delta (already fog-filtered server-side); deliver
       // them after the snapshot so consumers resolve ids against the updated state.
@@ -292,6 +436,17 @@ export class MultiplayerClient {
       return;
     }
     if (message.type === 'rejection' && message.actionId && message.code) {
+      // Transient, non-seq-consuming rejections are retried silently (BF-2); the
+      // rejection surfaces only when the retry budget is exhausted. Everything else
+      // consumed its seq — drop it from the resend window and surface as before.
+      if (
+        (message.code === 'E_RATE_LIMIT' || message.code === 'E_OUT_OF_ORDER') &&
+        this.queueResend(message.actionId)
+      ) {
+        return;
+      }
+      this.sentEnvelopes.delete(message.actionId);
+      this.retryCounts.delete(message.actionId);
       this.handlers.onRejection?.(message.actionId, message.code);
       return;
     }

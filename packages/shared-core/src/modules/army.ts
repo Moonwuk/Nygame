@@ -2,7 +2,7 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Fleet } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { findHealthyStack, addUnits, sumUnitStat } from '../util/stacks';
-import { requireOwnedIdleFleet } from '../util/fleet';
+import { garrisonUnderAssault, requireOwnedIdleFleet } from '../util/fleet';
 
 interface TransferPayload {
   fleetId: string;
@@ -68,6 +68,12 @@ export const armyModule: GameModule = {
       const { fleet, planet, def, unit, count } = resolve(action, h);
       if (def.traits.includes('immobile')) {
         return h.reject('E_IMMOBILE'); // fixed emplacements (e.g. orbital AA) can't be lifted
+      }
+      // No mid-assault evacuation: while a battle holds this garrison, lifting it
+      // onto ships would dodge the resolve (defender escapes unbloodied, attacker
+      // wins an empty rock).
+      if (garrisonUnderAssault(h.state, planet.id)) {
+        return h.reject('E_UNDER_ASSAULT');
       }
       const avail = findHealthyStack(planet.garrison, unit);
       if (!avail || avail.count < count) {

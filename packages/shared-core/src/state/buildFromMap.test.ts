@@ -245,6 +245,16 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     expect(() => parseMatchMap(raw)).toThrow();
   });
 
+  it('rejects a player id carrying the offer-key separator ">" too', () => {
+    // `>` splices DIRECTED offer keys (`from>to`) — an id containing it could
+    // misattribute a standing diplomatic offer to the wrong pair.
+    expect(() =>
+      buildStateFromMap(avaMap(), data, {
+        slots: { slot_a: { playerId: 'a>b' }, slot_b: { playerId: 'p2' } },
+      }),
+    ).toThrow(/E_BAD_PLAYER_ID/);
+  });
+
   it('rejects a slot granting an unknown technology (fail-secure at boot)', () => {
     expect(() =>
       buildStateFromMap(avaMap(), data, {

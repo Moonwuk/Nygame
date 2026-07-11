@@ -197,6 +197,19 @@ describe('kernel — manifest & dispatch', () => {
     expect(expectErr(res).code).toBe('E_UNKNOWN_ACTION');
   });
 
+  it('rejects a KNOWN action once the match has ended (terminal gate, BF-34)', () => {
+    const kernel = createKernel([movementModule]);
+    const ongoing = baseState();
+    // Sanity: the same action succeeds while the match runs…
+    expect(
+      kernel.applyAction(ongoing, action('move.computeSpeed', { base: 10 }), ctx()).ok,
+    ).toBe(true);
+    // …but is frozen out once the match is decided.
+    const ended: GameState = { ...ongoing, match: { ...ongoing.match, status: 'ended' } };
+    const res = kernel.applyAction(ended, action('move.computeSpeed', { base: 10 }), ctx());
+    expect(expectErr(res).code).toBe('E_MATCH_ENDED');
+  });
+
   it('throws on duplicate action handlers at build time', () => {
     expect(() => createKernel([movementModule, movementModule])).toThrow(/Duplicate action/);
   });

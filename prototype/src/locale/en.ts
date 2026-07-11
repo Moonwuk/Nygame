@@ -16,6 +16,10 @@ export const en: Record<string, string> = {
   '{n} {r}/день': '{n} {r}/day',
   '{n} {r}/ч': '{n} {r}/h',
   '{n} ФЛОТОВ': '{n} FLEETS',
+  'Осталось: {r}': 'Remaining: {r}',
+  'В очереди — ещё не начато.': 'Queued — not started yet.',
+  'По готовности пополнит гарнизон/флот планеты.': 'Joins the planet\'s garrison/fleet once finished.',
+  '{r}: {now}/ч сейчас → {final}/ч по готовности': '{r}: {now}/h now → {final}/h once finished',
   '{n} героя: главный (имя = твой ник) + по одному грейду. Грейд задаёт число слотов под модули (обычный {c} · редкий {r} · легендарный {l} · главный {m}) + базовая аура (+5% бой флоту). Бери модуль из инвентаря и вставляй в слот. В матче меняется в столице.':
     '{n} heroes: the main hero (name = your callsign) + one per grade. Grade sets the module slot count (common {c} · rare {r} · legendary {l} · main {m}) + a base aura (+5% combat to the fleet). Grab a module from the inventory and drop it in a slot. Re-fit at your capital mid-match.',
   '{n} кораблей': '{n} ships',
@@ -129,6 +133,9 @@ export const en: Record<string, string> = {
   'Канал «{ch}» пуст.': 'Channel "{ch}" is empty.',
   'Класс': 'Class',
   'Коалиция': 'Coalition',
+  'Командный бой: ВКЛ': 'Team battle: ON',
+  'Командный бой: выкл': 'Team battle: off',
+  'одна сторона — союзники': 'one side = allies',
   'Командир': 'Commander',
   'Конвейер верфи': 'Shipyard conveyor',
   'Корпорация': 'Corporation',
@@ -201,6 +208,10 @@ export const en: Record<string, string> = {
     'Splits the wing off into its own fast strike fleet — send it in while the carrier stays put. Needs at least one non-squadron ship left behind. Countered by orbital AA.',
   'Отмена': 'Cancel',
   'Отменить': 'Cancel',
+  'Отменить — вернёт часть ресурсов и поставит на паузу': 'Cancel — refunds part of the cost and pauses it',
+  'Убрать из очереди': 'Remove from the queue',
+  'Приостановлено {n}%': 'Paused {n}%',
+  'Возобновить — доплатить остаток': 'Resume — pay the remainder',
   'Перезапуск — к выбору ботов': 'Restart — back to bot selection',
   'Отметить выбранную провинцию пингом': 'Mark the selected province with a ping',
   'Отметьте провинцию и отправьте — метка станет кликабельной (↪ камера).':
@@ -409,25 +420,16 @@ export const en: Record<string, string> = {
   'Авангард': 'Vanguard',
   'Страж': 'Sentinel',
 
-  // --- ground-division designer (renderTemplates) -------------------------------
-  'Собери 3 шаблона дивизий из 6 слотов. Состав даёт суммарные статы и бонусы; во время боя шаблоны не меняются. Тапни слот, чтобы сменить юнит.':
-    "Build 3 division templates out of 6 slots. Composition sets combined stats and bonuses; templates don't change mid-battle. Tap a slot to cycle its unit.",
-  'Стоимость мобилизации: {cost}': 'Mobilize for: {cost}',
-  'Нет бонусов состава — смешай рода войск.': "No composition bonus — mix unit types.",
   'Пехота': 'Infantry',
   'Танк': 'Tank',
   'Бомбер': 'Bomber',
-  // formation synergies (formationStats, game.ts)
+  // formation doctrines (formationStats, game.ts) — organisational labels, no combat bonus (BF-23)
   'Комбинированные войска': 'Combined arms',
-  '+15% атака и оборона — есть все три рода войск': '+15% attack and defense — you have all three troop types',
+  'Пехота и танки в одном строю': 'Infantry and tanks in one line',
   'Окопались': 'Entrenched',
-  '+25% оборона — чистая пехота': '+25% defense — pure infantry',
+  '≥3 тяжёлой пехоты держат рубеж': '≥3 heavy infantry hold the line',
   'Танковый кулак': 'Armored fist',
-  '+20% атака — ≥3 танков (прорыв)': '+20% attack — ≥3 tanks (breakthrough)',
-  'Авиаподдержка': 'Air support',
-  '+10% атака и удар по структурам — есть бомбардировщик': '+10% attack and structure damage — you have a bomber',
-  'ПВО-зонтик': 'AA umbrella',
-  '+10% оборона и защита от авиации — есть ПВО': '+10% defense and air protection — you have AA',
+  '≥3 танков — ударный клин': '≥3 tanks — a breakthrough wedge',
   // preset division template names (setupTemplates, game.ts)
   'Линия': 'Line',
   'Кулак': 'Fist',
@@ -624,6 +626,8 @@ export const en: Record<string, string> = {
   '⚛ Исследуется: {tech}': '⚛ Researching: {tech}',
   '⚛ изучено: {tech}': '⚛ researched: {tech}',
   '⚡ Коалиция · {n} уч.': '⚡ Coalition · {n} members',
+  '△ Сессия · {n} в матче': '△ Session · {n} in match',
+  'Общий канал матча — вас слышат все участники.': 'The match-wide channel — everyone in the match hears you.',
   '⛬ выберите флот для объединения': '⛬ pick a fleet to merge with',
   '⛬ флоты объединены у {at}': '⛬ fleets merged at {at}',
   '✓ актуально · локально {l} · сервер {r}': '✓ up to date · local {l} · server {r}',
@@ -649,6 +653,19 @@ export const en: Record<string, string> = {
     '🎯 tap an enemy fleet to focus fire · empty space = auto',
   '🏆 ПОБЕДА — {why}': '🏆 VICTORY — {why}',
   '🏆 ПОБЕДА КОАЛИЦИИ ({who}) — {why}': '🏆 COALITION VICTORY ({who}) — {why}',
+  '🏆 ПОБЕДА': '🏆 VICTORY',
+  '🏆 ПОБЕДА КОАЛИЦИИ': '🏆 COALITION VICTORY',
+  '⚖️ НИЧЬЯ': '⚖️ DRAW',
+  '💀 ПОРАЖЕНИЕ': '💀 DEFEAT',
+  'Итоговый счёт': 'Final score',
+  '{p}-е место из {n}': '{p} of {n}',
+  'Флоты': 'Fleets',
+  'Юниты': 'Units',
+  'Длительность': 'Duration',
+  'Смотреть доску': 'View the board',
+  '⟳ Играть ещё': '⟳ Play again',
+  '⟳ Новый матч': '⟳ New match',
+  'В меню': 'Menu',
   '🏗️ {b}: построено на {at}': '🏗️ {b} built at {at}',
   '💀 ПОРАЖЕНИЕ — {why}': '💀 DEFEAT — {why}',
   '💥 {b}: разрушено на {at}': '💥 {b} destroyed at {at}',
@@ -678,8 +695,8 @@ export const en: Record<string, string> = {
   '🛰 орбита': '🛰 orbit',
 
   // --- static markup (build.mjs, data-i18n) -------------------------------------
-  '×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×50.':
-    "×1 — real time (an hour of travel = an hour of life, the world runs offline too). For a quick game pick ×10–×50.",
+  '×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.':
+    "×1 — real time (an hour of travel = an hour of life, the world runs offline too). For a quick game pick ×10–×100.",
   'Аккаунт': 'Account',
   'Активные': 'Active',
   'Альянсы': 'Alliances',
@@ -803,10 +820,9 @@ export const en: Record<string, string> = {
   'Командир обороны': 'Defense Commander',
   'Снабженец': 'Quartermaster',
   'Рейдовая доктрина': 'Raid Doctrine',
-  '+15% атака — ≥2 спецназа без ополчения': '+15% attack — ≥2 special forces, no militia',
+  '≥2 спецназа без ополчения': '≥2 special forces, no militia',
   'Людская волна': 'Human Wave',
-  '+10% оборона — ≥4 ополчения': '+10% defense — ≥4 militia',
-  '+25% оборона — ≥3 тяжёлой пехоты': '+25% defense — ≥3 heavy infantry',
+  '≥4 ополчения — берут числом': '≥4 militia — winning by numbers',
   'Именной шаблон офицера: состав закреплён, редактировать нельзя.':
     "An officer's named template: composition locked, no editing.",
   'Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.':
@@ -948,6 +964,10 @@ export const en: Record<string, string> = {
   'вращающийся луч на карте — только вид, не влияет на обнаружение':
     'the rotating beam on the map — visual only, does not affect detection',
   'Прозрачность радарной развёртки': 'Radar sweep opacity',
+  'Свои метки на карте': 'My map markers',
+  'булавки 📍 ваших пингов — метки союзников видны всегда': "your own 📍 ping pins — allies' markers always show",
+  'вкл': 'on',
+  'выкл': 'off',
   'ГОТОВО': 'DONE',
   '⟳ К выбору ботов': '⟳ Back to setup',
 
@@ -1002,4 +1022,45 @@ export const en: Record<string, string> = {
   'энергии': 'energy',
   'еды': 'food',
   'микроэлектроники': 'microelectronics',
+  // --- hero window / deploy flow (окно героя, развёртывание) --------------------
+  'Способности': 'Abilities',
+  'Дерево скиллов': 'Skill tree',
+  'Активировать': 'Activate',
+  'КД {h}': 'CD {h}',
+  'нет слотов': 'no slots',
+  'нужен пред. узел': 'needs the prior node',
+  'установлен': 'installed',
+  'погиб': 'lost',
+  'в пути': 'in transit',
+  'резерв · {at}': 'reserve · {at}',
+  'перк развёртывания': 'deploy perk',
+  'Развёрнуто {a}/{cap}. Герой действует со своего корабля; резерв разворачивается на своём мире (перки открывают свой флот / мир союзника).':
+    'Deployed {a}/{cap}. A hero acts from its ship; a reserve deploys at its own world (perks unlock own-fleet / ally-world deploys).',
+  '⚓ выберите свой мир{fl}{al} — там поднимется корабль героя':
+    '⚓ pick your world{fl}{al} — the hero\'s ship rises there',
+  ' / свой флот': ' / own fleet',
+  ' / мир союзника': ' / ally\'s world',
+  '✨ выберите мир-цель на карте': '✨ pick a target world on the map',
+  '✖ каст отменён': '✖ cast cancelled',
+  '✖ развёртывание отменено': '✖ deploy cancelled',
+  'Цель…': 'Target…',
+  // --- division / formation builder (конструктор дивизий) ----------------------
+  'Итог по формации': 'Formation summary',
+  'Доктрина состава': 'Composition doctrine',
+  'Стоимость мобилизации': 'Mobilization cost',
+  'Нет шаблонов.': 'No templates.',
+  'Смешай рода войск — состав задаёт доктрину.': 'Mix troop types — the composition sets a doctrine.',
+  '{n}/{s} юнитов · тапни слот, чтобы менять род войск':
+    '{n}/{s} units · tap a slot to change the troop type',
+  'Тап по слоту: пусто → пехота → танк. Мобилизация дивизии — в панели своего мира (вкладка «Дивизии»).':
+    'Tap a slot: empty → infantry → tank. Mobilize the division in your world\'s panel (the «Divisions» tab).',
+  'Фиттинги · {u}/{n}': 'Fittings · {u}/{n}',
+  // --- build ETA / misc --------------------------------------------------------
+  'Стройка': 'Building',
+  'изучено': 'researched',
+  'Ещё раз «Назад» — выход из матча': 'Press Back again to leave the match',
+  // --- static H4 headers / steward toggle (build.mjs [data-i18n]) --------------
+  'КОНСТРУКТОР ДИВИЗИЙ': 'DIVISION BUILDER',
+  'ХРАНИТЕЛЬ · ИИ НА СОН': 'STEWARD · AI WHILE ASLEEP',
+  'Хранитель — передать ИИ на сон': 'Steward — hand to the AI while asleep',
 };

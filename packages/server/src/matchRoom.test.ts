@@ -778,3 +778,109 @@ describe('MatchRoom — backpressure (drop a peer that stops draining)', () => {
     expect(sent).toBe(0); // nothing queued onto the stuck peer
   });
 });
+
+// BF-15/BF-16: event fog. Personal and bilateral events (research, steward,
+// diplomacy, market, elimination) must reach their named participants; hero
+// events must stay owner-only even when an enemy identifies the node.
+describe('MatchRoom — event fog (personal/bilateral audiences, hero privacy)', () => {
+  const fogEventsModule: GameModule = {
+    id: 'fog-events-test',
+    version: '1.0.0',
+    setup(api) {
+      api.onAction('test.personal', (action, h) => {
+        h.emit('technology.researched', { playerId: action.playerId, technology: 'lasers' });
+      });
+      api.onAction('test.bilateral', (action, h) => {
+        const { to } = action.payload as { to: string };
+        h.emit('diplomacy.offered', { from: action.playerId, to, stance: 'peace' });
+      });
+      api.onAction('test.hero', (action, h) => {
+        const { at } = action.payload as { at: string };
+        h.emit('hero.spawned', { owner: action.playerId, heroId: 'h1', fleetId: 'f1', at });
+      });
+    },
+  };
+
+  function fogState(): GameState {
+    const base = testState();
+    return {
+      ...base,
+      players: {
+        ...base.players,
+        p3: player('p3', 'Three'),
+      },
+      // p2 owns node1 → p2 identifies it (fog coverage floods from own worlds).
+      planets: {
+        node1: {
+          id: 'node1',
+          owner: 'p2',
+          position: { x: 0, y: 0 },
+          resources: {},
+          buildings: [],
+          garrison: [],
+          traits: [],
+        },
+      },
+    };
+  }
+
+  function fogRoom(): { r: MatchRoom; p1: MemoryPeer; p2: MemoryPeer; p3: MemoryPeer } {
+    const r = new MatchRoom({
+      id: 'fog-room',
+      initialState: fogState(),
+      kernel: createKernel([fogEventsModule]),
+      data: testData(),
+      now: () => 10,
+    });
+    const p1 = new MemoryPeer();
+    const p2 = new MemoryPeer();
+    const p3 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    r.addPeer('p2', p2);
+    r.addPeer('p3', p3);
+    return { r, p1, p2, p3 };
+  }
+
+  function lastEvents(peer: MemoryPeer): string[] {
+    const last = peer.messages.at(-1) as { type: string; events?: { type: string }[] };
+    expect(last.type).toBe('delta');
+    return (last.events ?? []).map((e) => e.type);
+  }
+
+  it('a personal event (payload.playerId) reaches its subject and nobody else', () => {
+    const { r, p1, p2, p3 } = fogRoom();
+    r.submitAction(
+      'p1',
+      { id: 'e1', type: 'test.personal', playerId: 'p1', issuedAt: 1, payload: {} },
+      p1,
+    );
+    expect(lastEvents(p1)).toContain('technology.researched');
+    expect(lastEvents(p2)).not.toContain('technology.researched');
+    expect(lastEvents(p3)).not.toContain('technology.researched');
+  });
+
+  it('a bilateral event (from/to) reaches both participants but not a third party', () => {
+    const { r, p1, p2, p3 } = fogRoom();
+    r.submitAction(
+      'p1',
+      { id: 'e2', type: 'test.bilateral', playerId: 'p1', issuedAt: 1, payload: { to: 'p2' } },
+      p1,
+    );
+    expect(lastEvents(p1)).toContain('diplomacy.offered');
+    expect(lastEvents(p2)).toContain('diplomacy.offered');
+    expect(lastEvents(p3)).not.toContain('diplomacy.offered');
+  });
+
+  it('a hero event is owner-only: an identified node must NOT reveal it to an enemy', () => {
+    const { r, p1, p2, p3 } = fogRoom();
+    // p1 spawns a hero at node1 — a node p2 identifies (p2 owns it).
+    r.submitAction(
+      'p1',
+      { id: 'e3', type: 'test.hero', playerId: 'p1', issuedAt: 1, payload: { at: 'node1' } },
+      p1,
+    );
+    expect(lastEvents(p1)).toContain('hero.spawned');
+    expect(lastEvents(p2)).not.toContain('hero.spawned'); // the leak BF-16 plugged
+    expect(lastEvents(p3)).not.toContain('hero.spawned');
+  });
+});

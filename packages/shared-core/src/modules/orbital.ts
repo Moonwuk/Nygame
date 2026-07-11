@@ -139,10 +139,16 @@ function runOrbital(h: HandlerContext, from: number, to: number, hours: number):
       }
     }
     // Bombardment — each hostile bombarding fleet shells the structures below.
+    // A fleet PINNED in a melee (battleId) does not shell: it is busy fighting —
+    // and it is invisible to AA (`nearOrbitHostile` skips battleId fleets), so
+    // letting it bombard made a defender's relief fleet PROTECT the bombarder
+    // while the shelling continued (bug-hunt MAJOR). Resume = re-issue after the
+    // battle (finishBattle resets `bombarding` on release).
     if (localFleets) {
       for (const f of localFleets) {
         if (
           f.bombarding &&
+          !f.battleId &&
           f.orbit === 'near' &&
           planet.owner !== null &&
           isHostile(h, f.owner, planet.owner)

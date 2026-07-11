@@ -40,6 +40,7 @@ export {
   clipHalfPlane,
   clipHalfPlaneTagged,
   computePowerCells,
+  computePowerCell,
   drawTerritory,
   type TerritorySeed,
   type TerritoryCell,

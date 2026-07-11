@@ -99,6 +99,15 @@ describe('session market — two-sided order book', () => {
     expect(order(s, marketTake('p1', marketLots(s)[0]!.id), s.time).error).toBe('E_OWN_LOT');
   });
 
+  it('rejects a numeric-STRING amount/price on the ungated path (typeof, not coercion)', () => {
+    const s = rich();
+    // '10' >= 0 and Math.floor('10') both coerce — the handler must typeof-check first.
+    const strPrice = marketList('p1', 'sell', 'metal', 10, '3' as unknown as number);
+    const strAmount = marketList('p1', 'sell', 'metal', '10' as unknown as number, 3);
+    expect(order(s, strPrice, 0).error).toBe('E_BAD_PAYLOAD');
+    expect(order(s, strAmount, 0).error).toBe('E_BAD_PAYLOAD');
+  });
+
   it('a bot lists its surplus goods for sale (and the embargo blocks a soured buyer)', () => {
     let s = newGame(); // p2 = AI
     // The building economy taught the bot a working RESERVE (120 food) — its seeded

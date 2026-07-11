@@ -179,7 +179,8 @@ function world(): GameState {
       C: planet('C', 'p2', 400, 0, [], 'planet'),
       F: planet('F', 'p2', 700, 0, [], 'planet'),
     },
-    heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'A', cooldowns: {} } },
+    // Deployed (BF-24): an undeployed reserve can no longer act from the bench.
+    heroes: { 'hero:p1': { id: 'hero:p1', owner: 'p1', location: 'A', cooldowns: {}, alive: true } },
   };
 }
 
@@ -994,7 +995,7 @@ describe('hero — data-driven passives (HERO-5)', () => {
           D: { id: 'D', owner: 'p2', location: 'P', movement: null, traits: [], units: [{ unit: 'warship', count: 1 }] },
         },
         heroes: {
-          'hero:p1': { id: 'hero:p1', owner: 'p1', location: heroAt, cooldowns: {}, passives: ['warcry'] },
+          'hero:p1': { id: 'hero:p1', owner: 'p1', location: heroAt, cooldowns: {}, passives: ['warcry'], alive: true },
         },
       };
     };
@@ -1014,6 +1015,13 @@ describe('hero — data-driven passives (HERO-5)', () => {
     const far = round(base('X'));
     expect(far.dmgToDefender).toBe(20);
     expect(far.dmgToAttacker).toBe(20);
+    // BF-24: the SAME hero as an undeployed reserve (alive undefined) radiates
+    // nothing, even in radius — no invulnerable bench buffer.
+    const benched = base('H');
+    delete benched.heroes!['hero:p1']!.alive;
+    const res = round(benched);
+    expect(res.dmgToDefender).toBe(20);
+    expect(res.dmgToAttacker).toBe(20);
   });
 });
 
@@ -1102,5 +1110,23 @@ describe('hero — death and respawn', () => {
     const heroFleet = Object.values(reborn.state.fleets).find((f) => f.owner === 'p1' && heroUnit(f));
     expect(heroFleet?.location).toBe('ZED');
     expect(heroOf(reborn.state, 'p1')?.location).toBe('ZED');
+  });
+});
+
+// BF-13: `heroOf` used to take the player's first hero in INSERTION order — a
+// JSONB round-trip re-orders keys, so after a hibernation the same action could
+// land on a DIFFERENT hero than in the replay. The pick is now sorted-id stable.
+describe('hero — heroOf picks by sorted instance id, not insertion order (BF-13)', () => {
+  it('moves the alphabetically-first hero even when keys were inserted in reverse', () => {
+    const kernel = createKernel([heroModule]);
+    const st = world();
+    // Re-insert two shipless heroes in REVERSE id order (simulates a store re-order).
+    st.heroes = {
+      'hero:p1:2': { id: 'hero:p1:2', owner: 'p1', location: 'A', cooldowns: {}, alive: true },
+      'hero:p1:1': { id: 'hero:p1:1', owner: 'p1', location: 'A', cooldowns: {}, alive: true },
+    };
+    const r = okApply(kernel.applyAction(st, act('hero.move', 'p1', { to: 'B' }), ctx(0)));
+    expect(r.state.heroes!['hero:p1:1']!.location).toBe('B'); // sorted-first moved
+    expect(r.state.heroes!['hero:p1:2']!.location).toBe('A'); // the other untouched
   });
 });

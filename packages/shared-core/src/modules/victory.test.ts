@@ -136,6 +136,33 @@ describe('victory module', () => {
     });
   });
 
+  it('a dead-equal share at a ≤50% threshold crowns nobody; a strict leader wins', () => {
+    const kernel = createKernel([victoryModule]);
+    const config = { timeScale: 1, victory: { dominationPercent: 0.5, scoreLimit: 0 } };
+    // 50/50: both qualify, neither leads — the match keeps running (no alphabetical
+    // coronation of p1).
+    const tied: GameState = {
+      ...baseState(),
+      planets: { A: planet('A', 'p1'), B: planet('B', 'p2') },
+    };
+    const r1 = okAdvance(kernel.advanceTo(tied, ctx(HOUR, config)));
+    expect(r1.state.match.status).toBe('ongoing');
+    // 3/5 vs 2/5 (with the threshold at 0.4 BOTH qualify): the strict leader wins.
+    const led: GameState = {
+      ...baseState(),
+      planets: {
+        A: planet('A', 'p2'),
+        B: planet('B', 'p2'),
+        C: planet('C', 'p2'),
+        D: planet('D', 'p1'),
+        E: planet('E', 'p1'),
+      },
+    };
+    const cfg2 = { timeScale: 1, victory: { dominationPercent: 0.4, scoreLimit: 0 } };
+    const r2 = okAdvance(kernel.advanceTo(led, ctx(HOUR, cfg2)));
+    expect(r2.state.match).toMatchObject({ status: 'ended', winner: 'p2', reason: 'domination' });
+  });
+
   it('domination counts only CAPTURABLE provinces (void is ignored in the share)', () => {
     const kernel = createKernel([victoryModule]);
     const voids: Record<string, Planet> = {};
@@ -270,6 +297,36 @@ describe('victory module', () => {
       type: 'match.ended',
       payload: expect.objectContaining({ winners: ['p1', 'p2'] }),
     });
+  });
+
+  it('a coalition is a CLIQUE, not a chain: A–B, B–C with A–C at war do not win together', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: { p1: player('p1'), p2: player('p2'), p3: player('p3') },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }), // 50
+        B: planet('B', 'p2', { kind: 'planet' }), // 50
+        C: planet('C', 'p3', { kind: 'planet' }), // 50
+        D: planet('D', null, { kind: 'planet' }),
+        E: planet('E', null, { kind: 'planet' }),
+      },
+    };
+    setStance(state, 'p1', 'p2', 'alliance');
+    setStance(state, 'p2', 'p3', 'alliance');
+    setStance(state, 'p1', 'p3', 'war'); // p1 and p3 are NOT allies — belligerents
+
+    // The chain {p1,p2,p3}=150 would clear a 3-way threshold (100×3×0.5=150), but they
+    // are not a clique. The valid cliques are {p1,p2}=100 and {p2,p3}=100, each below
+    // the 2-way threshold 100×2×0.5=100? — exactly 100 ≥ 100, so a 2-clique CAN win;
+    // pick a factor that leaves the pairs short to prove the trio never sums.
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 100, coalitionFactor: 0.7 } })),
+    );
+
+    // 2-way threshold = 140; every clique (pairs at 100, singletons at 100-solo) is short.
+    expect(r.state.match.status).toBe('ongoing');
+    expect(r.state.match.winners).toBeUndefined();
   });
 
   it('the coalition threshold REPLACES the solo one for members', () => {

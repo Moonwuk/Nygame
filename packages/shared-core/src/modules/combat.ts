@@ -184,8 +184,23 @@ function assaultPlanet(h: HandlerContext, fleet: Fleet): string | null {
   if (planet.owner !== null && !isHostile(h, fleet.owner, planet.owner)) {
     return 'E_FORBIDDEN'; // an ally's world
   }
-  if (findEnemyFleetAt(h, at, fleet.owner, fleet.id)) {
-    return 'E_ORBIT_CONTESTED'; // beat the defending fleet first
+  // One ground battle per garrison: two concurrent assaults would SHARE the same
+  // garrison defender ref — double return fire, a stale second capture, and the
+  // second deposit overwriting the first winner's garrison (bug-hunt MAJOR).
+  for (const id of Object.keys(h.state.battles).sort()) {
+    const b = h.state.battles[id];
+    if (b && b.phase === 'ground' && b.location === at) return 'E_UNDER_ASSAULT';
+  }
+  // Contested orbit blocks the landing while ANY hostile fleet holds the node —
+  // including one locked in a battle. `findEnemyFleetAt` skips battleId fleets (it
+  // looks for a fleet TO engage), which let a second attacker start the ground phase
+  // while the orbital fight was still undecided — GDD §7.4 is two SEQUENTIAL phases.
+  for (const id of Object.keys(h.state.fleets)) {
+    const f = h.state.fleets[id];
+    if (!f || f.id === fleet.id || f.location !== at) continue;
+    if (f.units.some((s) => s.count > 0) && isHostile(h, fleet.owner, f.owner)) {
+      return 'E_ORBIT_CONTESTED'; // beat the defending fleet first
+    }
   }
   const defended = (planet.garrison ?? []).some((s) => s.count > 0);
   if (defended) {
@@ -290,9 +305,14 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
   // Ground capture must happen BEFORE releaseOrDestroyFleet — a fleet whose
   // ships were lost but whose landing troops won the assault would otherwise be
   // deleted (units.length === 0) before capturePlanet can deposit them as the
-  // new garrison.
+  // new garrison. Re-validate against the CURRENT owner: if the world changed hands
+  // mid-battle (a concurrent capture path), a stale-owner capture must not fire and
+  // must not overwrite the fresh owner's garrison.
   if (battle.phase === 'ground' && aAlive && !dAlive && battle.attacker.ref.kind === 'landing') {
-    capturePlanet(h, battle.location, battle.attacker.ref.fleetId, battle.defender.owner, true);
+    const planet = h.state.planets[battle.location];
+    if (planet && planet.owner === battle.defender.owner) {
+      capturePlanet(h, battle.location, battle.attacker.ref.fleetId, planet.owner, true);
+    }
   }
 
   releaseOrDestroyFleet(h, battle.attacker.ref);
@@ -305,6 +325,12 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
     winner,
     rounds: battle.round,
   });
+
+  // A STALEMATE (the MAX_COMBAT_ROUNDS valve) must NOT chain-engage: both sides are
+  // alive, so the "victor" re-engage would restart the identical zero-damage battle
+  // immediately — an unbounded battle/release livelock (bug-hunt MAJOR). The pair
+  // coexists released; any later arrival/action may engage them afresh.
+  if (stalemate) return;
 
   if (battle.phase === 'orbital') {
     // Whichever fleet SURVIVED holds the node — not just the attacker. The victor
@@ -331,6 +357,17 @@ function finishBattle(h: HandlerContext, battle: Battle, stalemate = false): voi
           engageFleets(h, victorId, battle.location);
         }
       }
+    }
+  }
+
+  if (battle.phase === 'ground' && battle.attacker.ref.kind !== 'garrison') {
+    // Mirror the orbital victor rule for the GROUND finish: a relief fleet arriving
+    // mid-assault could not engage (the assault fleet was battleId-locked), and
+    // nothing re-engaged after resolution — hostile fleets coexisted at the node
+    // forever (bug-hunt MAJOR). engageFleets no-ops unless both sides are live.
+    const f = h.state.fleets[battle.attacker.ref.fleetId];
+    if (f && !f.battleId && f.location !== null) {
+      engageFleets(h, f.id, battle.location);
     }
   }
 }

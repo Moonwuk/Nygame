@@ -108,9 +108,15 @@ const SPAWN_FLEET_TYPE = 'spawn_fleet';
 const SPAWN_ALLIED_TYPE = 'spawn_allied';
 
 function heroOf(state: GameState, playerId: PlayerId): Hero | undefined {
-  // Instance-keyed roster: find the player's hero by owner. (One per player today;
-  // the find is order-stable on insertion order, deterministic.)
-  return Object.values(state.heroes ?? {}).find((hero) => hero.owner === playerId);
+  // Instance-keyed roster: the player's FIRST hero by SORTED instance id (BF-13).
+  // Insertion order is not durable — a JSONB round-trip (hibernation) re-orders
+  // object keys, and with several heroes per player an insertion-order find would
+  // pick a DIFFERENT hero after a restart than in the replay.
+  const heroes = state.heroes ?? {};
+  for (const id of Object.keys(heroes).sort()) {
+    if (heroes[id]!.owner === playerId) return heroes[id];
+  }
+  return undefined;
 }
 
 /** The hero commanding this fleet (its ship), if any. Insertion-order stable. The
@@ -211,8 +217,12 @@ function passiveBonus(
 ): number {
   if (h.state.heroes === undefined) return 0; // hero-less match: keep the hot hooks free
   let total = 0;
-  for (const hero of Object.values(h.state.heroes)) {
-    if (hero.owner !== owner || hero.alive === false) continue;
+  // Sorted (BF-13): float summation order must not follow JSONB key order.
+  for (const id of Object.keys(h.state.heroes).sort()) {
+    const hero = h.state.heroes[id]!;
+    // DEPLOYED heroes only — a reserve hero (alive undefined) must not radiate
+    // passives from the bench (bughunt BF-24).
+    if (hero.owner !== owner || hero.alive !== true) continue;
     for (const id of hero.passives ?? []) {
       const def = h.ctx.data.heroPassives[id];
       if (!def || def.hook !== hook) continue;
@@ -426,7 +436,8 @@ export const heroModule: GameModule = {
       if (typeof to !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
       const from = heroNode(h.state, hero); // acts from its ship's node when deployed
       if (to === from) return h.reject('E_SAME_LOCATION');
       const a = h.state.planets[from];
@@ -468,7 +479,8 @@ export const heroModule: GameModule = {
       if (typeof planetId !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD'); // a dead hero can't act
+      if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
       const planet = h.state.planets[planetId];
       if (!planet) return h.reject('E_NO_PLANET');
       if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
@@ -504,6 +516,10 @@ export const heroModule: GameModule = {
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
       if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      // DEPLOYED only (`alive` is stamped by deploy): a reserve hero (never deployed,
+      // `alive` undefined) must not cast from the bench — it would be an invulnerable
+      // caster outside HERO_ACTIVE_CAP (bughunt BF-24).
+      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED');
       const def = h.ctx.data.heroAbilities[abilityId];
       if (!def) return h.reject('E_NO_ABILITY');
       // The hero must actually carry the ability in a slot (its data-driven loadout).
@@ -668,7 +684,11 @@ export const heroModule: GameModule = {
       const hero = h.state.heroes?.[heroId];
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
-      // Already commanding a live ship. A stale fleetId (ship gone) doesn't block.
+      // Already commanding a live ship. `alive` is stamped by deploy and cleared ONLY
+      // by death (unit.died / fleet.destroyed) — check the flag, not just a live
+      // fleetId: a host may delete/rename the carrier without a death (fleet.merge),
+      // and a stale fleetId must not re-mint a second free flagship (BF-3 dupe).
+      if (hero.alive === true) return h.reject('E_HERO_ALIVE');
       if (hero.fleetId !== undefined && h.state.fleets[hero.fleetId] !== undefined) {
         return h.reject('E_HERO_ALIVE');
       }

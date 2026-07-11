@@ -1,19 +1,31 @@
-# Trivy ignore list — base-OS CVEs in the node:22-slim (Debian bookworm) base image
-# that have NO fix available AND no runtime path in our Node-only proto server
-# (the container runs `node prototype/netserver.mjs` — no perl, no terminal UI, etc.).
-# Each is an accepted, documented risk; re-review whenever the base image is bumped.
-# Ties to audit SD-5.1 (minimal image) / F-15 (base-image hygiene). The fixable image
-# CVEs (corepack/pnpm cache, global npm) are removed in the Dockerfile, not ignored.
+# Trivy ignore list — base-OS CVEs in the RUNTIME image base
+# gcr.io/distroless/nodejs22-debian13:nonroot (Debian 13 "trixie"), i.e. what
+# `trivy image` actually scans (the node:26-slim build stage is not shipped).
+# Every entry: NO fixed version available in trixie AND no runtime path in our
+# Node-only proto server (distroless: no shell, no perl, nothing but node + libs).
+# Each is an accepted, documented risk; re-review whenever the base image digest
+# is bumped (SEC-1 baseline discipline; ties to audit SD-5.1 / F-15).
+#
+# Reviewed 2026-07-10 (SEC-1): previous entries (bookworm perl/ncurses/zlib-minizip
+# from the old node:22-slim single-stage image) no longer apply to the distroless
+# runtime and were removed after the trivy-image scan came back to life (the
+# corepack build break had silently disabled it — caught by the SEC-1 gate).
 
-# zlib1g: the vulnerable minizip code is NOT built by Debian → not applicable.
-CVE-2023-45853
+# libc6 2.41-12+deb13u3 — MEDIUM, no fixed version published for trixie yet.
+CVE-2026-5435
+CVE-2026-5450
+CVE-2026-5928
+CVE-2026-6238
 
-# ncurses / libtinfo6: no fixed version; terminal library is unused by the server.
-CVE-2025-69720
+# libc6 — ancient LOW, disputed/won't-fix upstream (Debian marks them minor/unimportant),
+# no fixed version; carried by every glibc-based image.
+CVE-2010-4756
+CVE-2018-20796
+CVE-2019-1010022
+CVE-2019-1010023
+CVE-2019-1010024
+CVE-2019-1010025
+CVE-2019-9192
 
-# perl-base: perl is never invoked at runtime; no fixed version published.
-CVE-2026-42496
-CVE-2026-8376
-CVE-2026-42497
-CVE-2026-48962
-CVE-2026-9538
+# zlib1g 1:1.3.dfsg+really1.3.1-1+b1 — MEDIUM, no fixed version for trixie.
+CVE-2026-27171

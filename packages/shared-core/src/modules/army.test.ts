@@ -234,3 +234,33 @@ describe('army module — unloading and validation', () => {
     expect(st.fleets.F?.landing).toEqual([]);
   });
 });
+
+// BF-27: while a live battle references a world's garrison, that garrison is
+// locked in — loading it onto ships mid-assault would dodge the resolve (the
+// defender escapes unbloodied; the attacker wins an empty rock).
+describe('army module — no mid-assault evacuation (BF-27)', () => {
+  it('rejects army.load while a battle holds the garrison', () => {
+    const kernel = createKernel([armyModule]);
+    const st = base();
+    st.battles['battle:1'] = {
+      id: 'battle:1',
+      location: 'A',
+      phase: 'ground',
+      attacker: { ref: { kind: 'landing', fleetId: 'X' }, owner: 'p2' },
+      defender: { ref: { kind: 'garrison', planetId: 'A' }, owner: 'p1' },
+      round: 1,
+    };
+    expect(errCode(kernel.applyAction(st, load('F', 'militia', 1), ctx))).toBe('E_UNDER_ASSAULT');
+    // A battle at ANOTHER world locks nothing here.
+    const other = base();
+    other.battles['battle:2'] = {
+      id: 'battle:2',
+      location: 'B',
+      phase: 'ground',
+      attacker: { ref: { kind: 'landing', fleetId: 'X' }, owner: 'p2' },
+      defender: { ref: { kind: 'garrison', planetId: 'B' }, owner: 'p1' },
+      round: 1,
+    };
+    okApply(kernel.applyAction(other, load('F', 'militia', 1), ctx));
+  });
+});

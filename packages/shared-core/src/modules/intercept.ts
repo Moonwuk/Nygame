@@ -19,7 +19,9 @@ function scanLaneIntercepts(h: HandlerContext, fleetId: string): void {
     return; // not on a lane (at a node / gone)
   }
   const now = h.ctx.now;
-  for (const id of Object.keys(h.state.fleets)) {
+  // Sorted (BF-13): each hit schedules an event, and the schedule's (at, seq)
+  // tiebreak follows CALL order — key order must not depend on the JSONB store.
+  for (const id of Object.keys(h.state.fleets).sort()) {
     if (id === fleetId) {
       continue;
     }

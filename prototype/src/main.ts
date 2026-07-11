@@ -35,6 +35,8 @@ import {
   buildBuilding,
   upgradeBuilding,
   buildUnit,
+  cancelConstruction,
+  resumeConstruction,
   aiOrders,
   declareWar,
   netIncome,
@@ -58,7 +60,6 @@ import {
   setDivisionTemplate,
   loadDivision,
   unloadDivision,
-  setDivisionOfficer,
   designateCapital,
   capitalOf,
   isInhabited,
@@ -113,6 +114,8 @@ import {
   pairHas,
   hashState,
   planRoute,
+  thresholdRamp,
+  type PausedConstructionSite,
 } from '../../packages/shared-core/src/index';
 import { MultiplayerClient, type MultiplayerPing, type MultiplayerChatMessage, createBattleModel, type BattleSideView } from '../../packages/client/src/index';
 import {
@@ -122,7 +125,7 @@ import {
   centerOn as camCenterOn,
 } from '../../packages/client/src/camera';
 import { rgba, blitGlow as hdBlitGlow, blitSphere as hdBlitSphere } from '../../packages/client/src/holoDraw';
-import { drawTerritory } from '../../packages/client/src/territory';
+import { drawTerritory, computePowerCell, type TerritorySeed } from '../../packages/client/src/territory';
 import {
   buildLabel,
   checkForUpdateDetailed,
@@ -321,6 +324,11 @@ const ORBIT_COLOR = '#7df0d0'; // the single orbit ring (GDD §7.4 — no near/f
 let s: GameState = newGame();
 let speed = 1 / 3600; // game-hours per real second (0 = paused); ×1 = wall-clock, overwritten at launch
 let banner: string | null = null;
+// Terminal end screen (the match-over overlay): outcome + reason + XP award, filled
+// once by checkEnd from the authoritative `match` state. `dismissed` lets the player
+// hide it to look at the final board (the match stays frozen). Reset on a fresh match
+// / reconnect so a new game never opens straight into the old result.
+let endScreen: { won: boolean; draw: boolean; why: string; xp: number; levelUp: number | null; dismissed: boolean } | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
@@ -481,18 +489,31 @@ const siegeShots: Array<{
   seed: number; // stable per-volley variation (spark angles, shell jitter)
 }> = [];
 let siegeSeed = 0;
+// Capture flashes: a province that changed hands lights up in its NEW owner's colour —
+// a wave sweeps across its cell and the frontier ignites, fading over ~1.5s, so a
+// silent capture (previously only a toast) reads on the map at a glance. Fog-gated at
+// push time (a hidden flip never flashes). Keyed by node so a re-capture restarts it.
+const captureFlashes = new Map<string, { owner: string; at: number }>();
 // Casualties per contested location (owner → unit → count), accumulated from
 // unit.died while a battle runs and paid out as a result note on battle.resolved.
 const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 // Single-player setup screen state: per-seat role (seat 0 is always you) + your
 // chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
 let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
+// Team battle (2v2 etc.): when on, seats fight in sides — same side ALLIED (win
+// together, no friendly fire), across sides at WAR from the first hour. Seat 0 (you)
+// is always side A; the default when enabling pairs you with seat 1 vs seats 2-3.
+// Off ⇒ classic free-for-all. See newGame's team-aware diplomacy seeding.
+let setupTeams = false;
+let setupSeatTeam: Array<'A' | 'B'> = ['A', 'A', 'B', 'B'];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
 let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
 let setupFaction = 'blue'; // H3: the house the HUMAN plays; AI seats take the remaining ones
-// Chosen time-flow multiplier for the launched match (×1/×2/×5/×10). ×1 = today's
-// normal play pace; the launch maps it onto the speedbar (applyTimeSpeed).
-const SETUP_SPEEDS = [1, 2, 5, 10, 50];
+// Chosen time-flow multiplier for the launched match (×1/×2/×5/×10/×50/×100). ×1 = today's
+// normal play pace; the launch maps it onto the speedbar (applyTimeSpeed). ×100 is a
+// single-player-only sandbox pace — in net mode the server owns the clock, so this list
+// (and the in-match pace chips) only ever affect the local sim (see `frame()`'s `!NET` guard).
+const SETUP_SPEEDS = [1, 2, 5, 10, 50, 100];
 let setupSpeed = 10;
 let lastPanelHtml = '';
 let lastCmdHtml = '';
@@ -644,12 +665,28 @@ function setSweepOpacity(v: number): void {
     /* private-mode / storage-full: keep the in-memory value, just don't persist */
   }
 }
+// Player display preference (client-only, localStorage): show YOUR OWN ping markers
+// on the map. Purely visual — the ping itself (chat line, allies' view, the server
+// relay) is untouched; allies' pins are always drawn. Default on.
+let showOwnPings = typeof localStorage === 'undefined' || localStorage.getItem('void.showOwnPings') !== '0';
+function setShowOwnPings(v: boolean): void {
+  showOwnPings = v;
+  try {
+    localStorage.setItem('void.showOwnPings', v ? '1' : '0');
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
 /** Radar contacts as PAINTED BY THE SWEEP: a signature is refreshed only as the arm
  *  crosses it, then lingers at that last-swept spot (a dim ghost) until the next
  *  pass repaints it — so radar gives periodic snapshots, never a live feed. */
 const radarMemory = new Map<string, { node: string; size: 'S' | 'M' | 'L'; at: number }>();
+/** NET radar picture (BF-18): the server's per-frame contact list. In a network
+ *  match the fogged state carries NO radar-only enemy fleets, so the sweep paints
+ *  these server-sent contacts instead of scanning `s.fleets`. */
+let netSignatures: Array<{ location: string; size: 'S' | 'M' | 'L' }> = [];
 
 /** How brightly a contact at screen-point `c` is lit by the sweep: 1 the instant
  *  the arm crosses it, fading linearly back to 0 just before the next pass (so the
@@ -749,11 +786,24 @@ function sweptThisFrame(target: number): boolean {
 function updateRadarContacts(now: number): void {
   if (!sweepOn) return;
   if (vision) {
-    for (const f of Object.values(s.fleets)) {
-      if (f.owner === ME) continue;
-      const fn = fleetNode(f);
-      if (!fn || known(fn) || !radarHas(fn)) continue; // identified or out of radar → not a signature
-      const node = s.planets[fn];
+    // What the sweep may paint. Solo scans the full state for radar-only enemy
+    // fleets; in NET those fleets are physically ABSENT from the fogged state —
+    // the server ships them as coarse contacts (snapshot.signatures, BF-18).
+    const contacts: Array<{ key: string; node: string; size: 'S' | 'M' | 'L' }> = [];
+    if (NET) {
+      netSignatures.forEach((c, i) => {
+        if (!known(c.location)) contacts.push({ key: `sig:${c.location}:${i}`, node: c.location, size: c.size });
+      });
+    } else {
+      for (const f of Object.values(s.fleets)) {
+        if (f.owner === ME) continue;
+        const fn = fleetNode(f);
+        if (!fn || known(fn) || !radarHas(fn)) continue; // identified or out of radar → not a signature
+        contacts.push({ key: f.id, node: fn, size: sigClass(fleetSignature(f)) });
+      }
+    }
+    for (const c of contacts) {
+      const node = s.planets[c.node];
       if (!node) continue;
       const pos = world(node.position);
       // painted only by an arm whose radar disc actually covers the blip
@@ -763,9 +813,8 @@ function updateRadarContacts(now: number): void {
         return dx * dx + dy * dy <= a.r * a.r && sweptThisFrame(Math.atan2(dy, dx));
       });
       if (painted) {
-        const size = sigClass(fleetSignature(f));
-        if (!radarMemory.has(f.id)) note(t('◆ новый радарный контакт ({size}) у {at}', { size, at: fn }), fn);
-        radarMemory.set(f.id, { node: fn, size, at: now });
+        if (!radarMemory.has(c.key)) note(t('◆ новый радарный контакт ({size}) у {at}', { size: c.size, at: c.node }), c.node);
+        radarMemory.set(c.key, { node: c.node, size: c.size, at: now });
       }
     }
   }
@@ -2095,8 +2144,12 @@ function handleEvents(events: DomainEvent[]) {
         break;
       }
       case 'planet.captured':
-        if (p.owner === ME || known(p.planetId as string))
+        if (p.owner === ME || known(p.planetId as string)) {
           note(t('🚩 {who} захватил {at}', { who: NAME[p.owner as string] ?? (p.owner as string), at: p.planetId as string }), p.planetId as string);
+          // light the flipped province up in its new owner's colour (fog-gated: only
+          // a capture we may see flashes) — re-capture restarts the wave.
+          captureFlashes.set(p.planetId as string, { owner: p.owner as string, at: performance.now() });
+        }
         if (diploOpen && diploTab === 'diplo') renderDiplo(); // province counts shifted
         break;
       case 'diplomacy.changed': {
@@ -2342,6 +2395,7 @@ function drivePatrols(): void {
     const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
     for (const g of Object.values(s.fleets)) {
       if (g.owner === ME || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+      if (g.battleId) continue; // in a battle — engage would reject, yet the sortie fuel is spent (BF-30)
       if (getStance(s, ME, g.owner) !== 'war') continue; // only declared enemies — never auto-war
       if (!known(g.location)) continue; // identified only — "опознанная цель в зоне видимости"
       const pos = s.planets[g.location]?.position;
@@ -2373,33 +2427,31 @@ function endReasonText(reason: string | undefined): string {
  *  in the kernel — local sim and the net server both run it), not a hand-rolled
  *  guess. Fires once; a draw (no winner on timeout) is its own line. */
 function checkEnd() {
-  if (banner) return;
+  // `xpAwarded` marks this match's end as already handled — it survives navigating
+  // away (hub/setup) while the match stays 'ended', so the overlay isn't re-created
+  // over the menu; only a fresh match / reconnect resets it.
+  if (endScreen || xpAwarded) return;
   if (s.match?.status !== 'ended') return;
   const why = endReasonText(s.match.reason);
   // A coalition wins together (SES-1): every member of match.winners is a victor,
   // not only the top scorer in match.winner.
   const iWon = s.match.winner === ME || (s.match.winners?.includes(ME) ?? false);
-  banner = iWon
-    ? s.match.winners && s.match.winners.length > 1
-      ? t('🏆 ПОБЕДА КОАЛИЦИИ ({who}) — {why}', {
-          who: s.match.winners.map((id) => NAME[id as string] ?? id).join(' + '),
-          why,
-        })
-      : t('🏆 ПОБЕДА — {why}', { why })
-    : s.match.winner === null
-      ? t('⚖️ НИЧЬЯ — {why}', { why })
-      : t('💀 ПОРАЖЕНИЕ — {why}', { why });
+  const draw = !iWon && s.match.winner === null;
   // Meta-progression: one XP award per finished match (прокачка командующего).
+  let gained = 0;
+  let levelUp: number | null = null;
   if (!xpAwarded) {
     xpAwarded = true;
     const st = loadMeta();
-    const gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
+    gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
     const before = metaLevel(st.xp);
     const after = { xp: st.xp + gained, spent: st.spent };
     saveMeta(after);
-    note(t('★ Опыт командующего: +{n}', { n: gained }));
-    if (metaLevel(after.xp) > before) note(t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: metaLevel(after.xp) }));
+    if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
   }
+  // The full end screen (renderEndScreen) reads this — outcome, reason, XP. The old
+  // thin victory `banner` is retired; `banner` now carries only NET-status lines.
+  endScreen = { won: iWon, draw, why, xp: gained, levelUp, dismissed: false };
 }
 
 // --- rendering ---------------------------------------------------------------
@@ -2994,7 +3046,15 @@ function drawRadarRange(now: number): void {
 
 function render(now: number) {
   cx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels, crisp on hi-DPI
+  // Semantic zoom (LOD): zoomed far out the map turns SCHEMATIC — holo type
+  // badges, callout text, fleet pyramids/cargo/counts, orbit rings and battle
+  // timers dissolve away (a globalAlpha cross-fade over scale 1.2→1.45, fully
+  // schematic below), leaving territories, node art, fleet chevrons, battle
+  // pulses and pings. Skipping those draws over the widest views — where the
+  // most nodes are on screen at once — is also the frame-time win.
+  const detail = clamp((cam.scale - 1.2) / 0.25, 0, 1);
   blitStaticLayer(); // backdrop + province political map (re-baked on camera move, else cached)
+  drawCaptureFlashes(now); // wave over a just-flipped province, over the political fill
   drawScanSweep(now); // slow radar sweep — pure console chrome
   updateRadarContacts(now); // the arm paints enemy signatures as it crosses them
   drawRadarCoverage(); // my sensor reach (radar arrays + ships)
@@ -3013,8 +3073,9 @@ function render(now: number) {
     const c = world(anchor);
     if (!visible(c, 120)) continue;
     drawBattlePulse(c.x, c.y, wave, b.phase);
-    if (typeof b.nextRoundAt === 'number') {
+    if (typeof b.nextRoundAt === 'number' && detail > 0) {
       cx.save();
+      cx.globalAlpha = detail; // LOD: the timer text dissolves on the schematic view
       cx.font = '700 10px ui-monospace,Menlo,monospace';
       cx.textAlign = 'center';
       cx.fillStyle = b.phase === 'ground' ? '#f5cf6b' : '#ff8a7d';
@@ -3237,13 +3298,14 @@ function render(now: number) {
     // a projected hologram (soft glow halo + holo capsule ring + a faint projector
     // tether down to the node), gently bobbing in the sector-type colour so the type
     // reads at a glance regardless of the bespoke art below (planet / asteroid / …).
-    if (KIND_ICON[n.sector]) {
+    if (KIND_ICON[n.sector] && detail > 0) {
       const kc = SECTOR_TYPES[SECTOR_OF[n.id]]?.color ?? '#9fb6bd';
       const bob = Math.sin(now / 700 + n.x * 0.021 + n.y * 0.017) * 2.4;
       const brad = 11;
       const bx = c.x;
       const by = c.y - R - 6 - brad - 6 + bob; // badge centre floats above, softly bobbing
       cx.save();
+      cx.globalAlpha = detail; // LOD: the hologram dissolves on the schematic view
       blitGlow(kc, bx, by, brad + 9, 0.5); // holographic bloom (cached disc)
       // projector tether — a faint dashed beam from the node up to the badge
       cx.strokeStyle = rgba(kc, 0.16);
@@ -3574,8 +3636,13 @@ function render(now: number) {
     // callout: id + garrison/buildings, monospace. Worlds (planets — the capturable
     // prize) get a BRIGHT designation; every other sector is de-emphasised to a dim,
     // smaller coordinate so the map reads "worlds first" (fogged → no telemetry).
+    // LOD: callout text dissolves on the schematic view — except YOUR OWN worlds,
+    // which stay labelled like city names on a globe (your anchor at any zoom).
     const isWorld = n.sector === 'planet';
+    const mineWorld = isWorld && p.owner === ME;
+    if (detail === 0 && !mineWorld) continue;
     cx.save();
+    cx.globalAlpha = mineWorld ? Math.max(detail, 0.9) : detail;
     cx.shadowColor = 'rgba(0,0,0,0.85)';
     cx.shadowBlur = 3;
     if (isWorld) {
@@ -3586,7 +3653,9 @@ function render(now: number) {
       cx.font = '600 10px ui-monospace,Menlo,monospace';
     }
     cx.fillText(n.id, c.x + R + 12, c.y - 1);
-    if (kn) {
+    // the telemetry line is detail-only — on the schematic view a labelled own
+    // world keeps just its name
+    if (kn && detail > 0) {
       const g = p.garrison.reduce((a, st) => a + st.count, 0);
       const icons = p.buildings.map((b) => BUILD_ICON[b.type] ?? '▪').join('');
       // worlds always show telemetry; a quiet sector only when it holds something
@@ -3595,7 +3664,7 @@ function render(now: number) {
         cx.font = isWorld ? '10px ui-monospace,Menlo,monospace' : '9px ui-monospace,Menlo,monospace';
         cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + (isWorld ? 12 : 11));
       }
-    } else {
+    } else if (!kn && detail > 0) {
       cx.fillStyle = 'rgba(110,130,140,0.5)';
       cx.font = '10px ui-monospace,Menlo,monospace';
       cx.fillText('· no telemetry', c.x + R + 12, c.y + 12);
@@ -3611,7 +3680,8 @@ function render(now: number) {
       if (!fleetSeen(f)) continue; // hidden enemy orbit (no identify, no intel window)
       (stationed[f.location] ??= []).push(f);
     }
-  for (const pid of Object.keys(stationed)) {
+  // LOD: stationed-orbit rings are gone entirely on the schematic view
+  for (const pid of detail > 0 ? Object.keys(stationed) : []) {
     const pl = s.planets[pid];
     if (!pl) continue;
     // orbit only on types that have one (cities); a fortress gives a junction one too
@@ -3623,6 +3693,7 @@ function render(now: number) {
     // A single orbit ring (GDD §7.4) — one orbit, so no N/F labels cluttering the map.
     const rr = orbitRingRadius(pl);
     cx.save();
+    cx.globalAlpha = detail;
     cx.setLineDash([2, 5]);
     cx.lineDashOffset = now / 200;
     cx.strokeStyle = rgba(ORBIT_COLOR, 0.4);
@@ -3686,6 +3757,34 @@ function render(now: number) {
         cx.fill();
       }
     }
+
+    // LOD: far out a fleet is ONE glowing chevron, nose on course — the pyramid,
+    // cargo pips and ship count cross-fade away (schematic view keeps who/where).
+    if (detail < 1) {
+      cx.save();
+      cx.globalAlpha = 1 - detail;
+      cx.translate(A.x, A.y);
+      cx.rotate(A.ang + Math.PI / 2);
+      cx.shadowColor = col;
+      cx.shadowBlur = 5 + 4 * engine;
+      cx.fillStyle = rgba(col, 0.92);
+      cx.strokeStyle = 'rgba(4,10,12,.8)';
+      cx.lineWidth = 1;
+      cx.beginPath();
+      cx.moveTo(0, -5);
+      cx.lineTo(4, 3.5);
+      cx.lineTo(-4, 3.5);
+      cx.closePath();
+      cx.fill();
+      cx.stroke();
+      cx.restore();
+    }
+    if (detail === 0) {
+      // selection still reads on the schematic view; the rest of the kit is gone
+      if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 10, now);
+      continue;
+    }
+    cx.globalAlpha = detail; // full detail fades back in toward 1.45
 
     // Squadron emblem (upright): ships are up-triangles, ONE per three ships, packed
     // into a pyramid — "каждые 3 корабля = один треугольник". Cargo glues under the
@@ -3841,6 +3940,7 @@ function render(now: number) {
     cx.font = '700 9px ui-monospace,Menlo,monospace';
     cx.fillText(String(ships), A.x, A.y + 18);
 
+    cx.globalAlpha = 1; // end of the per-fleet LOD cross-fade
   }
 
   drawRadarContacts(now); // swept enemy signatures — last-known ghosts until repainted
@@ -3901,9 +4001,16 @@ function unitRows(stacks: Array<{ unit: string; count: number }>): string {
     )
     .join('');
 }
+/** Localized one-line label for a paused site (shares `ConstructionPayload`'s field
+ *  names, so `constructionLabel` reads it directly — the extra `id`/`progress`/
+ *  `remainingHours`/`remainingCost` fields are simply ignored). */
+function pausedLabel(site: PausedConstructionSite): string {
+  return constructionLabel(site);
+}
 function conveyorHtml(planetId: string, lane: BuildLane): string {
   const active = activeConstruction(planetId, lane);
   const queued = queueOf(planetId)[lane];
+  const paused = (s.planets[planetId]?.pausedConstruction ?? []).filter((p) => laneOf(p.kind) === lane);
   let html = `<div class="conveyor">`;
   if (active) {
     // The live % / remaining-time are patched in each frame by updatePanelLive() and
@@ -3911,7 +4018,8 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
     // build buttons) would be rebuilt 60×/s, and a click whose down/up straddle a rebuild
     // is dropped (the bug where rapid build orders only queued one ship in real time).
     const dur = buildDurationHours(active.payload) * HOUR;
-    html += `<div class="current"><span>${t('СЕЙЧАС')}</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em></div>`;
+    html += `<div class="current" data-desc="c:${planetId}:${lane}:active:${active.seq}"><span>${t('СЕЙЧАС')}</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em>`;
+    html += `<button class="conv-cancel" data-act="cancelbuild" data-arg="${active.seq}" title="${t('Отменить — вернёт часть ресурсов и поставит на паузу')}">✕</button></div>`;
     html += `<div class="bar"><i class="conv-fill" data-at="${active.at}" data-dur="${dur}" style="width:0%"></i></div>`;
   } else {
     html += `<div class="current idle"><span>${t('ПРОСТОЙ')}</span><b>${t('готов к следующему заказу')}</b><em>—</em></div>`;
@@ -3919,10 +4027,21 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
   }
   if (queued.length) {
     html += `<div class="queue">${queued
-      .map((q, i) => `<span><em>${i + 1}</em>${queuedLabel(q)}</span>`)
+      .map(
+        (q, i) =>
+          `<span data-desc="c:${planetId}:${lane}:queued:${i}"><em>${i + 1}</em>${queuedLabel(q)}<button class="q-x" data-act="dequeue" data-arg="${lane}:${i}" title="${t('Убрать из очереди')}">✕</button></span>`,
+      )
       .join('')}</div>`;
   } else {
     html += `<div class="queue empty">${t('очередь пуста')}</div>`;
+  }
+  if (paused.length) {
+    html += `<div class="paused">${paused
+      .map(
+        (p) =>
+          `<span data-desc="c:${planetId}:${lane}:paused:${p.id}"><em>${t('Приостановлено {n}%', { n: Math.round(p.progress * 100) })}</em>${pausedLabel(p)}<button class="p-go" data-act="resumebuild" data-arg="${p.id}" title="${t('Возобновить — доплатить остаток')}">▶</button></span>`,
+      )
+      .join('')}</div>`;
   }
   return html + `</div>`;
 }
@@ -4316,7 +4435,8 @@ function panelHtml(): string {
     for (const b of p.buildings) {
       const def = data.buildings[b.type];
       const max = def ? buildingMaxLevel(def) : 1;
-      blds += `<div class="asset-row" data-desc="b:${b.type}:${b.level}"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${buildingName(b.type)}</b><span class="dim">L${b.level}/${max} · ${t('хп')} ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}</span>`;
+      const prod = def ? producesLine(buildingLevel(def, b.level).produces) : '';
+      blds += `<div class="asset-row" data-desc="b:${b.type}:${b.level}"><span class="bicon">${BUILD_ICON[b.type] ?? '▪'}</span><b>${buildingName(b.type)}</b><span class="dim">L${b.level}/${max} · ${t('хп')} ${floor(b.hp)}/${hpOfLevel(b.type, b.level)}${prod ? ` · <span class="prod">${prod}</span>` : ''}</span>`;
       if (mine && b.level < max) {
         const c = def?.upgrades[b.level - 1]?.cost;
         // hovering Upgrade previews the NEXT level's dossier (output it will unlock)
@@ -4462,6 +4582,115 @@ function unitDossier(id: string): Dossier | null {
   }
 }
 
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/** "+10 металл/ч, +5 кредиты/ч" — the always-visible output readout on a built
+ *  building's row (not just on hover). Empty string for a produces-less building
+ *  (defense/radar/etc.), so the row's dim-text separator (" · ") is skipped. */
+function producesLine(produces: Record<string, number>): string {
+  return Object.entries(produces)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([res, n]) => `+${round1(n ?? 0)} ${tData(res)}/ч`)
+    .join(', ');
+}
+
+/** Dossier for an in-flight/queued/paused construction/upgrade/unit order — "what is
+ *  this, what does it yield NOW vs once finished". `progress` is 0 for a not-yet-
+ *  started queued order, the live 0..1 fraction for an active one, or the frozen
+ *  `PausedConstructionSite.progress` for a paused one; `remainingH` is null only for
+ *  a queued order (it hasn't started, so there's no ETA yet). The same base+delta×ramp
+ *  formula construction.ts/economy.ts use: for a fresh building `base` is 0 (nothing
+ *  exists below the threshold), for an upgrade `base` is the CURRENT level's output
+ *  (already running in full) and only the delta to the target level ramps in. */
+function taskDossier(
+  planetId: string,
+  kind: BuildKind,
+  building: string | undefined,
+  unit: string | undefined,
+  count: number | undefined,
+  level: number | undefined,
+  progress: number,
+  remainingH: number | null,
+): Dossier {
+  const eta = remainingH !== null ? t('Осталось: {r}', { r: hl(fmtEta(remainingH)) }) : t('В очереди — ещё не начато.');
+  if (kind === 'unit' && unit) {
+    return {
+      name: `${count ?? 1}× ${unitIcon(unit)} ${displayUnit(unit)}`,
+      body: [eta, t('По готовности пополнит гарнизон/флот планеты.')].join('<br>'),
+    };
+  }
+  if (!building) return { name: t('Стройка'), body: eta };
+  const def = data.buildings[building];
+  if (!def) return { name: building, body: eta };
+  const name =
+    kind === 'upgrade'
+      ? `${BUILD_ICON[building] ?? '▣'} ${tData(def.name)} → L${level ?? '?'}`
+      : `${BUILD_ICON[building] ?? '▣'} ${tData(def.name)}`;
+  const ramp = thresholdRamp(progress);
+  let base: Record<string, number> = {};
+  let final: Record<string, number> = {};
+  if (kind === 'upgrade' && typeof level === 'number') {
+    const instance = s.planets[planetId]?.buildings.find((b) => b.type === building);
+    base = instance ? buildingLevel(def, instance.level).produces : {};
+    final = buildingLevel(def, level).produces;
+  } else {
+    final = buildingLevel(def, 1).produces;
+  }
+  const lines: string[] = [];
+  for (const res of new Set([...Object.keys(base), ...Object.keys(final)])) {
+    const b = base[res] ?? 0;
+    const f = final[res] ?? 0;
+    if (b === 0 && f === 0) continue;
+    const now = b + (f - b) * ramp;
+    lines.push(
+      t('{r}: {now}/ч сейчас → {final}/ч по готовности', { r: tData(res), now: hl(round1(now)), final: hl(round1(f)) }),
+    );
+  }
+  return { name, body: [eta, ...lines].join('<br>') };
+}
+
+function constructionDossier(key: string): Dossier | null {
+  const [, planetId, lane, state, ref] = key.split(':');
+  if (!planetId || !lane || !state || ref === undefined) return null;
+  if (state === 'active') {
+    const active = activeConstruction(planetId, lane as BuildLane);
+    if (!active || String(active.seq) !== ref) return null;
+    const p = active.payload;
+    return taskDossier(
+      planetId,
+      (p.kind ?? 'building') as BuildKind,
+      p.building,
+      p.unit,
+      p.count,
+      p.level,
+      progressPct(active) / 100,
+      Math.max(0, (active.at - s.time) / HOUR),
+    );
+  }
+  if (state === 'queued') {
+    const q = queueOf(planetId)[lane as BuildLane][Number(ref)];
+    if (!q) return null;
+    const level =
+      q.kind === 'upgrade' ? (s.planets[planetId]?.buildings.find((b) => b.type === q.id)?.level ?? 0) + 1 : undefined;
+    return taskDossier(
+      planetId,
+      q.kind,
+      q.kind === 'unit' ? undefined : q.id,
+      q.kind === 'unit' ? q.id : undefined,
+      q.count,
+      level,
+      0,
+      null,
+    );
+  }
+  if (state === 'paused') {
+    const site = (s.planets[planetId]?.pausedConstruction ?? []).find((p) => String(p.id) === ref);
+    if (!site) return null;
+    return taskDossier(planetId, site.kind, site.building, site.unit, site.count, site.level, site.progress, site.remainingHours);
+  }
+  return null;
+}
+
 function objDossier(key: string): Dossier | null {
   if (key === 'fleet') {
     return {
@@ -4469,6 +4698,7 @@ function objDossier(key: string): Dossier | null {
       body: t('Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.'),
     };
   }
+  if (key.startsWith('c:')) return constructionDossier(key);
   const [kind, id, lvl] = key.split(':');
   if (kind === 'b') return buildingDossier(id, Number(lvl) || 1);
   if (kind === 'u') return unitDossier(id);
@@ -4916,10 +5146,18 @@ function convoLineHtml(m: SessionMsg, stamp?: StampOpts): string {
 function convoFeedInnerHtml(key: string): string {
   const msgs = convoMessages(key);
   if (msgs.length) return msgs.map((m) => convoLineHtml(m)).join('');
-  return `<div class="dp-empty">${key === COALITION ? t('Чат коалиции пуст.<br>Отметьте провинцию пингом 📍 или напишите.') : t('Сообщений пока нет.')}</div>`;
+  const hint =
+    key === COALITION
+      ? t('Чат коалиции пуст.<br>Отметьте провинцию пингом 📍 или напишите.')
+      : key === CH_SESSION
+        ? t('Общий канал матча — вас слышат все участники.')
+        : t('Сообщений пока нет.');
+  return `<div class="dp-empty">${hint}</div>`;
 }
-/** Left column: the coalition channel pinned on top, then a DM per participant
- *  (most-recently-active first). Selecting one opens its thread on the right. */
+/** Left column: the match-wide session channel + the coalition channel pinned on
+ *  top, then a DM per participant (most-recently-active first). Selecting one
+ *  opens its thread on the right. Session here is what makes the NET chat fully
+ *  reachable from a PHONE — the floating chat window is desktop-only. */
 function convoListHtml(): string {
   const dms = diploSeats()
     .filter((id) => id !== ME)
@@ -4928,6 +5166,14 @@ function convoListHtml(): string {
         (convoLast(b)?.at ?? -1) - (convoLast(a)?.at ?? -1) ||
         (NAME[a] ?? a).localeCompare(NAME[b] ?? b),
     );
+  const sessLast = convoLast(CH_SESSION);
+  const sessPrev = sessLast
+    ? esc((sessLast.from === ME ? t('Вы') + ': ' : '') + sessLast.text)
+    : t('{n} уч.', { n: Object.keys(s.players).length });
+  const sess =
+    `<button class="dp-cv coal${convoOpen === CH_SESSION ? ' on' : ''}" data-convo="${CH_SESSION}">` +
+    `<span class="dp-cv-ic" style="color:var(--cyan)">△</span>` +
+    `<span class="dp-cv-nm">${t('Сессия')}<em>${sessPrev}</em></span></button>`;
   const coal =
     `<button class="dp-cv coal${convoOpen === COALITION ? ' on' : ''}" data-convo="${COALITION}">` +
     `<span class="dp-cv-ic" style="color:var(--amber)">⚡</span>` +
@@ -4943,15 +5189,18 @@ function convoListHtml(): string {
       );
     })
     .join('');
-  return `<div class="dp-cvlist">${coal}${items}</div>`;
+  return `<div class="dp-cvlist">${sess}${coal}${items}</div>`;
 }
 /** Right column: header, the open conversation's messages, and the composer (with a
  *  ping button in the coalition channel). */
 function convoThreadHtml(): string {
   const isCoal = convoOpen === COALITION;
-  const title = isCoal
-    ? t('⚡ Коалиция · {n} уч.', { n: coalitionMembers().length })
-    : `${seatBadge(convoOpen).icon} ${esc(NAME[convoOpen] ?? convoOpen)}`;
+  const title =
+    convoOpen === CH_SESSION
+      ? t('△ Сессия · {n} в матче', { n: Object.keys(s.players).length })
+      : isCoal
+        ? t('⚡ Коалиция · {n} уч.', { n: coalitionMembers().length })
+        : `${seatBadge(convoOpen).icon} ${esc(NAME[convoOpen] ?? convoOpen)}`;
   const pingBtn = isCoal
     ? `<button class="dp-ping" title="${t('Отметить выбранную провинцию пингом')}">📍</button>`
     : '';
@@ -5052,15 +5301,30 @@ function codexBuildBtn(kind: string, id: string): string {
   return '';
 }
 
+/** A `b:<id>:<lvl>` key embeds its building level in the title (as `hl(lvl)`) — shared
+ *  by the desktop hover pane and the mobile tap modal so both read identically. */
+function dossierTitleHtml(key: string, d: Dossier): string {
+  const lvl = key.startsWith('b:') ? Number(key.split(':')[2]) || 0 : 0;
+  return lvl ? `${esc(d.name)} ${hl(lvl)}` : esc(d.name);
+}
+
 /** Right-docked description pane HTML for the currently hovered menu object. */
 function objDescHtml(): string {
   const d = hoverObj ? objDossier(hoverObj) : null;
   if (!d) {
     return `<div class="pd-empty">${t('Наведи на объект слева — здесь появится его досье.')}</div>`;
   }
-  const lvl = hoverObj && hoverObj.startsWith('b:') ? Number(hoverObj.split(':')[2]) || 0 : 0;
-  const title = lvl ? `${esc(d.name)} ${hl(lvl)}` : esc(d.name);
-  return `<div class="pd-title">${title}</div><div class="pd-body">${d.body}</div>`;
+  return `<div class="pd-title">${dossierTitleHtml(hoverObj!, d)}</div><div class="pd-body">${d.body}</div>`;
+}
+
+/** Touch has no hover — a tap on a `[data-desc]` object opens the SAME dossier in the
+ *  codex overlay instead (reuses its box/close chrome; no "Build here" button here). */
+function openDossier(key: string): void {
+  const d = objDossier(key);
+  const el = document.getElementById('codex');
+  if (!el || !d) return;
+  el.innerHTML = `<div class="cxbox"><div class="cx-head"><b>${dossierTitleHtml(key, d)}</b></div><div class="cx-desc">${d.body}</div><button class="cx-close">${t('ЗАКРЫТЬ')}</button></div>`;
+  el.classList.add('show');
 }
 
 function renderObjDesc(): void {
@@ -5302,7 +5566,16 @@ side.addEventListener('click', (ev) => {
     return;
   }
   const bEl = (ev.target as HTMLElement).closest('button') as HTMLButtonElement | null;
-  if (!bEl || bEl.disabled) return;
+  if (!bEl || bEl.disabled) {
+    // Touch has no hover: a tap that lands on a dossier-able row (not one of its own
+    // action buttons, handled below) opens the same summary the desktop pane shows
+    // on hover — building/task name, current vs full output, ETA.
+    if (MOBILE) {
+      const key = (ev.target as HTMLElement).closest('[data-desc]')?.dataset.desc ?? null;
+      if (key !== null) openDossier(key);
+    }
+    return;
+  }
   if (bEl.dataset.codex) {
     openCodex(bEl.dataset.codex); // a build/ship tile → full specs (+ Build here)
     return;
@@ -5326,6 +5599,17 @@ side.addEventListener('click', (ev) => {
     enqueueBuild(selPlanet!, { kind: 'upgrade', id: arg, count: 1 });
   } else if (act === 'unit') {
     enqueueBuild(selPlanet!, { kind: 'unit', id: arg, count: 1 });
+  } else if (act === 'cancelbuild') {
+    // The active order only — refunds the unbuilt share and pauses it (resumable).
+    playerOrder(cancelConstruction(ME, selPlanet!, Number(arg)));
+  } else if (act === 'resumebuild') {
+    playerOrder(resumeConstruction(ME, selPlanet!, Number(arg)));
+  } else if (act === 'dequeue') {
+    // Nothing was ever paid for a not-yet-dispatched queued order (single-player
+    // local buffer only — net mode sends immediately, so there's nothing to dequeue
+    // there) — a plain local removal, no action needed.
+    const [qLane, qIdx] = arg.split(':');
+    queueOf(selPlanet!)[qLane as BuildLane].splice(Number(qIdx), 1);
   } else if (act === 'mobtpl') {
     mobTplIdx = Number(arg); // switch which template the assembler shows (local, re-renders)
   } else if (act === 'mobilize') {
@@ -5403,11 +5687,6 @@ side.addEventListener('click', (ev) => {
     playerOrder(loadDivision(ME, arg, selFleet!));
   } else if (act === 'divunload') {
     playerOrder(unloadDivision(ME, arg));
-  } else if (act === 'officer') {
-    const sep = arg.indexOf('|');
-    const divId = arg.slice(0, sep);
-    const key = arg.slice(sep + 1);
-    playerOrder(setDivisionOfficer(ME, divId, key || null));
   }
   lastPanelHtml = '';
   renderPanel();
@@ -5853,6 +6132,104 @@ function applyTimeSpeed(mult: number): void {
 restartBtn.addEventListener('click', () => openSetup());
 bannerEl.addEventListener('click', (ev) => {
   if ((ev.target as Element).closest('[data-restart]')) openSetup();
+});
+
+// --- end screen (match over): outcome + stats + rematch ----------------------
+const endscreenEl = $('endscreen');
+let lastEndHtml = '';
+/** Paint the terminal end screen from `endScreen` (set by checkEnd). Reads final
+ *  numbers straight from the AUTHORITATIVE `match` state, so the same panel serves a
+ *  solo match and a net one. Hidden while no match is over or the player dismissed it
+ *  to look at the board. */
+function renderEndScreen(): void {
+  if (!endScreen || endScreen.dismissed) {
+    if (endscreenEl.style.display !== 'none') {
+      endscreenEl.style.display = 'none';
+      lastEndHtml = '';
+    }
+    return;
+  }
+  const sc = s.match?.scores ?? {};
+  const mine = sc[ME];
+  // Placement: rank among all scored seats by total (1st of N).
+  const ranked = Object.keys(sc).sort((a, b) => (sc[b]?.total ?? 0) - (sc[a]?.total ?? 0));
+  const place = ranked.indexOf(ME) + 1;
+  const total = Math.round(mine?.total ?? 0);
+  const provinces = mine?.controlledPlanets ?? worldsOf(ME);
+  const fleets = mine?.fleets ?? 0;
+  const units = mine?.units ?? 0;
+  const elapsed = Math.max(0, (s.match?.endedAt ?? s.time) - (s.startedAt ?? 0));
+  const dur = fmtStamp(elapsed, { day: true, time: true });
+  const cls = endScreen.won ? 'win' : endScreen.draw ? 'draw' : 'lose';
+  const head = endScreen.won
+    ? s.match?.winners && s.match.winners.length > 1
+      ? t('🏆 ПОБЕДА КОАЛИЦИИ')
+      : t('🏆 ПОБЕДА')
+    : endScreen.draw
+      ? t('⚖️ НИЧЬЯ')
+      : t('💀 ПОРАЖЕНИЕ');
+  const cell = (k: string, v: string) => `<div class="es-cell"><span class="es-k">${k}</span><span class="es-v">${v}</span></div>`;
+  const xpLine =
+    endScreen.xp > 0
+      ? `<div class="es-xp">${t('★ Опыт командующего: +{n}', { n: endScreen.xp })}` +
+        (endScreen.levelUp !== null ? `<span class="lvl">${t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: endScreen.levelUp })}</span>` : '') +
+        `</div>`
+      : '';
+  // Rematch wording is honest per mode: solo restarts a skirmish; a NET match can't
+  // re-seat the same table client-side (server brick), so "again" opens the browser.
+  const againLabel = NET ? t('⟳ Новый матч') : t('⟳ Играть ещё');
+  const html =
+    `<div class="es-box">` +
+    `<div class="es-head ${cls}">${head}</div>` +
+    `<div class="es-why">${esc(endScreen.why)}</div>` +
+    `<div class="es-grid">` +
+    `<div class="es-cell wide"><span class="es-k">${t('Итоговый счёт')}</span><span class="es-v">✦ ${total} <small>· ${t('{p}-е место из {n}', { p: place, n: ranked.length })}</small></span></div>` +
+    cell(t('Провинции'), `⬣ ${provinces}`) +
+    cell(t('Флоты'), `⛴ ${fleets}`) +
+    cell(t('Юниты'), `⚔ ${units}`) +
+    cell(t('Длительность'), dur) +
+    `</div>` +
+    xpLine +
+    `<div class="es-acts">` +
+    `<button class="es-btn primary" data-es="again">${againLabel}</button>` +
+    `<button class="es-btn" data-es="menu">⌂ ${t('В меню')}</button>` +
+    `<button class="es-btn ghost" data-es="board">${t('Смотреть доску')}</button>` +
+    `</div></div>`;
+  if (html !== lastEndHtml) {
+    endscreenEl.innerHTML = html;
+    lastEndHtml = html;
+  }
+  endscreenEl.style.display = 'flex';
+}
+endscreenEl.addEventListener('click', (ev) => {
+  const act = (ev.target as Element).closest('[data-es]') as HTMLElement | null;
+  if (!act) return;
+  const which = act.dataset.es;
+  if (which === 'board') {
+    if (endScreen) endScreen.dismissed = true; // hide the panel, leave the frozen board
+    return;
+  }
+  // Leaving a net match is a deliberate disconnect (no auto-reconnect).
+  const wasNet = NET;
+  if (NET) {
+    userClosed = true;
+    NET = false;
+    if (netSock) netSock.close();
+  }
+  endScreen = null; // leaving the finished match — the overlay must not linger over the hub
+  lastEndHtml = '';
+  if (which === 'again') {
+    // Solo: straight back into a skirmish setup. Net: the match browser (a same-table
+    // rematch needs server support — a separate brick); either way, one tap to next game.
+    if (wasNet) {
+      openHub();
+      hubTab('games');
+    } else {
+      openSetup('hub');
+    }
+  } else {
+    openHub(); // "В меню"
+  }
 });
 
 // Speedbar "⌂ В меню": leave the current match back to the hub from anywhere in-game.
@@ -6545,9 +6922,9 @@ function conArmyPane(): string {
     conBar({ label: t('Корпус'), base: f.hp, effective: f.hp, delta: 0 }, max),
   ].join('');
   const syn = f.synergies.length
-    ? `<div class="cn-ph" style="margin-top:14px">${t('Синергии состава')}</div>` +
-      f.synergies.map((x) => `<div class="cn-syn">✦ ${esc(x.name)}</div>`).join('')
-    : `<div class="cn-note" style="margin-top:12px">${t('Смешай пехоту и танки для синергий.')}</div>`;
+    ? `<div class="cn-ph" style="margin-top:14px">${t('Доктрина состава')}</div>` +
+      f.synergies.map((x) => `<div class="cn-syn">✦ ${esc(t(x.name))}</div>`).join('')
+    : `<div class="cn-note" style="margin-top:12px">${t('Смешай рода войск — состав задаёт доктрину.')}</div>`;
   const cost =
     `<div class="cn-cost"><div class="cn-crow total"><span class="cn-cl">${t('Стоимость мобилизации')}</span>` +
     `<span class="cn-cv">${bagRu(f.cost)}</span></div></div>`;
@@ -6853,7 +7230,36 @@ function openHub(note = ''): void {
 }
 
 $('cnew').addEventListener('click', () => openHub());
-$('clogin').addEventListener('click', () => openHub());
+// «Вход по позывному»: reveal an inline field and enter under a callsign YOU type (vs
+// «Новый командир», which auto-suggests one). The chosen callsign is remembered
+// (`void.nick`) so the next visit auto-recognises you (the first-run gate above). No
+// accounts backend yet — local identity, not cross-device recovery (accounts-roadmap.md).
+const wLoginEl = $('cwlogin');
+const wNickInput = $('cwnick') as HTMLInputElement;
+function signInByCallsign(): void {
+  const nick = wNickInput.value.trim();
+  if (!nick) {
+    statusEl.textContent = t('Введи позывной');
+    wNickInput.focus();
+    return;
+  }
+  nickInput.value = nick;
+  localStorage.setItem('void.nick', nick); // remembered — next visit skips the welcome card
+  openHub();
+}
+$('clogin').addEventListener('click', () => {
+  const show = wLoginEl.style.display === 'none';
+  wLoginEl.style.display = show ? 'flex' : 'none';
+  statusEl.textContent = '';
+  if (show) {
+    wNickInput.value = (localStorage.getItem('void.nick') ?? '').trim();
+    wNickInput.focus();
+  }
+});
+$('cwgo').addEventListener('click', signInByCallsign);
+wNickInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') signInByCallsign();
+});
 $('cgoogle').addEventListener('click', () => openHub(t('Вход через Google — скоро · ты вошёл гостем')));
 $('capple').addEventListener('click', () => openHub(t('Вход через Apple — скоро · ты вошёл гостем')));
 $('cback').addEventListener('click', () => {
@@ -6915,6 +7321,10 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Радарная развёртка')}<span class="set-sub">${t('вращающийся луч на карте — только вид, не влияет на обнаружение')}</span></div>` +
     `<div class="set-ctl"><input id="set-sweep" type="range" min="0" max="100" step="5" value="${pct}" aria-label="${t('Прозрачность радарной развёртки')}"><span id="set-sweep-val" class="set-val">${pct}%</span></div>` +
     `</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Свои метки на карте')}<span class="set-sub">${t('булавки 📍 ваших пингов — метки союзников видны всегда')}</span></div>` +
+    `<div class="set-ctl"><label class="set-switch"><input id="set-ownpings" type="checkbox"${showOwnPings ? ' checked' : ''} aria-label="${t('Свои метки на карте')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-ownpings-val" class="set-val">${showOwnPings ? t('вкл') : t('выкл')}</span></div>` +
+    `</div>` +
     `<button class="pc-close" id="set-close" type="button">${t('ГОТОВО')}</button>` +
     `</div>`;
   const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
@@ -6922,6 +7332,12 @@ function renderSettings(): void {
   slider?.addEventListener('input', () => {
     setSweepOpacity(Number(slider.value) / 100);
     if (val) val.textContent = `${Math.round(sweepOpacity * 100)}%`; // 0% reads as hidden
+  });
+  const own = document.getElementById('set-ownpings') as HTMLInputElement | null;
+  const ownVal = document.getElementById('set-ownpings-val');
+  own?.addEventListener('change', () => {
+    setShowOwnPings(own.checked);
+    if (ownVal) ownVal.textContent = own.checked ? t('вкл') : t('выкл');
   });
   document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
 }
@@ -7039,7 +7455,19 @@ function renderSetupSlots(): void {
       `<span>${factionBonusLine(m.faction)}</span></button>`;
   }
   h += `</div>`;
+  // Team-battle toggle: sides fight as allies. Only meaningful with ≥2 rivals (a 2v2
+  // needs three AI seats on); shown always so the player can arm it before adding them.
+  h +=
+    `<div class="tmrow"><button class="tmtog${setupTeams ? ' on' : ''}" data-teamtog="1">` +
+    `${setupTeams ? '⚔ ' + t('Командный бой: ВКЛ') : t('Командный бой: выкл')}</button>` +
+    (setupTeams ? `<span class="tmhint">${t('одна сторона — союзники')}</span>` : '') +
+    `</div>`;
   const fids = seatFactionIds();
+  // A/B side chip for a seat (you are locked to A; AI seats toggle side).
+  const teamChip = (i: number, locked: boolean): string => {
+    const side = setupSeatTeam[i]!;
+    return `<button class="tmchip s${side}${locked ? ' lock' : ''}" data-teamseat="${i}"${locked ? ' disabled' : ''}>${side}</button>`;
+  };
   for (let i = 0; i < SEAT_META.length; i++) {
     const m = SEAT_META[i]!;
     const role = setupSlots[i]!;
@@ -7047,12 +7475,15 @@ function renderSetupSlots(): void {
     if (i === 0) {
       h +=
         `<div class="srow"><span class="dot" style="background:${m.color};color:${m.color}"></span>` +
-        `<span class="nm">${house}</span><span class="you">${t('ВЫ')}</span></div>`;
+        `<span class="nm">${house}</span>` +
+        (setupTeams ? teamChip(0, true) : '') +
+        `<span class="you">${t('ВЫ')}</span></div>`;
     } else {
       const aiOn = role === 'ai';
       h +=
         `<div class="srow ${aiOn ? '' : 'off'}"><span class="dot" style="background:${m.color};color:${m.color}"></span>` +
         `<span class="nm">${house}</span>` +
+        (setupTeams && aiOn ? teamChip(i, false) : '') +
         `<button class="stog ${aiOn ? 'ai' : ''}" data-slot="${i}">${aiOn ? t('ИИ') : t('ВЫКЛ')}</button></div>`;
     }
   }
@@ -7167,6 +7598,8 @@ sciWin.addEventListener('click', (e) => {
 function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
   setupSlots = ['human', 'ai', 'off', 'off'];
+  setupTeams = false; // a fresh setup opens on the classic free-for-all
+  setupSeatTeam = ['A', 'A', 'B', 'B'];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
   // Re-consecrate the council each time setup opens, PRE-SEEDED with the recommended
   // newbie pair (командование «Куратор» + генералист «Полимат»): the first permanent
@@ -7211,6 +7644,7 @@ function buildSetupConfig(): SetupConfig {
       faction: fids[0]!,
       start: setupStart,
       ai: false,
+      ...(setupTeams ? { team: setupSeatTeam[0] } : {}),
     },
   ];
   // Hand each active AI seat one of the remaining candidate worlds, in order.
@@ -7221,7 +7655,14 @@ function buildSetupConfig(): SetupConfig {
     const start = free[fi++];
     if (!start) break; // ran out of candidate worlds
     const m = SEAT_META[i]!;
-    seats.push({ id: m.id, name: houseName(fids[i]!, m.name), faction: fids[i]!, start, ai: true });
+    seats.push({
+      id: m.id,
+      name: houseName(fids[i]!, m.name),
+      faction: fids[i]!,
+      start,
+      ai: true,
+      ...(setupTeams ? { team: setupSeatTeam[i] } : {}),
+    });
   }
   // Carry the player's division templates + hero roster into the match (deep-cloned),
   // plus the meta-progression grant (snapshot — no live account reads mid-match).
@@ -7293,6 +7734,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
+  endScreen = null; // a fresh match must not open into the previous result
   xpAwarded = false; // a fresh match earns its own meta-XP award
   // The match goal, written AFTER the wipe so it is the first line a player can read.
   // Kept honest against the kernel: victoryModule ends on score (SCORE_LIMIT), on
@@ -7341,6 +7783,18 @@ setupSlotsEl.addEventListener('click', (ev) => {
   const fp = (ev.target as Element).closest('[data-fpick]');
   if (fp) {
     setupFaction = fp.getAttribute('data-fpick') ?? setupFaction;
+    renderSetup();
+    return;
+  }
+  if ((ev.target as Element).closest('[data-teamtog]')) {
+    setupTeams = !setupTeams;
+    renderSetup();
+    return;
+  }
+  const ts = (ev.target as Element).closest('[data-teamseat]');
+  if (ts) {
+    const i = Number(ts.getAttribute('data-teamseat'));
+    if (i > 0) setupSeatTeam[i] = setupSeatTeam[i] === 'A' ? 'B' : 'A'; // you (0) are locked to A
     renderSetup();
     return;
   }
@@ -7416,6 +7870,8 @@ function connect(): void {
           NET = true;
           ME = snap.playerId ?? ME;
           clearSelection();
+          endScreen = null; // joining a match must not carry the previous result
+          xpAwarded = false;
           pendingLoads = []; // drop any queued loads from a prior/local session
           showConnect(false);
           note(t('● подключён как {who}', { who: NAME[ME] ?? ME }));
@@ -7426,6 +7882,10 @@ function connect(): void {
         }
         const diploShift = admitted && s !== snap.state && diffNetDiplomacy(s, snap.state);
         s = snap.state;
+        // Radar picture (BF-18): detected-but-unidentified enemy fleets are absent
+        // from the fogged state — the server sends them as coarse contacts beside
+        // each frame. The sweep paints THESE in NET (see updateRadarContacts).
+        netSignatures = snap.signatures ?? [];
         // Re-render the open roster only NOW — the new state is in place, so the
         // stance chips and offer affordances (✓ accept / ⏳ pending) paint fresh.
         if (diploShift && diploOpen && diploTab === 'diplo') renderDiplo();
@@ -7835,6 +8295,28 @@ if (DEV_UI && typeof window !== 'undefined') {
       siegeShots.push({ from: { ...a }, to: { ...b }, at: performance.now(), seed: siegeSeed++ });
       return true;
     },
+    // Preview the capture wave over a province without staging a real ground battle.
+    flashCapture(node: string, owner: string): boolean {
+      if (!s.planets[node]) return false;
+      captureFlashes.set(node, { owner, at: performance.now() });
+      return true;
+    },
+    // Force the match to a terminal state so the end screen can be previewed without
+    // grinding to a score/elimination win. Seeds a plausible score if the victory
+    // module hasn't populated one yet; checkEnd then paints the overlay.
+    endMatch(outcome: 'win' | 'lose' | 'draw'): boolean {
+      const m = s.match;
+      if (!m) return false;
+      m.status = 'ended';
+      m.reason = 'score';
+      m.endedAt = s.time;
+      m.winner = outcome === 'draw' ? null : outcome === 'win' ? ME : ME === 'p1' ? 'p2' : 'p1';
+      m.scores ??= {};
+      for (const id of Object.keys(s.players)) {
+        m.scores[id] ??= { controlledPlanets: worldsOf(id), fleets: 0, units: 0, total: worldsOf(id) * 50 };
+      }
+      return true;
+    },
   };
 }
 let fpsEma = 60; // smoothed frames-per-second readout
@@ -7848,14 +8330,32 @@ const BUILD_TAG = (() => {
   const b = currentBuild();
   return b ? buildLabel(b) : '';
 })();
-// --- Android Back = close the top UI layer (APK convenience) ------------------
-// The APK's WebView maps the hardware Back to history.back(). While ANY closable
-// layer is open we keep ONE sentinel entry pushed: Back then pops the sentinel
-// (popstate), we close the topmost layer and re-arm. With nothing left to close
-// the sentinel stays un-armed, so the NEXT Back is the system's (exit) — after a
-// hint toast, the standard Android double-back pattern. Browser Back gets the
-// same behaviour for free.
+// --- Android Back / Escape = close the top UI layer (APK + desktop) -----------
+// The APK's WebView maps the hardware Back to history.back(); desktop maps Escape
+// (below). While ANY closable layer is open — OR a match is simply live — we keep
+// ONE sentinel entry pushed: Back pops the sentinel (popstate), we close the
+// topmost layer and re-arm. With nothing left to close AND a match running, the
+// first Back only shows a "press again to leave" hint (BF-17-adjacent: a bare
+// in-match Back used to silently unload the page and lose the solo match); a
+// second Back within the window is the system's (exit). Browser Back is the same.
 let backArmed = false;
+// Double-back-to-leave window: after the hint we stop re-arming the sentinel for
+// this long, so a second Back within the window is the system's. `performance.now()`
+// is fine here (prototype UI, not the deterministic core).
+const BACK_EXIT_WINDOW_MS = 2500;
+let backHintAt = -Infinity;
+
+/** In a live match (the map backdrop), i.e. none of the chrome SCREENS is up. The
+ *  three toggle `display` between 'flex'/'none'; on a fresh boot they read '' (CSS
+ *  default) ≠ 'none', so this is false until the player actually enters a match —
+ *  exactly when Back must stop silently unloading the page. */
+function inMatch(): boolean {
+  return (
+    connectEl.style.display === 'none' &&
+    hubEl.style.display === 'none' &&
+    setupEl.style.display === 'none'
+  );
+}
 
 /** Is any layer open that the Back button should close (probe only)? */
 function topLayerOpen(): boolean {
@@ -7947,10 +8447,18 @@ function closeTopLayer(): boolean {
 window.addEventListener('popstate', () => {
   backArmed = false;
   if (closeTopLayer()) {
-    if (topLayerOpen()) armBack(); // more layers underneath — stay resident
-  } else {
-    note(t('Ещё раз «Назад» — выход'));
+    if (topLayerOpen() || inMatch()) armBack(); // more layers / still in a match — stay
+    return;
   }
+  if (inMatch()) {
+    // Nothing left to close but a match is live — don't let one stray Back drop it.
+    // Show the hint and DON'T re-arm; during the exit window `frame()` won't re-arm
+    // either, so a second Back within it is the system's (leaves the match).
+    backHintAt = performance.now();
+    note(t('Ещё раз «Назад» — выход из матча'));
+    return;
+  }
+  note(t('Ещё раз «Назад» — выход')); // at the hub/welcome — the next Back exits
 });
 function armBack(): void {
   if (backArmed) return;
@@ -7958,18 +8466,30 @@ function armBack(): void {
   backArmed = true;
 }
 
+// Desktop parity: Escape closes the topmost layer, exactly like Back. Ignored while
+// typing (chat / nick / server inputs) so Escape still blurs a field the native way.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' && e.key !== 'Esc') return;
+  const el = e.target as HTMLElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  if (closeTopLayer()) e.preventDefault();
+});
+
 function frame(nowReal: number) {
-  // Keep the Back sentinel armed exactly while something closable is open — the
-  // frame loop sees every open path without instrumenting each one.
-  if (!backArmed && topLayerOpen()) armBack();
+  // Keep the Back sentinel armed while something is closable OR a match is live (so a
+  // bare in-match Back triggers the double-back hint instead of a silent unload) —
+  // but pause re-arming for the exit window after the hint, so the second Back leaves.
+  const matchGuard = inMatch() && performance.now() - backHintAt > BACK_EXIT_WINDOW_MS;
+  if (!backArmed && (topLayerOpen() || matchGuard)) armBack();
   const dt = nowReal - lastReal;
   lastReal = nowReal;
   // smooth FPS; ignore absurd gaps (tab backgrounded) so the readout stays sane
   if (dt > 0 && dt < 1000) fpsEma = fpsEma * 0.9 + (1000 / dt) * 0.1;
-  if (!NET && speed > 0 && !banner) {
+  if (!NET && speed > 0 && !banner && !endScreen) {
     // Local single-player sim. In net mode the server owns the clock, combat,
     // construction and every rival — a connected human, or the server-side AI for
     // an empty seat — so we only render its snapshots (no local AI runs here).
+    // A finished match (endScreen set) freezes the world — no advancing a decided game.
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
     autoEngage();
@@ -8108,6 +8628,7 @@ function frame(nowReal: number) {
     bannerEl.style.display = 'none'; // banner cleared (e.g. a fresh match) → hide it
     lastBannerHtml = '';
   }
+  renderEndScreen();
   // Speedbar restart — only the no-bots sandbox (no match end to restart from); other
   // modes use the end-banner button instead. Toggle each frame as the mode can change.
   const soloNoBots = !NET && AI_PLAYERS.size === 0;
@@ -8732,10 +9253,14 @@ function closePingPop(): void {
   document.getElementById('pingpop')?.classList.remove('show');
 }
 /** Draw a pin per active coalition ping (owner-coloured), recording screen hit-boxes
- *  for tap detection. Pins float just above the node, tip pointing at it. */
+ *  for tap detection. Pins float just above the node, tip pointing at it. Two sonar
+ *  rings expand from the marked node (half a period apart) and the pin head breathes
+ *  an owner-coloured glow — a "look here" you can catch from across the map. Your
+ *  own pins can be hidden with the settings switch (allies' are always drawn). */
 function drawPings(now: number): void {
   pingHits = [];
   for (const m of activePings()) {
+    if (m.from === ME && !showOwnPings) continue; // hidden by «Свои метки» switch
     const pl = s.planets[m.ping!];
     if (!pl) continue;
     const c = world(pl.position);
@@ -8743,10 +9268,34 @@ function drawPings(now: number): void {
     const x = c.x;
     const y = c.y - 18; // pin head floats above the node
     const col = ownerColor(m.from);
-    const pulse = 0.7 + 0.3 * Math.sin(now / 360 + x * 0.05);
+    const phase = x * 0.05; // de-syncs neighbouring pins so they don't blink in unison
+    const pulse = 0.7 + 0.3 * Math.sin(now / 360 + phase);
     cx.save();
-    cx.shadowColor = 'rgba(0,0,0,.7)';
-    cx.shadowBlur = 4;
+    // sonar waves: rings born at the node, growing and thinning out as they fade;
+    // a newborn ring flashes a soft filled core so each wave visibly "drops in"
+    cx.shadowColor = rgba(col, 0.7);
+    for (const off of [0, 0.5]) {
+      // 0 → 1 over one 2.2s period; double-mod keeps k positive when phase is
+      // negative (a pin near the screen's left edge has x < 0 → JS % keeps sign,
+      // and a negative k would feed cx.arc a negative radius = a thrown frame)
+      const k = (((now / 2200 + off + phase) % 1) + 1) % 1;
+      const rr = 5 + k * 30;
+      if (k < 0.18) {
+        cx.fillStyle = rgba(col, (1 - k / 0.18) * 0.28); // the drop-in flash
+        cx.beginPath();
+        cx.arc(c.x, c.y, rr, 0, TAU);
+        cx.fill();
+      }
+      cx.shadowBlur = 6 * (1 - k);
+      cx.strokeStyle = rgba(col, (1 - k) * 0.8);
+      cx.lineWidth = 2.6 - k * 1.8;
+      cx.beginPath();
+      cx.arc(c.x, c.y, rr, 0, TAU);
+      cx.stroke();
+    }
+    // the pin itself, breathing an owner-coloured glow (the dark stroke keeps contrast)
+    cx.shadowColor = rgba(col, 0.85);
+    cx.shadowBlur = 4 + 8 * pulse;
     cx.fillStyle = rgba(col, pulse);
     cx.strokeStyle = 'rgba(4,10,12,.85)';
     cx.lineWidth = 1.4;
@@ -8761,6 +9310,10 @@ function drawPings(now: number): void {
     cx.fillStyle = 'rgba(6,18,22,.95)';
     cx.beginPath();
     cx.arc(x, y - 1, 2.1, 0, TAU);
+    cx.fill();
+    cx.fillStyle = rgba(col, pulse); // a blinking ember in the pin's eye
+    cx.beginPath();
+    cx.arc(x, y - 1, 1.1, 0, TAU);
     cx.fill();
     cx.restore();
     pingHits.push({ loc: m.ping!, x, y: y - 1 });
@@ -8794,6 +9347,92 @@ function drawGoFlash(now: number): void {
   cx.arc(c.x, c.y, 14 + (1 - k) * 10, 0, TAU);
   cx.stroke();
   cx.restore();
+}
+const CAPTURE_FLASH_MS = 1500;
+/** A province that changed hands lights up in its NEW owner's colour: a bright wave
+ *  sweeps across the flipped cell from its centre and the frontier ignites, fading
+ *  over ~1.5s. The cell polygon is recomputed each frame with the SAME weighted-
+ *  Voronoi math the political map bakes (computePowerCell), so the wave lines up
+ *  pixel-for-pixel with the fill and tracks pan/zoom. Only runs while a flash is live
+ *  (captures are rare), so the O(n) recompute costs nothing on a quiet frame. */
+function drawCaptureFlashes(now: number): void {
+  if (captureFlashes.size === 0) return;
+  // Same seeds + clip the political fill uses, projected THIS frame so the wave
+  // tracks the camera. Built once, shared by every concurrent flash.
+  const W = 9000 * cam.scale * cam.scale;
+  const seeds: TerritorySeed[] = [];
+  const idxByNode = new Map<string, number>();
+  for (const n of MAP) {
+    if (n.sector === 'empty') continue;
+    const p = s.planets[n.id];
+    if (!p) continue;
+    const c = world(n);
+    idxByNode.set(n.id, seeds.length);
+    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: knownOwner(n.id), kind: n.sector });
+  }
+  const padB = Math.max(40, (MAXX - MINX) * 0.05);
+  const tl = world({ x: MINX - padB, y: MINY - padB });
+  const br = world({ x: MAXX + padB, y: MAXY + padB });
+  const clip: Array<[number, number]> = [
+    [tl.x, tl.y],
+    [br.x, tl.y],
+    [br.x, br.y],
+    [tl.x, br.y],
+  ];
+  const trace = (poly: Array<[number, number]>): void => {
+    cx.beginPath();
+    cx.moveTo(poly[0]![0], poly[0]![1]);
+    for (let i = 1; i < poly.length; i++) cx.lineTo(poly[i]![0], poly[i]![1]);
+    cx.closePath();
+  };
+  for (const [node, flash] of captureFlashes) {
+    const age = now - flash.at;
+    if (age >= CAPTURE_FLASH_MS) {
+      captureFlashes.delete(node);
+      continue;
+    }
+    const idx = idxByNode.get(node);
+    if (idx === undefined) continue; // province gone (shouldn't happen mid-flash)
+    const cell = computePowerCell(seeds, clip, idx);
+    if (!cell) continue;
+    const c = { x: seeds[idx]!.x, y: seeds[idx]!.y }; // seeds are already screen-space
+    // rAF's frame timestamp can predate the push by a hair → clamp so k ≥ 0 (a
+    // negative radius throws from cx.arc).
+    const k = Math.max(0, age) / CAPTURE_FLASH_MS; // 0 → 1
+    const fade = 1 - k;
+    const col = ownerColor(flash.owner);
+    // cell radius (centre → farthest vertex) sets how far the wave travels
+    let maxR = 0;
+    for (const [px, py] of cell.poly) maxR = Math.max(maxR, Math.hypot(px - c.x, py - c.y));
+    cx.save();
+    // 1) colour wash of the whole cell, fading — the province "flips" to the new hue
+    trace(cell.poly);
+    cx.fillStyle = rgba(col, 0.3 * fade);
+    cx.fill();
+    // 2) the wave: a bright ring expanding from the centre, CLIPPED to the cell so it
+    //    reads as energy sweeping across the province out to its border
+    trace(cell.poly);
+    cx.clip();
+    cx.globalCompositeOperation = 'lighter';
+    const rr = k * maxR * 1.25;
+    cx.strokeStyle = rgba(col, 0.85 * fade);
+    cx.lineWidth = 3 + 5 * fade;
+    cx.shadowColor = col;
+    cx.shadowBlur = 12 * fade;
+    cx.beginPath();
+    cx.arc(c.x, c.y, rr, 0, TAU);
+    cx.stroke();
+    cx.restore();
+    // 3) the frontier igniting — the cell outline pulses bright then settles
+    cx.save();
+    trace(cell.poly);
+    cx.strokeStyle = rgba(col, 0.9 * fade);
+    cx.lineWidth = 1.5 + 2.5 * fade;
+    cx.shadowColor = col;
+    cx.shadowBlur = 8 * fade;
+    cx.stroke();
+    cx.restore();
+  }
 }
 function jumpToPing(id: string): void {
   const pl = s.planets[id];

@@ -5,6 +5,7 @@ import {
   clipHalfPlaneTagged,
   clampPowerWeights,
   computePowerCells,
+  computePowerCell,
   type TerritorySeed,
 } from './territory';
 
@@ -113,5 +114,36 @@ describe('territory — computePowerCells', () => {
     computePowerCells(seeds, clip);
     expect(seeds[0]!.w).toBe(1);
     expect(seeds[1]!.w).toBe(9000);
+  });
+});
+
+describe('territory — computePowerCell (single cell, capture flash)', () => {
+  const clip: Array<[number, number]> = [
+    [-100, -100],
+    [100, -100],
+    [100, 100],
+    [-100, 100],
+  ];
+  const seeds: TerritorySeed[] = [
+    { x: 0, y: 0, w: 1, owner: 'p1', kind: 'planet' },
+    { x: 12, y: 0, w: 9000, owner: 'p2', kind: 'nebula' },
+    { x: 0, y: 12, w: 4000, owner: null, kind: 'asteroid' },
+  ];
+
+  it('matches the same-index cell from computePowerCells exactly (identical clamp/math)', () => {
+    const all = computePowerCells(seeds, clip);
+    for (let i = 0; i < seeds.length; i++) {
+      const one = computePowerCell(seeds, clip, i)!;
+      const full = all.find((c) => c.idx === i)!;
+      expect(one.poly).toEqual(full.poly); // pixel-for-pixel: the flash lines up with the fill
+      expect(one.tags).toEqual(full.tags);
+      expect(one.owner).toBe(full.owner);
+    }
+  });
+
+  it('returns null for an out-of-range index and never mutates seeds', () => {
+    expect(computePowerCell(seeds, clip, -1)).toBeNull();
+    expect(computePowerCell(seeds, clip, 3)).toBeNull();
+    expect(seeds[1]!.w).toBe(9000); // pure
   });
 });

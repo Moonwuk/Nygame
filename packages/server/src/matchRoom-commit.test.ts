@@ -121,6 +121,60 @@ describe('MatchRoom · strict commit-before-broadcast', () => {
     expect(room.state.fleets.green_1?.movement).toBeNull(); // action 2 (stop) wins: parked
   });
 
+  it('submitServerAction on a durable room serializes behind an in-flight commit (no clobber)', async () => {
+    // BF-2 (bug-hunt CRIT): a driver's raw sync submitAction mutated stateValue/seq in
+    // the middle of a commitApply persist await; the await's resolution then overwrote
+    // the driver's change and rewound seq. submitServerAction must route through the
+    // mailbox on a durable room so both actions land, in order, once each.
+    let released = false;
+    let pending = 0;
+    const waiters: Array<() => void> = [];
+    const persist = (): Promise<void> => {
+      pending += 1;
+      if (released) return Promise.resolve(); // after release, every write acks at once
+      return new Promise<void>((res) => waiters.push(res));
+    };
+    const release = (): void => {
+      released = true;
+      for (const w of waiters.splice(0)) w();
+    };
+    const room = createDevMatch(data, { now: () => 1000, time: 1000, persist });
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer);
+
+    // A player's committed action holds at its persist await.
+    const playerP = room.receive('green', peer, raw(orbit('green_1', 1)));
+    await flush();
+    expect(pending).toBe(1); // player's persist in flight
+    expect(room.sequence).toBe(0); // not committed yet
+
+    // A server driver (AI stand-in for the empty red seat) fires DURING that await —
+    // the pre-BF-2 sync path would apply immediately and be clobbered when the
+    // player's persist resolves.
+    const move: Action = { id: 'ai:red:1', type: 'fleet.move', playerId: 'red', payload: { fleetId: 'red_1', to: 'nexus' }, issuedAt: 0 };
+    const driverP = room.submitServerAction('red', move);
+    await flush();
+    expect(room.sequence).toBe(0); // driver queued behind the player's commit, not applied
+
+    release(); // ack the player's write; the driver's runs next and acks immediately
+    const driver = await driverP;
+    await playerP;
+
+    // Both landed, in order, once each — nothing clobbered, seq intact.
+    expect(driver.ok).toBe(true);
+    expect(room.sequence).toBe(2);
+    expect(room.state.fleets.green_1?.orbit).toBe('near'); // player's change survived
+    expect(room.state.fleets.red_1?.movement).not.toBeNull(); // driver's change applied
+  });
+
+  it('submitServerAction on an in-memory room is the plain sync submit', async () => {
+    const room = createDevMatch(data, { now: () => 1000, time: 1000 }); // no persist
+    const r = await room.submitServerAction('green', orbit('green_1', 1));
+    expect(r.ok).toBe(true);
+    expect(room.state.fleets.green_1?.orbit).toBe('near');
+    expect(room.sequence).toBe(1);
+  });
+
   it('replays a committed action idempotently (dedup, no re-apply)', async () => {
     const persist = (): Promise<void> => Promise.resolve();
     const room = createDevMatch(data, { now: () => 1000, time: 1000, persist });
