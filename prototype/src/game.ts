@@ -1572,6 +1572,10 @@ export interface SeatConfig {
 }
 export interface SetupConfig {
   seats: SeatConfig[];
+  /** RNG seed of the match. Absent → the historical fixed 'prototype-1'. Self-play
+   *  (M4) varies it per run — with the fixed seed an identical setup plays out
+   *  identically every time (the determinism the core guarantees). */
+  seed?: string;
   /** The human player's chosen research-leader council — up to 2 scientist ids from
    *  `data.scientists`, picked BEFORE the start-point at setup (a start consecration,
    *  GDD §5.2). Absent → the command leader «overseer» by default. */
@@ -1767,7 +1771,7 @@ export const DEFAULT_SETUP: SetupConfig = {
 
 export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
   const base = createInitialState({
-    seed: 'prototype-1',
+    seed: setup.seed ?? 'prototype-1',
     version: { data: '0.1.0', manifest: '1' },
   });
   // Every province starts NEUTRAL; the chosen seats below claim + fortify their homeworld.
