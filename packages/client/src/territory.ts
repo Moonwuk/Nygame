@@ -179,6 +179,36 @@ export function computePowerCells(
   return cells;
 }
 
+/** The single province cell for seed `idx` — the same power-diagram result
+ *  `computePowerCells` would give for that index, but clipping only that one seed's
+ *  half-planes (O(n), not O(n²)). Weights are clamped identically so the polygon
+ *  matches the baked political map exactly. Returns `null` if the cell is empty
+ *  (fully swallowed) or `idx` is out of range. Used for the capture-flash: an
+ *  animated overlay traces just the flipped province's border, so it must line up
+ *  pixel-for-pixel with the static fill beneath it. */
+export function computePowerCell(
+  seeds: TerritorySeed[],
+  clip: Array<[number, number]>,
+  idx: number,
+): TerritoryCell | null {
+  if (idx < 0 || idx >= seeds.length) return null;
+  const work = seeds.map((s) => ({ x: s.x, y: s.y, w: s.w }));
+  clampPowerWeights(work);
+  const si = work[idx]!;
+  let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
+  let tags: number[] = clip.map(() => BOUNDARY);
+  for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
+    if (idx === j) continue;
+    const sj = work[j]!;
+    const a = 2 * (sj.x - si.x);
+    const b = 2 * (sj.y - si.y);
+    const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
+    ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
+  }
+  if (poly.length < 3) return null;
+  return { poly, tags, owner: seeds[idx]!.owner, kind: seeds[idx]!.kind, idx };
+}
+
 /** Paint the political territory map into `g`: filled province cells (owner colour, or a
  *  faint neutral wash) with a terrain accent, then classified borders — same-owner inner
  *  hairlines, neutral divisions, and glowing owner frontiers. Fog is the caller's concern

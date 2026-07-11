@@ -125,7 +125,7 @@ import {
   centerOn as camCenterOn,
 } from '../../packages/client/src/camera';
 import { rgba, blitGlow as hdBlitGlow, blitSphere as hdBlitSphere } from '../../packages/client/src/holoDraw';
-import { drawTerritory } from '../../packages/client/src/territory';
+import { drawTerritory, computePowerCell, type TerritorySeed } from '../../packages/client/src/territory';
 import {
   buildLabel,
   checkForUpdateDetailed,
@@ -484,6 +484,11 @@ const siegeShots: Array<{
   seed: number; // stable per-volley variation (spark angles, shell jitter)
 }> = [];
 let siegeSeed = 0;
+// Capture flashes: a province that changed hands lights up in its NEW owner's colour —
+// a wave sweeps across its cell and the frontier ignites, fading over ~1.5s, so a
+// silent capture (previously only a toast) reads on the map at a glance. Fog-gated at
+// push time (a hidden flip never flashes). Keyed by node so a re-capture restarts it.
+const captureFlashes = new Map<string, { owner: string; at: number }>();
 // Casualties per contested location (owner → unit → count), accumulated from
 // unit.died while a battle runs and paid out as a result note on battle.resolved.
 const battleLosses = new Map<string, Record<string, Record<string, number>>>();
@@ -2128,8 +2133,12 @@ function handleEvents(events: DomainEvent[]) {
         break;
       }
       case 'planet.captured':
-        if (p.owner === ME || known(p.planetId as string))
+        if (p.owner === ME || known(p.planetId as string)) {
           note(t('🚩 {who} захватил {at}', { who: NAME[p.owner as string] ?? (p.owner as string), at: p.planetId as string }), p.planetId as string);
+          // light the flipped province up in its new owner's colour (fog-gated: only
+          // a capture we may see flashes) — re-capture restarts the wave.
+          captureFlashes.set(p.planetId as string, { owner: p.owner as string, at: performance.now() });
+        }
         if (diploOpen && diploTab === 'diplo') renderDiplo(); // province counts shifted
         break;
       case 'diplomacy.changed': {
@@ -3036,6 +3045,7 @@ function render(now: number) {
   // most nodes are on screen at once — is also the frame-time win.
   const detail = clamp((cam.scale - 1.2) / 0.25, 0, 1);
   blitStaticLayer(); // backdrop + province political map (re-baked on camera move, else cached)
+  drawCaptureFlashes(now); // wave over a just-flipped province, over the political fill
   drawScanSweep(now); // slow radar sweep — pure console chrome
   updateRadarContacts(now); // the arm paints enemy signatures as it crosses them
   drawRadarCoverage(); // my sensor reach (radar arrays + ships)
@@ -8109,6 +8119,12 @@ if (DEV_UI && typeof window !== 'undefined') {
       siegeShots.push({ from: { ...a }, to: { ...b }, at: performance.now(), seed: siegeSeed++ });
       return true;
     },
+    // Preview the capture wave over a province without staging a real ground battle.
+    flashCapture(node: string, owner: string): boolean {
+      if (!s.planets[node]) return false;
+      captureFlashes.set(node, { owner, at: performance.now() });
+      return true;
+    },
   };
 }
 let fpsEma = 60; // smoothed frames-per-second readout
@@ -9137,6 +9153,92 @@ function drawGoFlash(now: number): void {
   cx.arc(c.x, c.y, 14 + (1 - k) * 10, 0, TAU);
   cx.stroke();
   cx.restore();
+}
+const CAPTURE_FLASH_MS = 1500;
+/** A province that changed hands lights up in its NEW owner's colour: a bright wave
+ *  sweeps across the flipped cell from its centre and the frontier ignites, fading
+ *  over ~1.5s. The cell polygon is recomputed each frame with the SAME weighted-
+ *  Voronoi math the political map bakes (computePowerCell), so the wave lines up
+ *  pixel-for-pixel with the fill and tracks pan/zoom. Only runs while a flash is live
+ *  (captures are rare), so the O(n) recompute costs nothing on a quiet frame. */
+function drawCaptureFlashes(now: number): void {
+  if (captureFlashes.size === 0) return;
+  // Same seeds + clip the political fill uses, projected THIS frame so the wave
+  // tracks the camera. Built once, shared by every concurrent flash.
+  const W = 9000 * cam.scale * cam.scale;
+  const seeds: TerritorySeed[] = [];
+  const idxByNode = new Map<string, number>();
+  for (const n of MAP) {
+    if (n.sector === 'empty') continue;
+    const p = s.planets[n.id];
+    if (!p) continue;
+    const c = world(n);
+    idxByNode.set(n.id, seeds.length);
+    seeds.push({ x: c.x, y: c.y, w: (p.size ?? 1) * W, owner: knownOwner(n.id), kind: n.sector });
+  }
+  const padB = Math.max(40, (MAXX - MINX) * 0.05);
+  const tl = world({ x: MINX - padB, y: MINY - padB });
+  const br = world({ x: MAXX + padB, y: MAXY + padB });
+  const clip: Array<[number, number]> = [
+    [tl.x, tl.y],
+    [br.x, tl.y],
+    [br.x, br.y],
+    [tl.x, br.y],
+  ];
+  const trace = (poly: Array<[number, number]>): void => {
+    cx.beginPath();
+    cx.moveTo(poly[0]![0], poly[0]![1]);
+    for (let i = 1; i < poly.length; i++) cx.lineTo(poly[i]![0], poly[i]![1]);
+    cx.closePath();
+  };
+  for (const [node, flash] of captureFlashes) {
+    const age = now - flash.at;
+    if (age >= CAPTURE_FLASH_MS) {
+      captureFlashes.delete(node);
+      continue;
+    }
+    const idx = idxByNode.get(node);
+    if (idx === undefined) continue; // province gone (shouldn't happen mid-flash)
+    const cell = computePowerCell(seeds, clip, idx);
+    if (!cell) continue;
+    const c = { x: seeds[idx]!.x, y: seeds[idx]!.y }; // seeds are already screen-space
+    // rAF's frame timestamp can predate the push by a hair → clamp so k ≥ 0 (a
+    // negative radius throws from cx.arc).
+    const k = Math.max(0, age) / CAPTURE_FLASH_MS; // 0 → 1
+    const fade = 1 - k;
+    const col = ownerColor(flash.owner);
+    // cell radius (centre → farthest vertex) sets how far the wave travels
+    let maxR = 0;
+    for (const [px, py] of cell.poly) maxR = Math.max(maxR, Math.hypot(px - c.x, py - c.y));
+    cx.save();
+    // 1) colour wash of the whole cell, fading — the province "flips" to the new hue
+    trace(cell.poly);
+    cx.fillStyle = rgba(col, 0.3 * fade);
+    cx.fill();
+    // 2) the wave: a bright ring expanding from the centre, CLIPPED to the cell so it
+    //    reads as energy sweeping across the province out to its border
+    trace(cell.poly);
+    cx.clip();
+    cx.globalCompositeOperation = 'lighter';
+    const rr = k * maxR * 1.25;
+    cx.strokeStyle = rgba(col, 0.85 * fade);
+    cx.lineWidth = 3 + 5 * fade;
+    cx.shadowColor = col;
+    cx.shadowBlur = 12 * fade;
+    cx.beginPath();
+    cx.arc(c.x, c.y, rr, 0, TAU);
+    cx.stroke();
+    cx.restore();
+    // 3) the frontier igniting — the cell outline pulses bright then settles
+    cx.save();
+    trace(cell.poly);
+    cx.strokeStyle = rgba(col, 0.9 * fade);
+    cx.lineWidth = 1.5 + 2.5 * fade;
+    cx.shadowColor = col;
+    cx.shadowBlur = 8 * fade;
+    cx.stroke();
+    cx.restore();
+  }
 }
 function jumpToPing(id: string): void {
   const pl = s.planets[id];
