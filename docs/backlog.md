@@ -408,10 +408,22 @@
   Таблица в `state.match.rewards` + payload `match.ended` + observe-`end`
   прото-хоста (JSONL плейтеста). Остаток кирпича: запись на аккаунт — ждёт
   мета-экономику EC-* и серверный XP/уровень (AC-0.3).
-- **SES-3** ⏳ `[core]` `[data]` **Премиум-добыча (GDD §4.3).** Редкие миры с премиум-
-  ресурсом (деф. бонус обороны — горячие точки), слив в ускорение исследований с
-  убывающей эффективностью; НЕ юниты/боевая мощь. ⚠ Развилка с ECON-1 (premium_shard
-  выпилен, «премиум» сейчас = energy) — решение о валюте за владельцем до старта кирпича.
+- **SES-3** ✅ `[core]` `[data]` **Премиум-добыча (GDD §4.3).** Развилка решена
+  владельцем (2026-07-12): **премиум = energy**, нового ресурса нет. Каталог:
+  тип мира `energy_nexus` (`data/planetTypes.json`: +100% energy через
+  `productionByResource`, +30% обороны — горячая точка, score 45) — работает через
+  существующий `planetTypeModule`, кода не потребовал. Слив: действие
+  **`technology.boost {technology}`** (technologyModule) — платит
+  `data.researchBoost.cost` (деф. 50 energy) и режет ОСТАВШЕЕСЯ время одного
+  активного исследования на `initialPercent × decay^boosts` (деф. 25%, затухание
+  ×0.5 — геометрически убывающая эффективность, мгновенного завершения не купить;
+  НЕ юниты/боевая мощь/опыт героев). Ускорение = решедул: `completesAt` сдвигается,
+  старое `technology.complete` становится no-op по несовпавшему `completesAt`.
+  Конфиг `GameData.researchBoost` (`ResearchBoostDefSchema`, zod-default — бандлы
+  без блока не тронуты), payload-схема в гейте. Коды: `E_NOT_ACTIVE`, `E_TOO_LATE`,
+  `E_INSUFFICIENT`, `E_BAD_PAYLOAD`. Осталось за скоупом: расстановка energy_nexus
+  на картах (map-дизайн), прото-UI кнопки буста, источник 2 (покупка на мета-рынке
+  — EC-*).
 - **EFX-1** ✅ `[core]` **Универсальный движок трейтов/эффектов.** `effectsModule` —
   интерпретатор `data.events` (`EffectRuleSchema`): `planet_captured` — trait-scoped
   (правило = трейт: срабатывает, когда захватившая сила несёт id правила в `traits`
@@ -480,8 +492,14 @@
   `E_CHALLENGE_CLOSED`. REST `POST /ava/challenge` + `/:id/(accept|decline)`,
   `GET /ava/challenges`; session-gated, per-IP rate-limit; свип-интервал в `main.ts`. Memory
   - Postgres + сервис-тесты (весь state-машинный набор) + HTTP-контракт.
-- **AVA-5** ⏳ `[core/data]` **Пул AvA-карт + eligibility.** Тег `ava{sides,slotsPerSide}`
-  в `MatchMapSchema`, пометить `ava-duel-1`, добавить 2v2-карту; `pickAvaMap` (seeded).
+- **AVA-5** ✅ `[core/data]` **Пул AvA-карт + eligibility.** `MatchMapSchema.avaEligible`
+  (bool, дефолт false); форма ВЫВОДИТСЯ из slots хелпером `avaShape` (`sides`/`slotsPerSide`,
+  null при <2 сторонах / неравных — тегу и раскладке неоткуда разъехаться);
+  `validateMatchMap` валит eligible-карту с кривой формой (`E_AVA_SHAPE`). `ava-duel-1`
+  помечена (2×1), добавлена `ava-2v2-1.json` (2×2, союзные слоты сгруппированы по флангам,
+  нейтральные призы west/east). `pickAvaMap(maps, sides, slotsPerSide, rng)` в server/meta:
+  фильтр тег+форма, канонический порядок по id, один draw seeded-Rng — выбор карты
+  воспроизводим для реплеев. Тесты: `buildFromMap.test.ts` + `avaMapPool.test.ts`.
 - **AVA-6** ⏳ `[srv]` **Сбор ростера + лок (S3).** Окно паузы; `setRoster` (глава/офицер
   из флагнутых) + `joinAva`/`readyUp` (самозапись); в конце лок (GDD §2), недобор →
   отмена+возврат.
