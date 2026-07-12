@@ -190,6 +190,7 @@ export const en: Record<string, string> = {
   'Нет лотов на продажу': 'No sell orders',
   'Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».':
     'A carrier (◈) holds squadrons (△). Launch the wing from the selected fleet\'s panel with "🛩 Launch squadron".',
+  'Новый командир на борту — обучение скоро появится здесь.': 'New commander aboard — the tutorial is coming soon.',
   'ОБЪЯВИТЬ ВОЙНУ': 'DECLARE WAR',
   'ОБЪЯВИТЬ ВОЙНУ?': 'DECLARE WAR?',
   'ОПЕРАТИВНАЯ ГРУППА': 'TASK GROUP',

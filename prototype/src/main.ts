@@ -138,6 +138,7 @@ import {
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
 import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
+import { onboardingKey, parseOnboardingState, isNewPlayer, markStarted } from './onboarding';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 import { initTestMode, openTestMode } from './testmode';
@@ -7300,10 +7301,23 @@ $('hp-meta').addEventListener('click', (ev) => {
 });
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
-  $('hub-name').textContent = nickInput.value.trim() || t('Командир');
+  const nick = nickInput.value.trim();
+  $('hub-name').textContent = nick || t('Командир');
   showConnect(false);
   showHub(true);
   hubTab('home');
+  // ONB-0: first-launch funnel. A nick that has never touched onboarding (no
+  // started/completed/skipped) is new — mark it started (persists, so this fires
+  // exactly once per nick across reloads) and nudge toward the guide. Any explicit
+  // `note` (sign-in stub notices etc.) wins over the nudge. docs/onboarding-roadmap.md ONB-0.
+  const onbKey = onboardingKey(nick);
+  const onb = parseOnboardingState(localStorage.getItem(onbKey));
+  if (isNewPlayer(onb)) {
+    localStorage.setItem(onbKey, JSON.stringify(markStarted(onb)));
+    console.debug('[onb] funnel: started'); // thin OPS hook — aggregate only, no PII
+    hubNote.textContent = note || t('Новый командир на борту — обучение скоро появится здесь.');
+    return;
+  }
   hubNote.textContent = note;
 }
 
