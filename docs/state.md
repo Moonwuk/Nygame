@@ -349,6 +349,18 @@ E_CONDITIONS_UNMET, E_INSUFFICIENT`.
 `completed` — бонусы/анлоки действуют с первой секунды; неизвестный id валит сборку
 (`E_UNKNOWN_TECHNOLOGY`, fail-secure), дубли схлопываются, prerequisites намеренно
 не проверяются (стартовый кит может дарить узел из середины дерева).
+**Премиум-слив (SES-3, GDD §4.3):** `technology.boost {technology}` — платит
+`data.researchBoost.cost` (деф. **50 energy** — решение владельца: премиум = energy,
+добывается на редких мирах `energy_nexus` из `planetTypes.json`: +100% energy,
++30% обороны — горячая точка) и режет ОСТАВШЕЕСЯ время активного исследования на
+`initialPercent × decay^boosts` (деф. 25% с затуханием ×0.5 за буст — убывающая
+эффективность, мгновенного завершения не купить; юниты/бой/герои не трогаются).
+Ускорение = решедул: `completesAt` двигается раньше + новое `technology.complete`;
+старое событие делается no-op штатным stale-гардом (несовпавший `completesAt`).
+Счётчик `ActiveResearch.boosts`; конфиг `GameData.researchBoost`
+(`ResearchBoostDefSchema`, zod-default — старые бандлы не тронуты); событие
+`technology.research.boosted`. Коды: `E_NOT_ACTIVE`, `E_TOO_LATE`, `E_INSUFFICIENT`,
+`E_BAD_PAYLOAD`.
 
 ### scientist (`scientist`) — research-лидер (учёный)
 

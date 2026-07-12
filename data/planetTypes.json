@@ -65,5 +65,12 @@
     "productionByResource": { "metal": 0.3 },
     "defenseBonus": 0,
     "scoreValue": 0
+  },
+  "energy_nexus": {
+    "name": "Energy Nexus",
+    "productionBonus": 0,
+    "productionByResource": { "energy": 1.0 },
+    "defenseBonus": 0.3,
+    "scoreValue": 45
   }
 }
