@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1267 зелёных** (11 skip, 121 файл).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1280 зелёных** (11 skip, 122 файла).
 
 ---
 
@@ -953,6 +953,19 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
   `serverPatrolActions` + хост-цикл `netserver.runServerStanding`; `autoAssault`/
   `patrols` фильтруются в fog; кнопки «⚔ авто-штурм» и «🛩 дежурный вылет» работают
   в соло и NET.
+- **Первый запуск + воронка (ONB-0)** — признак «прошёл онбординг» отдельно от ника:
+  чистая per-nick модель `src/onboarding.ts` (`OnboardState {started, stepReached,
+  completed, skipped}`, fail-secure `parseOnboardState`, идемпотентные переходы,
+  `welcomeMode` new/returning, `isOnboarded`) — 13 юнит-тестов (`onboarding.test.ts`:
+  new/returning, идемпотентность completed, skip уважается, парсер не падает на битом
+  значении). Хранится в `localStorage` (`vd.onboard.<ник>`, рядом с `vd.meta.<ник>`);
+  при сервер-аккаунте (SE-1.x) переедет в профиль. main.ts: новичку — одноразовое
+  предложение в хабе (`#onboard-nudge`, «Начать обучение»/«Пропустить»), «Ещё → Обучение»
+  — реплей; «Начать» ставит `pendingTour` и запускает ONB-1-тур над живым HUD из
+  `installMatch` (ONB-2 подменит контент тура на скриптовую песочницу на этом же шве);
+  тонкий воронка-хук пишет `stepReached`/исход (без PII, агрегаты — за OPS-метриками).
+  Проверено вживую (headless-бут main.ts): предложение показывается новичку, «Пропустить»
+  пишет флаг и прячет карточку, повторный визит не предлагает, признак per-nick.
 - **Движок гайд-марок (ONB-1, spotlight)** — переиспользуемый онбординг-примитив
   (`src/spotlight.ts` — чистый, DOM-free стейт-машина + геометрия; `src/spotlightDom.ts`
   — браузерный адаптер; `src/onboardingTour.ts` — data-цепочка над реальным HUD).

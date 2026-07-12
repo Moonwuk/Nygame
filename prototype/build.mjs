@@ -1441,6 +1441,15 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   background:rgba(53,214,230,.1);color:var(--cyan);font-size:18px;}
 #hub .hub-card .hc-t{font-size:13px;color:#dfeef2;}
 #hub .hub-card .hc-s{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.45;}
+/* ONB-0 first-run offer card (hub home) */
+#hub .ob-nudge{border-color:var(--cyan);background:rgba(53,214,230,.06);}
+#hub .ob-nudge .ob-body{flex:1;}
+#hub .ob-nudge .ob-btns{display:flex;gap:8px;margin-top:10px;}
+#hub .ob-nudge .ob-go{background:var(--cyan);border:none;color:#04121a;font-weight:700;font-size:12px;
+  padding:7px 14px;border-radius:7px;cursor:pointer;letter-spacing:.4px;}
+#hub .ob-nudge .ob-later{background:none;border:1px solid var(--line-hi);color:var(--dim);font-size:12px;
+  padding:7px 12px;border-radius:7px;cursor:pointer;}
+#hub .ob-nudge .ob-later:active{border-color:var(--cyan);color:#dfeef2;}
 #hub .hub-empty{padding:54px 16px;text-align:center;color:var(--dim);font-size:14px;letter-spacing:1px;line-height:1.9;}
 #hub .hub-empty .he-ic{font-size:38px;color:var(--cyan-dim);display:block;margin-bottom:14px;
   text-shadow:0 0 16px rgba(53,214,230,.3);}
@@ -1721,6 +1730,18 @@ const html = `<!doctype html>
     <div class="hub-panel" id="hp-home">
       <button id="hub-play" class="hub-play" type="button" data-i18n>ИГРАТЬ СЕЙЧАС</button>
       <button id="hub-solo" class="hub-solo" type="button" data-i18n>Одиночная игра</button>
+      <!-- ONB-0 first-run offer: shown only to a not-yet-onboarded commander -->
+      <div class="hub-card ob-nudge" id="onboard-nudge" style="display:none">
+        <div class="hc-ic">◎</div>
+        <div class="ob-body">
+          <div class="hc-t" data-i18n>Впервые в Void Dominion?</div>
+          <div class="hc-s" data-i18n>Короткое обучение покажет интерфейс и первый ход — пара минут.</div>
+          <div class="ob-btns">
+            <button id="ob-start" class="ob-go" type="button" data-i18n>Начать обучение</button>
+            <button id="ob-skip" class="ob-later" type="button" data-i18n>Пропустить</button>
+          </div>
+        </div>
+      </div>
       <div class="hub-sec" data-i18n>Сводка</div>
       <div class="hub-card">
         <div class="hc-ic">◷</div>
@@ -1741,6 +1762,7 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
+        <button class="hub-tile" id="hub-tutorial" type="button"><span class="ht-ic">◎</span><span data-i18n>Обучение</span></button>
         <button class="hub-tile" id="hub-settings" type="button"><span class="ht-ic">⚙</span><span data-i18n>Настройки</span></button>
         <button class="hub-tile" id="hub-upd" type="button" style="display:none"><span class="ht-ic">⟳</span><span data-i18n>Обновления</span></button>
         <button class="hub-tile" data-more="Аккаунт" type="button"><span class="ht-ic">◉</span><span data-i18n>Аккаунт</span></button>

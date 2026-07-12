@@ -4,6 +4,13 @@
 // English in game.ts) need no entry here; `tData()` shows them as-is on this locale.
 // One language = one file.
 export const en: Record<string, string> = {
+  // --- ONB-0 first-run offer (hub) + «Ещё → Обучение» --------------------------
+  'Впервые в Void Dominion?': 'New to Void Dominion?',
+  'Короткое обучение покажет интерфейс и первый ход — пара минут.':
+    'A short tutorial walks you through the interface and your first move — a couple of minutes.',
+  'Начать обучение': 'Start tutorial',
+  Пропустить: 'Skip',
+  Обучение: 'Tutorial',
   // --- ONB-1 guide-marks (spotlight) — chrome + HUD orientation tour -----------
   'шаг {k} из {n}': 'step {k} of {n}',
   Далее: 'Next',

@@ -145,7 +145,19 @@ import { initTestMode, openTestMode } from './testmode';
 // `playerOrder` feeds it real actions so `action` steps advance; ONB-2 builds
 // the full guided first match on the same `startTour` primitive.
 import { startTour, type RunningTour } from './spotlightDom';
+import type { TourResult } from './spotlight';
 import { HUD_ORIENTATION_TOUR } from './onboardingTour';
+// ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
+// model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
+import {
+  markCompleted,
+  markSkipped,
+  markStarted,
+  parseOnboardState,
+  reachStep,
+  welcomeMode,
+  type OnboardState,
+} from './onboarding';
 import type {
   GameState,
   Fleet,
@@ -1833,9 +1845,10 @@ function playerOrder(action: Action) {
 // as the reusable seam ONB-0/ONB-2 (auto-offer, «Ещё → Обучение») and headless
 // e2e drive — starting a HUD tour needs an active match, which those own.
 let activeTour: RunningTour | null = null;
-function launchTour(steps = HUD_ORIENTATION_TOUR): void {
-  activeTour = startTour(steps, () => {
+function launchTour(steps = HUD_ORIENTATION_TOUR, onEnd?: (r: TourResult) => void): void {
+  activeTour = startTour(steps, (r) => {
     activeTour = null;
+    onEnd?.(r);
   });
 }
 interface TourWindow {
@@ -1848,6 +1861,62 @@ interface TourWindow {
     return activeTour?.active ?? false;
   },
 };
+
+// --- ONB-0 first-run onboarding: per-callsign flag + funnel + hub offer -------
+// The "passed onboarding" signal lives per-nick in localStorage (separate from the
+// saved callsign — a returning device can still be new to the guide). A brand-new
+// commander gets a one-time hub offer; accepting arms the ONB-1 tour to fire once
+// the match is live (`pendingTour`, launched from installMatch); ONB-2 will swap the
+// orientation tour for the full guided sandbox on this same seam.
+function onboardKey(): string {
+  return 'vd.onboard.' + (nickInput.value.trim() || 'guest');
+}
+function loadOnboard(): OnboardState {
+  return parseOnboardState(localStorage.getItem(onboardKey()));
+}
+function saveOnboard(st: OnboardState): void {
+  localStorage.setItem(onboardKey(), JSON.stringify(st));
+}
+let pendingTour: typeof HUD_ORIENTATION_TOUR | null = null;
+// Fired when a match goes live (installMatch) — runs a queued onboarding tour once.
+function maybeStartPendingTour(): void {
+  if (!pendingTour || NET) return;
+  const steps = pendingTour;
+  pendingTour = null;
+  // Let the fresh HUD paint one frame so selectors resolve, then walk it.
+  requestAnimationFrame(() => launchTour(steps, onboardTourEnded));
+}
+// Thin funnel + flag writer (no PII; aggregates belong to server OPS-metrics).
+function onboardTourEnded(r: TourResult): void {
+  let st = reachStep(loadOnboard(), r.reachedStep + 1); // 1-based furthest step
+  if (r.completed) st = markCompleted(st);
+  else if (r.skipped) st = markSkipped(st);
+  saveOnboard(st);
+  if (DEV_UI)
+    console.debug(
+      `[onboard] ${r.completed ? 'completed' : r.skipped ? 'skipped' : 'stopped'} @ step ${r.reachedStep + 1}`,
+    );
+}
+// Show the first-run offer to a not-yet-onboarded commander (idempotent per visit).
+function refreshOnboardOffer(): void {
+  const nudge = document.getElementById('onboard-nudge');
+  if (nudge) nudge.style.display = welcomeMode(loadOnboard()) === 'new' ? 'flex' : 'none';
+}
+// «Начать обучение» / «Ещё → Обучение»: begin a solo sandbox with the tour armed.
+function beginOnboarding(): void {
+  saveOnboard(markStarted(loadOnboard()));
+  const nudge = document.getElementById('onboard-nudge');
+  if (nudge) nudge.style.display = 'none';
+  pendingTour = HUD_ORIENTATION_TOUR;
+  showHub(false);
+  openSetup('hub'); // pick a homeworld; the tour fires from installMatch
+}
+document.getElementById('ob-start')?.addEventListener('click', beginOnboarding);
+document.getElementById('ob-skip')?.addEventListener('click', () => {
+  saveOnboard(markSkipped(loadOnboard())); // respected forever — never nagged again
+  refreshOnboardOffer();
+});
+document.getElementById('hub-tutorial')?.addEventListener('click', beginOnboarding);
 
 // --- timed cargo loading (prototype UX: "погрузка занимает час") --------------
 // A ground-army load doesn't snap into the hold — it takes ~1 game-hour. The order
@@ -7334,6 +7403,7 @@ function openHub(note = ''): void {
   showHub(true);
   hubTab('home');
   hubNote.textContent = note;
+  refreshOnboardOffer(); // ONB-0: first-run offer for a not-yet-onboarded commander
 }
 
 $('cnew').addEventListener('click', () => openHub());
@@ -7850,6 +7920,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
   defaultView(); // phone: zoom onto home; desktop: whole-map fit
   setupEl.style.display = 'none';
+  maybeStartPendingTour(); // ONB-0: run a queued onboarding guide over the fresh HUD
 }
 function startMatch(setup: SetupConfig): void {
   const st = newGame(setup);
