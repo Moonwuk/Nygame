@@ -1,4 +1,10 @@
-import type { MatchEndReason, MatchScore, PlayerId, UnitStack } from '../state/gameState';
+import type {
+  MatchEndReason,
+  MatchScore,
+  PlayerId,
+  PlayerReward,
+  UnitStack,
+} from '../state/gameState';
 import type { HandlerContext, GameModule } from '../kernel/module';
 import { MS_PER_DAY } from '../util/time';
 import { isCapturable, provinceScore } from '../state/sectorKind';
@@ -100,6 +106,45 @@ function highestScore(
   return tied ? null : winner;
 }
 
+/** Session-end reward table (SES-2 first slice, GDD §3.4). Pure and deterministic:
+ *  place = standard competition ranking (1224) over the final score table (ties
+ *  share a place, ids break the iteration order only); XP = participation +
+ *  capped score share + win bonus for every member of the winning unit, scaled
+ *  by `data.rewards`. Every seated player gets a row — participation pays even
+ *  in defeat. The core only REPORTS the table (in state + the `match.ended`
+ *  payload); crediting accounts is the server's job once the meta-economy
+ *  lands (EC-*). GDD's open smooth-vs-league place scaling maps onto `place`. */
+function computeRewards(
+  h: HandlerContext,
+  winner: PlayerId | null,
+  winners?: PlayerId[],
+): Record<PlayerId, PlayerReward> {
+  const scale = h.ctx.data.rewards;
+  const scores = h.state.match.scores;
+  const winningUnit = new Set(winners ?? (winner === null ? [] : [winner]));
+  const ids = Object.keys(h.state.players).sort(
+    (a, b) => (scores[b]?.total ?? 0) - (scores[a]?.total ?? 0) || (a < b ? -1 : 1),
+  );
+  const rewards: Record<PlayerId, PlayerReward> = {};
+  let place = 0;
+  let prevTotal = Infinity;
+  ids.forEach((id, i) => {
+    const total = scores[id]?.total ?? 0;
+    if (total < prevTotal) {
+      place = i + 1;
+      prevTotal = total;
+    }
+    rewards[id] = {
+      place,
+      xp:
+        scale.xpParticipation +
+        Math.min(scale.xpScoreCap, Math.floor(Math.max(0, total) / scale.xpScoreDivisor)) +
+        (winningUnit.has(id) ? scale.xpWin : 0),
+    };
+  });
+  return rewards;
+}
+
 function endMatch(
   h: HandlerContext,
   winner: PlayerId | null,
@@ -113,11 +158,13 @@ function endMatch(
   if (winners && winners.length > 1) h.state.match.winners = [...winners].sort();
   h.state.match.endedAt = h.ctx.now;
   h.state.match.reason = reason;
+  h.state.match.rewards = computeRewards(h, winner, winners);
   h.emit('match.ended', {
     winner,
     reason,
     at: h.ctx.now,
     scores: h.state.match.scores,
+    rewards: h.state.match.rewards,
     ...(h.state.match.winners ? { winners: h.state.match.winners } : {}),
   });
 }
