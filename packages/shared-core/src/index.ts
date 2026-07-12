@@ -127,6 +127,7 @@ export {
   MapSectorSchema,
   MapSlotSchema,
   SpawnPolicySchema,
+  avaShape,
   parseMatchMap,
   safeParseMatchMap,
   type MatchMap,

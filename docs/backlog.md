@@ -488,8 +488,14 @@
   `E_CHALLENGE_CLOSED`. REST `POST /ava/challenge` + `/:id/(accept|decline)`,
   `GET /ava/challenges`; session-gated, per-IP rate-limit; свип-интервал в `main.ts`. Memory
   - Postgres + сервис-тесты (весь state-машинный набор) + HTTP-контракт.
-- **AVA-5** ⏳ `[core/data]` **Пул AvA-карт + eligibility.** Тег `ava{sides,slotsPerSide}`
-  в `MatchMapSchema`, пометить `ava-duel-1`, добавить 2v2-карту; `pickAvaMap` (seeded).
+- **AVA-5** ✅ `[core/data]` **Пул AvA-карт + eligibility.** `MatchMapSchema.avaEligible`
+  (bool, дефолт false); форма ВЫВОДИТСЯ из slots хелпером `avaShape` (`sides`/`slotsPerSide`,
+  null при <2 сторонах / неравных — тегу и раскладке неоткуда разъехаться);
+  `validateMatchMap` валит eligible-карту с кривой формой (`E_AVA_SHAPE`). `ava-duel-1`
+  помечена (2×1), добавлена `ava-2v2-1.json` (2×2, союзные слоты сгруппированы по флангам,
+  нейтральные призы west/east). `pickAvaMap(maps, sides, slotsPerSide, rng)` в server/meta:
+  фильтр тег+форма, канонический порядок по id, один draw seeded-Rng — выбор карты
+  воспроизводим для реплеев. Тесты: `buildFromMap.test.ts` + `avaMapPool.test.ts`.
 - **AVA-6** ⏳ `[srv]` **Сбор ростера + лок (S3).** Окно паузы; `setRoster` (глава/офицер
   из флагнутых) + `joinAva`/`readyUp` (самозапись); в конце лок (GDD §2), недобор →
   отмена+возврат.

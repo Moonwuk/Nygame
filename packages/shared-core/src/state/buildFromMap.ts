@@ -1,6 +1,6 @@
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
-import type { MatchMap } from '../data/mapSchema';
+import { avaShape, type MatchMap } from '../data/mapSchema';
 import {
   createInitialState,
   type Fleet,
@@ -39,6 +39,11 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
   for (const sid of Object.keys(map.slots)) {
     if (Object.prototype.hasOwnProperty.call(map.players, sid)) issues.push(`E_SLOT_PLAYER_ID_CLASH:${sid}`);
   }
+
+  // an AvA-eligible map must be a symmetric team map (AVA-5): ≥2 sides with an
+  // equal number of slots each — the pool derives the map's shape from `slots`,
+  // so a lopsided or teamless "eligible" map would silently never match a request
+  if (map.avaEligible && avaShape(map) === null) issues.push('E_AVA_SHAPE');
 
   // owners reference a declared player or slot
   for (const [id, sec] of Object.entries(map.sectors)) {
