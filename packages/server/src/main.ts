@@ -161,11 +161,12 @@ if (auth && !allowedOrigins) {
   );
 }
 
-// AvA service (AVA-2/3/4): readiness pool + challenge state machine over the durable
-// corp + challenge stores. One instance is shared by the HTTP API and the expiry sweep.
+// AvA service (AVA-2/3/4/6): readiness pool + challenge state machine + roster window
+// over the durable stores. One instance is shared by the HTTP API and the sweeps.
 const avaService = new AvaService({
   corpStore: stores.corpStore,
   challengeStore: stores.challengeStore,
+  rosterStore: stores.rosterStore,
 });
 
 // Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
@@ -246,13 +247,19 @@ const httpUrl = wsBase.replace(/^ws/, 'http').replace(/\/matches.*$/, '');
 // on an interval (a slow, cheap safety net; joins fill matches between ticks).
 keeper?.start(30_000);
 
-// AvA challenge expiry (AVA-4): close+refund unanswered challenges on an interval — the
-// same no-client-needed model as the offline scheduler. Unref'd so it never holds the
+// AvA sweeps on one interval: challenge expiry (AVA-4, close+refund unanswered) and
+// the roster window (AVA-6, lock a full roster / cancel+refund a short one) — the same
+// no-client-needed model as the offline scheduler. Unref'd so it never holds the
 // process open; errors are swallowed so one bad sweep can't crash the server.
 const avaSweep = setInterval(() => {
   void avaService.sweepExpired().catch((err) => {
     process.stderr.write(
       `ava expiry sweep failed — ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  });
+  void avaService.sweepRosters().catch((err) => {
+    process.stderr.write(
+      `ava roster sweep failed — ${err instanceof Error ? err.message : String(err)}\n`,
     );
   });
 }, 60_000);

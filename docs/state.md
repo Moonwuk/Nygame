@@ -1012,8 +1012,21 @@ S2-матчап) или `decline` (возврат); истечение — `swee
 одна `pending`-заявка на пару (partial unique index) + exactly-once `pending→terminal`
 (условный UPDATE — гонка double-accept закрыта, без двойного возврата влияния). Всё
 fail-secure стабильными кодами; REST `/ava/*` session-gated + per-IP rate-limit;
-`AvaService`/HTTP/стор-контракт-тесты (memory + Postgres 16). Полный AvA-цикл дальше:
-пул карт (AVA-5) → ростер/лок (AVA-6) → оркестратор фаз (AVA-7/8), `corporation-wars.md`.
+`AvaService`/HTTP/стор-контракт-тесты (memory + Postgres 16).
+**AVA-6 ростер + лок (S3):** `accept` открывает окно паузы (`pause_ends_at`, деф. 24ч);
+state-машина матчапа расширена `accepted` → `locked`/`cancelled` (exactly-once условным
+UPDATE — лок необратим по построению). `AvaRosterStore` (Memory + Postgres `ava_roster`):
+PK (matchup, account), пер-сайд кап охраняется атомарно (вставка сериализуется
+`FOR UPDATE` на строке матчапа — гонка за последний слот не переполняет сторону).
+`setRoster` — глава/офицер, replace-side целиком, ТОЛЬКО флагнутые (AVA-3), кап;
+`join` — самозапись члена в окне (нефлагнутый тоже — явка и есть согласие),
+идемпотентен; `rosterView` — свой состав + счётчики обеих сторон (чужой ростер
+приватен до боя); `sweepRosters` — обе стороны ≥ minPerSide → `locked` (вход S4),
+недобор → `cancelled` + возврат цены вызова ровно один раз; свип рядом с expiry в
+`main.ts`. Кап = слоты карты подключит AVA-7 (пока параметр, деф. 4). Коды
+`E_NOT_FLAGGED`/`E_ROSTER_FULL`/`E_ROSTER_LOCKED`/`E_WINDOW_CLOSED`; REST
+`GET /ava/matchup/:id` + `POST …/roster` + `POST …/join`. Полный AvA-цикл дальше:
+оркестратор фаз (AVA-7/8) + лента (AVA-9), `corporation-wars.md`.
 
 ## 9. Статус
 

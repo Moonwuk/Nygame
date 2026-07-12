@@ -4,6 +4,7 @@ import { createInitialState, type GameState } from '@void/shared-core';
 import {
   MemoryAccountStore,
   MemoryAvaChallengeStore,
+  MemoryAvaRosterStore,
   MemoryCorpStore,
   MemoryMatchStore,
   MemoryReceiptStore,
@@ -11,6 +12,7 @@ import {
 import {
   PostgresAccountStore,
   PostgresAvaChallengeStore,
+  PostgresAvaRosterStore,
   PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,
@@ -20,6 +22,9 @@ import type {
   AccountStore,
   AvaChallenge,
   AvaChallengeStore,
+  AvaRosterEntry,
+  AvaRosterStore,
+  AvaSide,
   CorpStore,
   MatchSnapshot,
   MatchStore,
@@ -354,6 +359,95 @@ function avaChallengeStoreContract(
       await store.closeChallenge(uniq('ch-e'), 'expired');
       expect((await store.duePending(2000)).map((c) => c.id)).not.toContain(uniq('ch-e'));
     });
+
+    it('AVA-6: roster window stamps only accepted rows; closeMatchup is exactly-once', async () => {
+      const store = make();
+      const [a, b] = [uniq('c-a5'), uniq('c-b5')];
+      await store.createChallenge(challenge(uniq('ch-f'), a, b, 1000));
+      // pending → no window stamped (accept must come first)
+      await store.openRosterWindow(uniq('ch-f'), 5000);
+      expect((await store.getChallenge(uniq('ch-f')))?.pauseEndsAt).toBeUndefined();
+      // and no matchup close either — the row is not accepted
+      expect(await store.closeMatchup(uniq('ch-f'), 'locked')).toBe(false);
+
+      await store.closeChallenge(uniq('ch-f'), 'accepted');
+      await store.openRosterWindow(uniq('ch-f'), 5000);
+      expect((await store.getChallenge(uniq('ch-f')))?.pauseEndsAt).toBe(5000);
+      // dueRosters keys off the stamped deadline
+      expect((await store.dueRosters(4999)).map((c) => c.id)).not.toContain(uniq('ch-f'));
+      expect((await store.dueRosters(5000)).map((c) => c.id)).toContain(uniq('ch-f'));
+      // accepted → terminal happens exactly once (the sweep race)
+      expect(await store.closeMatchup(uniq('ch-f'), 'locked')).toBe(true);
+      expect(await store.closeMatchup(uniq('ch-f'), 'cancelled')).toBe(false);
+      expect((await store.getChallenge(uniq('ch-f')))?.status).toBe('locked');
+      expect((await store.dueRosters(9999)).map((c) => c.id)).not.toContain(uniq('ch-f'));
+    });
+  });
+}
+
+function rosterStoreContract(
+  name: string,
+  make: () => { challenges: AvaChallengeStore; roster: AvaRosterStore },
+  uniq: (p: string) => string,
+): void {
+  describe(`AvaRosterStore — ${name}`, () => {
+    const entry = (matchupId: string, accountId: string, side: AvaSide): AvaRosterEntry => ({
+      matchupId,
+      accountId,
+      side,
+      source: 'self',
+      at: 1,
+    });
+    /** A real accepted matchup row to roster against (the Postgres cap guard
+     *  serializes on it via FOR UPDATE). */
+    async function acceptedMatchup(stores: ReturnType<typeof make>, id: string): Promise<void> {
+      await stores.challenges.createChallenge(
+        challenge(id, uniq(`${id}-a`), uniq(`${id}-b`), 1000),
+      );
+      await stores.challenges.closeChallenge(id, 'accepted');
+    }
+
+    it('one row per (matchup, account); the per-side cap is guarded', async () => {
+      const stores = make();
+      const id = uniq('mu1');
+      await acceptedMatchup(stores, id);
+      expect(await stores.roster.addEntry(entry(id, uniq('p1'), 'challenger'), 2)).toEqual({
+        ok: true,
+      });
+      expect(await stores.roster.addEntry(entry(id, uniq('p1'), 'challenger'), 2)).toEqual({
+        ok: false,
+        code: 'E_ALREADY_ROSTERED',
+      });
+      expect(await stores.roster.addEntry(entry(id, uniq('p2'), 'challenger'), 2)).toEqual({
+        ok: true,
+      });
+      expect(await stores.roster.addEntry(entry(id, uniq('p3'), 'challenger'), 2)).toEqual({
+        ok: false,
+        code: 'E_ROSTER_FULL',
+      });
+      // The OTHER side has its own cap.
+      expect(await stores.roster.addEntry(entry(id, uniq('p3'), 'target'), 2)).toEqual({
+        ok: true,
+      });
+      expect(await stores.roster.rosterOf(id)).toHaveLength(3);
+    });
+
+    it('replaceSide swaps one side wholesale and leaves the other untouched', async () => {
+      const stores = make();
+      const id = uniq('mu2');
+      await acceptedMatchup(stores, id);
+      await stores.roster.addEntry(entry(id, uniq('q1'), 'challenger'), 4);
+      await stores.roster.addEntry(entry(id, uniq('q2'), 'target'), 4);
+      await stores.roster.replaceSide(id, 'challenger', [
+        { ...entry(id, uniq('q3'), 'challenger'), source: 'flagged' },
+        { ...entry(id, uniq('q4'), 'challenger'), source: 'flagged' },
+      ]);
+      const rows = await stores.roster.rosterOf(id);
+      expect(rows.filter((r) => r.side === 'challenger').map((r) => r.accountId).sort()).toEqual(
+        [uniq('q3'), uniq('q4')].sort(),
+      );
+      expect(rows.filter((r) => r.side === 'target').map((r) => r.accountId)).toEqual([uniq('q2')]);
+    });
   });
 }
 
@@ -368,6 +462,11 @@ corpStoreContract(
 avaChallengeStoreContract(
   'memory',
   () => new MemoryAvaChallengeStore(),
+  (p) => p,
+);
+rosterStoreContract(
+  'memory',
+  () => ({ challenges: new MemoryAvaChallengeStore(), roster: new MemoryAvaRosterStore() }),
   (p) => p,
 );
 
@@ -399,6 +498,14 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   avaChallengeStoreContract(
     'postgres',
     () => new PostgresAvaChallengeStore(pool),
+    (p) => `${p}_${stamp}`,
+  );
+  rosterStoreContract(
+    'postgres',
+    () => ({
+      challenges: new PostgresAvaChallengeStore(pool),
+      roster: new PostgresAvaRosterStore(pool),
+    }),
     (p) => `${p}_${stamp}`,
   );
 

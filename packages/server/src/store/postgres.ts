@@ -6,6 +6,9 @@ import type {
   AvaChallenge,
   AvaChallengeStatus,
   AvaChallengeStore,
+  AvaRosterEntry,
+  AvaRosterStore,
+  AvaSide,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -135,6 +138,22 @@ export async function migrate(pool: Pool): Promise<void> {
       ON ava_challenges (challenger_corp, target_corp) WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS ava_challenges_challenger_idx ON ava_challenges (challenger_corp);
     CREATE INDEX IF NOT EXISTS ava_challenges_target_idx ON ava_challenges (target_corp);
+    -- AVA-6: the roster window deadline, stamped on accept (S3 opens at S2).
+    -- ALTER … IF NOT EXISTS backfills pre-AVA-6 rows with NULL = window closed.
+    ALTER TABLE ava_challenges ADD COLUMN IF NOT EXISTS pause_ends_at bigint;
+
+    -- AvA rosters (AVA-6): one row per (matchup, account) — the PK is the
+    -- one-entry-per-account invariant; the per-side cap is guarded inside the
+    -- insert transaction (FOR UPDATE on the matchup row serializes racing joins).
+    CREATE TABLE IF NOT EXISTS ava_roster (
+      matchup_id text NOT NULL,
+      account_id text NOT NULL,
+      side       text NOT NULL,
+      source     text NOT NULL,
+      at         bigint NOT NULL,
+      PRIMARY KEY (matchup_id, account_id)
+    );
+    CREATE INDEX IF NOT EXISTS ava_roster_side_idx ON ava_roster (matchup_id, side);
   `);
 }
 
@@ -680,6 +699,7 @@ interface ChallengeRow {
   status: string;
   created_at: string;
   expires_at: string;
+  pause_ends_at: string | null;
 }
 
 function challengeOf(row: ChallengeRow): AvaChallenge {
@@ -691,6 +711,7 @@ function challengeOf(row: ChallengeRow): AvaChallenge {
     status: row.status as AvaChallengeStatus,
     createdAt: Number(row.created_at),
     expiresAt: Number(row.expires_at),
+    ...(row.pause_ends_at === null ? {} : { pauseEndsAt: Number(row.pause_ends_at) }),
   };
 }
 
@@ -726,7 +747,7 @@ export class PostgresAvaChallengeStore implements AvaChallengeStore {
 
   async getChallenge(id: string): Promise<AvaChallenge | null> {
     const r = await this.pool.query<ChallengeRow>(
-      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at, pause_ends_at
        FROM ava_challenges WHERE id = $1`,
       [id],
     );
@@ -735,7 +756,7 @@ export class PostgresAvaChallengeStore implements AvaChallengeStore {
 
   async challengesOf(corpId: string, limit = 50): Promise<AvaChallenge[]> {
     const r = await this.pool.query<ChallengeRow>(
-      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at, pause_ends_at
        FROM ava_challenges
        WHERE challenger_corp = $1 OR target_corp = $1
        ORDER BY created_at DESC, id LIMIT $2`,
@@ -744,10 +765,7 @@ export class PostgresAvaChallengeStore implements AvaChallengeStore {
     return r.rows.map(challengeOf);
   }
 
-  async closeChallenge(
-    id: string,
-    status: Exclude<AvaChallengeStatus, 'pending'>,
-  ): Promise<boolean> {
+  async closeChallenge(id: string, status: 'accepted' | 'declined' | 'expired'): Promise<boolean> {
     // Only a still-pending row transitions — so a lost double-accept race changes
     // nothing and the caller (which keys the refund off this) can't double-refund.
     const r = await this.pool.query(
@@ -759,12 +777,144 @@ export class PostgresAvaChallengeStore implements AvaChallengeStore {
 
   async duePending(now: number): Promise<AvaChallenge[]> {
     const r = await this.pool.query<ChallengeRow>(
-      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at, pause_ends_at
        FROM ava_challenges
        WHERE status = 'pending' AND expires_at <= $1
        ORDER BY expires_at, id`,
       [now],
     );
     return r.rows.map(challengeOf);
+  }
+
+  async openRosterWindow(id: string, pauseEndsAt: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE ava_challenges SET pause_ends_at = $2 WHERE id = $1 AND status = 'accepted'`,
+      [id, pauseEndsAt],
+    );
+  }
+
+  async closeMatchup(id: string, status: 'locked' | 'cancelled'): Promise<boolean> {
+    // Same exactly-once contract as closeChallenge, over the accepted state: only a
+    // still-accepted matchup transitions, so the sweep can't cancel-and-refund twice.
+    const r = await this.pool.query(
+      `UPDATE ava_challenges SET status = $2 WHERE id = $1 AND status = 'accepted'`,
+      [id, status],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async dueRosters(now: number): Promise<AvaChallenge[]> {
+    const r = await this.pool.query<ChallengeRow>(
+      `SELECT id, challenger_corp, target_corp, cost, status, created_at, expires_at, pause_ends_at
+       FROM ava_challenges
+       WHERE status = 'accepted' AND pause_ends_at IS NOT NULL AND pause_ends_at <= $1
+       ORDER BY pause_ends_at, id`,
+      [now],
+    );
+    return r.rows.map(challengeOf);
+  }
+}
+
+interface RosterRow {
+  matchup_id: string;
+  account_id: string;
+  side: string;
+  source: string;
+  at: string;
+}
+
+function rosterEntryOf(row: RosterRow): AvaRosterEntry {
+  return {
+    matchupId: row.matchup_id,
+    accountId: row.account_id,
+    side: row.side as AvaSide,
+    source: row.source as AvaRosterEntry['source'],
+    at: Number(row.at),
+  };
+}
+
+/** Postgres AvA roster store (AVA-6). The PK is the one-entry-per-account invariant;
+ *  the per-side cap is guarded by serializing racing inserts of one matchup — the
+ *  transaction takes FOR UPDATE on the matchup row before counting, so two joins for
+ *  the last slot cannot both pass the count. */
+export class PostgresAvaRosterStore implements AvaRosterStore {
+  constructor(private readonly pool: Pool) {}
+
+  async addEntry(
+    entry: AvaRosterEntry,
+    capPerSide: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_ROSTERED' | 'E_ROSTER_FULL' }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Serialize concurrent roster writes of this matchup (the cap guard's atomicity).
+      await client.query(`SELECT id FROM ava_challenges WHERE id = $1 FOR UPDATE`, [
+        entry.matchupId,
+      ]);
+      const dup = await client.query(
+        `SELECT 1 FROM ava_roster WHERE matchup_id = $1 AND account_id = $2`,
+        [entry.matchupId, entry.accountId],
+      );
+      if ((dup.rowCount ?? 0) > 0) {
+        await client.query('ROLLBACK');
+        return { ok: false, code: 'E_ALREADY_ROSTERED' };
+      }
+      const onSide = await client.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM ava_roster WHERE matchup_id = $1 AND side = $2`,
+        [entry.matchupId, entry.side],
+      );
+      if (Number(onSide.rows[0]?.n ?? 0) >= capPerSide) {
+        await client.query('ROLLBACK');
+        return { ok: false, code: 'E_ROSTER_FULL' };
+      }
+      await client.query(
+        `INSERT INTO ava_roster (matchup_id, account_id, side, source, at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [entry.matchupId, entry.accountId, entry.side, entry.source, entry.at],
+      );
+      await client.query('COMMIT');
+      return { ok: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async replaceSide(matchupId: string, side: AvaSide, entries: AvaRosterEntry[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT id FROM ava_challenges WHERE id = $1 FOR UPDATE`, [matchupId]);
+      await client.query(`DELETE FROM ava_roster WHERE matchup_id = $1 AND side = $2`, [
+        matchupId,
+        side,
+      ]);
+      for (const entry of entries) {
+        await client.query(
+          `INSERT INTO ava_roster (matchup_id, account_id, side, source, at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (matchup_id, account_id) DO NOTHING`,
+          [entry.matchupId, entry.accountId, entry.side, entry.source, entry.at],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async rosterOf(matchupId: string): Promise<AvaRosterEntry[]> {
+    const r = await this.pool.query<RosterRow>(
+      `SELECT matchup_id, account_id, side, source, at
+       FROM ava_roster WHERE matchup_id = $1
+       ORDER BY side, account_id`,
+      [matchupId],
+    );
+    return r.rows.map(rosterEntryOf);
   }
 }

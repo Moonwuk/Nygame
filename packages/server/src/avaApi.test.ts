@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { registerAvaApi } from './avaApi';
 import { AvaService } from './avaService';
 import { CorpService, type CorpActor } from './corpService';
-import { MemoryAvaChallengeStore, MemoryCorpStore } from './store';
+import { MemoryAvaChallengeStore, MemoryAvaRosterStore, MemoryCorpStore } from './store';
 import type { Identity } from './matchApi';
 
 // AVA-2/3/4 — the AvA HTTP routes. The service owns the state machine (see
@@ -34,9 +34,12 @@ async function harness(): Promise<Harness> {
   const service = new AvaService({
     corpStore: store,
     challengeStore: challenges,
+    rosterStore: new MemoryAvaRosterStore(),
     now,
     challengeCost: 100,
     expiryMs: 1000,
+    pauseMs: 1000,
+    capPerSide: 2,
   });
 
   const a = await corp.create(actor('alice'), 'Alliance A');
@@ -110,6 +113,70 @@ describe('AVA · readiness + challenge API', () => {
       challenges: Array<{ status: string }>;
     };
     expect(mine.challenges[0]).toMatchObject({ status: 'accepted' });
+    await app.close();
+  });
+
+  it('roster window over HTTP (AVA-6): join, curate, private opponent view', async () => {
+    const { app, corpB } = await harness();
+    await app.inject({ method: 'POST', url: '/ava/ready/corp', headers: as('alice') });
+    await app.inject({ method: 'POST', url: '/ava/ready/corp', headers: as('bob') });
+    const challenge = await app.inject({
+      method: 'POST',
+      url: '/ava/challenge',
+      headers: as('alice'),
+      payload: { target: corpB },
+    });
+    const { id } = challenge.json() as { id: string };
+    await app.inject({ method: 'POST', url: `/ava/challenge/${id}/accept`, headers: as('bob') });
+
+    // anonymous → 401 on every roster route
+    for (const route of [
+      { method: 'GET' as const, url: `/ava/matchup/${id}` },
+      { method: 'POST' as const, url: `/ava/matchup/${id}/join` },
+      { method: 'POST' as const, url: `/ava/matchup/${id}/roster`, payload: { players: [] } },
+    ]) {
+      expect((await app.inject(route)).statusCode, route.url).toBe(401);
+    }
+
+    // alice self-enrolls; her flagged head-pick also lands via the curated route
+    expect(
+      (await app.inject({ method: 'POST', url: `/ava/matchup/${id}/join`, headers: as('alice') }))
+        .statusCode,
+    ).toBe(200);
+    // curating an UNFLAGGED account → 409 E_NOT_FLAGGED (nothing changes)
+    const unflagged = await app.inject({
+      method: 'POST',
+      url: `/ava/matchup/${id}/roster`,
+      headers: as('alice'),
+      payload: { players: ['acc-ghost'] },
+    });
+    expect(unflagged.statusCode).toBe(409);
+    expect((unflagged.json() as { error: string }).error).toBe('E_NOT_FLAGGED');
+    // malformed list → 409, fail-secure
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/ava/matchup/${id}/roster`,
+          headers: as('alice'),
+          payload: { players: [42] },
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    // bob (target side) sees only alice's HEADCOUNT, not her roster rows
+    const view = (
+      await app.inject({ method: 'GET', url: `/ava/matchup/${id}`, headers: as('bob') })
+    ).json() as { side: string; mine: unknown[]; counts: Record<string, number> };
+    expect(view.side).toBe('target');
+    expect(view.mine).toHaveLength(0);
+    expect(view.counts).toEqual({ challenger: 1, target: 0 });
+
+    // an outsider is not a party → 403
+    expect(
+      (await app.inject({ method: 'GET', url: `/ava/matchup/${id}`, headers: as('carol') }))
+        .statusCode,
+    ).toBe(403);
     await app.close();
   });
 

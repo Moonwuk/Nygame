@@ -2,12 +2,14 @@ import type { MatchRoom } from './matchRoom';
 import {
   MemoryAccountStore,
   MemoryAvaChallengeStore,
+  MemoryAvaRosterStore,
   MemoryCorpStore,
   MemoryMatchStore,
   MemoryReceiptStore,
   MemoryUserStore,
   PostgresAccountStore,
   PostgresAvaChallengeStore,
+  PostgresAvaRosterStore,
   PostgresCorpStore,
   PostgresMatchStore,
   PostgresReceiptStore,
@@ -15,6 +17,7 @@ import {
   migrate,
   type AccountStore,
   type AvaChallengeStore,
+  type AvaRosterStore,
   type CorpStore,
   type MatchSnapshot,
   type MatchStore,
@@ -43,6 +46,8 @@ export interface Stores {
   corpStore: CorpStore;
   /** AvA challenges (AVA-4) — the S0→S2 challenge state machine, durable. */
   challengeStore: AvaChallengeStore;
+  /** AvA rosters (AVA-6) — the pause-window roster of an accepted matchup. */
+  rosterStore: AvaRosterStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -58,6 +63,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       userStore: new MemoryUserStore(),
       corpStore: new MemoryCorpStore(),
       challengeStore: new MemoryAvaChallengeStore(),
+      rosterStore: new MemoryAvaRosterStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -74,6 +80,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     userStore: new PostgresUserStore(pool),
     corpStore: new PostgresCorpStore(pool),
     challengeStore: new PostgresAvaChallengeStore(pool),
+    rosterStore: new PostgresAvaRosterStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

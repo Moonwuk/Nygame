@@ -3,8 +3,10 @@ import type { PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
   AvaChallenge,
-  AvaChallengeStatus,
   AvaChallengeStore,
+  AvaRosterEntry,
+  AvaRosterStore,
+  AvaSide,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -336,7 +338,7 @@ export class MemoryAvaChallengeStore implements AvaChallengeStore {
     return Promise.resolve(mine.slice(0, limit).map((r) => ({ ...r })));
   }
 
-  closeChallenge(id: string, status: Exclude<AvaChallengeStatus, 'pending'>): Promise<boolean> {
+  closeChallenge(id: string, status: 'accepted' | 'declined' | 'expired'): Promise<boolean> {
     const row = this.rows.get(id);
     if (!row || row.status !== 'pending') return Promise.resolve(false);
     row.status = status;
@@ -348,6 +350,73 @@ export class MemoryAvaChallengeStore implements AvaChallengeStore {
       [...this.rows.values()]
         .filter((r) => r.status === 'pending' && r.expiresAt <= now)
         .sort((a, b) => a.expiresAt - b.expiresAt || (a.id < b.id ? -1 : 1))
+        .map((r) => ({ ...r })),
+    );
+  }
+
+  openRosterWindow(id: string, pauseEndsAt: number): Promise<void> {
+    const row = this.rows.get(id);
+    if (row && row.status === 'accepted') row.pauseEndsAt = pauseEndsAt;
+    return Promise.resolve();
+  }
+
+  closeMatchup(id: string, status: 'locked' | 'cancelled'): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'accepted') return Promise.resolve(false);
+    row.status = status;
+    return Promise.resolve(true);
+  }
+
+  dueRosters(now: number): Promise<AvaChallenge[]> {
+    return Promise.resolve(
+      [...this.rows.values()]
+        .filter((r) => r.status === 'accepted' && r.pauseEndsAt !== undefined && r.pauseEndsAt <= now)
+        .sort((a, b) => (a.pauseEndsAt ?? 0) - (b.pauseEndsAt ?? 0) || (a.id < b.id ? -1 : 1))
+        .map((r) => ({ ...r })),
+    );
+  }
+}
+
+/** In-memory AvA roster store (AVA-6) — `matchupId → accountId → entry`, plus the
+ *  two structural invariants: one row per (matchup, account), guarded per-side cap. */
+export class MemoryAvaRosterStore implements AvaRosterStore {
+  private readonly byMatchup = new Map<string, Map<string, AvaRosterEntry>>();
+
+  addEntry(
+    entry: AvaRosterEntry,
+    capPerSide: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_ROSTERED' | 'E_ROSTER_FULL' }> {
+    let rows = this.byMatchup.get(entry.matchupId);
+    if (!rows) {
+      rows = new Map();
+      this.byMatchup.set(entry.matchupId, rows);
+    }
+    if (rows.has(entry.accountId)) {
+      return Promise.resolve({ ok: false, code: 'E_ALREADY_ROSTERED' });
+    }
+    const onSide = [...rows.values()].filter((r) => r.side === entry.side).length;
+    if (onSide >= capPerSide) return Promise.resolve({ ok: false, code: 'E_ROSTER_FULL' });
+    rows.set(entry.accountId, { ...entry });
+    return Promise.resolve({ ok: true });
+  }
+
+  replaceSide(matchupId: string, side: AvaSide, entries: AvaRosterEntry[]): Promise<void> {
+    let rows = this.byMatchup.get(matchupId);
+    if (!rows) {
+      rows = new Map();
+      this.byMatchup.set(matchupId, rows);
+    }
+    for (const [accountId, row] of rows) {
+      if (row.side === side) rows.delete(accountId);
+    }
+    for (const entry of entries) rows.set(entry.accountId, { ...entry });
+    return Promise.resolve();
+  }
+
+  rosterOf(matchupId: string): Promise<AvaRosterEntry[]> {
+    return Promise.resolve(
+      [...(this.byMatchup.get(matchupId)?.values() ?? [])]
+        .sort((a, b) => (a.side < b.side ? -1 : a.side > b.side ? 1 : a.accountId < b.accountId ? -1 : 1))
         .map((r) => ({ ...r })),
     );
   }

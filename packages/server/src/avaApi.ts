@@ -15,6 +15,9 @@ import type { Identity } from './matchApi';
  *   POST /ava/challenge     {target}   challenge a ready corp (head; spends influence)
  *   POST /ava/challenge/:id/accept     accept → S2 matchup (target head)
  *   POST /ava/challenge/:id/decline    decline → refund (target head)
+ *   GET  /ava/matchup/:id              my side's roster + both headcounts (AVA-6)
+ *   POST /ava/matchup/:id/roster       {players[]} curate my side (head/officer)
+ *   POST /ava/matchup/:id/join         self-enroll during the pause window (member)
  */
 
 export interface AvaApiDeps {
@@ -34,6 +37,10 @@ const STATUS: Record<AvaErrorCode, number> = {
   E_INSUFFICIENT: 402,
   E_NO_CHALLENGE: 404,
   E_CHALLENGE_CLOSED: 409,
+  E_NOT_FLAGGED: 409,
+  E_ROSTER_FULL: 409,
+  E_ROSTER_LOCKED: 409,
+  E_WINDOW_CLOSED: 409,
 };
 
 /** AvA writes are a spam surface like the corp API — share the same per-IP budget. */
@@ -159,6 +166,39 @@ export function registerAvaApi(app: FastifyInstance, deps: AvaApiDeps): void {
     if (!who) return { error: 'E_AUTH' as const };
     const { id } = request.params as { id: string };
     const result = await service.decline(who, id);
+    if (!result.ok) return failed(reply, result.code);
+    return result;
+  });
+
+  // ---- AVA-6 · roster window ------------------------------------------------
+
+  app.get('/ava/matchup/:id', async (request, reply) => {
+    const who = await identified(request, reply);
+    if (!who) return { error: 'E_AUTH' as const };
+    const { id } = request.params as { id: string };
+    const view = await service.rosterView(who, id);
+    if ('ok' in view && !view.ok) return failed(reply, view.code);
+    return view;
+  });
+
+  app.post('/ava/matchup/:id/roster', async (request, reply) => {
+    const who = await guardedWrite(request, reply);
+    if (!who) return { error: 'E_AUTH' as const };
+    const { id } = request.params as { id: string };
+    const players = (request.body as { players?: unknown } | null)?.players;
+    if (!Array.isArray(players) || players.some((p) => typeof p !== 'string' || p.length === 0)) {
+      return failed(reply, 'E_NOT_FLAGGED'); // malformed list — fail-secure, nothing changes
+    }
+    const result = await service.setRoster(who, id, players as string[]);
+    if (!result.ok) return failed(reply, result.code);
+    return result;
+  });
+
+  app.post('/ava/matchup/:id/join', async (request, reply) => {
+    const who = await guardedWrite(request, reply);
+    if (!who) return { error: 'E_AUTH' as const };
+    const { id } = request.params as { id: string };
+    const result = await service.join(who, id);
     if (!result.ok) return failed(reply, result.code);
     return result;
   });

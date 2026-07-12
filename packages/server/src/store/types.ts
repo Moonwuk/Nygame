@@ -203,9 +203,18 @@ export interface CorpStore {
   close?(): Promise<void>;
 }
 
-/** AvA challenge statuses (AVA-4). `pending` is the only live state; every other
- *  status is terminal — transitions happen exactly once (atomic close). */
-export type AvaChallengeStatus = 'pending' | 'accepted' | 'declined' | 'expired';
+/** AvA challenge statuses. AVA-4: `pending` → `accepted` (S2 matchup) / `declined` /
+ *  `expired` — the pending→terminal transition happens exactly once (atomic close).
+ *  AVA-6 extends the machine past S2: an `accepted` matchup runs its roster window and
+ *  transitions exactly once to `locked` (roster frozen — the orchestrator's S4 input)
+ *  or `cancelled` (a side came up short — challenge cost refunded). */
+export type AvaChallengeStatus =
+  | 'pending'
+  | 'accepted'
+  | 'declined'
+  | 'expired'
+  | 'locked'
+  | 'cancelled';
 
 /** One S0→S2 challenge row (AVA-4). An ACCEPTED row IS the S2 matchup contract —
  *  the roster phase (AVA-6) builds on it. */
@@ -218,6 +227,24 @@ export interface AvaChallenge {
   status: AvaChallengeStatus;
   createdAt: number;
   expiresAt: number;
+  /** Roster window deadline (AVA-6), stamped when the challenge is ACCEPTED: both
+   *  sides gather their roster until this instant, then the sweep locks or cancels.
+   *  Absent on rows accepted before AVA-6 — treated as a closed window (fail-secure). */
+  pauseEndsAt?: number;
+}
+
+/** Which party of a matchup an account fights for (AVA-6). */
+export type AvaSide = 'challenger' | 'target';
+
+/** One roster row (AVA-6): an account committed to a side of a matchup. `source`
+ *  records HOW they got in — curated from the flagged pool (`flagged`, set by the
+ *  head/officer) or self-enrolled during the pause window (`self`). */
+export interface AvaRosterEntry {
+  matchupId: string;
+  accountId: string;
+  side: AvaSide;
+  source: 'flagged' | 'self';
+  at: number;
 }
 
 /** Persistence for AvA challenges (AVA-4). Like CorpStore, deliberately dumb: the
@@ -234,9 +261,38 @@ export interface AvaChallengeStore {
   challengesOf(corpId: string, limit?: number): Promise<AvaChallenge[]>;
   /** Atomic pending→terminal transition. False = the row was NOT pending (already
    *  closed, or missing) and NOTHING changed — the caller must not refund twice. */
-  closeChallenge(id: string, status: Exclude<AvaChallengeStatus, 'pending'>): Promise<boolean>;
+  closeChallenge(id: string, status: 'accepted' | 'declined' | 'expired'): Promise<boolean>;
   /** Pending challenges whose expiry is due at `now` (for the sweep). */
   duePending(now: number): Promise<AvaChallenge[]>;
+  /** AVA-6: stamp the roster window deadline on an ACCEPTED matchup (right after the
+   *  accept wins its close race — S3 opens at S2). No-op on any other status. */
+  openRosterWindow(id: string, pauseEndsAt: number): Promise<void>;
+  /** AVA-6: atomic accepted→terminal transition of the roster phase (`locked` /
+   *  `cancelled`). False = the row was NOT accepted and NOTHING changed — the same
+   *  exactly-once contract as `closeChallenge` (the caller must not refund twice). */
+  closeMatchup(id: string, status: 'locked' | 'cancelled'): Promise<boolean>;
+  /** Accepted matchups whose roster window is due at `now` (for the roster sweep). */
+  dueRosters(now: number): Promise<AvaChallenge[]>;
+  close?(): Promise<void>;
+}
+
+/** Persistence for AvA rosters (AVA-6). The store guards the two invariants that need
+ *  storage-level atomicity: one roster row per (matchup, account), and the per-side
+ *  cap — a guarded insert can never push a side past `capPerSide` (two racing joins
+ *  must not overfill the last slot). The window/lock rules live in `AvaService`. */
+export interface AvaRosterStore {
+  /** Guarded insert: fails when the account is already rostered in this matchup or
+   *  the side is at `capPerSide`. Atomic — the count check and the insert are one
+   *  storage-level operation. */
+  addEntry(
+    entry: AvaRosterEntry,
+    capPerSide: number,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_ALREADY_ROSTERED' | 'E_ROSTER_FULL' }>;
+  /** Replace one side's roster wholesale (the head/officer's curated list). The new
+   *  list must already be validated by the service (flagged + within the cap). */
+  replaceSide(matchupId: string, side: AvaSide, entries: AvaRosterEntry[]): Promise<void>;
+  /** Every roster row of a matchup, sorted (side, then account) for determinism. */
+  rosterOf(matchupId: string): Promise<AvaRosterEntry[]>;
   close?(): Promise<void>;
 }
 
