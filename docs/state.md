@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1297 зелёных** (11 skip, 124 файла).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1306 зелёных** (11 skip, 125 файлов).
 
 ---
 
@@ -953,6 +953,18 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
   `serverPatrolActions` + хост-цикл `netserver.runServerStanding`; `autoAssault`/
   `patrols` фильтруются в fog; кнопки «⚔ авто-штурм» и «🛩 дежурный вылет» работают
   в соло и NET.
+- **Just-in-time интро механик (ONB-3)** — при **первом** открытии продвинутой панели
+  (технологии/рынок/Хранитель/верфь/дипломатия) — разовая интро-карточка, потом никогда:
+  чистый `src/intros.ts` (`INTROS` — 5 карточек `{id,title,body,trigger}` из готовой копии;
+  fail-secure `parseSeenIntros`, идемпотентные `markIntroSeen`/`hasSeenIntro`; `resolveIntro(seen,
+  id,{veteran})→{card,seen}` — показывает ровно раз, ветерану suppress-но-помечено) — 9 тестов.
+  Хранится per-nick `vd.seenIntros.<ник>`. main.ts: `maybeIntro(id)` в хуках рельс-панелей
+  (`rail-tech`/`-steward`/`-market`/`-constructor` + `openDiplo`), оверлей `#intro` (z-58 —
+  поверх панели, ниже настроек 59), «Понятно» закрывает; ветеран = завершил матч (`meta.xp>0`)
+  → карточки помечаются молча (не спамим). RU/EN. Прогрессивное раскрытие: обучение
+  разнесено по сессиям, не фронт-лоадом. Проверено вживую (headless-бут): первое открытие →
+  карточка, повторное → нет, другой панель → своя, ветеран → подавлено-но-помечено. _Триггеры
+  `firstAvailable`/`firstFail` (ретрит/артиллерия) — модель готова, хуки за доводкой._
 - **Help/кодекс-хаб (ONB-4)** — существующий корпус кодекса стал **находимым**: чистый
   индекс `src/codexIndex.ts` (`buildCodexIndex(data)`→плоский `CodexEntry[]` по всем
   юнитам/зданиям + `GLOSSARY` из 7 терминов-статей: async, туман, upkeep, орбита/высадка,

@@ -151,6 +151,8 @@ import { HUD_ORIENTATION_TOUR } from './onboardingTour';
 import { buildFirstMatchTour } from './firstMatchTour';
 // ONB-4 — searchable codex/help index (pure) over the existing article corpus.
 import { buildCodexIndex, searchCodex, GLOSSARY, type CodexEntry, type CodexCategory } from './codexIndex';
+// ONB-3 — just-in-time mechanic intros (per-nick seen-set, shown once on first contact).
+import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
 // ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
 // model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
 import {
@@ -5512,6 +5514,37 @@ document.getElementById('codexhub')?.addEventListener('click', (ev) => {
 document.getElementById('hub-help')?.addEventListener('click', openCodexHub);
 document.getElementById('rail-help')?.addEventListener('click', openCodexHub);
 
+// --- ONB-3 just-in-time mechanic intros --------------------------------------
+// The first time a player opens an advanced panel, a one-screen card explains it,
+// then never again (per-callsign seen-set). A veteran (has finished a match →
+// meta XP > 0) is marked seen silently, so they are never nagged.
+function seenIntrosKey(): string {
+  return 'vd.seenIntros.' + (nickInput.value.trim() || 'guest');
+}
+function showIntro(card: IntroCard): void {
+  const el = document.getElementById('intro');
+  if (!el) return;
+  el.innerHTML =
+    `<div class="inbox"><div class="in-head"><span class="in-ic">✦</span><b>${esc(t(card.title))}</b>` +
+    `<span class="in-tag">${t('впервые')}</span></div>` +
+    `<div class="in-body">${esc(t(card.body))}</div>` +
+    `<button class="in-ok">${t('Понятно')}</button></div>`;
+  el.classList.add('show');
+}
+// Panel-open hook: show the intro for `id` once (unless already seen / a veteran).
+function maybeIntro(id: string): void {
+  const seen = parseSeenIntros(localStorage.getItem(seenIntrosKey()));
+  const veteran = loadMeta().xp > 0; // finished at least one match → knows the ropes
+  const { card, seen: next } = resolveIntro(seen, id, { veteran });
+  localStorage.setItem(seenIntrosKey(), JSON.stringify(next));
+  if (card) showIntro(card);
+}
+document.getElementById('intro')?.addEventListener('click', (ev) => {
+  const el = document.getElementById('intro')!;
+  const tg = ev.target as HTMLElement;
+  if (tg === el || tg.closest('.in-ok')) el.classList.remove('show'); // backdrop / «Понятно»
+});
+
 /** A `b:<id>:<lvl>` key embeds its building level in the title (as `hl(lvl)`) — shared
  *  by the desktop hover pane and the mobile tap modal so both read identically. */
 function dossierTitleHtml(key: string, d: Dossier): string {
@@ -6725,6 +6758,7 @@ function renderTech(): void {
 document.getElementById('rail-tech')?.addEventListener('click', () => {
   techWin.classList.add('show');
   renderTech();
+  maybeIntro('tech');
 });
 techWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -6799,6 +6833,7 @@ function renderSteward(): void {
 document.getElementById('rail-steward')?.addEventListener('click', () => {
   stewWin.classList.add('show');
   renderSteward();
+  maybeIntro('steward');
 });
 stewWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -6979,6 +7014,7 @@ function renderMarket(): void {
 document.getElementById('rail-market')?.addEventListener('click', () => {
   marketWin.classList.add('show');
   renderMarket();
+  maybeIntro('market');
 });
 marketWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -7247,6 +7283,7 @@ function conFit(moduleId: string, remove: boolean): void {
 document.getElementById('rail-constructor')?.addEventListener('click', () => {
   constructorWin.classList.add('show');
   renderConstructor();
+  maybeIntro('constructor');
 });
 constructorWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -9048,7 +9085,10 @@ if (pingPopEl) {
 }
 
 // Session menu: the rail's Diplomacy / Dispatches buttons open the roster / message log.
-document.getElementById('rail-diplo')?.addEventListener('click', () => openDiplo('diplo'));
+document.getElementById('rail-diplo')?.addEventListener('click', () => {
+  openDiplo('diplo');
+  maybeIntro('diplomacy');
+});
 document.getElementById('rail-msgs')?.addEventListener('click', () => {
   unreadMsgs = 0; // reading the tab clears the badge
   openDiplo('msgs');

@@ -4,6 +4,22 @@
 // English in game.ts) need no entry here; `tData()` shows them as-is on this locale.
 // One language = one file.
 export const en: Record<string, string> = {
+  // --- ONB-3 just-in-time mechanic intros --------------------------------------
+  впервые: 'first time',
+  'Дерево технологий': 'Technology tree',
+  'Здесь ты открываешь технологии — постоянные улучшения флота, экономики и обороны. Узел стоит ресурсов и времени; изучил — бонус действует до конца матча. Планируй ветку под свой стиль игры.':
+    'Here you unlock technologies — permanent upgrades to your fleet, economy and defence. A node costs resources and time; once researched, the bonus lasts the rest of the match. Plan the branch to fit your playstyle.',
+  'Сессионный рынок': 'Session market',
+  'Торгуй ресурсами с другими игроками сессии: выставляй свои лоты и забирай чужие. Рынок сглаживает нехватку — обменяй излишек одного ресурса на тот, которого не хватает.':
+    'Trade resources with the other players in the session: post your own lots and take theirs. The market smooths shortages — swap a surplus of one resource for the one you lack.',
+  'Хранитель — ИИ на сон': 'Steward — AI on sleep',
+  'Уходишь надолго? Передай оборону Хранителю — он будет держать твои миры по заданным правилам, пока тебя нет. Мир идёт 24/7, но базовая защита останется, даже когда ты офлайн.':
+    'Away for a while? Hand your defence to the Steward — it holds your worlds by your rules while you are gone. The world runs 24/7, but a baseline defence stays up even when you are offline.',
+  'Верфь — оснащение': 'Shipyard — loadouts',
+  'Здесь ты собираешь корабли, эскадрильи, дивизии и героев из модулей. Лоадаут фиксируется при постройке — выбирай слоты заранее, переоснастить готовое нельзя. Вкладка «Герои» — штаб командиров.':
+    'Here you assemble ships, squadrons, divisions and heroes from modules. The loadout is locked at build time — choose slots up front, a finished unit cannot be re-fitted. The «Heroes» tab is your commander HQ.',
+  'Объявляй войну и мир, заключай пакты и союзы. Коалиция ограничена порогом силы — всех против одного не собрать. Следи за стойками сторон: союзник сегодня может стать соперником завтра.':
+    'Declare war and peace, sign pacts and alliances. A coalition is capped by combined strength — you cannot gang everyone up on one player. Watch the stances: an ally today can be a rival tomorrow.',
   // --- ONB-4 codex/help hub (chrome + glossary) --------------------------------
   Справочник: 'Codex',
   Справка: 'Help',

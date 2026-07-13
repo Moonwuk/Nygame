@@ -239,6 +239,21 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #codexhub .ch-empty{padding:24px 8px;text-align:center;color:var(--dim);font-size:13px;}
 #codexhub .cx-close{margin-top:10px;}
 /* the always-present in-match «?» help button (rail tool) reuses the rail styles */
+/* ONB-3 just-in-time intro card — one-screen first-contact explainer, z-58 so it
+   layers ABOVE the panel it introduces (tech/market/… at z-47) but below settings(59). */
+#intro{position:fixed;inset:0;z-index:58;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.62);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#intro.show{display:flex;}
+#intro .inbox{width:min(400px,92vw);max-height:84vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#intro .in-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line-hi);}
+#intro .in-ic{font-size:20px;color:var(--cyan);}
+#intro .in-head b{font-size:15px;letter-spacing:1px;color:#eafffb;flex:1;}
+#intro .in-tag{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);border:1px solid var(--line);padding:2px 6px;border-radius:2px;}
+#intro .in-body{font-size:13px;line-height:1.62;color:#cfe9e4;}
+#intro .in-ok{margin-top:14px;width:100%;padding:10px;cursor:pointer;border-radius:7px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.12);color:var(--cyan);font:700 13px ui-monospace,monospace;letter-spacing:1px;}
+#intro .in-ok:active{background:rgba(53,214,230,.24);}
 
 /* player card — tap the top-left crest for your session dossier */
 #playercard{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
@@ -1661,6 +1676,7 @@ const html = `<!doctype html>
 <div id="cmdbar"></div>
 <div id="codex"></div>
 <div id="codexhub"></div>
+<div id="intro"></div>
 <div id="playercard"></div>
 <div id="settings"></div>
 <div id="warprompt"></div>
