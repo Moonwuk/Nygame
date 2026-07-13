@@ -127,6 +127,7 @@ export {
   MapSectorSchema,
   MapSlotSchema,
   SpawnPolicySchema,
+  avaShape,
   parseMatchMap,
   safeParseMatchMap,
   type MatchMap,
@@ -161,6 +162,7 @@ export {
   HeroBranchSchema,
   TechnologyEffectsSchema,
   TechnologyUnlocksSchema,
+  ResearchBoostDefSchema,
   ResourceBagSchema,
   RewardsDefSchema,
   UnitStatsSchema,
@@ -202,6 +204,7 @@ export {
   type TechnologyUnlocks,
   type UnitStats,
   type RewardsDef,
+  type ResearchBoostDef,
 } from './data/schemas';
 export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loadGameData';
 

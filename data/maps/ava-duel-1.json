@@ -1,6 +1,7 @@
 {
   "id": "ava-duel-1",
   "seed": "ava-duel-1",
+  "avaEligible": true,
   "time": 0,
   "sectors": {
     "nexus": { "position": { "x": 0, "y": 0 }, "kind": "nebula", "terrain": "nebula" },

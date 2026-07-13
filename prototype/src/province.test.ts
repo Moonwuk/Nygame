@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAP, newGame } from './game';
+import { MAP, START_CANDIDATES, newGame } from './game';
 import { clampPowerWeights } from '../../packages/client/src/territory';
 
 // The province map is a weighted Voronoi (power diagram) over the sector centres,
@@ -68,5 +68,68 @@ describe('province power-diagram weights — every node keeps its own cell', () 
     const one = [{ x: 0, y: 0, w: 99 }];
     clampPowerWeights(one);
     expect(one[0]!.w).toBe(99);
+  });
+});
+
+describe('10-seat skirmish field', () => {
+  it('keeps the old per-seat density on an 11×11 board', () => {
+    expect(MAP).toHaveLength(121);
+    expect(START_CANDIDATES).toHaveLength(10);
+    expect(new Set(START_CANDIDATES).size).toBe(10);
+    expect(MAP.filter((node) => node.sector === 'planet')).toHaveLength(30);
+  });
+
+  it('is one connected province graph', () => {
+    const seen = new Set<string>();
+    const queue = [MAP[0]!.id];
+    const byId = new Map(MAP.map((node) => [node.id, node]));
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const next of byId.get(id)?.links ?? []) if (!seen.has(next)) queue.push(next);
+    }
+    expect(seen.size).toBe(MAP.length);
+  });
+
+  it('keeps every start within 10 nearby base points over three hops', () => {
+    const byId = new Map(MAP.map((node) => [node.id, node]));
+    const nearbyScores = START_CANDIDATES.map((start) => {
+      const distance = new Map([[start, 0]]);
+      const queue = [start];
+      while (queue.length) {
+        const id = queue.shift()!;
+        const hops = distance.get(id)!;
+        if (hops === 3) continue;
+        for (const next of byId.get(id)?.links ?? []) {
+          if (distance.has(next)) continue;
+          distance.set(next, hops + 1);
+          queue.push(next);
+        }
+      }
+      return [...distance.keys()].reduce(
+        (score, id) => score + (byId.get(id)?.sector === 'planet' ? 50 : 10),
+        0,
+      );
+    });
+    expect(Math.max(...nearbyScores) - Math.min(...nearbyScores)).toBeLessThanOrEqual(10);
+  });
+
+  it('spawns ten distinct players, homeworlds and starting fleets', () => {
+    const factions = ['blue', 'red', 'amber', 'violet'];
+    const seats = START_CANDIDATES.map((start, i) => ({
+      id: `p${i + 1}`,
+      name: `Player ${i + 1}`,
+      faction: factions[i % factions.length]!,
+      start,
+      ai: i > 0,
+    }));
+    const state = newGame({ seats });
+    expect(Object.keys(state.players)).toHaveLength(10);
+    expect(Object.keys(state.fleets)).toHaveLength(10);
+    for (const seat of seats) {
+      expect(state.planets[seat.start]?.owner).toBe(seat.id);
+      expect(state.fleets[`${seat.id}-1`]?.location).toBe(seat.start);
+    }
   });
 });

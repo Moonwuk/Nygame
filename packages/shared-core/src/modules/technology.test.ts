@@ -586,3 +586,105 @@ describe('technology module — session research tree', () => {
     expect(moved.state.fleets.F?.movement?.arrivesAt).toBeCloseTo(2 * HOUR);
   });
 });
+
+describe('technology.boost — the premium research sink (SES-3, GDD §4.3)', () => {
+  const kernel = createKernel([technologyModule]);
+  const boost = (technology: string, seq = 2): Action => ({
+    id: `s:p1:${seq}`,
+    type: 'technology.boost',
+    playerId: 'p1',
+    payload: { technology },
+    issuedAt: 0,
+  });
+  // A researcher with the premium in the treasury (default boost cost = 50 energy).
+  const researching = (): GameState =>
+    okApply(
+      kernel.applyAction(
+        stateWith({ players: [player('p1', { metal: 30, energy: 120 })] }),
+        research('industry'), // 1h research → completesAt = HOUR
+        ctx(0),
+      ),
+    ).state;
+
+  it('pays the premium cost and cuts the REMAINING time by initialPercent', () => {
+    const r = okApply(kernel.applyAction(researching(), boost('industry'), ctx(0)));
+    const slot = r.state.players.p1?.technologies?.active?.[0];
+    expect(slot).toMatchObject({ technology: 'industry', completesAt: 0.75 * HOUR, boosts: 1 });
+    expect(r.state.players.p1?.resources.energy).toBe(70); // 120 − 50
+    expect(r.events).toContainEqual({
+      type: 'technology.research.boosted',
+      payload: { playerId: 'p1', technology: 'industry', completesAt: 0.75 * HOUR, boosts: 1 },
+    });
+    // The accelerated completion actually fires at the earlier time.
+    const done = okAdvance(kernel.advanceTo(r.state, ctx(0.75 * HOUR)));
+    expect(done.state.players.p1?.technologies?.completed).toEqual(['industry']);
+  });
+
+  it('the ORIGINAL completion event no-ops after a boost (no double completion)', () => {
+    const r = okApply(kernel.applyAction(researching(), boost('industry'), ctx(0)));
+    // Advance PAST the original completesAt: the boosted event (0.75h) completes the
+    // research; the stale original (1h) finds no matching slot and does nothing.
+    const done = okAdvance(kernel.advanceTo(r.state, ctx(2 * HOUR)));
+    expect(done.state.players.p1?.technologies?.completed).toEqual(['industry']);
+    expect(done.state.players.p1?.technologies?.active).toEqual([]);
+  });
+
+  it('diminishing returns: each successive boost cuts geometrically less', () => {
+    const first = okApply(kernel.applyAction(researching(), boost('industry'), ctx(0)));
+    const second = okApply(kernel.applyAction(first.state, boost('industry', 3), ctx(0)));
+    const slot = second.state.players.p1?.technologies?.active?.[0];
+    // remaining 0.75h × 25% × 0.5¹ = 0.09375h cut → 0.65625h left.
+    expect(slot?.completesAt).toBe(0.65625 * HOUR);
+    expect(slot?.boosts).toBe(2);
+    expect(second.state.players.p1?.resources.energy).toBe(20); // two boosts paid
+  });
+
+  it('fail-secure rejections: not active, due, unaffordable, bad payload', () => {
+    // Boosting a tech that is not being researched.
+    expect(errCode(kernel.applyAction(researching(), boost('logistics'), ctx(0)))).toBe(
+      'E_NOT_ACTIVE',
+    );
+    // Completion already due at now — nothing left to cut.
+    const st = researching();
+    expect(errCode(kernel.applyAction({ ...st, time: HOUR }, boost('industry'), ctx(HOUR)))).toBe(
+      'E_TOO_LATE',
+    );
+    // Treasury cannot cover the premium price (default 50 energy).
+    const broke = okApply(
+      kernel.applyAction(
+        stateWith({ players: [player('p1', { metal: 30, energy: 10 })] }),
+        research('industry'),
+        ctx(0),
+      ),
+    ).state;
+    expect(errCode(kernel.applyAction(broke, boost('industry'), ctx(0)))).toBe('E_INSUFFICIENT');
+    const bad: Action = { id: 's:p1:9', type: 'technology.boost', playerId: 'p1', payload: {}, issuedAt: 0 };
+    expect(errCode(kernel.applyAction(researching(), bad, ctx(0)))).toBe('E_BAD_PAYLOAD');
+  });
+
+  it('scales by data.researchBoost — a bundle override changes price and cut', () => {
+    const scaled: GameData = {
+      ...data,
+      researchBoost: { cost: { metal: 5 }, initialPercent: 0.5, decay: 0.5 },
+    };
+    const st = okApply(
+      kernel.applyAction(
+        stateWith({ players: [player('p1', { metal: 30 })] }),
+        research('industry'),
+        { now: 0, data: scaled },
+      ),
+    ).state;
+    const r = okApply(kernel.applyAction(st, boost('industry'), { now: 0, data: scaled }));
+    const slot = r.state.players.p1?.technologies?.active?.[0];
+    expect(slot?.completesAt).toBe(0.5 * HOUR); // half the remaining hour
+    expect(r.state.players.p1?.resources.metal).toBe(15); // 30 − 10 research − 5 boost
+  });
+
+  it('the shipped defaults are the owner-decided premium: 50 energy', () => {
+    expect(data.researchBoost).toEqual({
+      cost: { energy: 50 },
+      initialPercent: 0.25,
+      decay: 0.5,
+    });
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { newGame, DEFAULT_SETUP, type SeatConfig } from './game';
+import { newGame, DEFAULT_SETUP, START_CANDIDATES, type SeatConfig } from './game';
 import { getStance } from '../../packages/shared-core/src/index';
 
 // A team battle seeds diplomacy by side: same team ALLIED, across teams at WAR. A
@@ -48,5 +48,22 @@ describe('team battle — diplomacy seeded by side', () => {
     expect(getStance(st, 'p1', 'p2')).toBe('alliance');
     expect(getStance(st, 'p1', 'p3')).toBe('war'); // lone seat vs team A
     expect(getStance(st, 'p2', 'p3')).toBe('war');
+  });
+
+  it('5v5 seeds alliances and wars across all ten seats', () => {
+    const factions = ['blue', 'red', 'amber', 'violet'];
+    const seats: SeatConfig[] = START_CANDIDATES.map((start, i) => ({
+      id: `p${i + 1}`,
+      name: `Player ${i + 1}`,
+      faction: factions[i % factions.length]!,
+      start,
+      ai: i > 0,
+      team: i < 5 ? 'A' : 'B',
+    }));
+    const st = newGame({ seats });
+    expect(getStance(st, 'p1', 'p5')).toBe('alliance');
+    expect(getStance(st, 'p6', 'p10')).toBe('alliance');
+    expect(getStance(st, 'p1', 'p6')).toBe('war');
+    expect(getStance(st, 'p5', 'p10')).toBe('war');
   });
 });

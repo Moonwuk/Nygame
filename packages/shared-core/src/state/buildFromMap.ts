@@ -1,14 +1,16 @@
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
-import type { MatchMap } from '../data/mapSchema';
+import { avaShape, type MatchMap } from '../data/mapSchema';
 import {
   createInitialState,
+  type DiplomaticStance,
   type Fleet,
   type GameState,
   type Hero,
   type Planet,
   type Player,
 } from './gameState';
+import { pairKey } from './diplomacy';
 import { distance } from './route';
 
 /**
@@ -39,6 +41,11 @@ export function validateMatchMap(map: MatchMap, data?: GameData): string[] {
   for (const sid of Object.keys(map.slots)) {
     if (Object.prototype.hasOwnProperty.call(map.players, sid)) issues.push(`E_SLOT_PLAYER_ID_CLASH:${sid}`);
   }
+
+  // an AvA-eligible map must be a symmetric team map (AVA-5): ≥2 sides with an
+  // equal number of slots each — the pool derives the map's shape from `slots`,
+  // so a lopsided or teamless "eligible" map would silently never match a request
+  if (map.avaEligible && avaShape(map) === null) issues.push('E_AVA_SHAPE');
 
   // owners reference a declared player or slot
   for (const [id, sec] of Object.entries(map.sectors)) {
@@ -155,6 +162,42 @@ export interface BuildFromMapOptions {
   /** Slot id → the player seated there. Required for every slot referenced as an
    *  `owner`; a slot-based (AvA) map is inert data until these are supplied. */
   slots?: Record<string, SlotAssignment>;
+  /** Stance seeded BETWEEN the sides of a teamed (slot) map: `war` (default) —
+   *  fight from the first hour; `peace` — the AvA peaceful start (AVA-8: the
+   *  orchestrator later escalates to war by timer via `diplomacy.declare`).
+   *  Ignored on a map without teams — a free-for-all seeds every pair at peace. */
+  crossTeamStart?: 'war' | 'peace';
+}
+
+/** Seeds `state.diplomacy` from the seats' teams (AVA-1) — the same seeding the
+ *  prototype's `newGame` does, ported to the server path. A map WITHOUT teams
+ *  (plain declared players) is a free-for-all at PEACE — no marching through
+ *  another commander's space and no combat until war is declared (the prototype
+ *  convention, not the engine's bare `war` default). A TEAMED (slot) map seeds
+ *  the same side ALLIED — win together, no friendly fire; seeded state, so it
+ *  deliberately bypasses the `E_BOT_ALLIANCE` declare-gate (an AI teammate is a
+ *  real ally and the SES-1 victory clique reads the stance) — and opposing
+ *  sides per `crossTeamStart`. Pairs come from the sorted player ids, so the
+ *  record is canonical: same seats → identical JSON. */
+function seedTeamDiplomacy(
+  teamOf: Map<string, string | undefined>,
+  crossTeamStart: 'war' | 'peace',
+): Record<string, DiplomaticStance> | undefined {
+  const ids = [...teamOf.keys()].sort();
+  if (ids.length < 2) return undefined;
+  const teamed = ids.some((id) => teamOf.get(id) !== undefined);
+  const diplomacy: Record<string, DiplomaticStance> = {};
+  for (let i = 0; i < ids.length; i++)
+    for (let j = i + 1; j < ids.length; j++) {
+      const ta = teamOf.get(ids[i]!);
+      const tb = teamOf.get(ids[j]!);
+      diplomacy[pairKey(ids[i]!, ids[j]!)] = !teamed
+        ? 'peace'
+        : ta !== undefined && ta === tb
+          ? 'alliance'
+          : crossTeamStart;
+    }
+  return diplomacy;
 }
 
 /** Normalizes a slot's scientist council (new `scientists`, else the legacy single
@@ -323,5 +366,23 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
     };
   }
 
-  return { ...base, players, planets, fleets, ...(Object.keys(heroes).length ? { heroes } : {}) };
+  // AVA-1: seed the pairwise stances from the seats' teams (a slot carries its
+  // side; a plain declared player has none). Seated slots overwrite a same-id
+  // plain entry, mirroring how the seating loop overwrites `players`.
+  const teamOf = new Map<string, string | undefined>(
+    Object.keys(map.players).map((id) => [id, undefined]),
+  );
+  for (const [slotId, a] of Object.entries(slotAssign)) {
+    if (map.slots[slotId]) teamOf.set(a.playerId, map.slots[slotId]!.team);
+  }
+  const diplomacy = seedTeamDiplomacy(teamOf, options.crossTeamStart ?? 'war');
+
+  return {
+    ...base,
+    players,
+    planets,
+    fleets,
+    ...(diplomacy ? { diplomacy } : {}),
+    ...(Object.keys(heroes).length ? { heroes } : {}),
+  };
 }

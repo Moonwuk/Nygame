@@ -38,7 +38,9 @@ import {
   kernel,
   data,
   DEFAULT_SETUP,
+  START_CANDIDATES,
   SCORE_LIMIT,
+  type SeatConfig,
   aiOrders,
   stewardActive,
   HOUR,
@@ -189,13 +191,26 @@ if (DATABASE_URL) {
   receiptStore = new MemoryReceiptStore();
 }
 const restored = await matchStore.load('proto');
-// NET seats are all HUMAN chairs (the server AI only stands in for an EMPTY one), so
-// seed the world with every seat un-branded ai:false — newGame then deals each seat
-// its research council and start kit symmetrically. Seeding the solo default here
-// left a live player on p2 without scientists (the «Хранитель» line unreachable).
-const initialState =
-  restored?.state ??
-  newGame({ seats: DEFAULT_SETUP.seats.map((seat) => ({ ...seat, ai: false })) });
+// NET-2v2 (AVA-1 tail): TEAMS=2v2 seats two sides of two — p1+p2 (team A, the two
+// west corners) vs p3+p4 (team B, the east ones), so allies share a flank. Same
+// team is seeded ALLIED, across teams — WAR (the AVA-0 seeding inside `newGame`);
+// a live team playtest before the meta-orchestrator (AVA-7) exists. Any seat
+// without a live human is played by the server AI after the grace window, so
+// 1–4 humans can run it. Ignored when resuming a saved match (restored wins).
+const TEAMS_2V2 = process.env.TEAMS === '2v2';
+const NET_SEATS: SeatConfig[] = TEAMS_2V2
+  ? [
+      { id: 'p1', name: 'Azure Compact', faction: 'blue', start: START_CANDIDATES[0]!, ai: false, team: 'A' },
+      { id: 'p2', name: 'Violet Ascendancy', faction: 'violet', start: START_CANDIDATES[2]!, ai: false, team: 'A' },
+      { id: 'p3', name: 'Crimson Hegemony', faction: 'red', start: START_CANDIDATES[1]!, ai: false, team: 'B' },
+      { id: 'p4', name: 'Amber Combine', faction: 'amber', start: START_CANDIDATES[3]!, ai: false, team: 'B' },
+    ]
+  : // NET seats are all HUMAN chairs (the server AI only stands in for an EMPTY one), so
+    // seed the world with every seat un-branded ai:false — newGame then deals each seat
+    // its research council and start kit symmetrically. Seeding the solo default here
+    // left a live player on p2 without scientists (the «Хранитель» line unreachable).
+    DEFAULT_SETUP.seats.map((seat) => ({ ...seat, ai: false }));
+const initialState = restored?.state ?? newGame({ seats: NET_SEATS });
 // A NET seat is not a bot: every seat here is claimable by a human, and the
 // server-side AI merely stands in for an empty chair (`humans` is the live truth).
 // Strip the static `ai` branding newGame took from the seat config, or two humans
@@ -461,11 +476,14 @@ const lines = [
   TIME_SCALE > 1
     ? `  time   : ×${TIME_SCALE} fast-forward (1 real min ≈ ${(TIME_SCALE / 60).toFixed(1)} game-hours) — playtest mode`
     : '  time   : ×1 real-time (set TIME_SCALE=100 to fast-forward a playtest)',
+  TEAMS_2V2
+    ? '  mode   : 2v2 team battle — Azure+Violet (A) vs Crimson+Amber (B); an empty seat is AI-driven'
+    : '  mode   : 1v1 skirmish (set TEAMS=2v2 for a team battle)',
   '',
   '  Two-person test:',
   `   • You:    open ${localHttp}/  → Connect → Azure (p1)`,
   onLan
-    ? `   • Friend: open ${friendUrl}  (same Wi-Fi) → Connect → Crimson (p2)`
+    ? `   • Friend: open ${friendUrl}  (same Wi-Fi) → Connect → ${TEAMS_2V2 ? 'a free seat (p2–p4)' : 'Crimson (p2)'}`
     : '   • Friend: run `pnpm host` (binds 0.0.0.0 → prints a LAN URL), or tunnel the port for a remote friend — see docs/multiplayer.md',
 ];
 if (unreachableOnly) {

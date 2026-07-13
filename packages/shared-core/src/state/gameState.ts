@@ -131,6 +131,9 @@ export interface ActiveResearch {
   technology: TechnologyId;
   startedAt: number;
   completesAt: number;
+  /** Premium boosts already applied (SES-3): drives the geometric diminishing
+   *  returns of `technology.boost`. Absent = never boosted. */
+  boosts?: number;
 }
 
 export interface PlayerTechnologyState {

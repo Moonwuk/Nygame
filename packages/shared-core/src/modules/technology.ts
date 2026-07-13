@@ -256,11 +256,63 @@ function startResearch(action: Action, h: HandlerContext): void {
   });
 }
 
+/** SES-3 (GDD §4.3): sink the premium resource into faster research. One boost
+ *  pays `data.researchBoost.cost` and cuts the REMAINING time of one active
+ *  research by `initialPercent × decay^boosts` — geometric diminishing returns,
+ *  so pouring more premium never buys instant completion (and never touches
+ *  units / combat power / hero XP — the GDD fairness rule). Acceleration is a
+ *  RESCHEDULE, not a cancel: `completesAt` moves earlier and a fresh
+ *  `technology.complete` is scheduled; the originally-scheduled event no-ops on
+ *  arrival because its `completesAt` no longer matches the slot (the same
+ *  stale-completion guard the complete handler already has). */
+function boostResearch(action: Action, h: HandlerContext): void {
+  const payload = action.payload as Partial<ResearchPayload>;
+  if (typeof payload?.technology !== 'string') {
+    return h.reject('E_BAD_PAYLOAD');
+  }
+  const player = h.state.players[action.playerId];
+  if (!player) {
+    return h.reject('E_FORBIDDEN');
+  }
+  const slot = player.technologies?.active?.find((a) => a.technology === payload.technology);
+  if (!slot) {
+    return h.reject('E_NOT_ACTIVE'); // not currently being researched
+  }
+  const remaining = slot.completesAt - h.ctx.now;
+  if (remaining <= 0) {
+    return h.reject('E_TOO_LATE'); // completion is already due — nothing to cut
+  }
+  const boost = h.ctx.data.researchBoost;
+  if (!canAfford(player.resources, boost.cost)) {
+    return h.reject('E_INSUFFICIENT');
+  }
+  payCost(player.resources, boost.cost);
+  // initialPercent × decay^boosts by repeated multiplication — Math.pow is barred
+  // from the core (implementation-approximated); products are correctly rounded.
+  let share = boost.initialPercent;
+  for (let i = 0; i < (slot.boosts ?? 0); i++) share *= boost.decay;
+  const cut = remaining * share;
+  slot.boosts = (slot.boosts ?? 0) + 1;
+  slot.completesAt = h.ctx.now + Math.max(0, Math.round(remaining - cut));
+  h.schedule(slot.completesAt, 'technology.complete', {
+    playerId: action.playerId,
+    technology: payload.technology,
+    completesAt: slot.completesAt,
+  });
+  h.emit('technology.research.boosted', {
+    playerId: action.playerId,
+    technology: payload.technology,
+    completesAt: slot.completesAt,
+    boosts: slot.boosts,
+  });
+}
+
 export const technologyModule: GameModule = {
   id: 'technology',
   version: '1.0.0',
   setup(api) {
     api.onAction('technology.research', startResearch);
+    api.onAction('technology.boost', boostResearch);
 
     api.on('technology.complete', (event, h) => {
       const payload = event.payload as CompletePayload;

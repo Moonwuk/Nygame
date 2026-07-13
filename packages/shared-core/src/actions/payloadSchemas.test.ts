@@ -28,6 +28,7 @@ const CLIENT_ACTION_TYPES = [
   'construction.cancel',
   'construction.resume',
   'technology.research',
+  'technology.boost',
   'diplomacy.declare',
   'espionage.spy',
   'market.list',
@@ -90,6 +91,7 @@ describe('SV-1.2 · action payload schemas', () => {
       ['construction.cancel', { planetId: 'p1', seq: 3 }],
       ['construction.resume', { planetId: 'p1', id: 3 }],
       ['technology.research', { technology: 'railgun' }],
+      ['technology.boost', { technology: 'railgun' }], // SES-3: premium research sink
       ['diplomacy.declare', { target: 'p2', stance: 'war' }],
       ['diplomacy.declare', { target: 'p2', stance: 'alliance' }], // friendly declare = an offer
       ['espionage.spy', { target: 'p2', kind: 'treasury' }],
@@ -146,6 +148,7 @@ describe('SV-1.2 · action payload schemas', () => {
       ['construction.resume', { planetId: 'p1', id: 1.5 }], // id not an integer
       ['army.load', { fleetId: 'f1' }], // missing unit
       ['technology.research', {}], // missing technology
+      ['technology.boost', {}], // missing technology
       ['station.deploy', { planetId: '' }], // empty id
       ['hero.move', { to: null }], // wrong type
       ['hero.ability', { heroId: 'hero:p1' }], // missing abilityId

@@ -37,6 +37,7 @@ export {
   type OpenMatchesFeedDeps,
 } from './matchApi';
 export { MatchKeeper, type MatchKeeperOptions } from './matchFactory';
+export { pickAvaMap } from './avaMapPool';
 export { MetricsAggregator, type MetricsSummary, type SeriesStat } from './metrics';
 export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export {
