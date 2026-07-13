@@ -155,6 +155,8 @@ import { buildCodexIndex, searchCodex, GLOSSARY, type CodexEntry, type CodexCate
 import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
 // ONB-5 — return digest ("пока тебя не было"): aggregate the away-window event log.
 import { buildRecap, type RecapEvent } from './recap';
+// ONB-7 — first-session goals checklist (mine/fleet/capture/score, ticked from state).
+import { FIRST_GOALS, metGoals, mergeDone, goalsComplete, type GoalSignals } from './firstGoals';
 // ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
 // model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
 import {
@@ -1910,6 +1912,7 @@ function startGuidedMatch(): void {
   pendingGuide = () => {
     const startScore = myScore();
     const startWorlds = myWorldCount(); // baseline: home only
+    startFirstGoals(); // ONB-7: the first-session checklist rides alongside the guide
     launchTour(
       buildFirstMatchTour({
         capturedWorld: () => myWorldCount() > startWorlds,
@@ -1932,11 +1935,82 @@ function onGuidedTourEnded(r: TourResult): void {
     saveMeta({ ...cur, xp: cur.xp + xp });
     note(t('✔ Обучение пройдено · +{n} XP — теперь сыграй настоящий матч!', { n: xp }));
   }
+  stopFirstGoals(); // ONB-7: the checklist belongs to the onboarding session only
   if (DEV_UI)
     console.debug(
       `[onboard] ${r.completed ? 'completed' : r.skipped ? 'skipped' : 'stopped'} @ step ${r.reachedStep + 1}`,
     );
 }
+
+// --- ONB-7 first-session goals checklist -------------------------------------
+// A light "am I playing right?" list, shown only in the onboarding match: four
+// goals tick from live state (mine built, fleet raised, world taken, 100 score),
+// and finishing all four praises the player + nudges them to a real match.
+let goalsActive = false;
+let goalsCollapsed = false;
+let goalsRewarded = false;
+let goalsDone: string[] = [];
+let goalBase = { worlds: 0, mines: 0, fleets: 0 };
+const myMineCount = (): number =>
+  Object.values(s.planets)
+    .filter((p) => p.owner === ME)
+    .reduce((n, p) => n + p.buildings.filter((b) => b.type === 'mine').length, 0);
+const myFleetCount = (): number => Object.values(s.fleets).filter((f) => f.owner === ME).length;
+function goalSignals(): GoalSignals {
+  return {
+    builtMine: myMineCount() > goalBase.mines,
+    launchedFleet: myFleetCount() > goalBase.fleets,
+    capturedWorld: myWorldCount() > goalBase.worlds,
+    score: myScore(),
+  };
+}
+function startFirstGoals(): void {
+  goalBase = { worlds: myWorldCount(), mines: myMineCount(), fleets: myFleetCount() };
+  goalsDone = [];
+  goalsRewarded = false;
+  goalsCollapsed = false;
+  goalsActive = true;
+  renderGoals();
+}
+function stopFirstGoals(): void {
+  goalsActive = false;
+  document.getElementById('goals')?.classList.remove('show');
+}
+// Called each frame while active: tick newly-met goals; all-done → praise + XP once.
+function updateGoals(): void {
+  if (!goalsActive) return;
+  const next = mergeDone(goalsDone, metGoals(goalSignals()));
+  if (next.length === goalsDone.length) return; // nothing new
+  goalsDone = next;
+  renderGoals();
+  if (goalsComplete(goalsDone) && !goalsRewarded) {
+    goalsRewarded = true;
+    const cur = loadMeta();
+    const bonus = 40;
+    saveMeta({ ...cur, xp: cur.xp + bonus });
+    note(t('🏅 Все цели первой сессии выполнены! +{n} XP — ты готов к настоящему матчу.', { n: bonus }));
+  }
+}
+function renderGoals(): void {
+  const el = document.getElementById('goals');
+  if (!el) return;
+  const items = FIRST_GOALS.map((g) => {
+    const done = goalsDone.includes(g.id);
+    return `<div class="gl-item${done ? ' done' : ''}"><span class="gl-ck">${done ? '✓' : '○'}</span><span>${esc(t(g.label))}</span></div>`;
+  }).join('');
+  el.innerHTML =
+    `<div class="gl-box"><div class="gl-head"><b>${t('Цели первой сессии')}</b>` +
+    `<span class="gl-count">${goalsDone.length}/${FIRST_GOALS.length}</span>` +
+    `<button class="gl-tg" id="gl-tg" type="button">${goalsCollapsed ? '▸' : '▾'}</button></div>` +
+    (goalsCollapsed ? '' : `<div class="gl-list">${items}</div>`);
+  el.classList.add('show');
+}
+document.getElementById('goals')?.addEventListener('click', (ev) => {
+  if ((ev.target as HTMLElement).closest('#gl-tg')) {
+    goalsCollapsed = !goalsCollapsed;
+    renderGoals();
+  }
+});
 // Show the first-run offer to a not-yet-onboarded commander (idempotent per visit).
 function refreshOnboardOffer(): void {
   const nudge = document.getElementById('onboard-nudge');
@@ -6630,6 +6704,7 @@ $('tomenu').addEventListener('click', () => {
     NET = false;
     if (netSock) netSock.close();
   }
+  stopFirstGoals(); // ONB-7: leaving the match ends the onboarding checklist
   openHub();
 });
 
@@ -8913,6 +8988,7 @@ function frame(nowReal: number) {
     pumpBuildQueues();
     closeIdleRallies(); // drop the 'rally' tag once a world's build pipeline empties
   }
+  updateGoals(); // ONB-7: tick the first-session checklist off live state (no-op when idle)
   // The orbit spin only advances while the world is actually running (sim ticking, or a
   // live net match), so pausing freezes the ships on their rings instead of drifting on.
   if (dt > 0 && dt < 1000 && (NET || (speed > 0 && !banner))) orbitPhase += dt;

@@ -273,6 +273,23 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #recap .rc-item.hi{border-color:rgba(255,180,58,.5);}
 #recap .rc-item.hi .rc-dot{background:var(--amber);box-shadow:0 0 8px rgba(255,180,58,.6);}
 #recap .cx-close{margin-top:10px;}
+/* ONB-7 first-session goals — a small collapsible checklist, onboarding match only.
+   Top-right under the top bar; z-32 above the HUD but below toasts/modals. */
+#goals{position:fixed;top:52px;right:14px;z-index:32;display:none;max-width:min(230px,60vw);}
+#goals.show{display:block;}
+#goals .gl-box{background:rgba(4,16,22,.94);border:1px solid var(--cyan-dim);border-radius:9px;overflow:hidden;
+  box-shadow:0 4px 16px rgba(0,0,0,.45);}
+#goals .gl-head{display:flex;align-items:center;gap:7px;padding:7px 10px;background:rgba(53,214,230,.08);
+  border-bottom:1px solid var(--line-hi);}
+#goals .gl-head b{flex:1;font-size:11px;letter-spacing:.6px;color:var(--cyan);text-transform:uppercase;}
+#goals .gl-count{font-size:11px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;}
+#goals .gl-tg{width:20px;height:20px;border:none;background:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0;}
+#goals .gl-list{padding:7px 10px 9px;display:flex;flex-direction:column;gap:5px;}
+#goals .gl-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);line-height:1.3;}
+#goals .gl-item .gl-ck{color:var(--cyan-dim);flex:0 0 auto;font-size:13px;}
+#goals .gl-item.done{color:#dfeef2;}
+#goals .gl-item.done .gl-ck{color:var(--grn);text-shadow:0 0 8px rgba(95,240,192,.5);}
+@media (max-width:640px){#goals{top:auto;bottom:70px;right:8px;}}
 
 /* player card — tap the top-left crest for your session dossier */
 #playercard{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
@@ -1700,6 +1717,7 @@ const html = `<!doctype html>
 <div id="codexhub"></div>
 <div id="intro"></div>
 <div id="recap"></div>
+<div id="goals"></div>
 <div id="playercard"></div>
 <div id="settings"></div>
 <div id="warprompt"></div>

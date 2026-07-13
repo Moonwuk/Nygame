@@ -4,6 +4,14 @@
 // English in game.ts) need no entry here; `tData()` shows them as-is on this locale.
 // One language = one file.
 export const en: Record<string, string> = {
+  // --- ONB-7 first-session goals checklist -------------------------------------
+  'Цели первой сессии': 'First-session goals',
+  'Построй шахту': 'Build a mine',
+  'Подними флот': 'Raise a fleet',
+  'Захвати мир': 'Capture a world',
+  'Набери 100 очков': 'Reach 100 points',
+  '🏅 Все цели первой сессии выполнены! +{n} XP — ты готов к настоящему матчу.':
+    '🏅 All first-session goals done! +{n} XP — you are ready for a real match.',
   // --- ONB-5 async intro + return digest ---------------------------------------
   'Мир идёт без тебя': 'The world runs without you',
   'Этот флот прибудет через часы реального времени — мир Void Dominion идёт непрерывно, даже когда ты офлайн. Можешь закрыть игру: приказы выполнятся сами, а к возвращению мы пришлём уведомление и покажем сводку «пока тебя не было».':
