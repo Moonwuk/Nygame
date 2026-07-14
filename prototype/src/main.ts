@@ -142,6 +142,32 @@ import { onboardingKey, parseOnboardingState, isNewPlayer, markStarted } from '.
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 import { initTestMode, openTestMode } from './testmode';
+// ONB-1 — the reusable guide-mark (spotlight) engine + its browser adapter.
+// `playerOrder` feeds it real actions so `action` steps advance; ONB-2 builds
+// the full guided first match on the same `startTour` primitive.
+import { startTour, type RunningTour } from './spotlightDom';
+import type { TourResult } from './spotlight';
+import { HUD_ORIENTATION_TOUR } from './onboardingTour';
+// ONB-2 — the guided first match (a data chain over this same engine).
+import { buildFirstMatchTour } from './firstMatchTour';
+// ONB-4 — searchable codex/help index (pure) over the existing article corpus.
+import { buildCodexIndex, searchCodex, GLOSSARY, type CodexEntry, type CodexCategory } from './codexIndex';
+// ONB-3 — just-in-time mechanic intros (per-nick seen-set, shown once on first contact).
+import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
+// ONB-5 — return digest ("пока тебя не было"): aggregate the away-window event log.
+import { buildRecap, type RecapEvent } from './recap';
+// ONB-7 — first-session goals checklist (mine/fleet/capture/score, ticked from state).
+import { FIRST_GOALS, metGoals, mergeDone, goalsComplete, type GoalSignals } from './firstGoals';
+// ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
+// model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
+import {
+  applyTourOutcome,
+  markSkipped,
+  markStarted,
+  parseOnboardState,
+  welcomeMode,
+  type OnboardState,
+} from './onboarding';
 import type {
   GameState,
   Fleet,
@@ -1418,11 +1444,15 @@ function fleetAnchor(f: Fleet): { x: number; y: number; ang: number } | null {
   const ang = orbitsLive() ? a0 + Math.PI / 2 : a0;
   return { x: pc.x + Math.cos(a0) * r, y: pc.y + Math.sin(a0) * r, ang };
 }
+// ONB-5: a structured, bounded mirror of the event log — feeds the return digest.
+const eventLog: RecapEvent[] = [];
 function note(msg: string, at?: string) {
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   logLines.push(`D${d} ${String(h).padStart(2, '0')}h · ${msg}`);
   while (logLines.length > 9) logLines.shift();
+  eventLog.push({ at: s.time, text: msg, anchor: at });
+  while (eventLog.length > 80) eventLog.shift();
   toast(msg, at);
 }
 
@@ -1842,12 +1872,192 @@ function errText(code: string): string {
 function playerOrder(action: Action) {
   if (NET && netClient) {
     netClient.sendAction(action); // server is authoritative — await its broadcast
+    activeTour?.notifyAction(action.type); // optimistic — server result is async
     return;
   }
   const out = order(s, action, s.time);
   apply(out);
   if (out.error) note('✖ ' + errText(out.error));
+  else {
+    activeTour?.notifyAction(action.type); // an accepted intent advances `action` steps
+    // ONB-5: the first fleet leaving on a course is when "the world runs offline"
+    // becomes real — teach it once (but not mid-guide, where the tour owns the screen).
+    if (action.type === 'fleet.move' && !activeTour?.active) maybeIntro('asyncDelay');
+  }
 }
+
+// --- ONB-1 guide-mark launcher ------------------------------------------------
+// One tour at a time; `playerOrder` above notifies it of accepted actions so a
+// step's `advance: { on: 'action' }` fires on the real order. Exposed on `window`
+// as the reusable seam ONB-0/ONB-2 (auto-offer, «Ещё → Обучение») and headless
+// e2e drive — starting a HUD tour needs an active match, which those own.
+let activeTour: RunningTour | null = null;
+function launchTour(steps = HUD_ORIENTATION_TOUR, onEnd?: (r: TourResult) => void): void {
+  activeTour = startTour(steps, (r) => {
+    activeTour = null;
+    onEnd?.(r);
+  });
+}
+interface TourWindow {
+  __vdTour?: { start: (steps?: typeof HUD_ORIENTATION_TOUR) => void; stop: () => void; readonly active: boolean };
+}
+(window as unknown as TourWindow).__vdTour = {
+  start: (steps) => launchTour(steps),
+  stop: () => activeTour?.stop(),
+  get active() {
+    return activeTour?.active ?? false;
+  },
+};
+
+// --- ONB-0/ONB-2 first-run onboarding: flag + funnel + guided first match -----
+// The "passed onboarding" signal lives per-nick in localStorage (separate from the
+// saved callsign — a returning device can still be new to the guide). A brand-new
+// commander gets a one-time hub offer; accepting (or «Ещё → Обучение») launches the
+// ONB-2 guided first match: a bot-free solo sandbox with the data-described guide
+// (firstMatchTour) walking produce→build→move→capture→score over the live HUD.
+function onboardKey(): string {
+  return 'vd.onboard.' + (nickInput.value.trim() || 'guest');
+}
+function loadOnboard(): OnboardState {
+  return parseOnboardState(localStorage.getItem(onboardKey()));
+}
+function saveOnboard(st: OnboardState): void {
+  localStorage.setItem(onboardKey(), JSON.stringify(st));
+}
+// A guide queued to launch once the next match's HUD is live (from installMatch).
+let pendingGuide: (() => void) | null = null;
+function maybeStartPendingTour(): void {
+  if (!pendingGuide || NET) return;
+  const run = pendingGuide;
+  pendingGuide = null;
+  requestAnimationFrame(run); // let the fresh HUD paint a frame so selectors resolve
+}
+const myScore = (): number => Math.round(s.match?.scores?.[ME]?.total ?? 0);
+const myWorldCount = (): number => Object.values(s.planets).filter((p) => p.owner === ME).length;
+// ONB-2: start a bot-free solo sandbox and arm the guided first match over its HUD.
+function startGuidedMatch(): void {
+  setupSlots = ['human', 'off', 'off', 'off']; // no rivals — a safe, calm sandbox
+  setupStart = START_CANDIDATES[0] ?? MAP[0]!.id; // a deterministic homeworld
+  pendingGuide = () => {
+    const startScore = myScore();
+    const startWorlds = myWorldCount(); // baseline: home only
+    startFirstGoals(); // ONB-7: the first-session checklist rides alongside the guide
+    launchTour(
+      buildFirstMatchTour({
+        capturedWorld: () => myWorldCount() > startWorlds,
+        scoreRose: () => myScore() > startScore + 1,
+      }),
+      onGuidedTourEnded,
+    );
+  };
+  showHub(false);
+  showConnect(false);
+  startMatch(buildSetupConfig()); // installMatch → maybeStartPendingTour runs the guide
+}
+// Fold the finished guide into the flag (+funnel); first completion earns XP + a nudge.
+function onGuidedTourEnded(r: TourResult): void {
+  const { state, rewarded } = applyTourOutcome(loadOnboard(), r);
+  saveOnboard(state);
+  if (rewarded) {
+    const cur = loadMeta();
+    const xp = matchXp({ won: false, score: 100 }); // a modest onboarding packet
+    saveMeta({ ...cur, xp: cur.xp + xp });
+    note(t('✔ Обучение пройдено · +{n} XP — теперь сыграй настоящий матч!', { n: xp }));
+  }
+  stopFirstGoals(); // ONB-7: the checklist belongs to the onboarding session only
+  if (DEV_UI)
+    console.debug(
+      `[onboard] ${r.completed ? 'completed' : r.skipped ? 'skipped' : 'stopped'} @ step ${r.reachedStep + 1}`,
+    );
+}
+
+// --- ONB-7 first-session goals checklist -------------------------------------
+// A light "am I playing right?" list, shown only in the onboarding match: four
+// goals tick from live state (mine built, fleet raised, world taken, 100 score),
+// and finishing all four praises the player + nudges them to a real match.
+let goalsActive = false;
+let goalsCollapsed = false;
+let goalsRewarded = false;
+let goalsDone: string[] = [];
+let goalBase = { worlds: 0, mines: 0, fleets: 0 };
+const myMineCount = (): number =>
+  Object.values(s.planets)
+    .filter((p) => p.owner === ME)
+    .reduce((n, p) => n + p.buildings.filter((b) => b.type === 'mine').length, 0);
+const myFleetCount = (): number => Object.values(s.fleets).filter((f) => f.owner === ME).length;
+function goalSignals(): GoalSignals {
+  return {
+    builtMine: myMineCount() > goalBase.mines,
+    launchedFleet: myFleetCount() > goalBase.fleets,
+    capturedWorld: myWorldCount() > goalBase.worlds,
+    score: myScore(),
+  };
+}
+function startFirstGoals(): void {
+  goalBase = { worlds: myWorldCount(), mines: myMineCount(), fleets: myFleetCount() };
+  goalsDone = [];
+  goalsRewarded = false;
+  goalsCollapsed = false;
+  goalsActive = true;
+  renderGoals();
+}
+function stopFirstGoals(): void {
+  goalsActive = false;
+  document.getElementById('goals')?.classList.remove('show');
+}
+// Called each frame while active: tick newly-met goals; all-done → praise + XP once.
+function updateGoals(): void {
+  if (!goalsActive) return;
+  const next = mergeDone(goalsDone, metGoals(goalSignals()));
+  if (next.length === goalsDone.length) return; // nothing new
+  goalsDone = next;
+  renderGoals();
+  if (goalsComplete(goalsDone) && !goalsRewarded) {
+    goalsRewarded = true;
+    const cur = loadMeta();
+    const bonus = 40;
+    saveMeta({ ...cur, xp: cur.xp + bonus });
+    note(t('🏅 Все цели первой сессии выполнены! +{n} XP — ты готов к настоящему матчу.', { n: bonus }));
+  }
+}
+function renderGoals(): void {
+  const el = document.getElementById('goals');
+  if (!el) return;
+  const items = FIRST_GOALS.map((g) => {
+    const done = goalsDone.includes(g.id);
+    return `<div class="gl-item${done ? ' done' : ''}"><span class="gl-ck">${done ? '✓' : '○'}</span><span>${esc(t(g.label))}</span></div>`;
+  }).join('');
+  el.innerHTML =
+    `<div class="gl-box"><div class="gl-head"><b>${t('Цели первой сессии')}</b>` +
+    `<span class="gl-count">${goalsDone.length}/${FIRST_GOALS.length}</span>` +
+    `<button class="gl-tg" id="gl-tg" type="button">${goalsCollapsed ? '▸' : '▾'}</button></div>` +
+    (goalsCollapsed ? '' : `<div class="gl-list">${items}</div>`);
+  el.classList.add('show');
+}
+document.getElementById('goals')?.addEventListener('click', (ev) => {
+  if ((ev.target as HTMLElement).closest('#gl-tg')) {
+    goalsCollapsed = !goalsCollapsed;
+    renderGoals();
+  }
+});
+// Show the first-run offer to a not-yet-onboarded commander (idempotent per visit).
+function refreshOnboardOffer(): void {
+  const nudge = document.getElementById('onboard-nudge');
+  if (nudge) nudge.style.display = welcomeMode(loadOnboard()) === 'new' ? 'flex' : 'none';
+}
+// «Начать обучение» / «Ещё → Обучение»: launch the guided first match.
+function beginOnboarding(): void {
+  saveOnboard(markStarted(loadOnboard()));
+  const nudge = document.getElementById('onboard-nudge');
+  if (nudge) nudge.style.display = 'none';
+  startGuidedMatch();
+}
+document.getElementById('ob-start')?.addEventListener('click', beginOnboarding);
+document.getElementById('ob-skip')?.addEventListener('click', () => {
+  saveOnboard(markSkipped(loadOnboard())); // respected forever — never nagged again
+  refreshOnboardOffer();
+});
+document.getElementById('hub-tutorial')?.addEventListener('click', beginOnboarding);
 
 // --- timed cargo loading (prototype UX: "погрузка занимает час") --------------
 // A ground-army load doesn't snap into the hold — it takes ~1 game-hour. The order
@@ -4748,6 +4958,15 @@ function cxRow(k: string, v: string): string {
 }
 /** Full info card — cost + every stat + the lore blurb — for a building ('b') or unit ('u'). */
 function codexHtml(kind: string, id: string): string {
+  if (kind === 'm') {
+    // ONB-4 glossary article — a short mechanic/term explainer (plain text copy).
+    const g = GLOSSARY.find((x) => x.id === id);
+    if (!g) return '';
+    return (
+      `<div class="cx-head"><span class="cx-ic">?</span><b>${esc(t(g.title))}</b><span class="cx-tag">${t('механика')}</span></div>` +
+      `<div class="cx-desc">${esc(t(g.body))}</div>`
+    );
+  }
   if (kind === 'b') {
     const def = data.buildings[id];
     if (!def) return '';
@@ -5337,6 +5556,172 @@ function codexBuildBtn(kind: string, id: string): string {
   }
   return '';
 }
+
+// --- ONB-4 codex/help hub: searchable index over the article corpus ----------
+// The pure index (src/codexIndex.ts) flattens every unit/building + a glossary of
+// tricky terms; here we localise labels and render a searchable «?» surface. A tap
+// on a result deep-links into the single-article codex (openCodex), so any
+// term/unit/mechanic is two taps away. Entry points: hub «Ещё → Справочник» + the
+// in-match rail «?».
+const CODEX_INDEX = buildCodexIndex(data, GLOSSARY);
+const CODEX_SECTIONS: Array<[CodexCategory, string]> = [
+  ['unit', 'Юниты'],
+  ['building', 'Здания'],
+  ['mechanic', 'Механики'],
+];
+function codexEntryLabel(e: CodexEntry): string {
+  const id = e.key.slice(2);
+  if (e.category === 'unit') return unitDossier(id)?.name ?? displayUnit(id);
+  if (e.category === 'building') return buildingName(id);
+  return t(e.title); // mechanic: title is the canonical-Russian msgid
+}
+function codexEntryIcon(e: CodexEntry): string {
+  const id = e.key.slice(2);
+  if (e.category === 'unit') return unitIcon(id);
+  if (e.category === 'building') return BUILD_ICON[id] ?? '▣';
+  return '?';
+}
+function codexItemHtml(e: CodexEntry): string {
+  return `<button class="ch-item" data-codex="${esc(e.key)}"><span class="ch-ic">${codexEntryIcon(e)}</span><span>${esc(codexEntryLabel(e))}</span></button>`;
+}
+// Search folds the LOCALISED label into the haystack so RU and EN queries both hit.
+function renderCodexResults(query: string): void {
+  const host = document.getElementById('ch-results');
+  if (!host) return;
+  const hits = searchCodex(CODEX_INDEX, query, (e) =>
+    (codexEntryLabel(e) + ' ' + e.title + ' ' + e.tags.join(' ')).toLowerCase(),
+  );
+  if (!query.trim()) {
+    // Empty query → browse by category.
+    host.innerHTML = CODEX_SECTIONS.map(([cat, label]) => {
+      const items = hits.filter((e) => e.category === cat);
+      return items.length ? `<div class="ch-sec">${t(label)}</div><div class="ch-grid">${items.map(codexItemHtml).join('')}</div>` : '';
+    }).join('');
+    return;
+  }
+  host.innerHTML = hits.length
+    ? `<div class="ch-grid">${hits.map(codexItemHtml).join('')}</div>`
+    : `<div class="ch-empty">${t('Ничего не найдено')}</div>`;
+}
+function openCodexHub(): void {
+  const box = document.getElementById('codexhub');
+  if (!box) return;
+  box.innerHTML =
+    `<div class="chbox"><div class="ch-head"><span class="cx-ic">?</span><b>${t('СПРАВОЧНИК')}</b></div>` +
+    `<input id="ch-search" class="ch-search" type="text" placeholder="${t('Поиск: юнит, здание, термин…')}" aria-label="${t('Поиск по справочнику')}">` +
+    `<div class="ch-body" id="ch-results"></div>` +
+    `<button class="cx-close" id="ch-close">${t('ЗАКРЫТЬ')}</button></div>`;
+  const input = document.getElementById('ch-search') as HTMLInputElement | null;
+  if (input) input.oninput = () => renderCodexResults(input.value);
+  renderCodexResults('');
+  box.classList.add('show');
+  input?.focus();
+}
+// One delegated handler for the hub (rebuilt each open, so wire the container once).
+document.getElementById('codexhub')?.addEventListener('click', (ev) => {
+  const box = document.getElementById('codexhub')!;
+  const tg = ev.target as HTMLElement;
+  if (tg === box || tg.closest('#ch-close')) {
+    box.classList.remove('show'); // backdrop / CLOSE
+    return;
+  }
+  const item = tg.closest('.ch-item') as HTMLElement | null;
+  if (item?.dataset.codex) openCodex(item.dataset.codex); // deep-link → single article (layers on top)
+});
+document.getElementById('hub-help')?.addEventListener('click', openCodexHub);
+document.getElementById('rail-help')?.addEventListener('click', openCodexHub);
+
+// --- ONB-3 just-in-time mechanic intros --------------------------------------
+// The first time a player opens an advanced panel, a one-screen card explains it,
+// then never again (per-callsign seen-set). A veteran (has finished a match →
+// meta XP > 0) is marked seen silently, so they are never nagged.
+function seenIntrosKey(): string {
+  return 'vd.seenIntros.' + (nickInput.value.trim() || 'guest');
+}
+function showIntro(card: IntroCard): void {
+  const el = document.getElementById('intro');
+  if (!el) return;
+  el.innerHTML =
+    `<div class="inbox"><div class="in-head"><span class="in-ic">✦</span><b>${esc(t(card.title))}</b>` +
+    `<span class="in-tag">${t('впервые')}</span></div>` +
+    `<div class="in-body">${esc(t(card.body))}</div>` +
+    `<button class="in-ok">${t('Понятно')}</button></div>`;
+  el.classList.add('show');
+}
+// Panel-open hook: show the intro for `id` once (unless already seen / a veteran).
+function maybeIntro(id: string): void {
+  const seen = parseSeenIntros(localStorage.getItem(seenIntrosKey()));
+  const veteran = loadMeta().xp > 0; // finished at least one match → knows the ropes
+  const { card, seen: next } = resolveIntro(seen, id, { veteran });
+  localStorage.setItem(seenIntrosKey(), JSON.stringify(next));
+  if (card) showIntro(card);
+}
+document.getElementById('intro')?.addEventListener('click', (ev) => {
+  const el = document.getElementById('intro')!;
+  const tg = ev.target as HTMLElement;
+  if (tg === el || tg.closest('.in-ok')) el.classList.remove('show'); // backdrop / «Понятно»
+});
+
+// --- ONB-5 return digest ("пока тебя не было") -------------------------------
+// The world runs while you're away (a backgrounded tab catches up on return, and
+// on the server it runs 24/7). Rather than a silently-changed map, brief the player
+// on what happened since they left — attention items first, tap to jump to the spot.
+let awayFromGameTime: number | null = null;
+function recapItemHtml(i: { text: string; anchor?: string; high: boolean }): string {
+  const jump = i.anchor ? ` data-jump="${esc(i.anchor)}"` : '';
+  return `<button class="rc-item${i.high ? ' hi' : ''}"${jump}><span class="rc-dot"></span><span>${esc(i.text)}</span></button>`;
+}
+/** Render the digest of events at/after `since`. No-op when nothing happened. */
+function openRecap(since: number): void {
+  const el = document.getElementById('recap');
+  if (!el) return;
+  const r = buildRecap(eventLog, since);
+  if (!r.count) return; // nothing accrued — don't nag with an empty briefing
+  const hi = r.items.filter((i) => i.high);
+  const lo = r.items.filter((i) => !i.high);
+  let body = '';
+  if (hi.length) body += `<div class="rc-sec hi">${t('Требуют внимания · {n}', { n: r.attention })}</div>` + hi.map(recapItemHtml).join('');
+  if (lo.length) body += `<div class="rc-sec">${t('Пока тебя не было')}</div>` + lo.map(recapItemHtml).join('');
+  el.innerHTML =
+    `<div class="rcbox"><div class="rc-head"><span class="cx-ic">🛰</span><b>${t('СВОДКА ВОЗВРАЩЕНИЯ')}</b></div>` +
+    `<div class="rc-body">${body}</div><button class="cx-close" id="rc-close">${t('ЗАКРЫТЬ')}</button></div>`;
+  el.classList.add('show');
+}
+document.getElementById('recap')?.addEventListener('click', (ev) => {
+  const el = document.getElementById('recap')!;
+  const tg = ev.target as HTMLElement;
+  if (tg === el || tg.closest('#rc-close')) {
+    el.classList.remove('show');
+    return;
+  }
+  const jump = tg.closest('.rc-item') as HTMLElement | null;
+  if (jump?.dataset.jump) {
+    el.classList.remove('show');
+    jumpToPing(jump.dataset.jump); // fly the camera to the event's world
+  }
+});
+// The «🛰» button in the log window → the whole-session briefing on demand.
+document.getElementById('lw-recap')?.addEventListener('click', () => openRecap(0));
+// Auto-briefing: mark where we left when the tab hides; on return (after the sim has
+// caught up the elapsed time) summarise what happened — only for a real absence.
+let awayAtRealMs = 0;
+document.addEventListener?.('visibilitychange', () => {
+  if (document.hidden) {
+    if (inMatch()) {
+      awayFromGameTime = s.time;
+      awayAtRealMs = Date.now();
+    }
+    return;
+  }
+  if (awayFromGameTime == null || !inMatch()) return;
+  const since = awayFromGameTime;
+  awayFromGameTime = null;
+  if (Date.now() - awayAtRealMs < 15000) return; // a quick glance away — no briefing
+  // Give the frame loop a beat to catch the world up before we summarise it.
+  window.setTimeout(() => {
+    if (inMatch()) openRecap(since);
+  }, 500);
+});
 
 /** A `b:<id>:<lvl>` key embeds its building level in the title (as `hl(lvl)`) — shared
  *  by the desktop hover pane and the mobile tap modal so both read identically. */
@@ -6351,6 +6736,7 @@ $('tomenu').addEventListener('click', () => {
     NET = false;
     if (netSock) netSock.close();
   }
+  stopFirstGoals(); // ONB-7: leaving the match ends the onboarding checklist
   openHub();
 });
 
@@ -6551,6 +6937,7 @@ function renderTech(): void {
 document.getElementById('rail-tech')?.addEventListener('click', () => {
   techWin.classList.add('show');
   renderTech();
+  maybeIntro('tech');
 });
 techWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -6625,6 +7012,7 @@ function renderSteward(): void {
 document.getElementById('rail-steward')?.addEventListener('click', () => {
   stewWin.classList.add('show');
   renderSteward();
+  maybeIntro('steward');
 });
 stewWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -6805,6 +7193,7 @@ function renderMarket(): void {
 document.getElementById('rail-market')?.addEventListener('click', () => {
   marketWin.classList.add('show');
   renderMarket();
+  maybeIntro('market');
 });
 marketWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -7073,6 +7462,7 @@ function conFit(moduleId: string, remove: boolean): void {
 document.getElementById('rail-constructor')?.addEventListener('click', () => {
   constructorWin.classList.add('show');
   renderConstructor();
+  maybeIntro('constructor');
 });
 constructorWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
@@ -7350,6 +7740,7 @@ function openHub(note = ''): void {
     return;
   }
   hubNote.textContent = note;
+  refreshOnboardOffer(); // ONB-0: first-run offer for a not-yet-onboarded commander
 }
 
 $('cnew').addEventListener('click', () => openHub());
@@ -7862,6 +8253,8 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   battleLosses.clear();
   aaShots.length = 0;
   logLines.length = 0; // fresh log — drop notes from the menu-background match
+  eventLog.length = 0; // ONB-5: the return digest belongs to THIS match only
+  awayFromGameTime = null; // reset the away-window baseline for the new match
   banner = null; // clear any end-banner left by the menu-background match (else it sticks)
   endScreen = null; // a fresh match must not open into the previous result
   xpAwarded = false; // a fresh match earns its own meta-XP award
@@ -7872,6 +8265,7 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   for (const k of Object.keys(buildQueues)) delete buildQueues[k];
   defaultView(); // phone: zoom onto home; desktop: whole-map fit
   setupEl.style.display = 'none';
+  maybeStartPendingTour(); // ONB-0: run a queued onboarding guide over the fresh HUD
 }
 function startMatch(setup: SetupConfig): void {
   const st = newGame(setup);
@@ -8646,6 +9040,7 @@ function frame(nowReal: number) {
     pumpBuildQueues();
     closeIdleRallies(); // drop the 'rally' tag once a world's build pipeline empties
   }
+  updateGoals(); // ONB-7: tick the first-session checklist off live state (no-op when idle)
   // The orbit spin only advances while the world is actually running (sim ticking, or a
   // live net match), so pausing freezes the ships on their rings instead of drifting on.
   if (dt > 0 && dt < 1000 && (NET || (speed > 0 && !banner))) orbitPhase += dt;
@@ -8892,7 +9287,10 @@ if (pingPopEl) {
 }
 
 // Session menu: the rail's Diplomacy / Dispatches buttons open the roster / message log.
-document.getElementById('rail-diplo')?.addEventListener('click', () => openDiplo('diplo'));
+document.getElementById('rail-diplo')?.addEventListener('click', () => {
+  openDiplo('diplo');
+  maybeIntro('diplomacy');
+});
 document.getElementById('rail-msgs')?.addEventListener('click', () => {
   unreadMsgs = 0; // reading the tab clears the badge
   openDiplo('msgs');

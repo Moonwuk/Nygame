@@ -163,6 +163,37 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #holdtip{position:fixed;z-index:60;display:none;max-width:70vw;padding:6px 10px;pointer-events:none;
   background:rgba(4,16,22,.96);border:1px solid var(--cyan);border-radius:7px;color:var(--cyan);
   font-size:13px;font-weight:600;letter-spacing:.3px;box-shadow:0 4px 14px rgba(0,0,0,.5);}
+/* ONB-1 spotlight — guide-mark overlay (engine: src/spotlight.ts, adapter: src/spotlightDom.ts).
+   z-50 sits ABOVE the HUD (top-bar 30, toasts 40) but BELOW critical modals (endscreen 56,
+   settings 59, scipick/holdtip 60). The four .sl-dim panels frame the target; the element
+   shows through the gap. .sl-passthrough (action/state steps) lets HUD clicks reach the map;
+   default (tap steps) swallows them so «Далее» is the only way forward. */
+#spotlight{position:fixed;inset:0;z-index:50;display:none;}
+#spotlight .sl-dim{position:fixed;background:rgba(2,8,11,.72);pointer-events:auto;}
+/* action/state steps: the player must operate the real HUD — let clicks through AND
+   drop the dimming so the map stays fully legible (only the ring marks the target). */
+#spotlight.sl-passthrough .sl-dim{pointer-events:none;background:transparent;}
+#spotlight .sl-ring{position:fixed;border:2px solid var(--cyan);border-radius:8px;pointer-events:none;
+  box-shadow:0 0 0 2px rgba(53,214,230,.25),0 0 18px rgba(53,214,230,.45);animation:sl-pulse 1.6s ease-in-out infinite;}
+@keyframes sl-pulse{0%,100%{box-shadow:0 0 0 2px rgba(53,214,230,.2),0 0 14px rgba(53,214,230,.35);}
+  50%{box-shadow:0 0 0 4px rgba(53,214,230,.35),0 0 22px rgba(53,214,230,.6);}}
+#spotlight .sl-bubble{position:fixed;pointer-events:auto;max-width:min(320px,82vw);
+  background:rgba(4,16,22,.97);border:1px solid var(--cyan);border-radius:10px;padding:13px 15px;
+  box-shadow:0 6px 22px rgba(0,0,0,.55);color:var(--ink);}
+#spotlight .sl-arrow{position:absolute;width:12px;height:12px;background:rgba(4,16,22,.97);
+  border:1px solid var(--cyan);transform:rotate(45deg);}
+#spotlight .sl-arrow[data-dir=up]{top:-7px;left:calc(50% - 6px);border-right:none;border-bottom:none;}
+#spotlight .sl-arrow[data-dir=down]{bottom:-7px;left:calc(50% - 6px);border-left:none;border-top:none;}
+#spotlight .sl-arrow[data-dir=left]{left:-7px;top:calc(50% - 6px);border-right:none;border-top:none;}
+#spotlight .sl-arrow[data-dir=right]{right:-7px;top:calc(50% - 6px);border-left:none;border-bottom:none;}
+#spotlight .sl-count{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--cyan);margin-bottom:5px;}
+#spotlight .sl-copy{font-size:14px;line-height:1.42;color:var(--ink);}
+#spotlight .sl-btns{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;}
+#spotlight .sl-skip{background:none;border:none;color:var(--dim);font-size:12px;cursor:pointer;padding:4px 2px;}
+#spotlight .sl-skip:hover{color:var(--ink);text-decoration:underline;}
+#spotlight .sl-next{background:var(--cyan);border:none;color:#04121a;font-weight:700;font-size:13px;
+  padding:7px 16px;border-radius:7px;cursor:pointer;}
+#spotlight .sl-next:hover{filter:brightness(1.08);}
 /* codex popup — full stats + description on tile click */
 #codex{position:fixed;inset:0;z-index:46;display:none;align-items:center;justify-content:center;padding:18px;
   background:rgba(1,5,9,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
@@ -183,6 +214,82 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .cx-build:active{background:rgba(95,240,168,.24);}
 .cx-close{margin-top:8px;width:100%;padding:9px;cursor:pointer;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font:600 12px ui-monospace,monospace;letter-spacing:1px;}
+
+/* ONB-4 codex/help hub — searchable index over units/buildings/mechanics (pure
+   index: src/codexIndex.ts). Sits at z-45, one below #codex (46) so tapping a
+   result layers the single-article popup on top of the hub. */
+#codexhub{position:fixed;inset:0;z-index:45;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#codexhub.show{display:flex;}
+#codexhub .chbox{width:min(460px,94vw);max-height:86vh;display:flex;flex-direction:column;background:var(--glass);
+  border:1px solid var(--cyan);border-radius:10px;padding:14px 16px 12px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#codexhub .ch-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line-hi);}
+#codexhub .ch-head .cx-ic{font-size:20px;color:var(--cyan);}
+#codexhub .ch-head b{font-size:15px;letter-spacing:1.5px;color:#eafffb;flex:1;}
+#codexhub .ch-search{width:100%;box-sizing:border-box;padding:9px 11px;margin-bottom:10px;border-radius:7px;
+  border:1px solid var(--line-hi);background:rgba(3,12,16,.7);color:var(--ink);font:13px ui-monospace,monospace;}
+#codexhub .ch-search:focus{outline:none;border-color:var(--cyan);}
+#codexhub .ch-body{overflow:auto;}
+#codexhub .ch-sec{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:8px 0 6px;}
+#codexhub .ch-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:6px;}
+#codexhub .ch-item{display:flex;align-items:center;gap:8px;padding:9px 10px;cursor:pointer;text-align:left;
+  border-radius:7px;border:1px solid var(--line-hi);background:rgba(3,12,16,.6);color:#dfeef2;font:600 12px ui-monospace,monospace;}
+#codexhub .ch-item:active{background:rgba(53,214,230,.12);border-color:var(--cyan);}
+#codexhub .ch-item .ch-ic{color:var(--cyan);flex:0 0 auto;}
+#codexhub .ch-empty{padding:24px 8px;text-align:center;color:var(--dim);font-size:13px;}
+#codexhub .cx-close{margin-top:10px;}
+/* the always-present in-match «?» help button (rail tool) reuses the rail styles */
+/* ONB-3 just-in-time intro card — one-screen first-contact explainer, z-58 so it
+   layers ABOVE the panel it introduces (tech/market/… at z-47) but below settings(59). */
+#intro{position:fixed;inset:0;z-index:58;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.62);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#intro.show{display:flex;}
+#intro .inbox{width:min(400px,92vw);max-height:84vh;overflow:auto;background:var(--glass);border:1px solid var(--cyan);
+  border-radius:10px;padding:16px 18px 14px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#intro .in-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line-hi);}
+#intro .in-ic{font-size:20px;color:var(--cyan);}
+#intro .in-head b{font-size:15px;letter-spacing:1px;color:#eafffb;flex:1;}
+#intro .in-tag{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cyan-dim);border:1px solid var(--line);padding:2px 6px;border-radius:2px;}
+#intro .in-body{font-size:13px;line-height:1.62;color:#cfe9e4;}
+#intro .in-ok{margin-top:14px;width:100%;padding:10px;cursor:pointer;border-radius:7px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.12);color:var(--cyan);font:700 13px ui-monospace,monospace;letter-spacing:1px;}
+#intro .in-ok:active{background:rgba(53,214,230,.24);}
+/* ONB-5 return digest — "пока тебя не было": events since you left, attention first */
+#recap{position:fixed;inset:0;z-index:57;display:none;align-items:center;justify-content:center;padding:18px;
+  background:rgba(1,5,9,.62);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#recap.show{display:flex;}
+#recap .rcbox{width:min(440px,94vw);max-height:86vh;display:flex;flex-direction:column;background:var(--glass);
+  border:1px solid var(--cyan);border-radius:10px;padding:14px 16px 12px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
+#recap .rc-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:8px;border-bottom:1px solid var(--line-hi);}
+#recap .rc-head .cx-ic{font-size:19px;color:var(--cyan);}
+#recap .rc-head b{font-size:14px;letter-spacing:1.5px;color:#eafffb;flex:1;}
+#recap .rc-body{overflow:auto;}
+#recap .rc-sec{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);margin:10px 0 6px;}
+#recap .rc-sec.hi{color:var(--amber);}
+#recap .rc-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 10px;margin-bottom:5px;cursor:pointer;
+  border-radius:7px;border:1px solid var(--line-hi);background:rgba(3,12,16,.6);color:#dfeef2;font:500 12px ui-monospace,monospace;line-height:1.4;}
+#recap .rc-item[data-jump]:active{background:rgba(53,214,230,.12);border-color:var(--cyan);}
+#recap .rc-item .rc-dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--cyan-dim);}
+#recap .rc-item.hi{border-color:rgba(255,180,58,.5);}
+#recap .rc-item.hi .rc-dot{background:var(--amber);box-shadow:0 0 8px rgba(255,180,58,.6);}
+#recap .cx-close{margin-top:10px;}
+/* ONB-7 first-session goals — a small collapsible checklist, onboarding match only.
+   Top-right under the top bar; z-32 above the HUD but below toasts/modals. */
+#goals{position:fixed;top:52px;right:14px;z-index:32;display:none;max-width:min(230px,60vw);}
+#goals.show{display:block;}
+#goals .gl-box{background:rgba(4,16,22,.94);border:1px solid var(--cyan-dim);border-radius:9px;overflow:hidden;
+  box-shadow:0 4px 16px rgba(0,0,0,.45);}
+#goals .gl-head{display:flex;align-items:center;gap:7px;padding:7px 10px;background:rgba(53,214,230,.08);
+  border-bottom:1px solid var(--line-hi);}
+#goals .gl-head b{flex:1;font-size:11px;letter-spacing:.6px;color:var(--cyan);text-transform:uppercase;}
+#goals .gl-count{font-size:11px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;}
+#goals .gl-tg{width:20px;height:20px;border:none;background:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0;}
+#goals .gl-list{padding:7px 10px 9px;display:flex;flex-direction:column;gap:5px;}
+#goals .gl-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);line-height:1.3;}
+#goals .gl-item .gl-ck{color:var(--cyan-dim);flex:0 0 auto;font-size:13px;}
+#goals .gl-item.done{color:#dfeef2;}
+#goals .gl-item.done .gl-ck{color:var(--grn);text-shadow:0 0 8px rgba(95,240,192,.5);}
+@media (max-width:640px){#goals{top:auto;bottom:70px;right:8px;}}
 
 /* player card — tap the top-left crest for your session dossier */
 #playercard{position:fixed;inset:0;z-index:47;display:none;align-items:center;justify-content:center;padding:18px;
@@ -551,6 +658,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .lw-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line-hi);}
 .lw-head b{font-size:12px;letter-spacing:2px;color:var(--cyan);}
 .lw-close{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
+#logwin .lw-head b{flex:1;} /* push the buttons to the right when the recap button is present */
+.lw-recap{width:28px;height:28px;margin-right:6px;border-radius:6px;border:1px solid var(--cyan-dim);background:rgba(53,214,230,.08);color:var(--cyan);cursor:pointer;}
+.lw-recap:active{background:rgba(53,214,230,.2);}
 #log{flex:1;min-height:0;overflow:auto;touch-action:pan-y;padding:10px 14px;
   font:11px/1.6 ui-monospace,Menlo,monospace;color:#73b6a2;scrollbar-width:thin;}
 #log div::before{content:"> ";color:var(--grn-dim);}
@@ -1414,6 +1524,15 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   background:rgba(53,214,230,.1);color:var(--cyan);font-size:18px;}
 #hub .hub-card .hc-t{font-size:13px;color:#dfeef2;}
 #hub .hub-card .hc-s{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.45;}
+/* ONB-0 first-run offer card (hub home) */
+#hub .ob-nudge{border-color:var(--cyan);background:rgba(53,214,230,.06);}
+#hub .ob-nudge .ob-body{flex:1;}
+#hub .ob-nudge .ob-btns{display:flex;gap:8px;margin-top:10px;}
+#hub .ob-nudge .ob-go{background:var(--cyan);border:none;color:#04121a;font-weight:700;font-size:12px;
+  padding:7px 14px;border-radius:7px;cursor:pointer;letter-spacing:.4px;}
+#hub .ob-nudge .ob-later{background:none;border:1px solid var(--line-hi);color:var(--dim);font-size:12px;
+  padding:7px 12px;border-radius:7px;cursor:pointer;}
+#hub .ob-nudge .ob-later:active{border-color:var(--cyan);color:#dfeef2;}
 #hub .hub-empty{padding:54px 16px;text-align:center;color:var(--dim);font-size:14px;letter-spacing:1px;line-height:1.9;}
 #hub .hub-empty .he-ic{font-size:38px;color:var(--cyan-dim);display:block;margin-bottom:14px;
   text-shadow:0 0 16px rgba(53,214,230,.3);}
@@ -1568,12 +1687,13 @@ const html = `<!doctype html>
     <button id="railcorp" title="Корпорация" data-i18n-title>⬢<span class="rlbl" data-i18n>Корп</span></button>
     <button id="rail-chat" title="Чат" data-i18n-title class="desk-only">🗨<span class="rlbl" data-i18n>Чат</span></button>
     <button id="rail-log" title="Сводки" data-i18n-title>≡<span class="rlbl" data-i18n>Сводки</span><span class="badge" id="alertbadge" style="display:none">0</span></button>
+    <button id="rail-help" title="Справочник" data-i18n-title>?<span class="rlbl" data-i18n>Справка</span></button>
   </div>
   <button id="railtoggle" title="Инструменты" type="button" aria-expanded="false"><span id="railglyph">☰</span><span class="badge" id="railalert" style="display:none">0</span></button>
 </nav>
 <!-- floating chat window (desktop only) — content rendered by renderChat() in main.ts -->
 <div id="chatwin" class="desk-only"></div>
-<div id="logwin"><div class="lwbox"><div class="lw-head"><b data-i18n>СВОДКИ</b><button class="lw-close">✕</button></div><div id="log"></div></div></div>
+<div id="logwin"><div class="lwbox"><div class="lw-head"><b data-i18n>СВОДКИ</b><button class="lw-recap" id="lw-recap" type="button" title="Сводка возвращения" data-i18n-title>🛰</button><button class="lw-close">✕</button></div><div id="log"></div></div></div>
 <!-- technologies window — content rendered by renderTech() in main.ts -->
 <div id="tech"><div class="twbox"><div class="lw-head"><b data-i18n>ТЕХНОЛОГИИ</b><button class="tw-close">✕</button></div><div id="techbody"></div></div></div>
 <!-- steward («Хранитель») window — content rendered by renderSteward() in main.ts -->
@@ -1596,6 +1716,10 @@ const html = `<!doctype html>
 </div>
 <div id="cmdbar"></div>
 <div id="codex"></div>
+<div id="codexhub"></div>
+<div id="intro"></div>
+<div id="recap"></div>
+<div id="goals"></div>
 <div id="playercard"></div>
 <div id="settings"></div>
 <div id="warprompt"></div>
@@ -1694,6 +1818,18 @@ const html = `<!doctype html>
     <div class="hub-panel" id="hp-home">
       <button id="hub-play" class="hub-play" type="button" data-i18n>ИГРАТЬ СЕЙЧАС</button>
       <button id="hub-solo" class="hub-solo" type="button" data-i18n>Одиночная игра</button>
+      <!-- ONB-0 first-run offer: shown only to a not-yet-onboarded commander -->
+      <div class="hub-card ob-nudge" id="onboard-nudge" style="display:none">
+        <div class="hc-ic">◎</div>
+        <div class="ob-body">
+          <div class="hc-t" data-i18n>Впервые в Void Dominion?</div>
+          <div class="hc-s" data-i18n>Короткое обучение покажет интерфейс и первый ход — пара минут.</div>
+          <div class="ob-btns">
+            <button id="ob-start" class="ob-go" type="button" data-i18n>Начать обучение</button>
+            <button id="ob-skip" class="ob-later" type="button" data-i18n>Пропустить</button>
+          </div>
+        </div>
+      </div>
       <div class="hub-sec" data-i18n>Сводка</div>
       <div class="hub-card">
         <div class="hc-ic">◷</div>
@@ -1714,6 +1850,8 @@ const html = `<!doctype html>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
+        <button class="hub-tile" id="hub-tutorial" type="button"><span class="ht-ic">◎</span><span data-i18n>Обучение</span></button>
+        <button class="hub-tile" id="hub-help" type="button"><span class="ht-ic">?</span><span data-i18n>Справочник</span></button>
         <button class="hub-tile" id="hub-settings" type="button"><span class="ht-ic">⚙</span><span data-i18n>Настройки</span></button>
         <button class="hub-tile" id="hub-upd" type="button" style="display:none"><span class="ht-ic">⟳</span><span data-i18n>Обновления</span></button>
         <button class="hub-tile" data-more="Аккаунт" type="button"><span class="ht-ic">◉</span><span data-i18n>Аккаунт</span></button>
