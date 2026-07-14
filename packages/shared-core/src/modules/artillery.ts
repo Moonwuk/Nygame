@@ -1,43 +1,14 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { BarrageMode, Fleet, GameState, PlanetId } from '../state/gameState';
+import type { BarrageMode, Fleet } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { timeScaleOf } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { defHasTrait } from '../data/traits';
 import { getStance } from '../state/diplomacy';
+import { fleetPositionAt } from '../state/fleetPosition';
 import { distance } from '../state/route';
 import { applyDamageToSide, isHostile, ownFleet, removeIfWiped } from '../util/combat';
 import { effectiveStats } from '../util/loadout';
-
-/** A fleet's continuous map position at `now`: its node, its parked lane point,
- *  or its interpolated spot mid-leg (mirrors movement's own progress math). null
- *  if it has no resolvable position (units missing from the map). */
-function fleetPosition(
-  state: GameState,
-  fleet: Fleet,
-  now: number,
-): { x: number; y: number } | null {
-  if (fleet.location !== null) {
-    return state.planets[fleet.location]?.position ?? null;
-  }
-  const lerp = (from: PlanetId, to: PlanetId, t: number): { x: number; y: number } | null => {
-    const a = state.planets[from]?.position;
-    const b = state.planets[to]?.position;
-    if (!a || !b) return null;
-    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-  };
-  const mv = fleet.movement;
-  if (mv) {
-    const startT = mv.startT ?? 0;
-    const endT = mv.endT ?? 1;
-    const span = mv.arrivesAt - mv.departedAt;
-    const progress = span > 0 ? Math.min(1, Math.max(0, (now - mv.departedAt) / span)) : 1;
-    return lerp(mv.from, mv.to, startT + (endT - startT) * progress);
-  }
-  const e = fleet.edge;
-  if (e) return lerp(e.from, e.to, e.t);
-  return null;
-}
 
 /** A fleet's standoff firepower = Σ over its artillery units (count × attack).
  *  Only `artillery`-trait units fire at range; the rest are melee-only. */
@@ -103,7 +74,7 @@ function pickBarrageTarget(
     // span would over/under-bill (and make the damage depend on how finely time
     // advances). A holding/sieging target has a constant position — exact.
     if (f.movement) return false;
-    const p = fleetPosition(h.state, f, h.ctx.now);
+    const p = fleetPositionAt(h.state, f, h.ctx.now);
     return p !== null && distance(from, p) <= range;
   };
   const chosen = shooter.barrageTarget;
@@ -122,7 +93,7 @@ function pickBarrageTarget(
   for (const id of ids) {
     const f = h.state.fleets[id];
     if (!f || !inRange(f)) continue;
-    const d = distance(from, fleetPosition(h.state, f, h.ctx.now)!);
+    const d = distance(from, fleetPositionAt(h.state, f, h.ctx.now)!);
     if (d < bestDist) {
       bestDist = d;
       best = f;
@@ -166,7 +137,7 @@ function runArtillery(h: HandlerContext, hours: number): void {
     const range = artilleryRange(shooter, data);
     const power = artilleryPower(shooter, data);
     if (range <= 0 || power <= 0) continue;
-    const from = fleetPosition(h.state, shooter, h.ctx.now);
+    const from = fleetPositionAt(h.state, shooter, h.ctx.now);
     if (!from) continue;
     const target = pickBarrageTarget(h, shooter, from, range, mode, ids);
     if (!target) continue;

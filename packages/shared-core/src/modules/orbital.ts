@@ -2,7 +2,7 @@ import type { GameModule, HandlerContext } from '../kernel/module';
 import type { BuildingInstance, Fleet, UnitStack } from '../state/gameState';
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
-import { timeScaleOf, type Context } from '../action/types';
+import { hoursToMs, timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
@@ -14,7 +14,7 @@ const BOMBARD_FRACTION = 0.5;
 
 /** One game-hour of world time — the AA volley grid (same value the melee module
  *  uses for its round interval). */
-const hourIntervalMs = (ctx: Context): number => MS_PER_HOUR / timeScaleOf(ctx);
+const hourIntervalMs = (ctx: Context): number => hoursToMs(ctx, 1);
 
 /** The ORBITAL AA tier: Σ the buildings' `aaDamage` — fixed heavy emplacements.
  *  Fires one full-strength volley per game-HOUR. */

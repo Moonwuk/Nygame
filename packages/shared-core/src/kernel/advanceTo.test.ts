@@ -226,6 +226,37 @@ describe('advanceTo — real-time timeline (docs/architecture.md §4.1)', () => 
     expect(r.state.scheduled).toHaveLength(0); // both consumed, world not stuck
   });
 
+  it('dead-letters a failing time.advanced handler: the span is lost, the clock is not', () => {
+    // The accrue-failure branch: a throwing `time.advanced` subscriber must not
+    // wedge the world — the span's accrual is dropped (recorded in `failures`)
+    // and time still stamps forward, so later spans keep accruing normally.
+    const flakyEconomy: GameModule = {
+      id: 'flaky-economy',
+      version: '1.0.0',
+      setup(api) {
+        api.on(TIME_ADVANCED, (event, h) => {
+          const { from, to } = event.payload as { from: number; to: number };
+          if (from < 100) throw new Error('secret accrual crash'); // only the FIRST span dies
+          for (const id of Object.keys(h.state.planets)) {
+            const p = h.state.planets[id];
+            if (p) p.resources.metal = (p.resources.metal ?? 0) + 2 * (to - from);
+          }
+        });
+      },
+    };
+    const kernel = createKernel([flakyEconomy]);
+    const planets = { p: makePlanet('p', { metal: 0 }) };
+    // A scheduled no-op at 100 splits the advance into spans 0→100 and 100→300.
+    const state = stateWith({ planets, scheduled: [sched(0, 100, 'noop')] });
+    const r = okAdvance(kernel.advanceTo(state, ctx(300)));
+
+    expect(r.failures).toEqual([{ at: 100, type: TIME_ADVANCED, code: 'E_INTERNAL' }]);
+    expect(JSON.stringify(r.failures)).not.toContain('secret'); // no detail leaks (A10)
+    expect(r.state.time).toBe(300); // the clock still reached the target
+    // Span 0→100 was dropped, span 100→300 accrued: 2 metal/ms × 200ms.
+    expect(r.state.planets.p?.resources.metal).toBe(400);
+  });
+
   it('yields a bounded partial advance on a same-instant runaway instead of wedging', () => {
     const kernel = createKernel([infiniteModule]);
     const state = stateWith({ scheduled: [sched(0, 50, 'inf')] });

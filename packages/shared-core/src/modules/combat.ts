@@ -1,7 +1,7 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Battle, CombatantRef, Fleet, PlanetId } from '../state/gameState';
 import type { GameData } from '../data/schemas';
-import { timeScaleOf, type Context } from '../action/types';
+import { hoursToMs, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { requireOwnedIdleFleet } from '../util/fleet';
 import { effectiveStats } from '../util/loadout';
@@ -25,12 +25,13 @@ const MAX_COMBAT_ROUNDS = 240;
  *  node-equivalent edge); mirrors movement's own EPS. */
 const EDGE_EPS = 1e-4;
 
-const roundIntervalMs = (ctx: Context): number => MS_PER_HOUR / timeScaleOf(ctx);
+const roundIntervalMs = (ctx: Context): number => hoursToMs(ctx, 1);
 
 // --- retreat -----------------------------------------------------------------
 
-/** The price of disengaging: each stack sheds `RETREAT_TOLL` of its MAX hull and
- *  MAX shield (not current) — pulling out of a fight is never free. */
+/** The price of disengaging: each stack sheds `RETREAT_TOLL` of its CURRENT hull
+ *  and shield pools (see `applyRetreatToll`) — pulling out of a fight is never
+ *  free, but the toll alone can never finish a fleet off. */
 const RETREAT_TOLL = 0.4;
 /** How much faster a just-retreated fleet travels while fleeing… */
 const RETREAT_HASTE_MULT = 1.5;

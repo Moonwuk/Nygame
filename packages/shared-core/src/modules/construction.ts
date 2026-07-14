@@ -620,7 +620,7 @@ export const constructionModule: GameModule = {
       }
 
       for (const planet of Object.values(h.state.planets)) {
-        if (!planet || planet.owner === null || planet.garrison.length === 0) continue;
+        if (planet.owner === null || planet.garrison.length === 0) continue;
         if (groundBattleLocations.has(planet.id)) continue;
         let totalHealRate = 0;
         for (const b of planet.buildings) {
@@ -651,7 +651,7 @@ export const constructionModule: GameModule = {
       const SHIELD_REGEN = 0.06; // shield-pool fraction restored per game-hour
       const SHIELD_REGEN_DELAY = MS_PER_HOUR; // shields stay down this long after a hit
       for (const fleet of Object.values(h.state.fleets)) {
-        if (!fleet || fleet.battleId) continue; // a fleet in combat regenerates nothing
+        if (fleet.battleId) continue; // a fleet in combat regenerates nothing
 
         // Hull mends only while parked over a FRIENDLY world with a repair yard
         // (shipyard/spaceport `shipRepair`, shields-roadmap SH-2.1) — no yard, no mend.

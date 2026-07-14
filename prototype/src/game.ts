@@ -43,6 +43,7 @@ import {
   pairKey,
   identifiedNodes,
   timeScaleOf,
+  hoursToMs,
   buildProgress,
   thresholdRamp,
   type DiplomaticStance,
@@ -1578,7 +1579,7 @@ export const fleetLaunchModule: GameModule = {
       const battleId = `battle:${h.state.battleSeq++}`;
       // Round cadence mirrors the core combat module: one round per GAME hour
       // (÷timeScale on the wall clock), with nextRoundAt stamped for the HUD timer.
-      const roundAt = h.ctx.now + HOUR / timeScaleOf(h.ctx);
+      const roundAt = h.ctx.now + hoursToMs(h.ctx, 1);
       const battle: Battle = {
         id: battleId,
         location: f.location,

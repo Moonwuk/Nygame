@@ -95,7 +95,9 @@ export const marketModule: GameModule = {
       if (!o) return h.reject('E_NO_ORDER');
       if (o.seller !== action.playerId) return h.reject('E_FORBIDDEN');
       const seller = h.state.players[action.playerId];
-      if (seller) seller.resources[o.resource] = (seller.resources[o.resource] ?? 0) + o.amount; // refund escrow
+      // Fail-secure: no seller row → reject, never burn the escrow silently.
+      if (!seller) return h.reject('E_FORBIDDEN');
+      seller.resources[o.resource] = (seller.resources[o.resource] ?? 0) + o.amount; // refund escrow
       h.state.market = (h.state.market ?? []).filter((x) => x.id !== o.id);
       h.emit('market.cancelled', { orderId, seller: action.playerId, resource: o.resource, amount: o.amount });
     });

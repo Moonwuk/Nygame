@@ -257,6 +257,26 @@ describe('kernel — events & graceful degradation (docs/modulesystem.md)', () =
     expect(res.events.map((e) => e.type)).toEqual(['unit.died', 'unit.reinforced']);
   });
 
+  it('runs same-event subscribers in module array order (invariant #6)', () => {
+    // Two modules subscribe to the same event; execution order must equal their
+    // order in the array passed to createKernel — the registration push order IS
+    // the guarantee (no sorting machinery behind it).
+    const calls: string[] = [];
+    const listener = (id: string): GameModule => ({
+      id,
+      version: '1.0.0',
+      setup(api) {
+        api.on('unit.died', () => {
+          calls.push(id);
+        });
+      },
+    });
+    const kernel = createKernel([combatModule, listener('first'), listener('second')]);
+    const state = withPlanet(baseState(), makePlanet('kepler_7', 'p2'));
+    expectOk(kernel.applyAction(state, action('combat.resolve', { planetId: 'kepler_7' }), ctx()));
+    expect(calls).toEqual(['first', 'second']);
+  });
+
   it('the same action works with the listener absent — event simply fades', () => {
     const kernel = createKernel([combatModule]); // no reinforce
     const state = withPlanet(baseState(), makePlanet('kepler_7', 'p2'));

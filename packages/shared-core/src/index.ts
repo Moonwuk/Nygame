@@ -96,6 +96,7 @@ export {
   Rejection,
   parseActionId,
   timeScaleOf,
+  hoursToMs,
   type Action,
   type Context,
   type MatchConfig,
