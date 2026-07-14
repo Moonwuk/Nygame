@@ -6,6 +6,7 @@ import { timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
 import { sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
+import { isActivelyBombarding } from '../state/orbit';
 import { applyDamageToSide, isHostile, removeIfWiped } from '../util/combat';
 
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
@@ -139,20 +140,15 @@ function runOrbital(h: HandlerContext, from: number, to: number, hours: number):
       }
     }
     // Bombardment — each hostile bombarding fleet shells the structures below.
-    // A fleet PINNED in a melee (battleId) does not shell: it is busy fighting —
-    // and it is invisible to AA (`nearOrbitHostile` skips battleId fleets), so
-    // letting it bombard made a defender's relief fleet PROTECT the bombarder
-    // while the shelling continued (bug-hunt MAJOR). Resume = re-issue after the
+    // The rule (incl. the pinned-in-melee exception and why it exists) is THE
+    // shared predicate `isActivelyBombarding` — the same one the economy /
+    // construction freeze reads, so damage and freeze can't disagree. Here it
+    // gets combat's capability-aware hostility; resume = re-issue after the
     // battle (finishBattle resets `bombarding` on release).
     if (localFleets) {
+      const hostile = (a: string, b: string): boolean => isHostile(h, a, b);
       for (const f of localFleets) {
-        if (
-          f.bombarding &&
-          !f.battleId &&
-          f.orbit === 'near' &&
-          planet.owner !== null &&
-          isHostile(h, f.owner, planet.owner)
-        ) {
+        if (isActivelyBombarding(h.state, f, hostile)) {
           const power = bombardPower(f, data) * hours;
           if (power > 0) {
             h.emit('planet.bombarded', { planetId, power, owner: planet.owner, by: f.owner });

@@ -522,10 +522,17 @@ export class PostgresCorpStore implements CorpStore {
         [corpId, fromAccountId],
       );
       if ((demoted.rowCount ?? 0) > 0) {
-        await client.query(
+        const promoted = await client.query(
           `UPDATE corp_members SET role = 'head' WHERE corp_id = $1 AND account_id = $2`,
           [corpId, toAccountId],
         );
+        if ((promoted.rowCount ?? 0) === 0) {
+          // The target left (or was kicked) between the service's membership check
+          // and this transaction — roll the demotion back rather than commit a
+          // headless corp. Net effect: a no-op, same as the memory adapter.
+          await client.query('ROLLBACK');
+          return;
+        }
       }
       await client.query('COMMIT');
     } catch (err) {

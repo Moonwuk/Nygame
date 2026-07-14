@@ -329,6 +329,48 @@ describe('victory module', () => {
     expect(r.state.match.winners).toBeUndefined();
   });
 
+  it('enumerates EVERY maximal clique — a coalition a greedy pass misses still wins', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: {
+        p1: player('p1'),
+        p2: player('p2'),
+        p3: player('p3'),
+        p4: player('p4'),
+        p5: player('p5'),
+      },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }), // 50
+        B: planet('B', 'p2', { kind: 'planet' }), // 50
+        C: planet('C', 'p3', { kind: 'planet' }), // 50
+        D: planet('D', 'p4', { kind: 'planet' }), // 50
+        D2: planet('D2', 'p4', { kind: 'planet' }), // 50 → p4 = 100
+        E: planet('E', 'p5', { kind: 'planet' }), // 50
+      },
+    };
+    // Alliance web whose maximal cliques are {p1,p3,p5}, {p3,p4,p5} and {p2,p4}.
+    // A greedy growth from any seed absorbs a blocker before reaching {p3,p4,p5}
+    // (from p3 it grabs p1 first, from p4 it grabs p2, from p5 it grabs p1), so the
+    // pre-fix enumeration never saw that unit and the race ended in a phantom tie
+    // between {p1,p3,p5} and {p2,p4} at 150.
+    setStance(state, 'p1', 'p3', 'alliance');
+    setStance(state, 'p1', 'p5', 'alliance');
+    setStance(state, 'p3', 'p5', 'alliance');
+    setStance(state, 'p3', 'p4', 'alliance');
+    setStance(state, 'p4', 'p5', 'alliance');
+    setStance(state, 'p2', 'p4', 'alliance');
+
+    // 3-way threshold = 70 × 3 × 0.7 = 147: {p3,p4,p5} = 200 clears it and outscores
+    // {p1,p3,p5} = 150 — a clean single win, not a tie.
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 70 } })),
+    );
+
+    expect(r.state.match).toMatchObject({ status: 'ended', reason: 'score', winner: 'p4' });
+    expect(r.state.match.winners).toEqual(['p3', 'p4', 'p5']);
+  });
+
   it('the coalition threshold REPLACES the solo one for members', () => {
     const kernel = createKernel([victoryModule]);
     const state: GameState = {

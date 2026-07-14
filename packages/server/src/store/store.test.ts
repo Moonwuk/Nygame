@@ -206,6 +206,18 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       expect(await store.membershipOf(uniq('acc-new'))).toMatchObject({ role: 'head' });
     });
 
+    it('swapHead is a no-op when the target already left — never commits a headless corp', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Orphanproof'), uniq('acc-head'), 'head');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-gone'), 'gone', 'member');
+      // The target vanishes between the service's membership check and the swap
+      // (the TOCTOU window corpService.transfer leaves open).
+      await store.removeMember(created.corpId, uniq('acc-gone'));
+      await store.swapHead(created.corpId, uniq('acc-head'), uniq('acc-gone'));
+      expect(await store.membershipOf(uniq('acc-head'))).toMatchObject({ role: 'head' });
+    });
+
     it('removeCorp releases every member; the audit trail survives, newest first', async () => {
       const store = make();
       const created = await store.createCorp(uniq('Doomed'), uniq('acc-x'), 'xena');
