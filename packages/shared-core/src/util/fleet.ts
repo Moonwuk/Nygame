@@ -1,5 +1,6 @@
 import type { Fleet, GameState, PlanetId } from '../state/gameState';
 import type { HandlerContext } from '../kernel/module';
+import { ownFleet } from './combat';
 
 /** A fleet that has been validated as stationed at a planet and idle (not
  *  moving, not in battle). The `location` is guaranteed non-null. */
@@ -18,7 +19,9 @@ export function requireOwnedIdleFleet(
   fleetId: string,
   playerId: string,
 ): IdleFleet {
-  const fleet = h.state.fleets[fleetId];
+  // Own-key lookup (`ownFleet`): a poisoned id ('__proto__'…) reads as no-fleet
+  // explicitly, not merely by luck of the owner check failing on the prototype.
+  const fleet = ownFleet(h.state, fleetId);
   if (!fleet || fleet.owner !== playerId) {
     h.reject('E_NO_FLEET');
   }

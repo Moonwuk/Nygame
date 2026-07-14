@@ -274,7 +274,9 @@ function boostResearch(action: Action, h: HandlerContext): void {
   if (!player) {
     return h.reject('E_FORBIDDEN');
   }
-  const slot = player.technologies?.active?.find((a) => a.technology === payload.technology);
+  // technologyState migrates a legacy single-object `active` before the .find —
+  // a pre-multi-slot save must boost, not blow up with E_INTERNAL.
+  const slot = technologyState(player).active?.find((a) => a.technology === payload.technology);
   if (!slot) {
     return h.reject('E_NOT_ACTIVE'); // not currently being researched
   }

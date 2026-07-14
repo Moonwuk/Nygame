@@ -113,12 +113,19 @@ export const espionageModule: GameModule = {
       // Counter-intelligence (SPY-2): the detect roll is drawn for EVERY paid
       // attempt — success or failure — so the RNG stream shape does not depend on
       // the outcome (or on what hooks did to the odds).
-      const rawDetect = h.hook<number>(
-        'espionage.detect',
-        succeeded ? BASE_DETECT_SUCCESS : BASE_DETECT_FAILED,
-        { playerId: action.playerId, target: p.target, kind: p.kind, succeeded },
-      );
-      const detectChance = Number.isFinite(rawDetect) ? Math.min(1, Math.max(0, rawDetect)) : 0;
+      const baseDetect = succeeded ? BASE_DETECT_SUCCESS : BASE_DETECT_FAILED;
+      const rawDetect = h.hook<number>('espionage.detect', baseDetect, {
+        playerId: action.playerId,
+        target: p.target,
+        kind: p.kind,
+        succeeded,
+      });
+      // Same fallback policy as the chance/duration hooks: a broken pipeline
+      // (non-finite) reverts to the BASE value — it must not silently switch
+      // counter-intelligence off.
+      const detectChance = Number.isFinite(rawDetect)
+        ? Math.min(1, Math.max(0, rawDetect))
+        : baseDetect;
       const detected = h.rng.nextFloat() < detectChance;
 
       if (!succeeded) {

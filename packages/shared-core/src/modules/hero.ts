@@ -12,6 +12,7 @@ import type {
 } from '../state/gameState';
 import { stacksHaveTrait } from '../data/traits';
 import { getStance, stanceToRelation } from '../state/diplomacy';
+import { fleetSideDealingHit, heroNode } from '../state/heroes';
 import { distance } from '../state/route';
 import { isCapturable } from '../state/sectorKind';
 import { canInstall } from '../util/fitting';
@@ -126,18 +127,6 @@ function heroOf(state: GameState, playerId: PlayerId): Hero | undefined {
 function heroByFleet(state: GameState, fleetId: string): Hero | undefined {
   if (state.heroes === undefined) return undefined;
   return Object.values(state.heroes).find((hero) => hero.fleetId === fleetId);
-}
-
-/** The node a hero acts from (HERO-2 — the hero's position IS its ship): the fleet's
- *  current node while deployed; mid-flight (`location: null`) or shipless it falls back
- *  to `Hero.location` — the last confirmed node, synced on transit/arrival and doubling
- *  as the respawn anchor after `home`. */
-function heroNode(state: GameState, hero: Hero): PlanetId {
-  if (hero.fleetId) {
-    const loc = state.fleets[hero.fleetId]?.location;
-    if (typeof loc === 'string') return loc;
-  }
-  return hero.location;
 }
 
 /** Does this fleet currently carry a living hero unit? (drives the fleet aura). */
@@ -611,16 +600,13 @@ export const heroModule: GameModule = {
     // covers both its attack (vs the foe) and its return-fire defense.
     api.hook<number>('combat.damage', (base, args, h) => {
       const { battleId, attacker } = (args ?? {}) as { battleId?: string; attacker?: string };
-      if (typeof battleId !== 'string' || typeof attacker !== 'string') return base;
-      const battle = h.state.battles[battleId];
-      if (!battle) return base;
-      const side = battle.attacker.owner === attacker ? battle.attacker : battle.defender;
-      if (side.ref.kind !== 'fleet') return base; // the aura is a fleet bonus only
+      const hit = fleetSideDealingHit(h.state, battleId, attacker);
+      if (!hit || typeof attacker !== 'string') return base;
       let out = base;
-      if (fleetHasHero(h, side.ref.fleetId)) out *= 1 + HERO_COMBAT_BONUS;
+      if (fleetHasHero(h, hit.side.ref.fleetId)) out *= 1 + HERO_COMBAT_BONUS;
       const passives = passiveBonus(h, 'combat.damage', attacker, {
-        fleetId: side.ref.fleetId,
-        node: battle.location,
+        fleetId: hit.side.ref.fleetId,
+        node: hit.battle.location,
       });
       return passives !== 0 ? out * (1 + passives) : out;
     });

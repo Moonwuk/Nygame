@@ -140,20 +140,12 @@ export const FactionDefSchema = z.object({
   abilities: z.array(z.string()).default([]),
   /** Unit ids this faction can field that others cannot (its signature roster). */
   uniqueUnits: z.array(z.string()).default([]),
-  /** Match-start loadout (resources / fleet / garrison / homeworld buildings). */
-  startingLoadout: FactionLoadoutSchema.default({
-    resources: {},
-    fleet: [],
-    garrison: [],
-    homeBuildings: [],
-  }),
+  /** Match-start loadout (resources / fleet / garrison / homeworld buildings).
+   *  `.prefault({})` pipes the empty object through the schema, so the per-field
+   *  defaults there stay the single source of truth (no literal to drift). */
+  startingLoadout: FactionLoadoutSchema.prefault({}),
   /** Always-on faction bonuses, applied by the faction module via hooks. */
-  passives: FactionPassivesSchema.default({
-    productionBonus: 0,
-    fleetSpeedBonus: 0,
-    combatDamageBonus: 0,
-    radarRangeBonus: 0,
-  }),
+  passives: FactionPassivesSchema.prefault({}),
 });
 
 /** Per-level stats of a building (level 2..N). Level 1 uses the base fields. */
@@ -335,13 +327,10 @@ export const TechnologyDefSchema = z.object({
   cost: ResourceBagSchema.default({}),
   researchTimeHours: z.number().nonnegative().default(0),
   prerequisites: z.array(z.string()).default([]),
-  unlocks: TechnologyUnlocksSchema.default({ units: [], buildings: [], abilities: [] }),
-  effects: TechnologyEffectsSchema.default({
-    productionBonus: 0,
-    fleetSpeedBonus: 0,
-    combatDamageBonus: 0,
-    radarRangeBonus: 0,
-  }),
+  // `.prefault({})` re-runs the nested schema, keeping its per-field defaults
+  // the single source of truth instead of a duplicate literal that can drift.
+  unlocks: TechnologyUnlocksSchema.prefault({}),
+  effects: TechnologyEffectsSchema.prefault({}),
 });
 
 /** How a province type draws on the map — resolved by kind id on the client, never
@@ -621,17 +610,10 @@ export const GameDataSchema = z.object({
   heroPassives: z.record(z.string(), HeroPassiveDefSchema).default({}),
   heroSkillTrees: z.record(z.string(), HeroSkillNodeSchema).default({}),
   heroFittings: z.record(z.string(), HeroFittingDefSchema).default({}),
-  rewards: RewardsDefSchema.default({
-    xpParticipation: 40,
-    xpScoreDivisor: 10,
-    xpScoreCap: 100,
-    xpWin: 160,
-  }),
-  researchBoost: ResearchBoostDefSchema.default({
-    cost: { energy: 50 },
-    initialPercent: 0.25,
-    decay: 0.5,
-  }),
+  // `.prefault({})` pipes the empty object through the nested schema, so its
+  // per-field defaults stay the single source of truth (no literal to drift).
+  rewards: RewardsDefSchema.prefault({}),
+  researchBoost: ResearchBoostDefSchema.prefault({}),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;

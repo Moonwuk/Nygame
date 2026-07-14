@@ -16,23 +16,24 @@ export function canAfford(treasury: ResourceBag, cost: ResourceBag): boolean {
   return true;
 }
 
-/** Deducts `cost` from the treasury in place (caller has checked affordability). */
-export function payCost(treasury: ResourceBag, cost: ResourceBag): void {
-  for (const res of Object.keys(cost)) {
-    const amount = cost[res] ?? 0;
+/** The one mutation both directions share: add `sign × bag` to the treasury in
+ *  place, skipping zero lines so an empty line never materializes a `0` entry. */
+function addToTreasury(treasury: ResourceBag, bag: ResourceBag, sign: 1 | -1): void {
+  for (const res of Object.keys(bag)) {
+    const amount = bag[res] ?? 0;
     if (amount !== 0) {
-      treasury[res] = (treasury[res] ?? 0) - amount;
+      treasury[res] = (treasury[res] ?? 0) + sign * amount;
     }
   }
+}
+
+/** Deducts `cost` from the treasury in place (caller has checked affordability). */
+export function payCost(treasury: ResourceBag, cost: ResourceBag): void {
+  addToTreasury(treasury, cost, -1);
 }
 
 /** Adds `amount` to the treasury in place — the symmetric inverse of `payCost`,
  *  for refunding a cancelled/paused construction. */
 export function refundCost(treasury: ResourceBag, amount: ResourceBag): void {
-  for (const res of Object.keys(amount)) {
-    const value = amount[res] ?? 0;
-    if (value !== 0) {
-      treasury[res] = (treasury[res] ?? 0) + value;
-    }
-  }
+  addToTreasury(treasury, amount, 1);
 }
