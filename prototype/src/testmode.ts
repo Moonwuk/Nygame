@@ -43,8 +43,20 @@ export interface TestModeHooks {
 }
 
 const SPEEDS = [1, 2, 6, 20]; // selectable game-speed multipliers
-const FORM_ICON: Record<string, string> = { infantry: '🪖', tank: '🛡' };
-const FORM_RU: Record<string, string> = { infantry: 'Пехота', tank: 'Танк' };
+// Keyed by the CURRENT ground roster (FORMATION_UNITS) — the old 2-type
+// infantry/tank maps rendered three of the four types as `undefined`.
+const FORM_ICON: Record<string, string> = {
+  militia: '🪓',
+  heavy_infantry: '🪖',
+  special_forces: '🎯',
+  tank: '🛡',
+};
+const FORM_RU: Record<string, string> = {
+  militia: 'Ополчение',
+  heavy_infantry: 'Тяжёлая пехота',
+  special_forces: 'Спецназ',
+  tank: 'Танк',
+};
 
 // Scenario-1 force config: the spacecraft each side's fleets are built from.
 const SHIP_UNITS = ['cruiser', 'scout', 'siege'] as const;

@@ -9,7 +9,7 @@
  * star lanes, holographic planet spheres coloured by owner with a floating type badge, and
  * fleets at their interpolated positions. Node sizes stay constant in screen px.
  */
-import type { GameState, PlayerId, Fleet } from '@void/shared-core';
+import { fleetPositionAt, type GameState, type PlayerId } from '@void/shared-core';
 import { worldToScreen, inView, type Cam, type Viewport, type Bounds } from './camera';
 import { blitGlow, blitSphere, rgba } from './holoDraw';
 import { drawTerritory, type TerritorySeed } from './territory';
@@ -60,28 +60,6 @@ export function ownerColors(state: GameState): Map<PlayerId, string> {
     i += 1;
   }
   return m;
-}
-
-/** Compute a fleet's map-space point: at a node, interpolated along its transit leg, or
- *  parked on a lane. Returns null if its anchor planets are missing. */
-function fleetPoint(state: GameState, f: Fleet, now: number): { x: number; y: number } | null {
-  if (f.location) return state.planets[f.location]?.position ?? null;
-  const leg = f.movement ?? (f.edge ? { from: f.edge.from, to: f.edge.to } : null);
-  if (!leg) return null;
-  const from = state.planets[leg.from]?.position;
-  const to = state.planets[leg.to]?.position;
-  if (!from || !to) return null;
-  let t: number;
-  if (f.movement) {
-    const span = f.movement.arrivesAt - f.movement.departedAt;
-    const prog = span > 0 ? Math.min(1, Math.max(0, (now - f.movement.departedAt) / span)) : 1;
-    const t0 = f.movement.startT ?? 0;
-    const t1 = f.movement.endT ?? 1;
-    t = t0 + prog * (t1 - t0);
-  } else {
-    t = f.edge?.t ?? 0;
-  }
-  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
 }
 
 /** Draw the whole map onto `g` for the current camera. Clears the viewport first. */
@@ -202,9 +180,10 @@ export function renderMap(
     }
   }
 
-  // Fleets — a small chevron in the owner's colour (with a soft glow) at its position.
+  // Fleets — a small chevron in the owner's colour (with a soft glow) at its
+  // interpolated position (the SHARED leg math — state/fleetPosition.ts).
   for (const f of Object.values(state.fleets)) {
-    const pt = fleetPoint(state, f, opts.now);
+    const pt = fleetPositionAt(state, f, opts.now);
     if (!pt) continue;
     const c = worldToScreen(pt, cam, vp, bounds);
     if (!inView(c, vw, vh, 24)) continue;

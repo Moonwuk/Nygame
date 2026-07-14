@@ -209,17 +209,28 @@ function toStacks(stacks: UnitStack[], data?: Pick<GameData, 'units'>): Selectio
   });
 }
 
-function hullOf(stacks: UnitStack[], data: Pick<GameData, 'units'>): { current: number; max: number } {
+/** Aggregate a whole-stack pool (hull or shield) over the stacks: max = Σ count ×
+ *  per-ship stat; current reads the stack's pool field, absent = full. The one
+ *  loop both mirrored aggregators share. */
+function poolOf(
+  stacks: UnitStack[],
+  data: Pick<GameData, 'units'>,
+  stat: 'hp' | 'shield',
+  pool: 'hp' | 'shieldHp',
+): { current: number; max: number } {
   let current = 0;
   let max = 0;
   for (const s of stacks) {
-    const perShip = data.units[s.unit]?.stats.hp ?? 0;
+    const perShip = data.units[s.unit]?.stats[stat] ?? 0;
     const stackMax = s.count * perShip;
     max += stackMax;
-    // `s.hp` is the whole-stack remaining pool during combat; absent = full health.
-    current += s.hp ?? stackMax;
+    current += s[pool] ?? stackMax;
   }
   return { current, max };
+}
+
+function hullOf(stacks: UnitStack[], data: Pick<GameData, 'units'>): { current: number; max: number } {
+  return poolOf(stacks, data, 'hp', 'hp');
 }
 
 /** Aggregate ablative shield, or undefined when the stacks have no shield capacity. */
@@ -227,16 +238,8 @@ function shieldOf(
   stacks: UnitStack[],
   data: Pick<GameData, 'units'>,
 ): { current: number; max: number } | undefined {
-  let current = 0;
-  let max = 0;
-  for (const s of stacks) {
-    const perShip = data.units[s.unit]?.stats.shield ?? 0;
-    const stackMax = s.count * perShip;
-    max += stackMax;
-    // `s.shieldHp` is the whole-stack shield pool; absent = full shield.
-    current += s.shieldHp ?? stackMax;
-  }
-  return max > 0 ? { current, max } : undefined;
+  const shield = poolOf(stacks, data, 'shield', 'shieldHp');
+  return shield.max > 0 ? shield : undefined;
 }
 
 /** The living hero commanding `fleet`, if any. Self-securing: only the viewer's own

@@ -12,6 +12,7 @@ import {
   buildingLevel,
   hasOrbit,
   allowedBuildings,
+  isBuildable,
   isCapturable,
   isBombarded,
   economyModule,
@@ -843,93 +844,58 @@ export interface SectorType {
    *  default `BUILDABLE` set. Mirrors core `sectorKinds.allowedBuildings`. */
   allowedBuildings?: string[];
 }
-export const SECTOR_TYPES: Record<string, SectorType> = {
-  planet: {
-    name: 'Planet',
-    core: 'empty_space',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#5fd0ff',
-  },
-  nebula: {
-    name: 'Nebula',
-    core: 'nebula',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#8f6dff',
-  },
+/** The prototype's UI delta per sector kind: display name, `data.sectors` terrain
+ *  mapping and map colour, plus an optionally STRICTER build roster than the core's
+ *  (asteroid: the UI offers only the starfort even though the core kind is open). */
+interface SectorTypeUi {
+  name: string;
+  core: string;
+  color: string;
+  allowedBuildings?: string[];
+}
+const SECTOR_TYPE_UI: Record<string, SectorTypeUi> = {
+  planet: { name: 'Planet', core: 'empty_space', color: '#5fd0ff' },
+  nebula: { name: 'Nebula', core: 'nebula', color: '#8f6dff' },
   asteroid: {
     name: 'Asteroid Field',
     core: 'asteroid_field',
-    capturable: true,
-    buildable: true,
-    orbit: false,
     color: '#d6a645',
     allowedBuildings: ['starfort'],
   },
-  empty: {
-    name: 'Empty Space',
-    core: 'empty_space',
-    capturable: false,
-    buildable: false,
-    orbit: false,
-    color: '#46606e',
-  },
+  empty: { name: 'Empty Space', core: 'empty_space', color: '#46606e' },
   // new terrains — each maps to a core `data.sectors` entry for its speed/HP bonus
-  ion_storm: {
-    name: 'Ion Storm',
-    core: 'ion_storm',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#6fe3ff',
-  },
-  dense_nebula: {
-    name: 'Dense Nebula',
-    core: 'dense_nebula',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#a78bff',
-  },
-  solar_flare: {
-    name: 'Solar Flare Zone',
-    core: 'solar_flare_zone',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#ff9f3a',
-  },
-  graveyard: {
-    name: 'Derelict Graveyard',
-    core: 'derelict_graveyard',
-    capturable: true,
-    buildable: true,
-    orbit: false,
-    color: '#9fb0a8',
-  },
+  ion_storm: { name: 'Ion Storm', core: 'ion_storm', color: '#6fe3ff' },
+  dense_nebula: { name: 'Dense Nebula', core: 'dense_nebula', color: '#a78bff' },
+  solar_flare: { name: 'Solar Flare Zone', core: 'solar_flare_zone', color: '#ff9f3a' },
+  graveyard: { name: 'Derelict Graveyard', core: 'derelict_graveyard', color: '#9fb0a8' },
   // debris field — a fast but UN-capturable corridor (kind `debris_field` in sectorKinds)
-  debris_field: {
-    name: 'Debris Field',
-    core: 'deep_void',
-    capturable: false,
-    buildable: false,
-    orbit: false,
-    color: '#2f4a59',
-  },
-  // dead world — a destroyed planet (future hero ability); re-claimable, only the salvage rig builds here
-  dead_world: {
-    name: 'Dead World',
-    core: 'deep_void',
-    capturable: true,
-    buildable: true,
-    orbit: true,
-    color: '#5a4a4a',
-    allowedBuildings: ['metal_station'],
-  },
+  debris_field: { name: 'Debris Field', core: 'deep_void', color: '#2f4a59' },
+  // dead world — a destroyed planet; re-claimable, only the salvage rig builds here
+  dead_world: { name: 'Dead World', core: 'deep_void', color: '#5a4a4a' },
 };
+
+/** SECTOR_TYPES = UI delta + gameplay flags DERIVED from `data.sectorKinds` via the
+ *  core's own resolution (permissive default for kinds the data doesn't list) — one
+ *  source of truth for capturable/buildable/orbit, so the prototype can't drift from
+ *  what the kernel actually enforces. `allowedBuildings` stays the UI roster: the
+ *  prototype may be stricter than the core (asteroid), else it mirrors the data
+ *  (dead_world's salvage rig comes from `data.sectorKinds`). */
+export const SECTOR_TYPES: Record<string, SectorType> = Object.fromEntries(
+  Object.entries(SECTOR_TYPE_UI).map(([kind, ui]) => {
+    const planet = { kind };
+    const roster = ui.allowedBuildings ?? allowedBuildings(data, planet);
+    const type: SectorType = {
+      name: ui.name,
+      core: ui.core,
+      color: ui.color,
+      capturable: isCapturable(data, planet),
+      buildable: isBuildable(data, planet),
+      orbit: hasOrbit(data, planet),
+      ...(roster === undefined ? {} : { allowedBuildings: roster }),
+    };
+    return [kind, type];
+  }),
+);
 
 // --- the map -----------------------------------------------------------------
 

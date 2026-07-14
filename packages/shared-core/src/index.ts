@@ -68,7 +68,8 @@ export {
 } from './state/sectorKind';
 export { factionStart, type FactionStart } from './state/factionStart';
 export { planRoute, routeDistance, fleetBaseSpeed, estimateTravelHours } from './state/route';
-export { isBombarded, bombardedPlanets } from './state/orbit';
+export { isBombarded, bombardedPlanets, isActivelyBombarding } from './state/orbit';
+export { fleetPositionAt, fleetNodeAt, legT } from './state/fleetPosition';
 export {
   DEFAULT_STANCE,
   STANCE_RANK,
