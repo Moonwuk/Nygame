@@ -131,6 +131,9 @@ export interface ActiveResearch {
   technology: TechnologyId;
   startedAt: number;
   completesAt: number;
+  /** Premium boosts already applied (SES-3): drives the geometric diminishing
+   *  returns of `technology.boost`. Absent = never boosted. */
+  boosts?: number;
 }
 
 export interface PlayerTechnologyState {
@@ -181,6 +184,18 @@ export interface MatchScore {
   total: number;
 }
 
+/** One row of the session-end reward table (SES-2 first slice, GDD §3.4). The
+ *  core only REPORTS the table — crediting accounts (XP / meta-resources) is the
+ *  server's job once the meta-economy lands (EC-*). */
+export interface PlayerReward {
+  /** Standing in the final score table — standard competition ranking (1224):
+   *  equal totals share a place, the next place skips the tied count. */
+  place: number;
+  /** Account XP earned: participation + capped score share + win bonus, scaled
+   *  by `GameData.rewards`. */
+  xp: number;
+}
+
 export interface MatchState {
   status: MatchStatus;
   winner: PlayerId | null;
@@ -190,6 +205,9 @@ export interface MatchState {
   endedAt?: number;
   reason?: MatchEndReason;
   scores: Record<PlayerId, MatchScore>;
+  /** Session-end reward table (GDD §3.4), written once when the match ends —
+   *  every seated player gets a row (participation pays even in defeat). */
+  rewards?: Record<PlayerId, PlayerReward>;
 }
 
 export interface Planet {

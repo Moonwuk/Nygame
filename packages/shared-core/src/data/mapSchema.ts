@@ -93,6 +93,12 @@ export const MapSlotSchema = z.object({
 export const MatchMapSchema = z.object({
   id: z.string(),
   seed: z.string(),
+  /** Opts this map into the AvA pool (AVA-5, `corporation-wars.md` S4). The map's
+   *  SHAPE — how many sides and slots per side — is deliberately NOT declared
+   *  alongside: it is derived from `slots` by {@link avaShape}, so the tag can
+   *  never drift out of sync with the actual layout. `validateMatchMap` rejects
+   *  an eligible map whose slots are not a symmetric ≥2-side split (`E_AVA_SHAPE`). */
+  avaEligible: z.boolean().default(false),
   /** World time the scenario starts at (default 0). */
   time: z.number().default(0),
   sectors: z.record(z.string(), MapSectorSchema),
@@ -112,6 +118,23 @@ export type MatchMap = z.infer<typeof MatchMapSchema>;
 export type MapSector = z.infer<typeof MapSectorSchema>;
 export type MapSlot = z.infer<typeof MapSlotSchema>;
 export type SpawnPolicy = z.infer<typeof SpawnPolicySchema>;
+
+/** The derived AvA shape of a map: how many sides its slots declare and how many
+ *  slots each side holds — `null` when the map has no slots, only one side, or
+ *  the sides are uneven (not a symmetric team map). The slots themselves are the
+ *  single source of truth (no separate declared numbers to drift out of sync);
+ *  the pool (`pickAvaMap`, server/meta) matches this against the requested size. */
+export function avaShape(map: MatchMap): { sides: number; slotsPerSide: number } | null {
+  const counts = new Map<string, number>();
+  for (const slot of Object.values(map.slots)) {
+    counts.set(slot.team, (counts.get(slot.team) ?? 0) + 1);
+  }
+  if (counts.size < 2) return null;
+  const sizes = [...counts.values()];
+  const per = sizes[0]!;
+  if (sizes.some((n) => n !== per)) return null;
+  return { sides: counts.size, slotsPerSide: per };
+}
 
 /** Strict parse — throws on a malformed map (use at trusted boot). */
 export function parseMatchMap(raw: unknown): MatchMap {

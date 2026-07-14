@@ -948,22 +948,23 @@ export interface MapNode {
 
 type KeyNode = Omit<MapNode, 'links'>;
 
-// A SQUARE, ORGANIC contested field: a jittered 7×7 lattice (equal cell spacing, no rigid
-// grid look) wired to neighbours by a relative-neighbourhood graph. EXACTLY 12 are 'planet'
-// kind — 4 of them START candidates (one per corner region, where players & AI spawn) + 8
-// neutral worlds — and the other 37 are non-planet provinces, so the board totals ~970 base
-// points (12×50 + 37×10); a solo win needs 450 (SCORE_LIMIT). All planets start NEUTRAL; newGame() seeds
-// owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash) →
-// reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
+// A SQUARE, ORGANIC contested field: a jittered 11×11 lattice (equal cell spacing, no rigid
+// grid look) wired to neighbours by a relative-neighbourhood graph. EXACTLY 30 are 'planet'
+// kind — 10 START candidates around the perimeter (where players & AI spawn) + 20 neutral
+// worlds — and the other 91 are non-planet provinces, so the board totals ~2410 base points
+// (30×50 + 91×10); a solo win needs 1100 (SCORE_LIMIT). All planets start NEUTRAL; newGame()
+// seeds owners + homes at the chosen starts. The jitter is deterministic (seeded sine hash)
+// → reproducible. Square aspect so it reads well in portrait (fills width, pans vertically).
 //
 // FAIRNESS (self-play M4 finding): the field is mirror-symmetric in BOTH axes — jitter,
 // terrain kinds and planet types are computed for the canonical quadrant cell and
-// mirrored out — so all four corner starts face an IDENTICAL neighbourhood. The first
+// mirrored out. The ten starts form three mirrored orbits (4 + 2 + 4), keeping opposite
+// seats equivalent while fitting ten evenly-spaced homes on a square perimeter. The first
 // asymmetric layout gave one corner ~6× the nearby province value (70 vs 410 points
 // within 3 hops) and that start won 100% of seeded bot matches regardless of slot
 // or faction. Competitive skirmish maps are symmetric for exactly this reason; the
 // per-quadrant jitter keeps the organic look.
-const FIELD = { cols: 7, rows: 7, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
+const FIELD = { cols: 11, rows: 11, x0: 150, dx: 145, y0: 150, dy: 145, jitter: 0.4 };
 const NON_PLANET_KINDS = [
   'asteroid',
   'nebula',
@@ -982,12 +983,34 @@ const NEUTRAL_PLANET_TYPES = [
   'ringworld',
   'crystalline',
 ];
-// 4 start candidates — one per corner region (inset), spread wide so starts don't crowd.
-const START_CELLS = ['1,1', '5,1', '1,5', '5,5'];
-// 8 neutral 'planet' worlds in axis-symmetric orbits: the edge pairs (1,3)/(5,3) and
-// (3,1)/(3,5) plus the diagonal four (2,2)/(4,2)/(2,4)/(4,4). The old list held an
-// unpaired (2,4) and a centre (3,3) — the source of the corner imbalance.
-const NEUTRAL_PLANET_CELLS = ['1,3', '5,3', '3,1', '3,5', '2,2', '4,2', '2,4', '4,4'];
+// 10 start candidates around the inset perimeter: three along the top/bottom and two
+// along each side. Ordering follows the perimeter clockwise so automatic seat placement
+// spreads through the board predictably.
+const START_CELLS = ['2,1', '5,1', '8,1', '9,3', '9,7', '8,9', '5,9', '2,9', '1,7', '1,3'];
+// 20 neutral 'planet' worlds in five four-cell axis-symmetric orbits. Combined with the
+// ten starts this preserves the old density: three planet provinces per maximum seat.
+const NEUTRAL_PLANET_CELLS = [
+  '3,3',
+  '7,3',
+  '3,7',
+  '7,7',
+  '2,0',
+  '8,0',
+  '2,10',
+  '8,10',
+  '4,2',
+  '6,2',
+  '4,8',
+  '6,8',
+  '2,4',
+  '8,4',
+  '2,6',
+  '8,6',
+  '4,4',
+  '6,4',
+  '4,6',
+  '6,6',
+];
 
 const cellId = (cell: string): string => {
   const [c, r] = cell.split(',');
@@ -1002,10 +1025,15 @@ function jhash(n: number): number {
 function buildField(): KeyNode[] {
   const starts = new Set(START_CELLS);
   const neutralP = new Set(NEUTRAL_PLANET_CELLS);
-  // Canonical quadrant cell: fold (col,row) into col≤3,row≤3. Jitter, terrain and
+  const maxCol = FIELD.cols - 1;
+  const maxRow = FIELD.rows - 1;
+  const midCol = maxCol / 2;
+  const midRow = maxRow / 2;
+  // Canonical quadrant cell: fold (col,row) around the two centre axes. Jitter, terrain and
   // planet type are decided ONCE per canonical cell and mirrored to its orbit, which
-  // is what makes the four corners exactly equivalent (see the FIELD comment).
-  const canon = (c: number, r: number): string => `${Math.min(c, 6 - c)},${Math.min(r, 6 - r)}`;
+  // is what makes opposite regions exactly equivalent (see the FIELD comment).
+  const canon = (c: number, r: number): string =>
+    `${Math.min(c, maxCol - c)},${Math.min(r, maxRow - r)}`;
   const jx = new Map<string, number>();
   const jy = new Map<string, number>();
   const kindOf = new Map<string, string>();
@@ -1013,13 +1041,13 @@ function buildField(): KeyNode[] {
   let ptIdx = 0; // cycles neutral planet types (per orbit)
   let npIdx = 0; // cycles non-planet terrains (per orbit)
   let i = 0; // jitter index (per canonical cell)
-  for (let row = 0; row <= 3; row += 1) {
-    for (let col = 0; col <= 3; col += 1) {
+  for (let row = 0; row <= midRow; row += 1) {
+    for (let col = 0; col <= midCol; col += 1) {
       const key = `${col},${row}`;
       jx.set(key, (jhash(i * 2) - 0.5) * 2 * FIELD.jitter * FIELD.dx);
       jy.set(key, (jhash(i * 2 + 1) - 0.5) * 2 * FIELD.jitter * FIELD.dy);
       i += 1;
-      if (starts.has(key)) continue; // corner orbit — always the terran home
+      if (starts.has(key)) continue; // start orbit — always the terran home
       if (neutralP.has(key)) {
         typeOf.set(key, NEUTRAL_PLANET_TYPES[ptIdx++ % NEUTRAL_PLANET_TYPES.length]!);
       } else {
@@ -1034,8 +1062,8 @@ function buildField(): KeyNode[] {
       const key = canon(col, row);
       // Mirror the canonical jitter: flip its sign across each centre axis; a cell ON
       // a centre axis is its own mirror there, so that component stays unjittered.
-      const sx = col < 3 ? 1 : col > 3 ? -1 : 0;
-      const sy = row < 3 ? 1 : row > 3 ? -1 : 0;
+      const sx = col < midCol ? 1 : col > midCol ? -1 : 0;
+      const sy = row < midRow ? 1 : row > midRow ? -1 : 0;
       const x = Math.round(FIELD.x0 + col * FIELD.dx + sx * jx.get(key)!);
       const y = Math.round(FIELD.y0 + row * FIELD.dy + sy * jy.get(key)!);
       const id = cellId(cell);
@@ -1052,7 +1080,7 @@ function buildField(): KeyNode[] {
 }
 
 const KEY: KeyNode[] = buildField();
-/** The 4 worlds players spawn on — the start picker offers these. */
+/** The 10 worlds players spawn on — the start picker offers these. */
 export const START_CANDIDATES: string[] = START_CELLS.map(cellId);
 
 // Wire sectors up as a Relative Neighbourhood Graph: a sector links to another
@@ -1579,7 +1607,7 @@ export const fleetLaunchModule: GameModule = {
 
 // --- assembling the match ----------------------------------------------------
 
-/** A seat in a match: who spawns where, and whether the AI drives it. Up to 4. */
+/** A seat in a match: who spawns where, and whether the AI drives it. Up to 10. */
 export interface SeatConfig {
   id: string;
   name: string;
@@ -3052,12 +3080,12 @@ export const MODULES: GameModule[] = [
 
 export const kernel = createKernel(MODULES);
 
-// Win at 450 of the board's ~970 base points (12 planets×50 + 37 provinces×10). Set
+// Win at 1100 of the board's ~2410 base points (30 planets×50 + 91 provinces×10). Set
 // below the ~60% domination line so a decisive-but-not-total lead — a fistful of planets
 // plus built-up infrastructure — can win the SCORE race first, making the score/building
 // system (scoreValue) meaningful instead of vestigial vs conquest. Tunable single source
 // of truth, also read by the HUD score readout.
-export const SCORE_LIMIT = 450;
+export const SCORE_LIMIT = 1100;
 export function ctx(now: number): Context {
   return { now, data, config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } } };
 }

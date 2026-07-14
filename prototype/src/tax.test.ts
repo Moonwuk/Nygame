@@ -26,7 +26,7 @@ describe('civic tax (anti-snowball diminishing returns)', () => {
 
 describe('victory score limit', () => {
   it('sits below the ~60% domination line so the score race can resolve first', () => {
-    expect(SCORE_LIMIT).toBe(450);
-    expect(SCORE_LIMIT).toBeLessThan(0.6 * 970); // 970 = board base points
+    expect(SCORE_LIMIT).toBe(1100);
+    expect(SCORE_LIMIT).toBeLessThan(0.6 * 2410); // 2410 = board base points
   });
 });

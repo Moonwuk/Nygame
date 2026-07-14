@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { GameData } from '../data/schemas';
 import { loadGameData } from '../data/loadGameData';
-import { parseMatchMap, type MatchMap } from '../data/mapSchema';
+import { avaShape, parseMatchMap, type MatchMap } from '../data/mapSchema';
 import { buildStateFromMap, validateMatchMap } from './buildFromMap';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -267,9 +267,102 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     expect(validateMatchMap(avaMap(), data)).toEqual([]);
   });
 
+  it('seeds opposing slots at war by default (AVA-1: team → diplomacy)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1' }, slot_b: { playerId: 'p2' } },
+    });
+    expect(state.diplomacy).toEqual({ 'p1|p2': 'war' });
+  });
+
+  it('crossTeamStart:"peace" starts a teamed match peaceful (the AvA peaceful start)', () => {
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1' }, slot_b: { playerId: 'p2' } },
+      crossTeamStart: 'peace',
+    });
+    expect(state.diplomacy).toEqual({ 'p1|p2': 'peace' });
+  });
+
+  it('seeds a 2v2: same side allied, across the sides per crossTeamStart', () => {
+    const map = avaMap();
+    map.slots.slot_a2 = { team: 'A', spawn: 'fixed', resources: {} };
+    map.slots.slot_b2 = { team: 'B', spawn: 'fixed', resources: {} };
+    const slots = {
+      slot_a: { playerId: 'a1' },
+      slot_a2: { playerId: 'a2' },
+      slot_b: { playerId: 'b1' },
+      slot_b2: { playerId: 'b2' },
+    };
+    const state = buildStateFromMap(map, data, { slots });
+    expect(state.diplomacy).toEqual({
+      'a1|a2': 'alliance',
+      'b1|b2': 'alliance',
+      'a1|b1': 'war',
+      'a1|b2': 'war',
+      'a2|b1': 'war',
+      'a2|b2': 'war',
+    });
+    // deterministic: the same seats → an identical (canonically ordered) record
+    expect(buildStateFromMap(map, data, { slots })).toEqual(state);
+  });
+
+  it('a map without teams (plain declared players) seeds a peace free-for-all', () => {
+    const state = buildStateFromMap(exampleMap(), data);
+    expect(state.diplomacy).toEqual({ 'green|red': 'peace' });
+  });
+
   it('flags a slot id that collides with a player id', () => {
     const map = exampleMap(); // has players green/red
     map.slots.green = { team: 'A', spawn: 'fixed', resources: {} };
     expect(validateMatchMap(map, data)).toContain('E_SLOT_PLAYER_ID_CLASH:green');
+  });
+});
+
+describe('AvA pool eligibility (AVA-5) — avaEligible tag + shape derived from slots', () => {
+  const duel = (): MatchMap => parseMatchMap(readJson('data/maps/ava-duel-1.json'));
+  const twoVTwo = (): MatchMap => parseMatchMap(readJson('data/maps/ava-2v2-1.json'));
+
+  it('shipped AvA maps are tagged eligible and validate clean', () => {
+    expect(duel().avaEligible).toBe(true);
+    expect(twoVTwo().avaEligible).toBe(true);
+    expect(validateMatchMap(duel(), data)).toEqual([]);
+    expect(validateMatchMap(twoVTwo(), data)).toEqual([]);
+  });
+
+  it('avaEligible defaults to false — a regular map stays out of the pool', () => {
+    expect(exampleMap().avaEligible).toBe(false);
+  });
+
+  it('derives the shape from the slots: duel 2×1, the 2v2 map 2×2, a slotless map null', () => {
+    expect(avaShape(duel())).toEqual({ sides: 2, slotsPerSide: 1 });
+    expect(avaShape(twoVTwo())).toEqual({ sides: 2, slotsPerSide: 2 });
+    expect(avaShape(exampleMap())).toBeNull(); // no slots at all
+  });
+
+  it('flags an eligible map whose slots are not a symmetric ≥2-side split', () => {
+    const oneSide = duel();
+    oneSide.slots.slot_b!.team = 'A'; // both slots end up on one side
+    expect(validateMatchMap(oneSide, data)).toContain('E_AVA_SHAPE');
+    const lopsided = twoVTwo();
+    lopsided.slots.slot_a3 = { team: 'A', spawn: 'fixed', resources: {} }; // A:3 vs B:2
+    expect(validateMatchMap(lopsided, data)).toContain('E_AVA_SHAPE');
+    // the same lopsided layout WITHOUT the tag is fine — shape only gates the pool
+    lopsided.avaEligible = false;
+    expect(validateMatchMap(lopsided, data)).toEqual([]);
+  });
+
+  it('builds a 2v2 state — four seated players own their corners', () => {
+    const state = buildStateFromMap(twoVTwo(), data, {
+      slots: {
+        slot_a1: { playerId: 'a1' },
+        slot_a2: { playerId: 'a2' },
+        slot_b1: { playerId: 'b1' },
+        slot_b2: { playerId: 'b2' },
+      },
+    });
+    expect(Object.keys(state.players).sort()).toEqual(['a1', 'a2', 'b1', 'b2']);
+    expect(state.planets.home_a1!.owner).toBe('a1');
+    expect(state.planets.home_b2!.owner).toBe('b2');
+    expect(state.fleets.fleet_a2!.owner).toBe('a2');
+    expect(state.planets.west!.owner).toBeNull(); // side prizes start neutral
   });
 });

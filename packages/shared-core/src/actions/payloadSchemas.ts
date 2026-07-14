@@ -72,6 +72,8 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'construction.resume': z.object({ planetId: id, id: z.number().int().nonnegative() }),
   // technology.ts
   'technology.research': z.object({ technology: id }),
+  // SES-3: sink the premium resource into one ACTIVE research (diminishing returns)
+  'technology.boost': z.object({ technology: id }),
   // espionage.ts — steal a time-boxed intel window; `planetId` only with kind 'planet'
   'espionage.spy': z
     .object({

@@ -6,6 +6,7 @@ import type {
   GameState,
   Kernel,
   PlayerId,
+  PlayerReward,
   SignatureContact,
 } from '@void/shared-core';
 import { diffState, getStance, hashState, identifiedNodes, visibleView } from '@void/shared-core';
@@ -148,7 +149,15 @@ export type RoomObservation =
       seq: number;
       code?: string;
     }
-  | { kind: 'end'; winner: PlayerId | null; reason?: string }
+  /** Terminal match report. `rewards` is the session-end table the core computed
+   *  (SES-2: place + XP per seated player, GDD §3.4) — surfaced here so the
+   *  playtest JSONL carries it until account crediting exists (EC-*). */
+  | {
+      kind: 'end';
+      winner: PlayerId | null;
+      reason?: string;
+      rewards?: Record<PlayerId, PlayerReward>;
+    }
   /** The world clock could not fully reach `now` in one `advance` call. `reason`
    *  distinguishes an enormous-but-legitimate catch-up that was throttled to bound
    *  work (`throttled` — it will finish on the next advance) from a same-instant
@@ -382,6 +391,7 @@ export class MatchRoom {
       kind: 'end',
       winner: this.stateValue.match.winner,
       ...(this.stateValue.match.reason ? { reason: this.stateValue.match.reason } : {}),
+      ...(this.stateValue.match.rewards ? { rewards: this.stateValue.match.rewards } : {}),
     });
   }
 

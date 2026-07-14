@@ -515,3 +515,108 @@ describe('victory module', () => {
     expect(r.state.match.scores.p2?.total).toBe(10);
   });
 });
+
+describe('session-end rewards (SES-2 first slice, GDD §3.4)', () => {
+  it('fills the reward scale from schema defaults when the bundle carries none', () => {
+    // The test bundle at the top declares no `rewards` — the shipped defaults
+    // (mirroring the prototype's matchXp: 40 / ÷10 / cap 100 / win 160) apply.
+    expect(data.rewards).toEqual({
+      xpParticipation: 40,
+      xpScoreDivisor: 10,
+      xpScoreCap: 100,
+      xpWin: 160,
+    });
+  });
+
+  it('writes the table to state + the match.ended payload on a score win', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      planets: {
+        A: planet('A', 'p1', { kind: 'capital' }),
+        B: planet('B', 'p1', { kind: 'capital' }),
+        C: planet('C', 'p1', { kind: 'capital' }), // p1 = 600 — the score win
+        D: planet('D', 'p2'),
+        E: planet('E', 'p2'), // p2 = 20
+        F: planet('F', null),
+        G: planet('G', null),
+        H: planet('H', null),
+      },
+    };
+
+    const r = okAdvance(kernel.advanceTo(state, ctx(HOUR)));
+
+    expect(r.state.match.reason).toBe('score');
+    const rewards = {
+      p1: { place: 1, xp: 40 + 60 + 160 }, // participation + 600/10 (under the cap) + win
+      p2: { place: 2, xp: 40 + 2 }, // participation + 20/10 — defeat still pays
+    };
+    expect(r.state.match.rewards).toEqual(rewards);
+    expect(r.events).toContainEqual({
+      type: 'match.ended',
+      payload: expect.objectContaining({ rewards }),
+    });
+  });
+
+  it('pays the win bonus to EVERY coalition member; equal totals share a place (1224)', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: { p1: player('p1'), p2: player('p2'), p3: player('p3') },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }),
+        B: planet('B', 'p1', { kind: 'planet' }), // p1 = 100
+        C: planet('C', 'p2', { kind: 'planet' }), // p2 = 50
+        D: planet('D', 'p3', { kind: 'planet' }), // p3 = 50 — same total as p2
+        E: planet('E', null, { kind: 'planet' }),
+      },
+    };
+    setStance(state, 'p1', 'p2', 'alliance');
+
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 100 } })),
+    );
+
+    expect(r.state.match.winners).toEqual(['p1', 'p2']);
+    expect(r.state.match.rewards).toEqual({
+      p1: { place: 1, xp: 40 + 10 + 160 },
+      p2: { place: 2, xp: 40 + 5 + 160 }, // allied co-winner — full win bonus
+      p3: { place: 2, xp: 40 + 5 }, // same 50 points as p2 → shares place 2
+    });
+  });
+
+  it('an eliminated player still gets a participation row', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      planets: { A: planet('A', 'p1') }, // p2 holds nothing → eliminated
+    };
+
+    const r = okAdvance(kernel.advanceTo(state, ctx(HOUR)));
+
+    expect(r.state.match.reason).toBe('elimination');
+    expect(r.state.match.rewards).toEqual({
+      p1: { place: 1, xp: 40 + 1 + 160 }, // flat-10 world → 1 XP of score share
+      p2: { place: 2, xp: 40 }, // defeated — participation only
+    });
+  });
+
+  it('scales by data.rewards — a bundle override changes the payout', () => {
+    const kernel = createKernel([victoryModule]);
+    const scaled: GameData = {
+      ...data,
+      rewards: { xpParticipation: 1, xpScoreDivisor: 1, xpScoreCap: 5, xpWin: 7 },
+    };
+    const state: GameState = {
+      ...baseState(),
+      planets: { A: planet('A', 'p1') },
+    };
+
+    const r = okAdvance(kernel.advanceTo(state, { now: HOUR, data: scaled }));
+
+    expect(r.state.match.rewards).toEqual({
+      p1: { place: 1, xp: 1 + 5 + 7 }, // score share 10/1 = 10 → capped at 5
+      p2: { place: 2, xp: 1 },
+    });
+  });
+});

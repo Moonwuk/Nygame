@@ -138,6 +138,7 @@ import {
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
 import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
+import { onboardingKey, parseOnboardingState, isNewPlayer, markStarted } from './onboarding';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 import { initTestMode, openTestMode } from './testmode';
@@ -159,22 +160,39 @@ import type {
 // Cyan stays the console-chrome accent (grid, borders, targeting reticle).
 const COLOR: Record<string, string> = {
   p1: '#3ad17a', // you — green
-  p2: '#ff5a4d', // rivals — red / amber / violet (by stable order, see RIVAL_COLORS)
+  p2: '#ff5a4d',
   p3: '#ffb43a',
   p4: '#b07cff',
+  p5: '#35d6e6',
+  p6: '#ff7ac8',
+  p7: '#9ed85a',
+  p8: '#e58b4a',
+  p9: '#6f9cff',
+  p10: '#d8cf5a',
   ally: '#4a8cff', // ally — blue (latent: no allied player in the skirmish yet)
   null: '#6f8a93', // neutral — gray
 };
 // Distinct hues for the OTHER commanders (you are always green), assigned in a stable
-// order so each rival keeps its colour across the match (up to 3 rivals on a 4-seat map).
-const RIVAL_COLORS = ['#ff5a4d', '#ffb43a', '#b07cff']; // red, amber, violet
+// order so each rival keeps its colour across the match (up to 9 rivals).
+const RIVAL_COLORS = [
+  COLOR.p2!,
+  COLOR.p3!,
+  COLOR.p4!,
+  COLOR.p5!,
+  COLOR.p6!,
+  COLOR.p7!,
+  COLOR.p8!,
+  COLOR.p9!,
+  COLOR.p10!,
+];
+const SEAT_IDS = Array.from({ length: 10 }, (_, i) => `p${i + 1}`);
 const VOID_COLOR = '#46606e'; // empty-space provinces — uncapturable void
 // Political colour is relative to the local commander: YOU are always green, neutral gray,
 // each rival its own hue. Works for solo (you = p1) and net (you may be any seat).
 function ownerColor(owner: string | null | undefined): string {
   if (!owner) return COLOR.null;
   if (owner === ME) return COLOR.p1;
-  const rivals = ['p1', 'p2', 'p3', 'p4'].filter((id) => id !== ME);
+  const rivals = SEAT_IDS.filter((id) => id !== ME);
   const i = rivals.indexOf(owner);
   return i >= 0 ? RIVAL_COLORS[i % RIVAL_COLORS.length]! : RIVAL_COLORS[0]!;
 }
@@ -190,13 +208,19 @@ const DEV_UI = ((): boolean => {
     return false;
   }
 })();
-// The four possible commanders, in stable seat order. Seat 1 is always you (human);
-// seats 2-4 are AI or off in the setup screen. Mirrors DEFAULT_SETUP in game.ts.
+// The ten possible commanders, in stable seat order. Seat 1 is always you (human);
+// seats 2-10 are AI or off in the setup screen. Four faction passives cycle across seats.
 const SEAT_META: ReadonlyArray<{ id: string; name: string; faction: string; color: string }> = [
   { id: 'p1', name: 'Azure Compact', faction: 'blue', color: COLOR.p1! },
   { id: 'p2', name: 'Crimson Hegemony', faction: 'red', color: COLOR.p2! },
   { id: 'p3', name: 'Amber Concord', faction: 'amber', color: COLOR.p3! },
   { id: 'p4', name: 'Violet Ascendancy', faction: 'violet', color: COLOR.p4! },
+  { id: 'p5', name: 'Azure Compact II', faction: 'blue', color: COLOR.p5! },
+  { id: 'p6', name: 'Crimson Hegemony II', faction: 'red', color: COLOR.p6! },
+  { id: 'p7', name: 'Amber Concord II', faction: 'amber', color: COLOR.p7! },
+  { id: 'p8', name: 'Violet Ascendancy II', faction: 'violet', color: COLOR.p8! },
+  { id: 'p9', name: 'Azure Compact III', faction: 'blue', color: COLOR.p9! },
+  { id: 'p10', name: 'Crimson Hegemony III', faction: 'red', color: COLOR.p10! },
 ];
 const GRID = 'rgba(46,150,160,0.07)';
 const LOCK = '#7df0d0'; // selection / targeting reticle accent
@@ -502,14 +526,19 @@ const captureFlashes = new Map<string, { owner: string; at: number }>();
 // unit.died while a battle runs and paid out as a result note on battle.resolved.
 const battleLosses = new Map<string, Record<string, Record<string, number>>>();
 // Single-player setup screen state: per-seat role (seat 0 is always you) + your
-// chosen homeworld. Seats 2-4 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
-let setupSlots: Array<'human' | 'ai' | 'off'> = ['human', 'ai', 'off', 'off'];
+// chosen homeworld. Seats 2-10 toggle 'ai'/'off'; an 'ai' seat spawns a rival.
+const freshSetupSlots = (): Array<'human' | 'ai' | 'off'> =>
+  SEAT_META.map((_, i) => (i === 0 ? 'human' : i === 1 ? 'ai' : 'off'));
+let setupSlots: Array<'human' | 'ai' | 'off'> = freshSetupSlots();
 // Team battle (2v2 etc.): when on, seats fight in sides — same side ALLIED (win
 // together, no friendly fire), across sides at WAR from the first hour. Seat 0 (you)
 // is always side A; the default when enabling pairs you with seat 1 vs seats 2-3.
 // Off ⇒ classic free-for-all. See newGame's team-aware diplomacy seeding.
 let setupTeams = false;
-let setupSeatTeam: Array<'A' | 'B'> = ['A', 'A', 'B', 'B'];
+const DEFAULT_TEAM_SIDES: ReadonlyArray<'A' | 'B'> = [
+  'A', 'A', 'B', 'B', 'A', 'A', 'B', 'B', 'A', 'B',
+];
+let setupSeatTeam: Array<'A' | 'B'> = [...DEFAULT_TEAM_SIDES];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
 let setupScientists: string[] = []; // the human's chosen research-leader council (≤2), picked at setup
 let setupFaction = 'blue'; // H3: the house the HUMAN plays; AI seats take the remaining ones
@@ -1958,7 +1987,10 @@ function hideWarPrompt(): void {
   document.getElementById('warprompt')?.classList.remove('show');
 }
 
-const NAME: Record<string, string> = { p1: 'Azure', p2: 'Crimson', p3: 'Amber', p4: 'Violet' };
+const NAME: Record<string, string> = Object.fromEntries(SEAT_META.map((m) => [m.id, m.name]));
+function syncPlayerNames(state: GameState): void {
+  for (const [id, player] of Object.entries(state.players)) NAME[id] = player.name;
+}
 function setFleetSelection(ids: string[]) {
   const picked = ids.filter((id) => s.fleets[id]?.owner === ME);
   selFleets = new Set(picked);
@@ -7300,10 +7332,23 @@ $('hp-meta').addEventListener('click', (ev) => {
 });
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
-  $('hub-name').textContent = nickInput.value.trim() || t('Командир');
+  const nick = nickInput.value.trim();
+  $('hub-name').textContent = nick || t('Командир');
   showConnect(false);
   showHub(true);
   hubTab('home');
+  // ONB-0: first-launch funnel. A nick that has never touched onboarding (no
+  // started/completed/skipped) is new — mark it started (persists, so this fires
+  // exactly once per nick across reloads) and nudge toward the guide. Any explicit
+  // `note` (sign-in stub notices etc.) wins over the nudge. docs/onboarding-roadmap.md ONB-0.
+  const onbKey = onboardingKey(nick);
+  const onb = parseOnboardingState(localStorage.getItem(onbKey));
+  if (isNewPlayer(onb)) {
+    localStorage.setItem(onbKey, JSON.stringify(markStarted(onb)));
+    console.debug('[onb] funnel: started'); // thin OPS hook — aggregate only, no PII
+    hubNote.textContent = note || t('Новый командир на борту — обучение скоро появится здесь.');
+    return;
+  }
   hubNote.textContent = note;
 }
 
@@ -7434,7 +7479,7 @@ if ((localStorage.getItem('void.nick') ?? '').trim()) openHub();
 
 // --- single-player setup overlay --------------------------------------------
 // Pick your homeworld on a mini-map and choose how many AI rivals join, then
-// launch a fresh local match. Seat 1 is always you; seats 2-4 toggle AI/off.
+// launch a fresh local match. Seat 1 is always you; seats 2-10 toggle AI/off.
 // Switch every rival OFF for a solo sandbox — the core never ends a one-player
 // match, so it's a peaceful space to read descriptions and learn the interface.
 const setupEl = $('setup');
@@ -7503,11 +7548,17 @@ function renderSetupMap(): void {
   setupMapEl.innerHTML = svg;
 }
 
-/** H3 — which house each seat plays: seat 0 (you) = `setupFaction`, the AI seats
- *  take the remaining houses in SEAT_META order. Colors stay per-seat (player id). */
+/** H3 — which house each seat plays: seat 0 (you) = `setupFaction`, then the four
+ *  passive houses rotate in stable order across the remaining seats. */
 function seatFactionIds(): string[] {
-  const rest = SEAT_META.map((m) => m.faction).filter((f) => f !== setupFaction);
-  return SEAT_META.map((_, i) => (i === 0 ? setupFaction : rest[i - 1]!));
+  const all = Object.keys(data.factions);
+  const ordered = [setupFaction, ...all.filter((f) => f !== setupFaction)];
+  return SEAT_META.map((_, i) => ordered[i % ordered.length]!);
+}
+function seatHouseName(fid: string, fallback: string, index: number): string {
+  const base = data.factions[fid]?.name ?? fallback;
+  const cycle = Math.floor(index / Math.max(1, Object.keys(data.factions).length)) + 1;
+  return cycle === 1 ? base : `${base} ${cycle}`;
 }
 /** A faction's passive-bonus readout, straight from the data (economy or units). */
 function factionBonusLine(fid: string): string {
@@ -7524,13 +7575,13 @@ function factionBonusLine(fid: string): string {
 function renderSetupSlots(): void {
   // The faction picker (H3): four houses, each a pure passive bonus — pick yours.
   let h = `<div class="fph">${t('Фракция — пассивный бонус дома')}</div><div class="fpick">`;
-  for (const m of SEAT_META) {
-    const f = data.factions[m.faction];
+  for (const fid of Object.keys(data.factions)) {
+    const f = data.factions[fid];
     if (!f) continue;
-    const on = m.faction === setupFaction;
+    const on = fid === setupFaction;
     h +=
-      `<button class="fchip${on ? ' on' : ''}" data-fpick="${m.faction}"><b>${esc(tData(f.name))}</b>` +
-      `<span>${factionBonusLine(m.faction)}</span></button>`;
+      `<button class="fchip${on ? ' on' : ''}" data-fpick="${fid}"><b>${esc(tData(f.name))}</b>` +
+      `<span>${factionBonusLine(fid)}</span></button>`;
   }
   h += `</div>`;
   // Team-battle toggle: sides fight as allies. Only meaningful with ≥2 rivals (a 2v2
@@ -7549,7 +7600,7 @@ function renderSetupSlots(): void {
   for (let i = 0; i < SEAT_META.length; i++) {
     const m = SEAT_META[i]!;
     const role = setupSlots[i]!;
-    const house = esc(tData(data.factions[fids[i]!]?.name ?? m.name));
+    const house = esc(tData(seatHouseName(fids[i]!, m.name, i)));
     if (i === 0) {
       h +=
         `<div class="srow"><span class="dot" style="background:${m.color};color:${m.color}"></span>` +
@@ -7675,9 +7726,9 @@ sciWin.addEventListener('click', (e) => {
 
 function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
   setupReturn = from;
-  setupSlots = ['human', 'ai', 'off', 'off'];
+  setupSlots = freshSetupSlots();
   setupTeams = false; // a fresh setup opens on the classic free-for-all
-  setupSeatTeam = ['A', 'A', 'B', 'B'];
+  setupSeatTeam = [...DEFAULT_TEAM_SIDES];
   setupStart = START_CANDIDATES[0] ?? MAP[0]!.id;
   // Re-consecrate the council each time setup opens, PRE-SEEDED with the recommended
   // newbie pair (командование «Куратор» + генералист «Полимат»): the first permanent
@@ -7714,11 +7765,10 @@ function buildSetupConfig(): SetupConfig {
   // Seats play the HOUSES assigned at setup (H3): you = setupFaction, AI = the rest.
   // Seat name follows the house (its canonical data name); color stays per-seat.
   const fids = seatFactionIds();
-  const houseName = (fid: string, fallback: string): string => data.factions[fid]?.name ?? fallback;
   const seats: SeatConfig[] = [
     {
       id: SEAT_META[0]!.id,
-      name: houseName(fids[0]!, SEAT_META[0]!.name),
+      name: seatHouseName(fids[0]!, SEAT_META[0]!.name, 0),
       faction: fids[0]!,
       start: setupStart,
       ai: false,
@@ -7735,7 +7785,7 @@ function buildSetupConfig(): SetupConfig {
     const m = SEAT_META[i]!;
     seats.push({
       id: m.id,
-      name: houseName(fids[i]!, m.name),
+      name: seatHouseName(fids[i]!, m.name, i),
       faction: fids[i]!,
       start,
       ai: true,
@@ -7791,6 +7841,7 @@ devlineEl.addEventListener('click', (ev) => {
 
 function installMatch(state: GameState, aiPlayers: Set<string>): void {
   s = state;
+  syncPlayerNames(s);
   ME = 'p1';
   AI_PLAYERS = aiPlayers;
   lastAiAt = s.time;
@@ -7973,6 +8024,7 @@ function connect(): void {
         }
         const diploShift = admitted && s !== snap.state && diffNetDiplomacy(s, snap.state);
         s = snap.state;
+        syncPlayerNames(s);
         // Radar picture (BF-18): detected-but-unidentified enemy fleets are absent
         // from the fogged state — the server sends them as coarse contacts beside
         // each frame. The sweep paints THESE in NET (see updateRadarContacts).
@@ -8355,7 +8407,7 @@ function renderLobby(): void {
   const rosterHtml = Object.keys(s.players)
     .map((id) => {
       const on = info.connected.includes(id);
-      const color = COLOR[id] ?? COLOR.null;
+      const color = ownerColor(id);
       const badges =
         (id === ME ? `<span class="me">${t('ВЫ')}</span>` : '') +
         (id === info.host ? `<span class="host">${t('ХОСТ')}</span>` : '');
@@ -8617,7 +8669,7 @@ function frame(nowReal: number) {
   const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
   const need = Math.max(0, SCORE_LIMIT - score);
   const statusHtml =
-    `<span id="clock">Day ${d} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
+    `<span id="clock">${t('День {n}', { n: d })} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
     `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ ' + t('ПОБЕДА') : ' · ' + t('до победы {n}', { n: need })}</span>` +
     `<span class="dl-donate" title="${t('Суверены — донат-валюта')}"><i>◆</i>${kfmt(SOVEREIGNS)}</span>`;
   if (statusHtml !== lastClockText) {

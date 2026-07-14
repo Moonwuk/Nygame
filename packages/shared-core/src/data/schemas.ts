@@ -570,6 +570,39 @@ export const HeroArchetypeDefSchema = z.object({
   startPassives: z.array(z.string()).default([]),
 });
 
+/** Session-end reward scale (SES-2 first slice, GDD §3.4) — the data knob for the
+ *  XP table `victoryModule` reports on `match.ended`. XP per player =
+ *  `xpParticipation + min(xpScoreCap, floor(score / xpScoreDivisor)) + (won ? xpWin : 0)`.
+ *  Defaults mirror the prototype's meta formula (`prototype/src/meta.ts matchXp`:
+ *  участие 40 + счёт до 100 + победа 160). GDD leaves smooth-vs-league place
+ *  scaling open — the reported `place` is the substrate either maps onto. */
+export const RewardsDefSchema = z.object({
+  /** XP for showing up — paid to every seated player, even in defeat. */
+  xpParticipation: z.number().int().nonnegative().default(40),
+  /** Score points per 1 XP of the score share. */
+  xpScoreDivisor: z.number().positive().default(10),
+  /** Cap on the score-share XP. */
+  xpScoreCap: z.number().int().nonnegative().default(100),
+  /** Win bonus — paid to every member of the winning unit (a coalition wins together). */
+  xpWin: z.number().int().nonnegative().default(160),
+});
+
+/** Premium research-boost scale (SES-3, GDD §4.3) — the data knob for
+ *  `technology.boost`: sink the premium resource (owner's decision: **energy**,
+ *  mined on rare energy-rich worlds — see `planetTypes.energy_nexus`) into
+ *  faster research. One boost pays `cost` and cuts the REMAINING research time
+ *  by `initialPercent × decay^boostsAlreadyApplied` — geometric diminishing
+ *  returns per GDD's fairness rule (✓ ускорение исследований, ✗ юниты/боевая
+ *  мощь/опыт героев): pouring more never buys instant completion. */
+export const ResearchBoostDefSchema = z.object({
+  /** Treasury price of ONE boost (any resource mix; default — the premium energy). */
+  cost: ResourceBagSchema.default({ energy: 50 }),
+  /** Share of the remaining time the FIRST boost removes. */
+  initialPercent: z.number().gt(0).lt(1).default(0.25),
+  /** Geometric falloff per successive boost of the same research. */
+  decay: z.number().gt(0).lt(1).default(0.5),
+});
+
 export const GameDataSchema = z.object({
   version: z.string(),
   resources: z.array(z.string()).min(1),
@@ -588,6 +621,17 @@ export const GameDataSchema = z.object({
   heroPassives: z.record(z.string(), HeroPassiveDefSchema).default({}),
   heroSkillTrees: z.record(z.string(), HeroSkillNodeSchema).default({}),
   heroFittings: z.record(z.string(), HeroFittingDefSchema).default({}),
+  rewards: RewardsDefSchema.default({
+    xpParticipation: 40,
+    xpScoreDivisor: 10,
+    xpScoreCap: 100,
+    xpWin: 160,
+  }),
+  researchBoost: ResearchBoostDefSchema.default({
+    cost: { energy: 50 },
+    initialPercent: 0.25,
+    decay: 0.5,
+  }),
 });
 
 export type ResourceBag = z.infer<typeof ResourceBagSchema>;
@@ -620,6 +664,8 @@ export type HeroPassiveDef = z.infer<typeof HeroPassiveDefSchema>;
 export type HeroSkillNode = z.infer<typeof HeroSkillNodeSchema>;
 export type HeroFittingDef = z.infer<typeof HeroFittingDefSchema>;
 export type HeroSkillGrants = z.infer<typeof HeroSkillGrantsSchema>;
+export type RewardsDef = z.infer<typeof RewardsDefSchema>;
+export type ResearchBoostDef = z.infer<typeof ResearchBoostDefSchema>;
 export type GameData = z.infer<typeof GameDataSchema>;
 
 /** Stats of a building at a given level (1-based). Level 1 = the base fields;
