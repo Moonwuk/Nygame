@@ -127,6 +127,9 @@ export interface DevMatchOptions {
    *  pinned in tests to exercise throttling deterministically. */
   actionRateMax?: number;
   actionRateWindowMs?: number;
+  /** Player-action deny-list (see `MatchRoom.denyPlayerActions`) — e.g. an AvA room
+   *  refuses `diplomacy.declare` because the orchestrator owns the stances (AVA-8). */
+  denyPlayerActions?: (type: string) => string | null | undefined;
 }
 
 function player(id: string, name: string, faction: string): Player {
@@ -227,6 +230,7 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
     gate: options.gate,
     actionRateMax: options.actionRateMax,
     actionRateWindowMs: options.actionRateWindowMs,
+    ...(options.denyPlayerActions ? { denyPlayerActions: options.denyPlayerActions } : {}),
     ...(options.config ? { config: options.config } : {}),
   });
 }

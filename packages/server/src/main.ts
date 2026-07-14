@@ -11,7 +11,7 @@ import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
 import { registerAvaApi } from './avaApi';
 import { AvaService } from './avaService';
-import { AvaOrchestrator } from './avaOrchestrator';
+import { AvaOrchestrator, warDeclarationsFor } from './avaOrchestrator';
 import { MatchKeeper } from './matchFactory';
 import { LazyRoomRegistry, type LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
@@ -59,6 +59,10 @@ async function loadMatch(matchId: string): Promise<LoadedMatch | null> {
   const snap = await stores.store.load(matchId);
   if (!snap) return null;
   const initialReceipts = await stores.receiptStore.loadAll(matchId);
+  // An AvA session (AVA-8): the orchestrator owns the diplomacy stances (peace S5 →
+  // war S6 by timer), so PLAYER declarations are refused at the wire; and the match
+  // end must settle the matchup (archive + influence, S7).
+  const avaSession = await stores.sessionStore.byMatch(matchId);
 
   let driver: ClockDriverHandle | null = null;
   // Strict commit-before-broadcast: the room awaits this durable write of the new snapshot
@@ -67,10 +71,19 @@ async function loadMatch(matchId: string): Promise<LoadedMatch | null> {
     await stores.store.save(snapshot);
     await stores.receiptStore.save(matchId, receipt);
   };
-  // The committed path already persists each action; `observe` only re-arms the driver, as
-  // an action may have scheduled a new event the sleeping timer can't see.
+  // The committed path already persists each action; `observe` re-arms the driver (an
+  // action may have scheduled a new event the sleeping timer can't see) and, for an
+  // AvA session, hands the match end to the orchestrator's settlement (exactly-once
+  // by the matchup's own transition — a replayed `end` no-ops).
   const observe = (event: RoomObservation): void => {
     if (event.kind === 'action') driver?.reschedule();
+    if (event.kind === 'end' && avaSession) {
+      void avaOrchestrator.onMatchEnded(matchId, event.winner).catch((err) => {
+        process.stderr.write(
+          `ava settlement failed for ${matchId} — ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      });
+    }
   };
 
   const room = createDevMatch(data, {
@@ -82,6 +95,12 @@ async function loadMatch(matchId: string): Promise<LoadedMatch | null> {
     initialReceipts,
     initialSeq: snap.seq,
     gate: gateFactory?.(),
+    ...(avaSession
+      ? {
+          denyPlayerActions: (type: string) =>
+            type === 'diplomacy.declare' ? 'E_AVA_DIPLOMACY' : null,
+        }
+      : {}),
   });
 
   // The 24/7 heartbeat while this match is live: fire due scheduled events with no player
@@ -136,6 +155,27 @@ const avaOrchestrator = new AvaOrchestrator({
     const room = createDevMatch(data, { id: matchId, initialState: state, time: state.time });
     await stores.store.save(snapshotOf(room));
   },
+  // AVA-8 (S6): the peace period, then the war opens on a timer. Env-tunable for
+  // playtests (a real day is too long to watch); the MVP default is 24h.
+  peaceMs: Number(process.env.AVA_PEACE_MS ?? '') || undefined,
+  // Open the war on the LIVE room: load it through the registry (a hibernated match
+  // wakes), submit the system declarations via the server-action path (past the wire
+  // deny — the orchestrator owns the stances). Deterministic action ids make a
+  // re-submitted batch idempotent; false on any transient failure → the sweep retries.
+  escalateWar: async (matchId) => {
+    const room = await registry.resolve?.(matchId);
+    if (!room) return false; // snapshot missing/unloadable — retry next sweep
+    let allLanded = true;
+    for (const { playerId, action } of warDeclarationsFor(room.state, matchId)) {
+      const r = await room.submitServerAction(playerId, action);
+      // E_SAME_STANCE = already at war (a replay after a partial pass) — that pair is done.
+      if (!r.ok && r.code !== 'E_SAME_STANCE') allLanded = false;
+    }
+    return allLanded;
+  },
+  // AVA-8 (S7): settle the ended war — archive the matchup, record the outcome,
+  // award influence to the winning corp (exactly-once by the locked→ended gate).
+  settle: (matchupId, winnerSide) => avaService.settleMatch(matchupId, winnerSide),
 });
 
 // Identity gate (SE-1.x): resolve the caller from the session token. Shared by the
@@ -289,6 +329,12 @@ const avaSweep = setInterval(() => {
       // Raise a live session for every freshly-locked matchup (AVA-7) — after the roster
       // sweep in the same tick, so a lock and its session land together.
       avaOrchestrator.sweep(),
+    )
+    .then(() =>
+      // AVA-8 (S6): open the war on every session whose peace period lapsed — chained
+      // after the session sweep so a freshly-raised session gets its timer in the same
+      // world the escalation will read.
+      avaOrchestrator.sweepWar(),
     )
     .catch((err) => {
       process.stderr.write(

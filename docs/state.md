@@ -1164,11 +1164,22 @@ MM-3.1: кто с кем/победитель/время) и начисляет 
 exactly-once-гейт, повторный `match.ended` не начисляет дважды. Ничья (`winnerSide=null`)
 — исход пишется, влияние нет. `matchHistory(limit)` — лента исходов newest-first
 (фундамент под AVA-9/медали/рейтинг). Код `E_MATCHUP_CLOSED`. Server-driven (мимо гейта,
-как свипы) — вызывается оркестратором на `match.ended` (проводка ниже). S5 мир уже
-поднимается AVA-7. **Осталось (S6):** системный `diplomacy.declare(war)` по таймеру на
-живом `MatchRoom` + вызов `settleMatch` на `match.ended` (победитель→сторона по
-`AvaSession.seats`). Полный AvA-цикл дальше: эскалация войны (AVA-8 S6) + лента (AVA-9),
-`corporation-wars.md`.
+как свипы).
+**AVA-8 S6 + проводка (кирпич закрыт — полный цикл S0→S7 собран):** `AvaSession.warAt`
+(= создание + `peaceMs`, деф. 24ч / env `AVA_PEACE_MS`) + exactly-once штамп
+`warDeclaredAt` (`markWarDeclared` условным UPDATE, очередь `dueWar`).
+`AvaOrchestrator.sweepWar` на общем интервале: `registry.resolve` будит комнату,
+`warDeclarationsFor(state)` — чистые системные декларации ровно по кросс-командным
+peace-парам (детерминированные id `ava-war:<match>:<a>:<b>` — реплей батча дедупится
+квитанциями; `E_SAME_STANCE` = пара уже провёрнута), транзиент-провал → ретрай
+следующим свипом; матчап, рассчитанный до войны, вычищается из очереди без эскалации.
+Игроки в AvA-комнате войну не объявляют: новая опция **`MatchRoom.denyPlayerActions`**
+— wire-правило в `receive` (оба пути bare+gated; серверные драйверы через
+`submitAction`/`submitServerAction` идут мимо), в AvA-комнате `diplomacy.declare` →
+`E_AVA_DIPLOMACY`. Проводка S7: observe-`end` AvA-комнаты → `onMatchEnded` →
+`winnerSideOf` (слот/`bot:`-слот → сторона тем же sorted-teams правилом, что рассадка;
+неизвестный → null-ничья, fail-secure) → `settleMatch` (реплей `end` — no-op).
+Из AvA-цикла осталась лента (AVA-9), `corporation-wars.md`.
 
 ## 9. Статус
 

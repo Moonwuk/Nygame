@@ -1,7 +1,9 @@
 import {
   Rng,
   buildStateFromMap,
+  getStance,
   seedRng,
+  type Action,
   type GameData,
   type GameState,
   type MatchMap,
@@ -52,7 +54,22 @@ export interface AvaOrchestratorDeps {
   createRoom: (spec: AvaSessionSpec) => Promise<void>;
   /** Injectable clock (deterministic tests + the sweep). */
   now?: () => number;
+  /** AVA-8 (S6): peace-period length — the war opens `peaceMs` after the session is
+   *  raised (`corporation-wars.md` MVP-дефолт: 1 timeScale-день). */
+  peaceMs?: number;
+  /** AVA-8 (S6): open the war on a LIVE room — submit the system war declarations
+   *  (see `warDeclarationsFor`) through the room's server-action path. True = every
+   *  declaration landed (the sweep then stamps the war exactly-once); false = a
+   *  transient failure, retried on the next sweep. Absent ⇒ the war sweep idles. */
+  escalateWar?: (matchId: string) => Promise<boolean>;
+  /** AVA-8 (S7): settle the ended war — `AvaService.settleMatch` (archive + record +
+   *  award influence, exactly-once by the matchup's locked→ended transition).
+   *  Absent ⇒ `onMatchEnded` observes nothing. */
+  settle?: (matchupId: string, winnerSide: AvaSide | null) => Promise<unknown>;
 }
+
+/** MVP peace period (`corporation-wars.md` §10: 1 timeScale-день). */
+const DEFAULT_PEACE_MS = 24 * 60 * 60 * 1000;
 
 /** The two sides of a matchup, in seating order (challenger → the first team of the map). */
 const SIDES: readonly AvaSide[] = ['challenger', 'target'];
@@ -111,6 +128,9 @@ export class AvaOrchestrator {
   private readonly maps: readonly MatchMap[];
   private readonly createRoom: (spec: AvaSessionSpec) => Promise<void>;
   private readonly now: () => number;
+  private readonly peaceMs: number;
+  private readonly escalateWar?: (matchId: string) => Promise<boolean>;
+  private readonly settle?: (matchupId: string, winnerSide: AvaSide | null) => Promise<unknown>;
 
   constructor(deps: AvaOrchestratorDeps) {
     this.challenges = deps.challengeStore;
@@ -120,6 +140,9 @@ export class AvaOrchestrator {
     this.maps = deps.maps;
     this.createRoom = deps.createRoom;
     this.now = deps.now ?? ((): number => Date.now());
+    this.peaceMs = deps.peaceMs ?? DEFAULT_PEACE_MS;
+    if (deps.escalateWar) this.escalateWar = deps.escalateWar;
+    if (deps.settle) this.settle = deps.settle;
   }
 
   /** Raise the live session for a LOCKED matchup (idempotent — an already-raised matchup
@@ -160,12 +183,14 @@ export class AvaOrchestrator {
     // session link. If the link insert loses a race, the room is a harmless duplicate save
     // and we return the winning session.
     await this.createRoom({ matchId, matchupId, mapId: map.id, state, seats });
+    const at = this.now();
     const created = await this.sessions.create({
       matchId,
       matchupId,
       mapId: map.id,
       seats,
-      at: this.now(),
+      at,
+      warAt: at + this.peaceMs, // S6: the war opens when the peace period lapses
     });
     if (!created.ok) {
       const winner = await this.sessions.byMatchup(matchupId);
@@ -204,4 +229,85 @@ export class AvaOrchestrator {
     }
     return { raised };
   }
+
+  /** AVA-8 (S6) — the war sweep: for every session whose peace period lapsed, open the
+   *  war on the live room (the injected `escalateWar` submits the system declarations)
+   *  and stamp it exactly-once (`markWarDeclared` — a lost race or a failed escalation
+   *  leaves the session queued for the next pass). A matchup already settled/ended
+   *  before its war (e.g. a timeout during peace) is stamped WITHOUT escalating —
+   *  flipping stances on a finished match would be noise. */
+  async sweepWar(now = this.now()): Promise<{ declared: number }> {
+    if (!this.escalateWar) return { declared: 0 };
+    let declared = 0;
+    for (const session of await this.sessions.dueWar(now)) {
+      const matchup = await this.challenges.getChallenge(session.matchupId);
+      if (matchup && matchup.status !== 'locked') {
+        await this.sessions.markWarDeclared(session.matchId, this.now()); // purge the queue
+        continue;
+      }
+      if (!(await this.escalateWar(session.matchId))) continue; // transient — retry next pass
+      if (await this.sessions.markWarDeclared(session.matchId, this.now())) declared += 1;
+    }
+    return { declared };
+  }
+
+  /** AVA-8 (S7) — the settlement hook the host calls from the room's `end` observation:
+   *  a non-AvA match is ignored; an AvA one maps the winning PLAYER (a slot id, or a
+   *  `bot:`-prefixed one; null = draw/tie) to its SIDE via the session's map and settles
+   *  the matchup (`settle` = `AvaService.settleMatch` — exactly-once by its own gate). */
+  async onMatchEnded(matchId: string, winnerPlayerId: string | null): Promise<void> {
+    if (!this.settle) return;
+    const session = await this.sessions.byMatch(matchId);
+    if (!session) return; // not an AvA session — nothing to settle
+    const map = this.maps.find((m) => m.id === session.mapId);
+    const side =
+      winnerPlayerId === null || !map ? null : winnerSideOf(map, winnerPlayerId);
+    await this.settle(session.matchupId, side);
+  }
+}
+
+/** The side a winning PLAYER id belongs to on an AvA map (pure, exported for tests).
+ *  Player ids are slot ids (`seatAvaRoster`), bots carry the `bot:` prefix; the side↔team
+ *  mapping is the SAME sorted-teams rule the seating used (challenger → teams[0]). An
+ *  unknown player/slot yields null — the settlement records a draw rather than guessing
+ *  a winner (fail-secure: influence is never awarded on a broken mapping). */
+export function winnerSideOf(map: MatchMap, winnerPlayerId: string): AvaSide | null {
+  const slotId = winnerPlayerId.startsWith('bot:') ? winnerPlayerId.slice(4) : winnerPlayerId;
+  const team = map.slots[slotId]?.team;
+  if (team === undefined) return null;
+  const teams = [...new Set(Object.values(map.slots).map((s) => s.team))].sort();
+  return team === teams[0] ? 'challenger' : 'target';
+}
+
+/** The system war declarations that open an AvA war (S6) — pure, exported for the host's
+ *  `escalateWar` sink and tests. In an AvA session every same-side pair is seeded ALLIANCE
+ *  and every cross-side pair PEACE, so "the pairs still at peace" IS the cross-team set;
+ *  one unilateral escalation per pair flips it to war (`diplomacy.declare` toward hostile
+ *  needs no consent). Action ids are deterministic (`ava-war:<matchId>:<a>:<b>`), so the
+ *  room's idempotency receipts absorb a re-submitted batch after a partial failure. */
+export function warDeclarationsFor(
+  state: GameState,
+  matchId: string,
+): Array<{ playerId: string; action: Action }> {
+  const ids = Object.keys(state.players)
+    .filter((id) => state.players[id]?.status === 'active')
+    .sort();
+  const out: Array<{ playerId: string; action: Action }> = [];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const [a, b] = [ids[i]!, ids[j]!];
+      if (getStance(state, a, b) !== 'peace') continue; // allies (or already at war)
+      out.push({
+        playerId: a,
+        action: {
+          id: `ava-war:${matchId}:${a}:${b}`,
+          type: 'diplomacy.declare',
+          playerId: a,
+          payload: { target: b, stance: 'war' },
+          issuedAt: state.time,
+        },
+      });
+    }
+  }
+  return out;
 }

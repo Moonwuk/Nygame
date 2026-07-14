@@ -182,6 +182,10 @@ export async function migrate(pool: Pool): Promise<void> {
       seats      jsonb NOT NULL,
       at         bigint NOT NULL
     );
+    -- AVA-8 (S6): the peace deadline + the exactly-once war stamp. ALTER … IF NOT
+    -- EXISTS backfills pre-S6 rows with NULL = no scheduled war (never escalated).
+    ALTER TABLE ava_sessions ADD COLUMN IF NOT EXISTS war_at bigint;
+    ALTER TABLE ava_sessions ADD COLUMN IF NOT EXISTS war_declared_at bigint;
   `);
 }
 
@@ -1025,6 +1029,8 @@ interface SessionRow {
   map_id: string;
   seats: Record<string, string>;
   at: string;
+  war_at: string | null;
+  war_declared_at: string | null;
 }
 
 function sessionOf(row: SessionRow): AvaSession {
@@ -1034,8 +1040,13 @@ function sessionOf(row: SessionRow): AvaSession {
     mapId: row.map_id,
     seats: row.seats,
     at: Number(row.at),
+    ...(row.war_at === null ? {} : { warAt: Number(row.war_at) }),
+    ...(row.war_declared_at === null ? {} : { warDeclaredAt: Number(row.war_declared_at) }),
   };
 }
+
+/** The full session column list every SELECT shares (one place to extend). */
+const SESSION_COLS = 'match_id, matchup_id, map_id, seats, at, war_at, war_declared_at';
 
 /** Postgres AvA session store (AVA-7). The PK (match_id) + UNIQUE (matchup_id) make
  *  `create` atomically one-per-matchup and one-per-instance; a duplicate raises the
@@ -1048,14 +1059,16 @@ export class PostgresAvaSessionStore implements AvaSessionStore {
   ): Promise<{ ok: true } | { ok: false; code: 'E_SESSION_EXISTS' }> {
     try {
       await this.pool.query(
-        `INSERT INTO ava_sessions (match_id, matchup_id, map_id, seats, at)
-         VALUES ($1, $2, $3, $4, $5)`,
+        `INSERT INTO ava_sessions (match_id, matchup_id, map_id, seats, at, war_at, war_declared_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           session.matchId,
           session.matchupId,
           session.mapId,
           JSON.stringify(session.seats),
           session.at,
+          session.warAt ?? null,
+          session.warDeclaredAt ?? null,
         ],
       );
       return { ok: true };
@@ -1067,7 +1080,7 @@ export class PostgresAvaSessionStore implements AvaSessionStore {
 
   async byMatch(matchId: string): Promise<AvaSession | null> {
     const r = await this.pool.query<SessionRow>(
-      `SELECT match_id, matchup_id, map_id, seats, at FROM ava_sessions WHERE match_id = $1`,
+      `SELECT ${SESSION_COLS} FROM ava_sessions WHERE match_id = $1`,
       [matchId],
     );
     return r.rows[0] ? sessionOf(r.rows[0]) : null;
@@ -1075,9 +1088,30 @@ export class PostgresAvaSessionStore implements AvaSessionStore {
 
   async byMatchup(matchupId: string): Promise<AvaSession | null> {
     const r = await this.pool.query<SessionRow>(
-      `SELECT match_id, matchup_id, map_id, seats, at FROM ava_sessions WHERE matchup_id = $1`,
+      `SELECT ${SESSION_COLS} FROM ava_sessions WHERE matchup_id = $1`,
       [matchupId],
     );
     return r.rows[0] ? sessionOf(r.rows[0]) : null;
+  }
+
+  async dueWar(now: number): Promise<AvaSession[]> {
+    const r = await this.pool.query<SessionRow>(
+      `SELECT ${SESSION_COLS} FROM ava_sessions
+       WHERE war_at IS NOT NULL AND war_at <= $1 AND war_declared_at IS NULL
+       ORDER BY war_at, match_id`,
+      [now],
+    );
+    return r.rows.map(sessionOf);
+  }
+
+  async markWarDeclared(matchId: string, at: number): Promise<boolean> {
+    // Exactly-once: only an undeclared, war-scheduled session takes the stamp — two
+    // racing sweep passes cannot both "win" and neither re-declares a declared war.
+    const r = await this.pool.query(
+      `UPDATE ava_sessions SET war_declared_at = $2
+       WHERE match_id = $1 AND war_at IS NOT NULL AND war_declared_at IS NULL`,
+      [matchId, at],
+    );
+    return (r.rowCount ?? 0) > 0;
   }
 }

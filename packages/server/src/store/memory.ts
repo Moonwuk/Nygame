@@ -449,6 +449,24 @@ export class MemoryAvaSessionStore implements AvaSessionStore {
     const row = this.byMatchupId.get(matchupId);
     return Promise.resolve(row ? { ...row, seats: { ...row.seats } } : null);
   }
+
+  dueWar(now: number): Promise<AvaSession[]> {
+    return Promise.resolve(
+      [...this.byMatchId.values()]
+        .filter((r) => r.warAt !== undefined && r.warAt <= now && r.warDeclaredAt === undefined)
+        .sort((a, b) => (a.warAt ?? 0) - (b.warAt ?? 0) || (a.matchId < b.matchId ? -1 : 1))
+        .map((r) => ({ ...r, seats: { ...r.seats } })),
+    );
+  }
+
+  markWarDeclared(matchId: string, at: number): Promise<boolean> {
+    const row = this.byMatchId.get(matchId);
+    if (!row || row.warAt === undefined || row.warDeclaredAt !== undefined) {
+      return Promise.resolve(false);
+    }
+    row.warDeclaredAt = at;
+    return Promise.resolve(true);
+  }
 }
 
 /** In-memory AvA roster store (AVA-6) — `matchupId → accountId → entry`, plus the
