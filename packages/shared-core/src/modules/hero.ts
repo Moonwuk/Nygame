@@ -12,6 +12,7 @@ import type {
 } from '../state/gameState';
 import { stacksHaveTrait } from '../data/traits';
 import { getStance, stanceToRelation } from '../state/diplomacy';
+import { fleetSideDealingHit, heroNode } from '../state/heroes';
 import { distance } from '../state/route';
 import { isCapturable } from '../state/sectorKind';
 import { canInstall } from '../util/fitting';
@@ -128,18 +129,6 @@ function heroByFleet(state: GameState, fleetId: string): Hero | undefined {
   return Object.values(state.heroes).find((hero) => hero.fleetId === fleetId);
 }
 
-/** The node a hero acts from (HERO-2 — the hero's position IS its ship): the fleet's
- *  current node while deployed; mid-flight (`location: null`) or shipless it falls back
- *  to `Hero.location` — the last confirmed node, synced on transit/arrival and doubling
- *  as the respawn anchor after `home`. */
-function heroNode(state: GameState, hero: Hero): PlanetId {
-  if (hero.fleetId) {
-    const loc = state.fleets[hero.fleetId]?.location;
-    if (typeof loc === 'string') return loc;
-  }
-  return hero.location;
-}
-
 /** Does this fleet currently carry a living hero unit? (drives the fleet aura). */
 function fleetHasHero(h: HandlerContext, fleetId: string): boolean {
   const fleet = h.state.fleets[fleetId];
@@ -154,6 +143,33 @@ function after(h: HandlerContext, hours: number): number {
 
 function onCooldown(hero: Hero, ability: string, now: number): boolean {
   return ((hero.cooldowns ?? {})[ability] ?? 0) > now;
+}
+
+/** Live/deployed gates shared by every hero CAST (the legacy actions and the
+ *  generic `hero.ability` dispatcher): a dead hero can't act, and a reserve hero
+ *  (never deployed, `alive` undefined) must not cast from the bench — it would
+ *  be an invulnerable caster outside HERO_ACTIVE_CAP (bughunt BF-24). */
+function gateLiveDeployed(h: HandlerContext, hero: Hero): void {
+  if (hero.alive === false) h.reject('E_HERO_DEAD');
+  if (hero.alive !== true) h.reject('E_HERO_NOT_DEPLOYED');
+}
+
+/** The legacy casters' shared gate tail (`hero.path.create`, `planet.annihilate`):
+ *  the same origin/target/range/cooldown sequence `hero.ability` derives from a
+ *  `HeroAbilityDef`, hand-rolled ONCE — per-action copies drifted before and
+ *  opened a bypass. Origin is the hero's node; every failed gate rejects. */
+function gateRangedCast(
+  h: HandlerContext,
+  hero: Hero,
+  targetId: string,
+  range: number,
+  cooldown: string,
+): void {
+  const origin = h.state.planets[heroNode(h.state, hero)];
+  const dest = h.state.planets[targetId];
+  if (!origin || !dest) h.reject('E_NO_PLANET');
+  if (distance(origin.position, dest.position) > range) h.reject('E_OUT_OF_RANGE');
+  if (onCooldown(hero, cooldown, h.ctx.now)) h.reject('E_COOLDOWN');
 }
 
 /** Adds an undirected `links` edge a→b; returns true if it was newly added. */
@@ -390,17 +406,26 @@ function castTempLane(
   h.emit('hero.path.created', { owner: playerId, from, to, laneId: lane.id });
 }
 
+/** The annihilation TARGET gate: a real, ownable world that isn't already a dead
+ *  world. Empty space (uncapturable) and a previously-annihilated dead world are
+ *  both rejected. Shared by the legacy `planet.annihilate` pre-gate (which checks
+ *  the target before range/cooldown — pinned by tests) and the cast body. */
+function requireDestructible(h: HandlerContext, planetId: PlanetId): NonNullable<
+  GameState['planets'][string]
+> {
+  const planet = h.state.planets[planetId];
+  if (!planet) h.reject('E_NO_PLANET');
+  if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
+    h.reject('E_NOT_DESTRUCTIBLE');
+  }
+  return planet;
+}
+
 /** The annihilation effect body (shared by `planet.annihilate` and `hero.ability`):
  *  flip the world to a neutral dead world and emit. Rejects unknown / undestructible
  *  targets; range/cooldown gates belong to callers. */
 function castAnnihilate(h: HandlerContext, playerId: PlayerId, planetId: PlanetId): void {
-  const planet = h.state.planets[planetId];
-  if (!planet) return h.reject('E_NO_PLANET');
-  // Destructible = a real, ownable world that isn't already a dead world. Empty
-  // space (uncapturable) and a previously-annihilated dead world are both rejected.
-  if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
-    return h.reject('E_NOT_DESTRUCTIBLE');
-  }
+  const planet = requireDestructible(h, planetId);
   const previousOwner = planet.owner;
   planet.owner = null; // neutral again — a depleted world anyone can re-claim
   planet.buildings = [];
@@ -435,15 +460,10 @@ export const heroModule: GameModule = {
       if (typeof to !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD');
-      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
-      const from = heroNode(h.state, hero); // acts from its ship's node when deployed
-      if (to === from) return h.reject('E_SAME_LOCATION');
-      const a = h.state.planets[from];
-      const b = h.state.planets[to];
-      if (!a || !b) return h.reject('E_NO_PLANET');
-      if (distance(a.position, b.position) > PATH_RANGE) return h.reject('E_OUT_OF_RANGE');
-      if (onCooldown(hero, 'path', h.ctx.now)) return h.reject('E_COOLDOWN');
+      gateLiveDeployed(h, hero);
+      // The hero acts from its ship's node when deployed.
+      if (to === heroNode(h.state, hero)) return h.reject('E_SAME_LOCATION');
+      gateRangedCast(h, hero, to, PATH_RANGE, 'path');
 
       castTempLane(h, action.playerId, hero, to, {
         durationHours: PATH_DURATION_HOURS,
@@ -478,19 +498,9 @@ export const heroModule: GameModule = {
       if (typeof planetId !== 'string') return h.reject('E_BAD_PAYLOAD');
       const hero = heroOf(h.state, action.playerId);
       if (!hero) return h.reject('E_NO_HERO');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD');
-      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED'); // reserve can't cast (BF-24)
-      const planet = h.state.planets[planetId];
-      if (!planet) return h.reject('E_NO_PLANET');
-      if (!isCapturable(h.ctx.data, planet) || planet.kind === DEAD_KIND) {
-        return h.reject('E_NOT_DESTRUCTIBLE');
-      }
-      const origin = h.state.planets[heroNode(h.state, hero)];
-      if (!origin) return h.reject('E_NO_PLANET');
-      if (distance(origin.position, planet.position) > ANNIHILATE_RANGE) {
-        return h.reject('E_OUT_OF_RANGE');
-      }
-      if (onCooldown(hero, 'annihilate', h.ctx.now)) return h.reject('E_COOLDOWN');
+      gateLiveDeployed(h, hero);
+      requireDestructible(h, planetId); // target gate first — pinned gate order
+      gateRangedCast(h, hero, planetId, ANNIHILATE_RANGE, 'annihilate');
 
       castAnnihilate(h, action.playerId, planetId);
       hero.cooldowns = hero.cooldowns ?? {};
@@ -514,11 +524,7 @@ export const heroModule: GameModule = {
       const hero = h.state.heroes?.[heroId];
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
-      if (hero.alive === false) return h.reject('E_HERO_DEAD');
-      // DEPLOYED only (`alive` is stamped by deploy): a reserve hero (never deployed,
-      // `alive` undefined) must not cast from the bench — it would be an invulnerable
-      // caster outside HERO_ACTIVE_CAP (bughunt BF-24).
-      if (hero.alive !== true) return h.reject('E_HERO_NOT_DEPLOYED');
+      gateLiveDeployed(h, hero);
       const def = h.ctx.data.heroAbilities[abilityId];
       if (!def) return h.reject('E_NO_ABILITY');
       // The hero must actually carry the ability in a slot (its data-driven loadout).
@@ -594,16 +600,13 @@ export const heroModule: GameModule = {
     // covers both its attack (vs the foe) and its return-fire defense.
     api.hook<number>('combat.damage', (base, args, h) => {
       const { battleId, attacker } = (args ?? {}) as { battleId?: string; attacker?: string };
-      if (typeof battleId !== 'string' || typeof attacker !== 'string') return base;
-      const battle = h.state.battles[battleId];
-      if (!battle) return base;
-      const side = battle.attacker.owner === attacker ? battle.attacker : battle.defender;
-      if (side.ref.kind !== 'fleet') return base; // the aura is a fleet bonus only
+      const hit = fleetSideDealingHit(h.state, battleId, attacker);
+      if (!hit || typeof attacker !== 'string') return base;
       let out = base;
-      if (fleetHasHero(h, side.ref.fleetId)) out *= 1 + HERO_COMBAT_BONUS;
+      if (fleetHasHero(h, hit.side.ref.fleetId)) out *= 1 + HERO_COMBAT_BONUS;
       const passives = passiveBonus(h, 'combat.damage', attacker, {
-        fleetId: side.ref.fleetId,
-        node: battle.location,
+        fleetId: hit.side.ref.fleetId,
+        node: hit.battle.location,
       });
       return passives !== 0 ? out * (1 + passives) : out;
     });

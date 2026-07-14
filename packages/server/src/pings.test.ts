@@ -46,7 +46,14 @@ const planet = (id: string, owner: string, x: number): Planet => ({
   traits: [],
 });
 
-function makeRoom(opts: { teams?: Record<string, string>; now?: () => number; ttl?: number } = {}): MatchRoom {
+function makeRoom(
+  opts: {
+    teams?: Record<string, string>;
+    now?: () => number;
+    ttl?: number;
+    manualStart?: boolean;
+  } = {},
+): MatchRoom {
   const data = loadShippedData();
   const base = createInitialState({ seed: 'pings', version: { data: data.version, manifest: '1' }, time: 0 });
   const players: Record<string, Player> = {
@@ -68,6 +75,7 @@ function makeRoom(opts: { teams?: Record<string, string>; now?: () => number; tt
     now: opts.now ?? (() => 0),
     teams: opts.teams,
     pingTtlMs: opts.ttl ?? 1000,
+    manualStart: opts.manualStart,
   });
 }
 
@@ -139,5 +147,24 @@ describe('ally pings', () => {
       await room.receive('green', g, place({ kind: 'mark', target: { point: { x: i, y: 0 } } }));
     }
     expect(g.ofType('error').some((m) => m.code === 'E_PING_RATE')).toBe(true);
+  });
+
+  it('the rate window follows the WALL clock — a frozen lobby never locks pings forever', async () => {
+    // manualStart with nobody pressing Start = the match clock stays frozen at 0.
+    // The window must still expire on wall time (same fix chat got), or the
+    // player is locked out for the whole lobby after PING_RATE_MAX placements.
+    let wall = 0;
+    const room = makeRoom({ teams: { green: 'A' }, manualStart: true, now: () => wall });
+    const g = new Peer();
+    room.addPeer('green', g);
+    for (let i = 0; i < 5; i++) {
+      await room.receive('green', g, place({ kind: 'mark', target: { point: { x: i, y: 0 } } }));
+    }
+    expect(g.ofType('error').some((m) => m.code === 'E_PING_RATE')).toBe(true);
+
+    wall += 61_000; // beyond PING_RATE_WINDOW_MS — the window has rolled over
+    await room.receive('green', g, place({ kind: 'mark', target: { point: { x: 99, y: 0 } } }));
+    const errors = g.ofType('error').filter((m) => m.code === 'E_PING_RATE');
+    expect(errors).toHaveLength(1); // no NEW rate error after the window expired
   });
 });

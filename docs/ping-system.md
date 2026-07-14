@@ -23,7 +23,8 @@
 - Типы `Ping` / `PingKind` (`mark|move|attack|defend|build`) / `PingAnchor` (`node` XOR `point`).
 - Клиентские сообщения `ping.place` / `ping.clear` (+ структурная валидация в `parseClientMessage`).
 - Серверные `ping.added` / `ping.removed` (`reason: cleared|expired`).
-- Коды ошибок `E_PING_KIND|TARGET|UNSEEN|BUILD|RATE`.
+- Коды ошибок `E_PING_TARGET|UNSEEN|BUILD|RATE` (невалидный `kind` отбрасывается ещё
+  структурной валидацией `parseClientMessage` → общий `E_BAD_MESSAGE`).
 
 Хранилище (`packages/server/src/ephemeral.ts`):
 - Пинги живут за интерфейсом **`EphemeralStore`** (KV + TTL + scan), in-memory-импл сейчас

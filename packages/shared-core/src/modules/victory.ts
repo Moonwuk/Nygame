@@ -175,26 +175,36 @@ function endMatch(
  *  party to must not block A's own win (GDD §3.3: "недвусмысленный критерий 'чьи очки
  *  суммируются'"). Coalitions are humans-only by construction (`E_BOT_ALLIANCE` bars
  *  bots from the alliance stance). Cliques overlap, so a player may appear in several
- *  candidate units — the caller looks for ANY unit over its threshold. Deterministic:
- *  seeds and members visited in sorted order; greedy per seed; deduped by membership. */
+ *  candidate units — the caller looks for ANY unit over its threshold.
+ *
+ *  ALL maximal cliques are enumerated (ordered Bron–Kerbosch) — a greedy pass per
+ *  seed provably misses some (a–c, a–e, c–e, c–d, d–e never yields {c,d,e}: every
+ *  seed's greedy growth absorbs a blocker first), silently denying a valid win.
+ *  Deterministic: candidates visited in sorted id order, so each clique comes out
+ *  sorted and the list order is fixed by the ids alone. Worst case is exponential
+ *  in theory, but a unit's vertices are the match's ACTIVE HUMAN seats (bots are
+ *  barred from `alliance`) — a handful of players, each edge a bilateral treaty. */
 function victoryUnits(h: HandlerContext, active: readonly PlayerId[]): PlayerId[][] {
-  const sorted = [...active].sort();
+  const allied = (a: PlayerId, b: PlayerId): boolean => getStance(h.state, a, b) === 'alliance';
   const units: PlayerId[][] = [];
-  const seenKeys = new Set<string>();
-  for (const seed of sorted) {
-    const members: PlayerId[] = [seed];
-    // Grow a clique: add a candidate only if it is allied with EVERY current member.
-    for (const cand of sorted) {
-      if (cand === seed) continue;
-      if (members.every((m) => getStance(h.state, m, cand) === 'alliance')) members.push(cand);
+  // R — the clique built so far; P — sorted candidates that all extend R; X — vertices
+  // already expanded at this level (kept so R is reported only when nothing — pending
+  // or already-covered — can grow it: the maximality check).
+  const expand = (R: PlayerId[], P: PlayerId[], X: PlayerId[]): void => {
+    if (P.length === 0 && X.length === 0) {
+      units.push(R);
+      return;
     }
-    members.sort(); // seed may not be the smallest member — sort so dedup keys match
-    const key = members.join('|');
-    if (!seenKeys.has(key)) {
-      seenKeys.add(key);
-      units.push(members);
+    for (let i = 0; i < P.length; i++) {
+      const v = P[i]!;
+      expand(
+        [...R, v],
+        P.slice(i + 1).filter((u) => allied(v, u)),
+        [...P.slice(0, i), ...X].filter((u) => allied(v, u)),
+      );
     }
-  }
+  };
+  expand([], [...active].sort(), []);
   return units;
 }
 

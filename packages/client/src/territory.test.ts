@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   BOUNDARY,
+  classifyBorders,
   clipHalfPlane,
   clipHalfPlaneTagged,
   clampPowerWeights,
@@ -145,5 +146,49 @@ describe('territory — computePowerCell (single cell, capture flash)', () => {
     expect(computePowerCell(seeds, clip, -1)).toBeNull();
     expect(computePowerCell(seeds, clip, 3)).toBeNull();
     expect(seeds[1]!.w).toBe(9000); // pure
+  });
+});
+
+describe('territory — classifyBorders (political border logic, no canvas)', () => {
+  const clip: Array<[number, number]> = [
+    [-100, -100],
+    [100, -100],
+    [100, 100],
+    [-100, 100],
+  ];
+
+  it('same-owner edges are INNER hairlines drawn once; owner-vs-other is a two-sided frontier', () => {
+    // p1 | p1 | p2 in a row: p1's pair shares an inner edge; p1|p2 is a frontier.
+    const seeds: TerritorySeed[] = [
+      { x: -50, y: 0, w: 0, owner: 'p1', kind: 'planet' },
+      { x: 0, y: 0, w: 0, owner: 'p1', kind: 'planet' },
+      { x: 50, y: 0, w: 0, owner: 'p2', kind: 'planet' },
+    ];
+    const { ownedFront, ownedInner, neutralEdge } = classifyBorders(
+      computePowerCells(seeds, clip),
+      seeds,
+    );
+    // The p1↔p1 edge appears ONCE (idx < t dedup), keyed by owner.
+    expect(ownedInner.get('p1')).toHaveLength(1);
+    expect(ownedInner.has('p2')).toBe(false);
+    // The p1↔p2 border glows from BOTH sides (one frontier segment per owner),
+    // and each owner's map-boundary edges are frontiers too.
+    expect(ownedFront.get('p1')!.length).toBeGreaterThan(0);
+    expect(ownedFront.get('p2')!.length).toBeGreaterThan(0);
+    expect(neutralEdge).toHaveLength(0); // nothing neutral on this map
+  });
+
+  it('neutral-vs-neutral divisions are deduped; neutral boundary edges are kept', () => {
+    const seeds: TerritorySeed[] = [
+      { x: -50, y: 0, w: 0, owner: null, kind: 'planet' },
+      { x: 50, y: 0, w: 0, owner: null, kind: 'planet' },
+    ];
+    const cells = computePowerCells(seeds, clip);
+    const { ownedFront, ownedInner, neutralEdge } = classifyBorders(cells, seeds);
+    expect(ownedFront.size).toBe(0);
+    expect(ownedInner.size).toBe(0);
+    // 1 shared division (deduped by idx < t) + 3 boundary edges per cell.
+    const boundaryEdges = cells.flatMap((c) => c.tags).filter((t) => t < 0).length;
+    expect(neutralEdge).toHaveLength(1 + boundaryEdges);
   });
 });

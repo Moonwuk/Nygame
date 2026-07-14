@@ -4,6 +4,8 @@ import { createDevMatch, loadShippedData } from './scenario';
 import { MemoryMatchStore, MemoryReceiptStore } from './store';
 import { snapshotOf } from './persistence';
 import { startClockDriver } from './clockDriver';
+import { createMatchLoader } from './serverWiring';
+import type { RoomPeer } from './matchRoom';
 
 // F8 (docs/infra-sizing-roadmap.md): the dev harness now persists after every commit
 // and resumes on restart, and a clock driver advances the world with no player action.
@@ -156,5 +158,42 @@ describe('F8 · clock driver', () => {
     driver.reschedule(); // main.ts calls this off the observe stream
     expect(scheduled).toBe(1); // now armed for the arrival
     driver.stop();
+  });
+});
+
+describe('F8 · the real loader wiring (serverWiring.createMatchLoader)', () => {
+  const silentPeer: RoomPeer = { send: () => {}, close: () => {} };
+  const raw = (action: Action): string => JSON.stringify({ type: 'action', action });
+
+  it('loads a stored match, persists each committed action, and resumes after dispose', async () => {
+    const store = new MemoryMatchStore();
+    const receiptStore = new MemoryReceiptStore();
+    // Seed the store the way main.ts's boot does.
+    const seed = createDevMatch(data, { now: () => 1000, time: 1000 });
+    await store.save(snapshotOf(seed));
+
+    const load = createMatchLoader({ stores: { store, receiptStore }, data, now: () => 1000 });
+    expect(await load('nope')).toBeNull(); // unknown id → no match, never a crash
+
+    const loaded = (await load(MATCH))!;
+    expect(loaded).not.toBeNull();
+    // The committed path: this room persists BEFORE committing — the exact wiring
+    // main.ts hands the registry, no mirroring.
+    const act = orbit('green', 'green_1', 'near', 1);
+    await loaded.room.receive('green', silentPeer, raw(act));
+    const snap = await store.load(MATCH);
+    expect(snap?.state.fleets.green_1?.orbit).toBe('near'); // snapshot landed
+    expect((await receiptStore.loadAll(MATCH)).some((r) => r.actionId === act.id)).toBe(true);
+
+    // Hibernate: dispose persists the final state and stops the driver.
+    await loaded.dispose();
+
+    // A "restarted" loader resumes the same match — with the receipt replayed.
+    const resumed = (await load(MATCH))!;
+    expect(resumed.room.state.fleets.green_1?.orbit).toBe('near');
+    const seqBefore = resumed.room.sequence;
+    await resumed.room.receive('green', silentPeer, raw(act)); // idempotent retry
+    expect(resumed.room.sequence).toBe(seqBefore); // deduped by the restored receipt
+    await resumed.dispose();
   });
 });

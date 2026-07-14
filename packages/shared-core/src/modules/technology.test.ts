@@ -606,6 +606,23 @@ describe('technology.boost — the premium research sink (SES-3, GDD §4.3)', ()
       ),
     ).state;
 
+  it('boosts a LEGACY single-object active slot (migration runs before the lookup)', () => {
+    // A match persisted before slots existed stored `active` as one object; boost
+    // must migrate it like startResearch/complete do, not throw into E_INTERNAL.
+    const legacy = stateWith({ players: [player('p1', { energy: 120 })] });
+    (legacy.players.p1 as Player).technologies = {
+      completed: [],
+      active: {
+        technology: 'industry',
+        startedAt: 0,
+        completesAt: HOUR,
+      } as unknown as ActiveResearch[],
+    };
+    const r = okApply(kernel.applyAction(legacy, boost('industry'), ctx(0)));
+    const slot = r.state.players.p1?.technologies?.active?.[0];
+    expect(slot).toMatchObject({ technology: 'industry', completesAt: 0.75 * HOUR, boosts: 1 });
+  });
+
   it('pays the premium cost and cuts the REMAINING time by initialPercent', () => {
     const r = okApply(kernel.applyAction(researching(), boost('industry'), ctx(0)));
     const slot = r.state.players.p1?.technologies?.active?.[0];

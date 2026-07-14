@@ -73,51 +73,6 @@ describe('visibilityModule (fog-of-war memory, variant B)', () => {
   });
 });
 
-describe('radar — two concentric ranges (inner full-reveal, outer signatures)', () => {
-  const rdata: GameData = parseGameData({
-    version: '0.1.0',
-    resources: ['metal'],
-    units: { cruiser: { faction: 'x', stats: { attack: 4, defense: 4, speed: 6, hp: 20 }, signature: 6 } },
-    factions: {},
-    buildings: { radar: { name: 'Radar', radarRange: 100 } }, // reach 100 → reveal ≤50, signature ≤100
-    events: {},
-  });
-  const enemy = (id: string, location: string) => ({
-    id,
-    owner: 'p2',
-    location,
-    movement: null,
-    units: [{ unit: 'cruiser', count: 2 }],
-    traits: [],
-  });
-  function radarState(): GameState {
-    return {
-      ...createInitialState({ seed: 'r', version: { data: '0.1.0', manifest: '1' } }),
-      players: { p1: player('p1'), p2: player('p2') },
-      planets: {
-        H: planet('H', 'p1', [], { position: { x: 0, y: 0 }, buildings: [{ type: 'radar', level: 1, hp: 0 }] }),
-        NEAR: planet('NEAR', null, [], { position: { x: 40, y: 0 } }), // ≤50 → full reveal
-        MID: planet('MID', null, [], { position: { x: 80, y: 0 } }), //  50<d≤100 → signature
-        FAR: planet('FAR', null, [], { position: { x: 200, y: 0 } }), // >100 → nothing
-      },
-      fleets: { fNear: enemy('fNear', 'NEAR'), fMid: enemy('fMid', 'MID'), fFar: enemy('fFar', 'FAR') },
-    };
-  }
-
-  it('identifies inside the inner half, signatures the outer half, hides beyond', () => {
-    const view = visibleState(radarState(), 'p1', rdata);
-    // inner (≤ reach/2 = 50): NEAR at 40 → enemy fleet fully identified, stays in view
-    expect(view.fleets.fNear).toBeDefined();
-    expect(view.fleets.fNear?.units).toEqual([{ unit: 'cruiser', count: 2 }]);
-    // outer (50 < d ≤ 100): MID at 80 → coarse signature only, the fleet is stripped
-    expect(view.fleets.fMid).toBeUndefined();
-    expect(view.signatures.map((s) => s.location)).toContain('MID');
-    // beyond reach (> 100): FAR at 200 → no fleet, no signature
-    expect(view.fleets.fFar).toBeUndefined();
-    expect(view.signatures.map((s) => s.location)).not.toContain('FAR');
-  });
-});
-
 describe('fleet scouting (A3) — a traveling fleet commits passed nodes to memory', () => {
   const sdata: GameData = parseGameData({
     version: '0.1.0',

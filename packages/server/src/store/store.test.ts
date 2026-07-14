@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { createInitialState, type GameState } from '@void/shared-core';
 import {
   MemoryAccountStore,
+  MemoryUserStore,
   MemoryAvaChallengeStore,
   MemoryAvaResultStore,
   MemoryAvaRosterStore,
@@ -13,6 +14,7 @@ import {
 } from './memory';
 import {
   PostgresAccountStore,
+  PostgresUserStore,
   PostgresAvaChallengeStore,
   PostgresAvaResultStore,
   PostgresAvaRosterStore,
@@ -24,6 +26,7 @@ import {
 } from './postgres';
 import type {
   AccountStore,
+  UserStore,
   AvaChallenge,
   AvaChallengeStore,
   AvaResultStore,
@@ -45,30 +48,40 @@ function snap(matchId: string, seq: number, s: GameState): MatchSnapshot {
 }
 
 // Shared behaviour run against BOTH adapters, so memory and Postgres agree.
-function matchStoreContract(name: string, make: () => MatchStore): void {
+// `uniq` decouples runs on the shared Postgres tables (ids must not collide).
+function matchStoreContract(name: string, make: () => MatchStore, uniq: (p: string) => string): void {
   describe(`MatchStore — ${name}`, () => {
     it('round-trips a snapshot byte-for-byte', async () => {
       const store = make();
       const s = state();
       s.time = 4242;
-      await store.save(snap('m1', 5, s));
-      const loaded = await store.load('m1');
+      await store.save(snap(uniq('m1'), 5, s));
+      const loaded = await store.load(uniq('m1'));
       expect(loaded?.seq).toBe(5);
       expect(loaded?.state.time).toBe(4242);
       expect(loaded?.state).toEqual(s);
     });
 
     it('returns null for an unknown match', async () => {
-      expect(await make().load('nope')).toBeNull();
+      expect(await make().load(uniq('nope'))).toBeNull();
     });
 
     it('is optimistic by seq — an older save never clobbers a newer one', async () => {
       const store = make();
-      await store.save(snap('m2', 10, withTime(state(), 1000)));
-      await store.save(snap('m2', 3, withTime(state(), 7))); // stale, lower seq
-      const loaded = await store.load('m2');
+      await store.save(snap(uniq('m2'), 10, withTime(state(), 1000)));
+      await store.save(snap(uniq('m2'), 3, withTime(state(), 7))); // stale, lower seq
+      const loaded = await store.load(uniq('m2'));
       expect(loaded?.seq).toBe(10);
       expect(loaded?.state.time).toBe(1000);
+    });
+
+    it('lists ONGOING matches only (the open-matches feed read)', async () => {
+      const store = make();
+      await store.save(snap(uniq('m-live'), 1, state()));
+      await store.save({ ...snap(uniq('m-done'), 1, state()), status: 'ended' });
+      const ids = await store.ongoingMatchIds();
+      expect(ids).toContain(uniq('m-live'));
+      expect(ids).not.toContain(uniq('m-done'));
     });
 
     it('ping reports the backing store reachable (the /ready probe)', async () => {
@@ -77,38 +90,38 @@ function matchStoreContract(name: string, make: () => MatchStore): void {
   });
 }
 
-function accountStoreContract(name: string, make: () => AccountStore): void {
+function accountStoreContract(name: string, make: () => AccountStore, uniq: (p: string) => string): void {
   describe(`AccountStore — ${name}`, () => {
     const seats = ['p1', 'p2'] as const;
 
     it('assigns a free seat and returns the SAME one on return', async () => {
       const store = make();
-      const first = await store.resolveSeat('r1', 'alice', seats);
+      const first = await store.resolveSeat(uniq('r1'), 'alice', seats);
       expect(first).toEqual({ playerId: 'p1', isNew: true });
-      const again = await store.resolveSeat('r1', 'alice', seats);
+      const again = await store.resolveSeat(uniq('r1'), 'alice', seats);
       expect(again).toEqual({ playerId: 'p1', isNew: false }); // resumes her side
     });
 
     it('gives a different nick the other seat, then rejects a full room', async () => {
       const store = make();
-      expect((await store.resolveSeat('r2', 'alice', seats))?.playerId).toBe('p1');
-      expect((await store.resolveSeat('r2', 'bob', seats))?.playerId).toBe('p2');
-      expect(await store.resolveSeat('r2', 'carol', seats)).toBeNull(); // full
+      expect((await store.resolveSeat(uniq('r2'), 'alice', seats))?.playerId).toBe('p1');
+      expect((await store.resolveSeat(uniq('r2'), 'bob', seats))?.playerId).toBe('p2');
+      expect(await store.resolveSeat(uniq('r2'), 'carol', seats)).toBeNull(); // full
       // but an already-seated nick still resolves even when "full"
-      expect((await store.resolveSeat('r2', 'bob', seats))?.playerId).toBe('p2');
+      expect((await store.resolveSeat(uniq('r2'), 'bob', seats))?.playerId).toBe('p2');
     });
 
     it('seat ticket (REL-5): first bind wins, later binds return the winner', async () => {
       const store = make();
-      await store.resolveSeat('r3', 'alice', seats);
-      expect(await store.seatTicket('r3', 'alice')).toBeNull(); // nothing bound yet
-      expect(await store.bindSeatTicket('r3', 'alice', 'hash-A')).toBe('hash-A'); // we won
-      expect(await store.bindSeatTicket('r3', 'alice', 'hash-B')).toBe('hash-A'); // lost → winner
-      expect(await store.seatTicket('r3', 'alice')).toBe('hash-A');
+      await store.resolveSeat(uniq('r3'), 'alice', seats);
+      expect(await store.seatTicket(uniq('r3'), 'alice')).toBeNull(); // nothing bound yet
+      expect(await store.bindSeatTicket(uniq('r3'), 'alice', 'hash-A')).toBe('hash-A'); // we won
+      expect(await store.bindSeatTicket(uniq('r3'), 'alice', 'hash-B')).toBe('hash-A'); // lost → winner
+      expect(await store.seatTicket(uniq('r3'), 'alice')).toBe('hash-A');
       // tickets are seat-scoped: another nick / another room are independent
-      await store.resolveSeat('r3', 'bob', seats);
-      expect(await store.seatTicket('r3', 'bob')).toBeNull();
-      expect(await store.bindSeatTicket('r4', 'alice', 'x')).toBeNull(); // no seat there
+      await store.resolveSeat(uniq('r3'), 'bob', seats);
+      expect(await store.seatTicket(uniq('r3'), 'bob')).toBeNull();
+      expect(await store.bindSeatTicket(uniq('r4'), 'alice', 'x')).toBeNull(); // no seat there
     });
   });
 }
@@ -118,14 +131,15 @@ function withTime(s: GameState, t: number): GameState {
   return s;
 }
 
-function receiptStoreContract(name: string, make: () => ReceiptStore): void {
+function receiptStoreContract(name: string, make: () => ReceiptStore, uniq: (p: string) => string): void {
   describe(`ReceiptStore — ${name}`, () => {
     it('saves + loads receipts; a re-save of the same action is a no-op (first wins)', async () => {
       const store = make();
-      await store.save('m', { actionId: 'a1', playerId: 'p1', seq: 1, ok: true });
-      await store.save('m', { actionId: 'a2', playerId: 'p2', seq: 2, ok: false, code: 'E_X' });
-      await store.save('m', { actionId: 'a1', playerId: 'p1', seq: 9, ok: true }); // dup → ignored
-      const all = await store.loadAll('m');
+      const m = uniq('m');
+      await store.save(m, { actionId: 'a1', playerId: 'p1', seq: 1, ok: true });
+      await store.save(m, { actionId: 'a2', playerId: 'p2', seq: 2, ok: false, code: 'E_X' });
+      await store.save(m, { actionId: 'a1', playerId: 'p1', seq: 9, ok: true }); // dup → ignored
+      const all = await store.loadAll(m);
       expect(all).toHaveLength(2);
       expect(all.find((r) => r.actionId === 'a1')).toMatchObject({ seq: 1, ok: true });
       expect(all.find((r) => r.actionId === 'a2')).toMatchObject({ ok: false, code: 'E_X' });
@@ -133,8 +147,35 @@ function receiptStoreContract(name: string, make: () => ReceiptStore): void {
 
     it('scopes receipts by match', async () => {
       const store = make();
-      await store.save('m1', { actionId: 'a', playerId: 'p1', seq: 1, ok: true });
-      expect(await store.loadAll('m2')).toHaveLength(0);
+      await store.save(uniq('rm1'), { actionId: 'a', playerId: 'p1', seq: 1, ok: true });
+      expect(await store.loadAll(uniq('rm2'))).toHaveLength(0);
+    });
+  });
+}
+
+/** SE-1.x — login+password accounts, run against BOTH adapters. */
+function userStoreContract(name: string, make: () => UserStore, uniq: (p: string) => string): void {
+  describe(`UserStore — ${name}`, () => {
+    it('creates an account and finds it case-insensitively', async () => {
+      const store = make();
+      const login = uniq('Ada');
+      const created = await store.createUser(login, 'hash-1');
+      if (!created.ok) throw new Error('expected ok');
+      expect((await store.findUser(login))?.userId).toBe(created.userId);
+      expect((await store.findUser(login.toUpperCase()))?.login).toBe(login);
+      expect(await store.findUser(uniq('nobody'))).toBeNull();
+    });
+
+    it('a duplicate login in ANY case is E_LOGIN_TAKEN, never an overwrite', async () => {
+      const store = make();
+      const login = uniq('Bob');
+      const first = await store.createUser(login, 'hash-1');
+      if (!first.ok) throw new Error('expected ok');
+      expect(await store.createUser(login.toUpperCase(), 'hash-2')).toEqual({
+        ok: false,
+        code: 'E_LOGIN_TAKEN',
+      });
+      expect((await store.findUser(login))?.passHash).toBe('hash-1'); // untouched
     });
   });
 }
@@ -204,6 +245,18 @@ function corpStoreContract(name: string, make: () => CorpStore, uniq: (p: string
       // a non-head `from` never steals headship
       await store.swapHead(created.corpId, uniq('acc-old'), uniq('acc-old'));
       expect(await store.membershipOf(uniq('acc-new'))).toMatchObject({ role: 'head' });
+    });
+
+    it('swapHead is a no-op when the target already left — never commits a headless corp', async () => {
+      const store = make();
+      const created = await store.createCorp(uniq('Orphanproof'), uniq('acc-head'), 'head');
+      if (!created.ok) throw new Error('expected ok');
+      await store.addMember(created.corpId, uniq('acc-gone'), 'gone', 'member');
+      // The target vanishes between the service's membership check and the swap
+      // (the TOCTOU window corpService.transfer leaves open).
+      await store.removeMember(created.corpId, uniq('acc-gone'));
+      await store.swapHead(created.corpId, uniq('acc-head'), uniq('acc-gone'));
+      expect(await store.membershipOf(uniq('acc-head'))).toMatchObject({ role: 'head' });
     });
 
     it('removeCorp releases every member; the audit trail survives, newest first', async () => {
@@ -569,9 +622,10 @@ function rosterStoreContract(
   });
 }
 
-matchStoreContract('memory', () => new MemoryMatchStore());
-accountStoreContract('memory', () => new MemoryAccountStore());
-receiptStoreContract('memory', () => new MemoryReceiptStore());
+matchStoreContract('memory', () => new MemoryMatchStore(), (p) => p);
+accountStoreContract('memory', () => new MemoryAccountStore(), (p) => p);
+receiptStoreContract('memory', () => new MemoryReceiptStore(), (p) => p);
+userStoreContract('memory', () => new MemoryUserStore(), (p) => p);
 corpStoreContract(
   'memory',
   () => new MemoryCorpStore(),
@@ -595,8 +649,6 @@ sessionStoreContract('memory', () => new MemoryAvaSessionStore(), (p) => p);
 const DB = process.env.DATABASE_URL;
 describe.skipIf(!DB)('Postgres adapters', () => {
   const pool = new Pool({ connectionString: DB });
-  let n = 0;
-  const uniq = (p: string): string => `${p}_${process.pid}_${++n}`;
 
   beforeAll(async () => {
     await migrate(pool);
@@ -631,56 +683,14 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   resultStoreContract('postgres', () => new PostgresAvaResultStore(pool), (p) => `${p}_${stamp}`);
   sessionStoreContract('postgres', () => new PostgresAvaSessionStore(pool), (p) => `${p}_${stamp}`);
 
+  // The SAME contracts the memory adapter runs — no weakened hand copies.
+  matchStoreContract('postgres', () => new PostgresMatchStore(pool), (p) => `${p}_${stamp}`);
+  accountStoreContract('postgres', () => new PostgresAccountStore(pool), (p) => `${p}_${stamp}`);
+  receiptStoreContract('postgres', () => new PostgresReceiptStore(pool), (p) => `${p}_${stamp}`);
+  userStoreContract('postgres', () => new PostgresUserStore(pool), (p) => `${p}_${stamp}`);
+
   it('migrates idempotently', async () => {
     await migrate(pool);
     await migrate(pool); // twice → no error (IF NOT EXISTS)
-  });
-
-  // Reuse the same contracts, but each call gets unique ids/rooms so tests don't
-  // collide on the shared tables.
-  it('MatchStore round-trips + is seq-optimistic', async () => {
-    await migrate(pool);
-    const store = new PostgresMatchStore(pool);
-    const id = uniq('m');
-    const s = withTime(state(), 999);
-    await store.save(snap(id, 7, s));
-    expect((await store.load(id))?.state.time).toBe(999);
-    await store.save(snap(id, 2, withTime(state(), 1))); // stale
-    expect((await store.load(id))?.seq).toBe(7);
-    expect((await store.load(id))?.state).toEqual(s);
-  });
-
-  it('AccountStore assigns, resumes, and rejects a full room', async () => {
-    await migrate(pool);
-    const store = new PostgresAccountStore(pool);
-    const room = uniq('r');
-    const seats = ['p1', 'p2'] as const;
-    expect((await store.resolveSeat(room, 'alice', seats))?.playerId).toBe('p1');
-    expect(await store.resolveSeat(room, 'alice', seats)).toEqual({ playerId: 'p1', isNew: false });
-    expect((await store.resolveSeat(room, 'bob', seats))?.playerId).toBe('p2');
-    expect(await store.resolveSeat(room, 'carol', seats)).toBeNull();
-  });
-
-  it('AccountStore seat ticket: first bind wins, no seat → null', async () => {
-    await migrate(pool);
-    const store = new PostgresAccountStore(pool);
-    const room = uniq('r');
-    await store.resolveSeat(room, 'alice', ['p1', 'p2']);
-    expect(await store.seatTicket(room, 'alice')).toBeNull();
-    expect(await store.bindSeatTicket(room, 'alice', 'hash-A')).toBe('hash-A');
-    expect(await store.bindSeatTicket(room, 'alice', 'hash-B')).toBe('hash-A'); // first wins
-    expect(await store.seatTicket(room, 'alice')).toBe('hash-A');
-    expect(await store.bindSeatTicket(room, 'nobody', 'x')).toBeNull(); // no seat row
-  });
-
-  it('ReceiptStore persists + dedupes by (match, action)', async () => {
-    await migrate(pool);
-    const store = new PostgresReceiptStore(pool);
-    const m = uniq('m');
-    await store.save(m, { actionId: 'a1', playerId: 'p1', seq: 1, ok: true });
-    await store.save(m, { actionId: 'a1', playerId: 'p1', seq: 9, ok: true }); // dup → ignored
-    const all = await store.loadAll(m);
-    expect(all).toHaveLength(1);
-    expect(all[0]).toMatchObject({ actionId: 'a1', seq: 1, ok: true });
   });
 });

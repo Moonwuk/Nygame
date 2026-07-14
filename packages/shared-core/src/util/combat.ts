@@ -97,19 +97,19 @@ export function isHostile(h: HandlerContext, a: string, b: string): boolean {
 // --- damage ------------------------------------------------------------------
 
 /**
- * Applies `totalDamage` to a unit list, filling the receiving lines in tier
- * order. Tracks each stack's remaining HP pool so partial damage persists
- * across rounds; whole ships/troops are lost as the pool drops, each loss
- * announced via `unit.died` (a bus event reactive modules can listen on).
- * Returns the surviving stacks.
+ * The PURE damage model: applies `totalDamage` to a unit list, filling the
+ * receiving lines in tier order. Tracks each stack's remaining HP pool so
+ * partial damage persists across rounds; whole ships/troops are lost as the
+ * pool drops. No bus access — losses are RETURNED (`deaths`, in processing
+ * order) so the math is unit-testable in isolation; the `applyDamage` wrapper
+ * turns each loss into a `unit.died` event.
  */
-export function applyDamage(
-  h: HandlerContext,
+export function damageUnits(
   units: UnitStack[],
   totalDamage: number,
   data: GameData,
-  source: Record<string, string>,
-): UnitStack[] {
+): { survivors: UnitStack[]; deaths: { unit: string; count: number }[] } {
+  const deaths: { unit: string; count: number }[] = [];
   let remaining = totalDamage;
   for (const tier of TIER_ORDER) {
     if (remaining <= 0) {
@@ -156,7 +156,7 @@ export function applyDamage(
       const newCount = pool <= 0 ? 0 : Math.ceil(pool / perShip);
       const lost = stack.count - newCount;
       if (lost > 0) {
-        h.emit('unit.died', { unit: stack.unit, count: lost, ...source });
+        deaths.push({ unit: stack.unit, count: lost });
       }
       stack.count = newCount;
       stack.hp = newCount > 0 ? pool : 0;
@@ -166,7 +166,23 @@ export function applyDamage(
       }
     }
   }
-  return units.filter((s) => s.count > 0);
+  return { survivors: units.filter((s) => s.count > 0), deaths };
+}
+
+/** The bus-facing wrapper over {@link damageUnits}: each loss is announced via
+ *  `unit.died` (tagged with `source`), and the surviving stacks are returned. */
+export function applyDamage(
+  h: HandlerContext,
+  units: UnitStack[],
+  totalDamage: number,
+  data: GameData,
+  source: Record<string, string>,
+): UnitStack[] {
+  const { survivors, deaths } = damageUnits(units, totalDamage, data);
+  for (const d of deaths) {
+    h.emit('unit.died', { unit: d.unit, count: d.count, ...source });
+  }
+  return survivors;
 }
 
 export function applyDamageToSide(

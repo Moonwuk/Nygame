@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACTION_ENVELOPE_SCHEMA_VERSION,
   ActionGate,
   createActionEnvelope,
 } from '@void/action-layer';
@@ -38,7 +37,6 @@ const SESSION = { matchId: 'dev', playerId: 'green', sessionId: 'sess-green' } a
 /** A valid, self-consistent gated envelope for green's fleet in the dev match. */
 function orbitEnvelope(clientSeq: number) {
   return createActionEnvelope({
-    schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
     matchId: SESSION.matchId,
     playerId: SESSION.playerId,
     sessionId: SESSION.sessionId,
@@ -108,7 +106,6 @@ describe('MatchRoom · action-layer gate (SV-1.1)', () => {
 
     // A self-consistent envelope claiming another player, sent over green's session.
     const foreignPlayer = createActionEnvelope({
-      schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
       matchId: 'dev',
       playerId: 'red',
       sessionId: SESSION.sessionId,
@@ -217,7 +214,6 @@ describe('MatchRoom · action-layer gate (SV-1.1)', () => {
 
     // Structurally a valid envelope, but the payload violates the fleet.orbit schema.
     const bad = createActionEnvelope({
-      schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
       matchId: 'dev',
       playerId: 'green',
       sessionId: SESSION.sessionId,

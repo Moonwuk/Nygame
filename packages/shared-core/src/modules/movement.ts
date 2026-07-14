@@ -1,7 +1,7 @@
 import type { GameModule, HandlerContext } from '../kernel/module';
 import type { Fleet, FleetEdge, GameState, PlanetId } from '../state/gameState';
-import { timeScaleOf } from '../action/types';
-import { MS_PER_HOUR } from '../util/time';
+import { hoursToMs } from '../action/types';
+import { legT } from '../state/fleetPosition';
 import { distance, fleetBaseSpeed, planRoute, routeDistance } from '../state/route';
 
 /** A target a `fleet.move` can aim at: a node, or a continuous point on a lane. */
@@ -92,8 +92,8 @@ function beginLeg(
   }
   // Distance covered = the fraction [startT,endT] of the full lane length.
   const legDist = distance(origin.position, dest.position) * span;
-  // timeScale compresses all real-time durations (GDD §3.1).
-  const legMs = ((legDist / speed) * MS_PER_HOUR) / timeScaleOf(h.ctx);
+  // timeScale compresses all real-time durations (GDD §3.1) — via hoursToMs.
+  const legMs = hoursToMs(h.ctx, legDist / speed);
   fleet.movement = {
     from: fromId,
     to: nextHop,
@@ -334,15 +334,8 @@ export const movementModule: GameModule = {
         return h.reject('E_FLEET_BUSY'); // not under way (or in a battle) → nothing to halt
       }
       // Park the fleet at its CURRENT continuous position on the lane — not at the
-      // next node. The fraction is how far this leg has progressed within its own
-      // [startT, endT] sub-segment, clamped to the lane interior.
-      const startT = mv.startT ?? 0;
-      const endT = mv.endT ?? 1;
-      const progress =
-        mv.arrivesAt > mv.departedAt
-          ? Math.min(1, Math.max(0, (h.ctx.now - mv.departedAt) / (mv.arrivesAt - mv.departedAt)))
-          : 1;
-      const frac = Math.min(1 - EPS, Math.max(EPS, startT + (endT - startT) * progress));
+      // next node: the shared leg interpolation, clamped to the lane interior.
+      const frac = Math.min(1 - EPS, Math.max(EPS, legT(mv, h.ctx.now)));
       const edge: FleetEdge = { from: mv.from, to: mv.to, t: frac };
       fleet.movement = null;
       fleet.location = null;

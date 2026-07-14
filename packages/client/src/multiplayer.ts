@@ -233,7 +233,6 @@ export class MultiplayerClient {
     }
     if (this.gated && this.sessionId && this.matchId && this.playerId) {
       const envelope = createActionEnvelope({
-        schemaVersion: 1,
         matchId: this.matchId,
         playerId: this.playerId,
         sessionId: this.sessionId,

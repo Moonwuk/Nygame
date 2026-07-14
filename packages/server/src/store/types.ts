@@ -147,6 +147,13 @@ export interface CorpAuditEntry {
  *  lives in `CorpService`; the store guards only the STRUCTURAL invariants that need
  *  storage-level atomicity: unique corp name (case-insensitive) and one corp per
  *  account. */
+/** Default page sizes for the bounded list reads — part of the store CONTRACT
+ *  (both adapters import these), so memory and Postgres can't silently diverge. */
+export const DEFAULT_AUDIT_LIMIT = 50;
+export const DEFAULT_CHALLENGES_LIMIT = 50;
+export const DEFAULT_LOCKED_MATCHUPS_LIMIT = 100;
+export const DEFAULT_RESULTS_LIMIT = 50;
+
 export interface CorpStore {
   /** Create a corp with `head` as its Глава — atomic, so a duplicate name or an
    *  already-membered founder can't slip in between check and insert. */

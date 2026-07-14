@@ -20,19 +20,6 @@ import type {
   ModuleSetupApi,
 } from './module';
 
-interface OrderedEntry {
-  priority: number;
-  index: number;
-}
-
-interface EventSub extends OrderedEntry {
-  handler: EventHandler;
-}
-
-interface HookEntry extends OrderedEntry {
-  fn: HookFn<unknown>;
-}
-
 type StepResult =
   | { ok: true; state: GameState; events: DomainEvent[] }
   | { ok: false; code: string };
@@ -49,10 +36,6 @@ const MAX_ADVANCE_STEPS = 100_000;
 /** The reserved event the kernel emits for each contiguous span of continuous
  *  time, so modules can accrue rate-based quantities (resources) by formula. */
 const TIME_ADVANCED = 'time.advanced';
-
-function byOrder(a: OrderedEntry, b: OrderedEntry): number {
-  return a.priority - b.priority || a.index - b.index;
-}
 
 /** Earliest scheduled event with `at <= now`. The `scheduled` array is kept
  *  sorted by `(at, seq)`, so this is O(1) — just check the head. */
@@ -86,16 +69,18 @@ function scheduledInsertPos(arr: readonly ScheduledEvent[], at: number, seq: num
  */
 export class Kernel {
   private readonly actionHandlers = new Map<string, ActionHandler>();
-  private readonly eventSubs = new Map<string, EventSub[]>();
-  private readonly hooks = new Map<string, HookEntry[]>();
+  private readonly eventSubs = new Map<string, EventHandler[]>();
+  private readonly hooks = new Map<string, HookFn<unknown>[]>();
   private readonly capabilities = new Map<string, unknown>();
   readonly manifest: ModuleManifest;
 
   constructor(modules: readonly GameModule[]) {
     const manifest: ModuleManifest = { modules: [] };
-    let registrationCounter = 0;
 
-    modules.forEach((module, priority) => {
+    // Deterministic ordering (invariant #6) needs no bookkeeping: setup runs
+    // synchronously module-by-module in array order, so every subscriber/hook
+    // list is pushed — and therefore executes — in exactly that order.
+    modules.forEach((module) => {
       const api: ModuleSetupApi = {
         onAction: (type, handler) => {
           if (this.actionHandlers.has(type)) {
@@ -105,12 +90,12 @@ export class Kernel {
         },
         on: (eventType, handler) => {
           const list = this.eventSubs.get(eventType) ?? [];
-          list.push({ priority, index: registrationCounter++, handler });
+          list.push(handler);
           this.eventSubs.set(eventType, list);
         },
         hook: (name, fn) => {
           const list = this.hooks.get(name) ?? [];
-          list.push({ priority, index: registrationCounter++, fn: fn as HookFn<unknown> });
+          list.push(fn as HookFn<unknown>);
           this.hooks.set(name, list);
         },
         provideCapability: (name, impl) => {
@@ -123,14 +108,6 @@ export class Kernel {
       module.setup(api);
       manifest.modules.push({ id: module.id, version: module.version });
     });
-
-    // Lock deterministic ordering: module priority first, then registration order.
-    for (const list of this.eventSubs.values()) {
-      list.sort(byOrder);
-    }
-    for (const list of this.hooks.values()) {
-      list.sort(byOrder);
-    }
 
     this.manifest = manifest;
   }
@@ -338,8 +315,8 @@ export class Kernel {
           return baseValue; // No contributor → base default. Never a crash.
         }
         let value: unknown = baseValue;
-        for (const entry of entries) {
-          value = entry.fn(value, args ?? null, h);
+        for (const fn of entries) {
+          value = fn(value, args ?? null, h);
         }
         return value as T;
       },
@@ -367,7 +344,7 @@ export class Kernel {
           continue; // Nobody listening → event harmlessly fades.
         }
         for (const sub of subs) {
-          sub.handler(event, h);
+          sub(event, h);
         }
       }
     } catch (err) {

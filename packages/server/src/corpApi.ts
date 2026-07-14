@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CorpErrorCode, CorpService } from './corpService';
 import type { Identity } from './matchApi';
+import { slidingWindowIpLimiter } from './rateLimit';
 
 /**
  * CORP-0 — the corporation HTTP API. Every route requires a session (`Authorization:
@@ -70,23 +71,12 @@ export function registerCorpApi(app: FastifyInstance, deps: CorpApiDeps): void {
   const now = deps.now ?? ((): number => Date.now());
   const rateMax = deps.rateMax ?? RATE_MAX;
   const rateWindowMs = deps.rateWindowMs ?? RATE_WINDOW_MS;
-  const attempts = new Map<string, { n: number; since: number }>();
-
-  const rateLimited = (ip: string): boolean => {
-    const t = now();
-    const c = attempts.get(ip);
-    if (!c || t - c.since >= rateWindowMs) {
-      attempts.delete(ip); // re-insert → freshest position in the FIFO order
-      attempts.set(ip, { n: 1, since: t });
-      if (attempts.size > RATE_MAX_IPS) {
-        const oldest = attempts.keys().next().value;
-        if (oldest !== undefined) attempts.delete(oldest);
-      }
-      return false;
-    }
-    c.n += 1;
-    return c.n > rateMax;
-  };
+  const rateLimited = slidingWindowIpLimiter({
+    now,
+    max: rateMax,
+    windowMs: rateWindowMs,
+    maxIps: RATE_MAX_IPS,
+  });
 
   /** Session gate shared by every route: identity or a uniform 401. */
   const identified = async (

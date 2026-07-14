@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hashPassword, verifyPassword, decoyHash, type ScryptParams } from './password';
 import type { UserStore } from './store';
+import { slidingWindowIpLimiter } from './rateLimit';
 
 /**
  * SE-1.x — login+password authentication over HTTP: `POST /auth/register` and
@@ -63,23 +64,12 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
   const now = deps.now ?? ((): number => Date.now());
   const rateMax = deps.rateMax ?? RATE_MAX;
   const rateWindowMs = deps.rateWindowMs ?? RATE_WINDOW_MS;
-  const attempts = new Map<string, { n: number; since: number }>();
-
-  const rateLimited = (ip: string): boolean => {
-    const t = now();
-    const c = attempts.get(ip);
-    if (!c || t - c.since >= rateWindowMs) {
-      attempts.delete(ip); // re-insert → freshest position in the FIFO order
-      attempts.set(ip, { n: 1, since: t });
-      if (attempts.size > RATE_MAX_IPS) {
-        const oldest = attempts.keys().next().value;
-        if (oldest !== undefined) attempts.delete(oldest);
-      }
-      return false;
-    }
-    c.n += 1;
-    return c.n > rateMax;
-  };
+  const rateLimited = slidingWindowIpLimiter({
+    now,
+    max: rateMax,
+    windowMs: rateWindowMs,
+    maxIps: RATE_MAX_IPS,
+  });
 
   // A decoy hash computed once at startup: login misses verify against it so the
   // "unknown login" path costs one scrypt derivation, same as "wrong password".
@@ -119,10 +109,15 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
     }
     const user = await deps.users.findUser(creds.login);
     // Uniform failure: both paths verify against SOME hash and return the same 401,
-    // so account existence leaks neither through the body nor through timing.
-    const ok = user
-      ? await verifyPassword(creds.password, user.passHash)
-      : (await verifyPassword(creds.password, await decoy), false);
+    // so account existence leaks neither through the body nor through timing. The
+    // decoy verification's result is deliberately discarded — it exists ONLY to
+    // cost one scrypt derivation, same as a real check.
+    let ok = false;
+    if (user) {
+      ok = await verifyPassword(creds.password, user.passHash);
+    } else {
+      await verifyPassword(creds.password, await decoy);
+    }
     if (!ok || !user) {
       void reply.code(401);
       return { error: 'E_AUTH' as const };

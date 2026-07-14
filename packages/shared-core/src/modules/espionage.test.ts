@@ -132,6 +132,20 @@ describe('espionage — stealing an intel window', () => {
     expect(errCode(kernel.applyAction(s, spy('p1', { target: 'p2', kind: 'treasury' }), ctx(0)))).toBe('E_INSUFFICIENT');
   });
 
+  // Status guards, mirroring the BF-32 block in diplomacy.test.ts: a DEFEATED
+  // seat neither spies nor is spied upon — both sides of the table must hold.
+  it('fail-secure: a defeated actor cannot spy (E_FORBIDDEN)', () => {
+    const s = baseState();
+    s.players.p1!.status = 'defeated';
+    expect(errCode(kernel.applyAction(s, spy('p1', { target: 'p2', kind: 'treasury' }), ctx(0)))).toBe('E_FORBIDDEN');
+  });
+
+  it('fail-secure: a defeated victim is no target (E_NO_PLAYER)', () => {
+    const s = baseState();
+    s.players.p2!.status = 'defeated';
+    expect(errCode(kernel.applyAction(s, spy('p1', { target: 'p2', kind: 'treasury' }), ctx(0)))).toBe('E_NO_PLAYER');
+  });
+
   it('keeps at most 8 grants per beneficiary (oldest evicted)', () => {
     const s = baseState();
     s.players.p1!.resources.credits = 10_000;

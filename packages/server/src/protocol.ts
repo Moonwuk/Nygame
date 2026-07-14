@@ -20,7 +20,6 @@ export type ServerErrorCode =
   | 'E_PAYLOAD_TOO_LARGE'
   | 'E_SLOT_TAKEN'
   | 'E_UNKNOWN_PLAYER'
-  | 'E_PING_KIND'
   | 'E_PING_TARGET'
   | 'E_PING_UNSEEN'
   | 'E_PING_BUILD'

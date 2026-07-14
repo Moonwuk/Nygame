@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isBombarded } from './orbit';
+import { bombardedPlanets, isBombarded } from './orbit';
+import { setStance } from './diplomacy';
 import { createInitialState, type Fleet, type GameState, type Planet } from './gameState';
 
 function planet(id: string, owner: string | null): Planet {
@@ -90,5 +91,33 @@ describe('isBombarded', () => {
       ],
     );
     expect(isBombarded(st, 'P')).toBe(true);
+  });
+
+  it('a fleet PINNED in a melee (battleId) does not freeze the planet — it is not shelling', () => {
+    // Same rule the orbital module applies to the damage side (bug-hunt MAJOR):
+    // damage and freeze read one shared predicate, so they cannot disagree.
+    const pinned = { ...fleet('F', 'p2', 'P', 'near', true), battleId: 'B1' };
+    const st = stateWith([planet('P', 'p1')], [pinned]);
+    expect(isBombarded(st, 'P')).toBe(false);
+  });
+
+  it('only an at-WAR pair bombards: peace/pact/alliance freeze nothing', () => {
+    for (const stance of ['peace', 'pact', 'alliance'] as const) {
+      const st = stateWith([planet('P', 'p1')], [fleet('F', 'p2', 'P', 'near', true)]);
+      setStance(st, 'p1', 'p2', stance);
+      expect(isBombarded(st, 'P'), stance).toBe(false);
+    }
+  });
+
+  it('bombardedPlanets collects every shelled world in one pass', () => {
+    const st = stateWith(
+      [planet('P', 'p1'), planet('Q', 'p1'), planet('R', 'p1')],
+      [
+        fleet('F1', 'p2', 'P', 'near', true), // shelling P
+        fleet('F2', 'p2', 'Q', 'near', false), // parked, guns cold
+        fleet('F3', 'p2', 'R', 'near', true), // shelling R
+      ],
+    );
+    expect(bombardedPlanets(st)).toEqual(new Set(['P', 'R']));
   });
 });

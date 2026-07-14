@@ -12,20 +12,11 @@
  * kernel discards the whole draft (fail-secure, cost included).
  */
 import type { GameModule, HandlerContext } from '../kernel/module';
-import type { Hero, GameState, PlanetId } from '../state/gameState';
+import type { PlanetId } from '../state/gameState';
+import { fleetSideDealingHit, heroNode } from '../state/heroes';
 import { distance } from '../state/route';
 import { MS_PER_HOUR } from '../util/time';
 import type { HeroEffect } from './hero';
-
-/** The node a hero acts from: its ship's node while deployed, else its last node.
- *  Inlined (not imported from heroModule) to keep this provider self-contained. */
-function heroNode(hero: Hero, state: GameState): PlanetId {
-  if (hero.fleetId !== undefined) {
-    const loc = state.fleets[hero.fleetId]?.location;
-    if (typeof loc === 'string') return loc;
-  }
-  return hero.location;
-}
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 
@@ -97,7 +88,7 @@ function auraBonus(h: HandlerContext, owner: string, at: PlanetId): number {
     if (hero.owner !== owner || hero.alive !== true) continue;
     const auras = hero.activeAuras;
     if (auras === undefined || auras.length === 0) continue;
-    const node = h.state.planets[heroNode(hero, h.state)]?.position;
+    const node = h.state.planets[heroNode(h.state, hero)]?.position;
     if (node === undefined) continue;
     const d = distance(node, here);
     for (const a of auras) if (a.until > now && d <= a.radius) total += a.bonus;
@@ -143,12 +134,9 @@ export const heroEffectsModule: GameModule = {
     // rides the side DEALING the hit (covers its attack and its return-fire defense).
     api.hook<number>('combat.damage', (base, args, h) => {
       const { battleId, attacker } = (args ?? {}) as { battleId?: string; attacker?: string };
-      if (typeof battleId !== 'string' || typeof attacker !== 'string') return base;
-      const battle = h.state.battles[battleId];
-      if (!battle) return base;
-      const side = battle.attacker.owner === attacker ? battle.attacker : battle.defender;
-      if (side.ref.kind !== 'fleet') return base; // the aura is a fleet bonus only
-      const bonus = auraBonus(h, attacker, battle.location);
+      const hit = fleetSideDealingHit(h.state, battleId, attacker);
+      if (!hit || typeof attacker !== 'string') return base;
+      const bonus = auraBonus(h, attacker, hit.battle.location);
       return bonus !== 0 ? base * (1 + bonus) : base;
     });
   },

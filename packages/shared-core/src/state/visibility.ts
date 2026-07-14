@@ -1,6 +1,7 @@
 import { buildingLevel, type GameData } from '../data/schemas';
 import { deepClone } from '../util/clone';
 import { offerInvolves } from './diplomacy';
+import { fleetNodeAt, fleetPositionAt } from './fleetPosition';
 import type { Fleet, GameState, PlanetId, PlayerId, ScheduledEvent } from './gameState';
 
 /** A scheduled event belongs to a player when it clearly references their own planet,
@@ -131,47 +132,17 @@ function withinRadius(
   if (origin) withinRadiusAt(state, origin, radius, out);
 }
 
-/** A fleet's CONTINUOUS map position right now: the interpolated point along its
- *  current leg (a moving fleet), the parked point on its lane, or its node — so a
- *  fleet's sensor reach tracks the SHIP, not its destination. Uses `state.time`. */
+/** A fleet's CONTINUOUS map position right now — the shared interpolation
+ *  (`state/fleetPosition.ts`) evaluated at `state.time`, so a fleet's sensor
+ *  reach tracks the SHIP, not its destination. */
 function fleetPosition(state: GameState, fleet: Fleet): { x: number; y: number } | null {
-  if (fleet.location) return state.planets[fleet.location]?.position ?? null;
-  const mv = fleet.movement;
-  if (mv) {
-    const a = state.planets[mv.from]?.position;
-    const b = state.planets[mv.to]?.position;
-    if (!a || !b) return null;
-    const span = mv.arrivesAt - mv.departedAt;
-    const progress = span > 0 ? Math.min(1, Math.max(0, (state.time - mv.departedAt) / span)) : 1;
-    const s0 = mv.startT ?? 0;
-    const t = s0 + ((mv.endT ?? 1) - s0) * progress;
-    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-  }
-  const e = fleet.edge;
-  if (e) {
-    const a = state.planets[e.from]?.position;
-    const b = state.planets[e.to]?.position;
-    if (!a || !b) return null;
-    return { x: a.x + (b.x - a.x) * e.t, y: a.y + (b.y - a.y) * e.t };
-  }
-  return null;
+  return fleetPositionAt(state, fleet, state.time);
 }
 
 /** The node a fleet is NEAREST to right now — its anchor for graph-hop identify and
- *  for where its radar contact blips. Tracks the ship along its leg, not pinned to
- *  the destination. */
+ *  for where its radar contact blips. Same shared interpolation, at `state.time`. */
 function fleetNode(state: GameState, fleet: Fleet): PlanetId | null {
-  if (fleet.location) return fleet.location;
-  const mv = fleet.movement;
-  if (mv) {
-    const span = mv.arrivesAt - mv.departedAt;
-    const progress = span > 0 ? Math.min(1, Math.max(0, (state.time - mv.departedAt) / span)) : 1;
-    const s0 = mv.startT ?? 0;
-    const t = s0 + ((mv.endT ?? 1) - s0) * progress;
-    return t <= 0.5 ? mv.from : mv.to;
-  }
-  if (fleet.edge) return fleet.edge.t <= 0.5 ? fleet.edge.from : fleet.edge.to;
-  return null;
+  return fleetNodeAt(state, fleet, state.time);
 }
 
 /** Viewer-wide radar-reach multiplier: ×(1 + Σ completed-tech `radarRangeBonus`

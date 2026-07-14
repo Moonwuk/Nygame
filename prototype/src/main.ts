@@ -1022,8 +1022,6 @@ const isSquadron = (u: string) => {
 const isShip = (u: string) => !data.units[u]?.traits.includes('ground') && !isSquadron(u);
 const isGround = (u: string) => data.units[u]?.domain === 'ground';
 const floor = Math.floor;
-const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-  Math.hypot(a.x - b.x, a.y - b.y);
 /** Compact number like Iron Order's bar: 15.7k, 728, … */
 function kfmt(n: number): string {
   const v = Math.round(n);
@@ -4301,263 +4299,264 @@ function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit
   return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
 
-function panelHtml(): string {
-  const group = [...selFleets].map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
-  if (group.length > 1) {
-    const ships = group.reduce((a, f) => a + sumUnits(f.units), 0);
-    const troops = group.reduce((a, f) => a + sumUnits(f.landing ?? []), 0);
-    let h = cardHeader(
-      ownerColor(ME),
-      t('ОПЕРАТИВНАЯ ГРУППА'),
-      t('{f} флот(ов) · {s} кораблей · {tr} десанта', { f: group.length, s: ships, tr: troops }),
-    );
-    h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift-рамка выделяет группу; Ctrl/⌘-клик добавляет флот.')}</div>`;
-    for (const f of group) {
-      const loc =
-        f.location ??
-        (f.movement
-          ? `${f.movement.from}→${f.movement.to}`
-          : f.edge
-            ? `⟜ ${f.edge.from}–${f.edge.to}`
-            : '—');
-      const nShips = sumUnits(f.units);
-      const nTr = sumUnits(f.landing ?? []);
-      h += `<div class="row" style="color:${ownerColor(f.owner)}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
-    }
-    h += btn('cancel', '', t('Снять выделение группы'), true);
-    return h;
+/** Side-panel: the multi-fleet TASK-GROUP card (Shift-frame selection). */
+function taskGroupPanelHtml(group: Fleet[]): string {
+  const ships = group.reduce((a, f) => a + sumUnits(f.units), 0);
+  const troops = group.reduce((a, f) => a + sumUnits(f.landing ?? []), 0);
+  let h = cardHeader(
+    ownerColor(ME),
+    t('ОПЕРАТИВНАЯ ГРУППА'),
+    t('{f} флот(ов) · {s} кораблей · {tr} десанта', { f: group.length, s: ships, tr: troops }),
+  );
+  h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift-рамка выделяет группу; Ctrl/⌘-клик добавляет флот.')}</div>`;
+  for (const f of group) {
+    const loc =
+      f.location ??
+      (f.movement
+        ? `${f.movement.from}→${f.movement.to}`
+        : f.edge
+          ? `⟜ ${f.edge.from}–${f.edge.to}`
+          : '—');
+    const nShips = sumUnits(f.units);
+    const nTr = sumUnits(f.landing ?? []);
+    h += `<div class="row" style="color:${ownerColor(f.owner)}">▲ ${f.id} <span class="dim">${loc}</span> · ${nShips}${nTr ? '+' + nTr : ''}</div>`;
   }
-  if (selFleet) {
-    const f = s.fleets[selFleet];
-    if (f) {
-      const nShips = sumUnits(f.units);
-      const nTr = sumUnits(f.landing ?? []);
-      const inOrbit = f.orbit === 'near';
-      // Hull integrity across the squadron (persistent between fights now): a stack's
-      // current hp ?? full. Below 30% the fleet limps (route.ts) until it repairs.
-      let curHull = 0,
-        maxHull = 0;
-      for (const st of f.units) {
-        const u = data.units[st.unit];
-        if (!u) continue;
-        const m = st.count * u.stats.hp;
-        maxHull += m;
-        curHull += st.hp ?? m;
-      }
-      const hullPct = maxHull > 0 ? Math.round((curHull / maxHull) * 100) : 100;
-      const hullTag = hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}${t('корпус {p}%', { p: hullPct })}` : '';
-      let h = cardHeader(
-        ownerColor(f.owner),
-        t('ФЛОТ'),
-        t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr }) + hullTag + (inOrbit ? ' · ' + t('на орбите') : '') + (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
-      );
-      // Aggregate combat weight, summed across the squadron's ships (it moves at its
-      // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
-      let atk = 0,
-        def = 0,
-        hpTot = 0,
-        spd = Infinity;
-      for (const u of f.units) {
-        const st = data.units[u.unit]?.stats;
-        if (!st || u.count <= 0) continue;
-        atk += (st.attack ?? 0) * u.count;
-        def += (st.defense ?? 0) * u.count;
-        hpTot += (st.hp ?? 0) * u.count;
-        if ((st.speed ?? 0) > 0) spd = Math.min(spd, st.speed ?? Infinity);
-      }
-      const spdTxt = spd === Infinity ? '—' : String(spd);
-      const flavor: string[] = [];
-      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) flavor.push(t('с героем-флагманом'));
-      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery'))) flavor.push(t('с осадной артиллерией'));
-      if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0)) flavor.push(t('со своим радарным дозором'));
-      const blurb =
-        nShips === 0
-          ? t('Пустая группа корпусов — кораблей на борту нет.')
-          : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
-      h += `<div class="row dim">${blurb}</div>`;
-      h += `<div class="pstats"><span>⚔ ${t('АТК')} ${atk}</span><span>🛡 ${t('ЗАЩ')} ${def}</span><span>❤ ${t('ХП')} ${hpTot}</span><span>⚡ ${t('СКР')} ${spdTxt}</span></div>`;
-      h += nShips ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units) : '';
-      if (nTr > 0) h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
+  h += btn('cancel', '', t('Снять выделение группы'), true);
+  return h;
+}
 
-      // Artillery rules of engagement — passive / return / standard / aggressive.
-      if (f.owner === ME && fleetHasArtillery(f)) {
-        const mode = f.barrageMode ?? 'standard';
-        const mbtn = (m: string, lbl: string) =>
-          btn('barragemode', m, (mode === m ? '● ' : '') + lbl, mode !== m);
-        h += `<div class="sec">${t('Артиллерия — режим огня')}</div><div class="row">`;
-        h += mbtn('passive', t('Пассив')) + mbtn('return', t('Ответ')) + mbtn('standard', t('Станд')) + mbtn('aggressive', t('Агрес'));
-        h += `</div>`;
-        h += `<div class="hint">${t('Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.')}</div>`;
-      }
+/** Side-panel: a single selected fleet — combat stats, orders, docking. */
+function fleetPanelHtml(f: Fleet): string {
+  const nShips = sumUnits(f.units);
+  const nTr = sumUnits(f.landing ?? []);
+  const inOrbit = f.orbit === 'near';
+  // Hull integrity across the squadron (persistent between fights now): a stack's
+  // current hp ?? full. Below 30% the fleet limps (route.ts) until it repairs.
+  let curHull = 0,
+    maxHull = 0;
+  for (const st of f.units) {
+    const u = data.units[st.unit];
+    if (!u) continue;
+    const m = st.count * u.stats.hp;
+    maxHull += m;
+    curHull += st.hp ?? m;
+  }
+  const hullPct = maxHull > 0 ? Math.round((curHull / maxHull) * 100) : 100;
+  const hullTag = hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}${t('корпус {p}%', { p: hullPct })}` : '';
+  let h = cardHeader(
+    ownerColor(f.owner),
+    t('ФЛОТ'),
+    t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr }) + hullTag + (inOrbit ? ' · ' + t('на орбите') : '') + (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
+  );
+  // Aggregate combat weight, summed across the squadron's ships (it moves at its
+  // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
+  let atk = 0,
+    def = 0,
+    hpTot = 0,
+    spd = Infinity;
+  for (const u of f.units) {
+    const st = data.units[u.unit]?.stats;
+    if (!st || u.count <= 0) continue;
+    atk += (st.attack ?? 0) * u.count;
+    def += (st.defense ?? 0) * u.count;
+    hpTot += (st.hp ?? 0) * u.count;
+    if ((st.speed ?? 0) > 0) spd = Math.min(spd, st.speed ?? Infinity);
+  }
+  const spdTxt = spd === Infinity ? '—' : String(spd);
+  const flavor: string[] = [];
+  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) flavor.push(t('с героем-флагманом'));
+  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery'))) flavor.push(t('с осадной артиллерией'));
+  if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0)) flavor.push(t('со своим радарным дозором'));
+  const blurb =
+    nShips === 0
+      ? t('Пустая группа корпусов — кораблей на борту нет.')
+      : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
+  h += `<div class="row dim">${blurb}</div>`;
+  h += `<div class="pstats"><span>⚔ ${t('АТК')} ${atk}</span><span>🛡 ${t('ЗАЩ')} ${def}</span><span>❤ ${t('ХП')} ${hpTot}</span><span>⚡ ${t('СКР')} ${spdTxt}</span></div>`;
+  h += nShips ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units) : '';
+  if (nTr > 0) h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
 
-      // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
-      // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
-      // refuses to take the whole stack), so an all-fighter fleet just flies itself.
-      if (f.owner === ME && fleetHasSquadron(f)) {
-        const wing = squadronTake(f).reduce((n, u) => n + u.count, 0);
-        h += `<div class="sec">${t('Авиагруппа')}</div><div class="row">`;
-        h += btn('launchsquad', '', t('🛩 Запустить эскадрилью ({n})', { n: wing }), fleetCanLaunchSquadron(f));
-        h += `</div>`;
-        h += `<div class="hint">${t('Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.')}</div>`;
+  // Artillery rules of engagement — passive / return / standard / aggressive.
+  if (f.owner === ME && fleetHasArtillery(f)) {
+    const mode = f.barrageMode ?? 'standard';
+    const mbtn = (m: string, lbl: string) =>
+      btn('barragemode', m, (mode === m ? '● ' : '') + lbl, mode !== m);
+    h += `<div class="sec">${t('Артиллерия — режим огня')}</div><div class="row">`;
+    h += mbtn('passive', t('Пассив')) + mbtn('return', t('Ответ')) + mbtn('standard', t('Станд')) + mbtn('aggressive', t('Агрес'));
+    h += `</div>`;
+    h += `<div class="hint">${t('Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.')}</div>`;
+  }
 
-        // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing
-        // (authoritative server state in NET — the server flies it while you're offline).
-        const pt = patrolOf(f.id);
-        h += `<div class="row">`;
-        h += btn('qscramble', '', pt ? t('🛩 дежурный вылет: ВКЛ') : t('🛩 дежурный вылет: выкл'), true);
-        h += `</div>`;
-        if (pt) {
-          const status = pt.sortie.rearming > 0 ? t('перезарядка {n}', { n: pt.sortie.rearming }) : t('топливо {n}', { n: pt.sortie.fuel });
-          h += `<div class="row dim">${t('радиус {r}', { r: Math.round(pt.radius) })} · ${status}</div>`;
-        }
-        h += `<div class="hint">${t('Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.')}</div>`;
-      }
+  // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
+  // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
+  // refuses to take the whole stack), so an all-fighter fleet just flies itself.
+  if (f.owner === ME && fleetHasSquadron(f)) {
+    const wing = squadronTake(f).reduce((n, u) => n + u.count, 0);
+    h += `<div class="sec">${t('Авиагруппа')}</div><div class="row">`;
+    h += btn('launchsquad', '', t('🛩 Запустить эскадрилью ({n})', { n: wing }), fleetCanLaunchSquadron(f));
+    h += `</div>`;
+    h += `<div class="hint">${t('Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.')}</div>`;
 
-      // The player's projection hero rides here → name it and flag its fleet aura.
-      if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
-        const hero = Object.values(s.heroes ?? {}).find((x) => x.owner === f.owner);
-        const heroName = hero?.name ?? s.players[f.owner]?.name ?? f.owner;
-        h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">${t('— проекция · +5% атаки/обороны этому флоту')}</span></div>`;
-      }
+    // CC-4 reactive auto-scramble — a standing "дежурный вылет" order on the wing
+    // (authoritative server state in NET — the server flies it while you're offline).
+    const pt = patrolOf(f.id);
+    h += `<div class="row">`;
+    h += btn('qscramble', '', pt ? t('🛩 дежурный вылет: ВКЛ') : t('🛩 дежурный вылет: выкл'), true);
+    h += `</div>`;
+    if (pt) {
+      const status = pt.sortie.rearming > 0 ? t('перезарядка {n}', { n: pt.sortie.rearming }) : t('топливо {n}', { n: pt.sortie.fuel });
+      h += `<div class="row dim">${t('радиус {r}', { r: Math.round(pt.radius) })} · ${status}</div>`;
+    }
+    h += `<div class="hint">${t('Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.')}</div>`;
+  }
 
-      // CC-2 standing order — auto-storm stance (authoritative server state in NET —
-      // the server presses it while you're offline).
-      if (f.owner === ME) {
-        const auto = isAutoAssault(f.id);
-        h += `<div class="sec">${t('Дежурный режим')}</div><div class="row">`;
-        h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true);
-        h += `</div>`;
-        h += `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
-      }
+  // The player's projection hero rides here → name it and flag its fleet aura.
+  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) {
+    const hero = Object.values(s.heroes ?? {}).find((x) => x.owner === f.owner);
+    const heroName = hero?.name ?? s.players[f.owner]?.name ?? f.owner;
+    h += `<div class="row"><b>♔ ${esc(heroName)}</b> <span class="dim">${t('— проекция · +5% атаки/обороны этому флоту')}</span></div>`;
+  }
 
-      if (f.movement) {
-        // total travel-time estimate to the final destination (next-hop ETA from the
-        // authoritative schedule + the remaining route at base speed). The ETA ticks
-        // every frame, so it's a placeholder here (stable signature → no rebuild) and
-        // patched in place by updatePanelLive() — keeps the panel's buttons put.
-        const dest = f.movement.destination ?? f.movement.to;
-        const restH = dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
-        h += `<div class="row">${t('↗ идёт к {dest} · прибытие через', { dest: `<b>${esc(dest)}</b>` })} <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b></div>`;
-      } else if (f.edge) {
-        const pct = Math.round(f.edge.t * 100);
-        h += `<div class="row">${t('⟜ стоит на трассе {lane} · {p}% пути', { lane: `<b>${esc(f.edge.from)}–${esc(f.edge.to)}</b>`, p: pct })}</div>`;
-      }
+  // CC-2 standing order — auto-storm stance (authoritative server state in NET —
+  // the server presses it while you're offline).
+  if (f.owner === ME) {
+    const auto = isAutoAssault(f.id);
+    h += `<div class="sec">${t('Дежурный режим')}</div><div class="row">`;
+    h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true);
+    h += `</div>`;
+    h += `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
+  }
 
-      const here = planet(f.location);
-      const docked = !!here && !f.movement && !f.battleId;
-      if (f.battleId) {
-        // The battle card (framework-agnostic view-model from @void/client): both
-        // sides, hull bars, phase, live round countdown — and the one action, retreat.
-        const bm = createBattleModel(s, f.battleId, ME, data);
-        if (bm.ok) {
-          const bar = (v: { current: number; max: number } | undefined, glyph: string): string =>
-            v && v.max > 0 ? ` · ${glyph} ${kfmt(v.current)}/${kfmt(v.max)}` : '';
-          const sideRow = (sv: BattleSideView, tag: string): string => {
-            const troops = sv.units.map((u) => `${u.count}× ${u.unit}`).join(', ') || '—';
-            return `<div class="row${sv.mine ? '' : ' dim'}">${sv.mine ? '▶' : '·'} <b>${esc(sv.ownerName)}</b> (${tag}, ${
-              sv.kind === 'garrison' ? t('гарнизон') : sv.kind === 'landing' ? t('десант') : t('флот')
-            }): ${esc(troops)}${bar(sv.hull, '♥')}${bar(sv.shield, '◈')}</div>`;
-          };
-          h += `<div class="sec">${t('⚔ Бой — {phase} · раунд {r}', { phase: bm.phase === 'ground' ? t('высадка') : t('орбита'), r: bm.round })}</div>`;
-          h += sideRow(bm.attacker, t('атака')) + sideRow(bm.defender, t('оборона'));
-          if (bm.nextRoundAt != null)
-            h += `<div class="row">${t('следующий раунд через')} <span class="pn-timer" data-at="${bm.nextRoundAt}">…</span></div>`;
-          h += `<div class="row">${btn('retreat', '', t('⤺ Отступить'), bm.retreatFleetId === f.id)}</div>`;
-          h += `<div class="hint">${t('Отход стоит −40% ТЕКУЩЕГО корпуса и щита (израненный флот теряет 40% остатка — отход не добивает) и даёт рывок скорости для бегства. Десант в высадке отступить не может; с орбиты вне боя корабль уходит свободно.')}</div>`;
-        }
-      }
-      if (!docked) {
-        if (!f.battleId)
-          h += `<div class="hint">${
-            f.edge
-              ? t('Стоит на трассе — нажмите «Курс», чтобы идти дальше (маршрут отсюда).')
-              : t('В пути — идёт по трассам. Столкновение начинает орбитальный бой.')
-          }</div>`;
-      } else {
-        // enemy/neutral world you can act on — empty space is pass-through only
-        const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
-        const cols: string[] = [];
-        if (hostile) {
-          let at = `<div class="sec">${t('Удар')}</div><div class="row">`;
-          at += btn(
-            'bombard',
-            f.bombarding ? 'off' : 'on',
-            f.bombarding ? t('⊗ Прекратить бомбардировку') : t('⊗ Бомбардировать'),
-            inOrbit && nShips > 0,
-          );
-          at += btn('assault', '', t('⚔ Штурм'), inOrbit);
-          at += `</div>`;
-          at += `<div class="hint">${t('С орбиты можно бомбардировать (изнашивает здания и замораживает их выпуск), но ПВО гарнизона достаёт до вас. Штурм высаживает десант против гарнизона.')}</div>`;
-          cols.push(at);
-        }
-        // load / unload ground army at your own world
-        if (here!.owner === ME) {
-          let ga = `<div class="sec">${t('Наземная армия ⇄ гарнизон')}</div>`;
-          const groundHere = here!.garrison.filter((st) => isGround(st.unit));
-          const carried = f.landing ?? [];
-          const loadingN = pendingLoads.filter((p) => p.fleetId === f.id).length;
-          const freeHold = fleetCargoFree(s, f) - pendingLoadCargo(f.id); // reserve in-progress loads
-          if (groundHere.length) {
-            ga += `<div class="row">`;
-            for (const st of groundHere) {
-              const sz = data.units[st.unit]?.stats.cargoSize ?? 1;
-              ga += btn('load', st.unit, t('▲ Погрузить {u}', { u: displayUnit(st.unit) }), sz <= freeHold);
-            }
-            ga += `</div>`;
-          }
-          if (carried.length) {
-            ga += `<div class="row">`;
-            for (const st of carried) ga += btn('unload', st.unit, t('▼ Выгрузить {u}', { u: displayUnit(st.unit) }), true);
-            ga += `</div>`;
-          }
-          if (loadingN) ga += `<div class="hint">${t('⏳ погрузка: {n} (≈1ч на единицу)', { n: loadingN })}</div>`;
-          if (!groundHere.length && !carried.length && !loadingN)
-            ga += `<div class="row dim">${t('наземной армии здесь нет')}</div>`;
-          cols.push(ga);
-        }
-        const dh = fleetDivisionsHtml(f, here!); // load/unload divisions (landing on a hostile world)
-        if (dh) cols.push(dh);
-        h += pcols(cols);
-      }
-      h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
-      h += btn('cancel', '', t('Снять выделение'), true);
-      return h;
+  if (f.movement) {
+    // total travel-time estimate to the final destination (next-hop ETA from the
+    // authoritative schedule + the remaining route at base speed). The ETA ticks
+    // every frame, so it's a placeholder here (stable signature → no rebuild) and
+    // patched in place by updatePanelLive() — keeps the panel's buttons put.
+    const dest = f.movement.destination ?? f.movement.to;
+    const restH = dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
+    h += `<div class="row">${t('↗ идёт к {dest} · прибытие через', { dest: `<b>${esc(dest)}</b>` })} <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b></div>`;
+  } else if (f.edge) {
+    const pct = Math.round(f.edge.t * 100);
+    h += `<div class="row">${t('⟜ стоит на трассе {lane} · {p}% пути', { lane: `<b>${esc(f.edge.from)}–${esc(f.edge.to)}</b>`, p: pct })}</div>`;
+  }
+
+  const here = planet(f.location);
+  const docked = !!here && !f.movement && !f.battleId;
+  if (f.battleId) {
+    // The battle card (framework-agnostic view-model from @void/client): both
+    // sides, hull bars, phase, live round countdown — and the one action, retreat.
+    const bm = createBattleModel(s, f.battleId, ME, data);
+    if (bm.ok) {
+      const bar = (v: { current: number; max: number } | undefined, glyph: string): string =>
+        v && v.max > 0 ? ` · ${glyph} ${kfmt(v.current)}/${kfmt(v.max)}` : '';
+      const sideRow = (sv: BattleSideView, tag: string): string => {
+        const troops = sv.units.map((u) => `${u.count}× ${u.unit}`).join(', ') || '—';
+        return `<div class="row${sv.mine ? '' : ' dim'}">${sv.mine ? '▶' : '·'} <b>${esc(sv.ownerName)}</b> (${tag}, ${
+          sv.kind === 'garrison' ? t('гарнизон') : sv.kind === 'landing' ? t('десант') : t('флот')
+        }): ${esc(troops)}${bar(sv.hull, '♥')}${bar(sv.shield, '◈')}</div>`;
+      };
+      h += `<div class="sec">${t('⚔ Бой — {phase} · раунд {r}', { phase: bm.phase === 'ground' ? t('высадка') : t('орбита'), r: bm.round })}</div>`;
+      h += sideRow(bm.attacker, t('атака')) + sideRow(bm.defender, t('оборона'));
+      if (bm.nextRoundAt != null)
+        h += `<div class="row">${t('следующий раунд через')} <span class="pn-timer" data-at="${bm.nextRoundAt}">…</span></div>`;
+      h += `<div class="row">${btn('retreat', '', t('⤺ Отступить'), bm.retreatFleetId === f.id)}</div>`;
+      h += `<div class="hint">${t('Отход стоит −40% ТЕКУЩЕГО корпуса и щита (израненный флот теряет 40% остатка — отход не добивает) и даёт рывок скорости для бегства. Десант в высадке отступить не может; с орбиты вне боя корабль уходит свободно.')}</div>`;
     }
   }
-  const p = planet(selPlanet);
-  if (!p) return `<div class="hint">${t('Тапните мир.')}</div>`;
-  if (!known(p.id) && p.owner !== ME) {
-    const mem = memory.get(p.id);
-    if (mem) {
-      const icons =
-        mem.buildings
-          .map((b) => `${BUILD_ICON[b.type] ?? '▪'} ${buildingName(b.type)} L${b.level}`)
-          .join(', ') || t('построек не видели');
-      // Espionage from memory: you know WHOSE world this was — an agent can reveal
-      // its live contents without flying there. Wrong/stale owner → the kernel
-      // rejects the attempt (bad target), which is honest: intel decays.
-      const spyRow =
-        mem.owner && mem.owner !== ME
-          ? `<div class="row">${btn('spyplanet', mem.owner, t('🕵 Разведать мир · {c}¤', { c: SPY_COST }), afford({ credits: SPY_COST }))}</div>`
-          : '';
-      return (
-        cardHeader(ownerColor(mem.owner), p.id, t('ПОСЛЕДНИЕ ДАННЫЕ ✦')) +
-        `<div class="row dim">${t('Вне сенсорного охвата — последний скан (мог устареть).')}</div>` +
-        `<div class="row">${t('Владелец')}: <b>${mem.owner ? NAME[mem.owner] : t('Нейтрал')}</b></div>` +
-        `<div class="row">${t('Гарнизон на момент скана')}: <b>${mem.garrison}</b></div>` +
-        `<div class="row">${t('Постройки')}: ${icons}</div>` +
-        spyRow +
-        `<div class="hint">${t('Обновите данные флотом или радаром.')}</div>` +
-        btn('cancel', '', t('Снять выделение'), true)
+  if (!docked) {
+    if (!f.battleId)
+      h += `<div class="hint">${
+        f.edge
+          ? t('Стоит на трассе — нажмите «Курс», чтобы идти дальше (маршрут отсюда).')
+          : t('В пути — идёт по трассам. Столкновение начинает орбитальный бой.')
+      }</div>`;
+  } else {
+    // enemy/neutral world you can act on — empty space is pass-through only
+    const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
+    const cols: string[] = [];
+    if (hostile) {
+      let at = `<div class="sec">${t('Удар')}</div><div class="row">`;
+      at += btn(
+        'bombard',
+        f.bombarding ? 'off' : 'on',
+        f.bombarding ? t('⊗ Прекратить бомбардировку') : t('⊗ Бомбардировать'),
+        inOrbit && nShips > 0,
       );
+      at += btn('assault', '', t('⚔ Штурм'), inOrbit);
+      at += `</div>`;
+      at += `<div class="hint">${t('С орбиты можно бомбардировать (изнашивает здания и замораживает их выпуск), но ПВО гарнизона достаёт до вас. Штурм высаживает десант против гарнизона.')}</div>`;
+      cols.push(at);
     }
+    // load / unload ground army at your own world
+    if (here!.owner === ME) {
+      let ga = `<div class="sec">${t('Наземная армия ⇄ гарнизон')}</div>`;
+      const groundHere = here!.garrison.filter((st) => isGround(st.unit));
+      const carried = f.landing ?? [];
+      const loadingN = pendingLoads.filter((p) => p.fleetId === f.id).length;
+      const freeHold = fleetCargoFree(s, f) - pendingLoadCargo(f.id); // reserve in-progress loads
+      if (groundHere.length) {
+        ga += `<div class="row">`;
+        for (const st of groundHere) {
+          const sz = data.units[st.unit]?.stats.cargoSize ?? 1;
+          ga += btn('load', st.unit, t('▲ Погрузить {u}', { u: displayUnit(st.unit) }), sz <= freeHold);
+        }
+        ga += `</div>`;
+      }
+      if (carried.length) {
+        ga += `<div class="row">`;
+        for (const st of carried) ga += btn('unload', st.unit, t('▼ Выгрузить {u}', { u: displayUnit(st.unit) }), true);
+        ga += `</div>`;
+      }
+      if (loadingN) ga += `<div class="hint">${t('⏳ погрузка: {n} (≈1ч на единицу)', { n: loadingN })}</div>`;
+      if (!groundHere.length && !carried.length && !loadingN)
+        ga += `<div class="row dim">${t('наземной армии здесь нет')}</div>`;
+      cols.push(ga);
+    }
+    const dh = fleetDivisionsHtml(f, here!); // load/unload divisions (landing on a hostile world)
+    if (dh) cols.push(dh);
+    h += pcols(cols);
+  }
+  h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
+  h += btn('cancel', '', t('Снять выделение'), true);
+  return h;
+}
+
+/** Side-panel: a world outside sensor coverage — last-scan memory, or no telemetry. */
+function unknownPlanetHtml(p: Planet): string {
+  const mem = memory.get(p.id);
+  if (mem) {
+    const icons =
+      mem.buildings
+        .map((b) => `${BUILD_ICON[b.type] ?? '▪'} ${buildingName(b.type)} L${b.level}`)
+        .join(', ') || t('построек не видели');
+    // Espionage from memory: you know WHOSE world this was — an agent can reveal
+    // its live contents without flying there. Wrong/stale owner → the kernel
+    // rejects the attempt (bad target), which is honest: intel decays.
+    const spyRow =
+      mem.owner && mem.owner !== ME
+        ? `<div class="row">${btn('spyplanet', mem.owner, t('🕵 Разведать мир · {c}¤', { c: SPY_COST }), afford({ credits: SPY_COST }))}</div>`
+        : '';
     return (
-      cardHeader('#5f8f8c', p.id, t('НЕТ ТЕЛЕМЕТРИИ')) +
-      `<div class="row dim">${t('Не исследовано — вне сенсоров и радаров. Содержимое неизвестно.')}</div>` +
-      `<div class="hint">${t('Отправьте флот к этой системе (или расширьте радар), чтобы обнаружить её.')}</div>` +
+      cardHeader(ownerColor(mem.owner), p.id, t('ПОСЛЕДНИЕ ДАННЫЕ ✦')) +
+      `<div class="row dim">${t('Вне сенсорного охвата — последний скан (мог устареть).')}</div>` +
+      `<div class="row">${t('Владелец')}: <b>${mem.owner ? NAME[mem.owner] : t('Нейтрал')}</b></div>` +
+      `<div class="row">${t('Гарнизон на момент скана')}: <b>${mem.garrison}</b></div>` +
+      `<div class="row">${t('Постройки')}: ${icons}</div>` +
+      spyRow +
+      `<div class="hint">${t('Обновите данные флотом или радаром.')}</div>` +
       btn('cancel', '', t('Снять выделение'), true)
     );
   }
+  return (
+    cardHeader('#5f8f8c', p.id, t('НЕТ ТЕЛЕМЕТРИИ')) +
+    `<div class="row dim">${t('Не исследовано — вне сенсоров и радаров. Содержимое неизвестно.')}</div>` +
+    `<div class="hint">${t('Отправьте флот к этой системе (или расширьте радар), чтобы обнаружить её.')}</div>` +
+    btn('cancel', '', t('Снять выделение'), true)
+  );
+}
+
+/** Side-panel: a known world — ownership header + ground/ships/squadron/buildings tabs. */
+function planetPanelHtml(p: Planet): string {
   const mine = p.owner === ME;
   const sec = tData(data.sectors[p.terrain ?? '']?.name ?? p.terrain ?? '—');
   const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
@@ -4699,6 +4698,20 @@ function panelHtml(): string {
     cols.push(blds);
   }
   return h + pcols(cols);
+}
+
+/** The side-panel dispatcher: task group → single fleet → unknown world → known world. */
+function panelHtml(): string {
+  const group = [...selFleets].map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
+  if (group.length > 1) return taskGroupPanelHtml(group);
+  if (selFleet) {
+    const f = s.fleets[selFleet];
+    if (f) return fleetPanelHtml(f); // a stale selection falls through to the planet
+  }
+  const p = planet(selPlanet);
+  if (!p) return `<div class="hint">${t('Тапните мир.')}</div>`;
+  if (!known(p.id) && p.owner !== ME) return unknownPlanetHtml(p);
+  return planetPanelHtml(p);
 }
 
 // --- object dossiers (side-panel hover descriptions) -------------------------

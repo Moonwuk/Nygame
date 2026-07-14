@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACTION_ENVELOPE_SCHEMA_VERSION,
   createActionEnvelope,
   type ActionSession,
 } from './envelope';
@@ -10,7 +9,6 @@ const session: ActionSession = { matchId: 'match-1', playerId: 'p1', sessionId: 
 
 function envelope(clientSeq: number, payload: unknown = { fleetId: 'f1', to: 'NEXUS' }) {
   return createActionEnvelope({
-    schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
     ...session,
     clientSeq,
     issuedAt: 1000 + clientSeq,

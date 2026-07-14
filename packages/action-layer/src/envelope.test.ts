@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACTION_ENVELOPE_SCHEMA_VERSION,
   authorizeActionEnvelope,
   createActionEnvelope,
   validateActionEnvelope,
@@ -10,7 +9,6 @@ const session = { matchId: 'match-1', playerId: 'p1', sessionId: 'mobile' };
 
 function envelope(seq = 1) {
   return createActionEnvelope({
-    schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
     ...session,
     clientSeq: seq,
     issuedAt: 1000,

@@ -152,39 +152,59 @@ export function clipHalfPlaneTagged(
  *  polygon, e.g. the map-boundary rectangle). Weights are clamped internally so no cell is
  *  swallowed; the caller's seed array is NOT mutated (pure — no canvas touched). Cells with
  *  a degenerate (<3-vertex) polygon are dropped. `tags`/`idx` index into `seeds`. */
+/** One seed's power-diagram cell: THE half-plane pass, shared by the full
+ *  tessellation and the single-cell variant so the formula (and its clamped
+ *  weights) exists in exactly one place — the two must stay bit-identical for
+ *  the capture-flash overlay to line up with the baked fill. `null` when the
+ *  cell degenerates (fully swallowed). */
+function powerCellAt(
+  seeds: TerritorySeed[],
+  work: ReadonlyArray<{ x: number; y: number; w: number }>,
+  clip: Array<[number, number]>,
+  i: number,
+): TerritoryCell | null {
+  const si = work[i]!;
+  let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
+  let tags: number[] = clip.map(() => BOUNDARY);
+  for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
+    if (i === j) continue;
+    const sj = work[j]!;
+    // power-diagram half-plane: keep |x-ci|² - wi ≤ |x-cj|² - wj
+    const a = 2 * (sj.x - si.x);
+    const b = 2 * (sj.y - si.y);
+    const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
+    ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
+  }
+  if (poly.length < 3) return null;
+  return { poly, tags, owner: seeds[i]!.owner, kind: seeds[i]!.kind, idx: i };
+}
+
+/** A pure copy of the weights, clamped so no cell is swallowed — the caller's
+ *  seed array is never mutated. */
+function clampedWork(seeds: TerritorySeed[]): Array<{ x: number; y: number; w: number }> {
+  const work = seeds.map((s) => ({ x: s.x, y: s.y, w: s.w }));
+  clampPowerWeights(work);
+  return work;
+}
+
 export function computePowerCells(
   seeds: TerritorySeed[],
   clip: Array<[number, number]>,
 ): TerritoryCell[] {
-  // Work on a copy of the weights so the caller keeps its seeds (and this stays pure).
-  const work = seeds.map((s) => ({ x: s.x, y: s.y, w: s.w }));
-  clampPowerWeights(work);
+  const work = clampedWork(seeds);
   const cells: TerritoryCell[] = [];
   for (let i = 0; i < seeds.length; i++) {
-    const si = work[i]!;
-    let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
-    let tags: number[] = clip.map(() => BOUNDARY);
-    for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
-      if (i === j) continue;
-      const sj = work[j]!;
-      // power-diagram half-plane: keep |x-ci|² - wi ≤ |x-cj|² - wj
-      const a = 2 * (sj.x - si.x);
-      const b = 2 * (sj.y - si.y);
-      const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
-      ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
-    }
-    if (poly.length < 3) continue;
-    cells.push({ poly, tags, owner: seeds[i]!.owner, kind: seeds[i]!.kind, idx: i });
+    const cell = powerCellAt(seeds, work, clip, i);
+    if (cell) cells.push(cell);
   }
   return cells;
 }
 
 /** The single province cell for seed `idx` — the same power-diagram result
  *  `computePowerCells` would give for that index, but clipping only that one seed's
- *  half-planes (O(n), not O(n²)). Weights are clamped identically so the polygon
- *  matches the baked political map exactly. Returns `null` if the cell is empty
- *  (fully swallowed) or `idx` is out of range. Used for the capture-flash: an
- *  animated overlay traces just the flipped province's border, so it must line up
+ *  half-planes (O(n), not O(n²)). Returns `null` if the cell is empty (fully
+ *  swallowed) or `idx` is out of range. Used for the capture-flash: an animated
+ *  overlay traces just the flipped province's border, so it must line up
  *  pixel-for-pixel with the static fill beneath it. */
 export function computePowerCell(
   seeds: TerritorySeed[],
@@ -192,21 +212,7 @@ export function computePowerCell(
   idx: number,
 ): TerritoryCell | null {
   if (idx < 0 || idx >= seeds.length) return null;
-  const work = seeds.map((s) => ({ x: s.x, y: s.y, w: s.w }));
-  clampPowerWeights(work);
-  const si = work[idx]!;
-  let poly: Array<[number, number]> = clip.map((q) => [q[0], q[1]]);
-  let tags: number[] = clip.map(() => BOUNDARY);
-  for (let j = 0; j < seeds.length && poly.length >= 3; j++) {
-    if (idx === j) continue;
-    const sj = work[j]!;
-    const a = 2 * (sj.x - si.x);
-    const b = 2 * (sj.y - si.y);
-    const cc = si.x * si.x + si.y * si.y - si.w - (sj.x * sj.x + sj.y * sj.y - sj.w);
-    ({ poly, tags } = clipHalfPlaneTagged(poly, tags, a, b, cc, j));
-  }
-  if (poly.length < 3) return null;
-  return { poly, tags, owner: seeds[idx]!.owner, kind: seeds[idx]!.kind, idx };
+  return powerCellAt(seeds, clampedWork(seeds), clip, idx);
 }
 
 /** Paint the political territory map into `g`: filled province cells (owner colour, or a
@@ -246,38 +252,9 @@ export function drawTerritory(
     }
   }
 
-  // Pass 2 — classify every cell edge by what's across it. Same-owner borders are thin
-  // INNER hairlines (so an empire stays one colour field with subtle province divisions);
-  // owner-vs-(other owner / neutral / void) borders are a glowing FRONTIER in the owner's
-  // colour. That contrast is the "merged territory, thinly outlined provinces" look.
-  type Seg = [number, number, number, number];
-  const ownedFront = new Map<string, Seg[]>();
-  const ownedInner = new Map<string, Seg[]>();
-  const neutralEdge: Seg[] = [];
-  const bucket = (m: Map<string, Seg[]>, key: string): Seg[] => {
-    let arr = m.get(key);
-    if (!arr) m.set(key, (arr = []));
-    return arr;
-  };
-  for (const cell of cells) {
-    const { poly, tags, owner, idx } = cell;
-    const m = poly.length;
-    for (let k = 0; k < m; k++) {
-      const t = tags[k]!;
-      const p0 = poly[k]!;
-      const p1 = poly[(k + 1) % m]!;
-      const seg: Seg = [p0[0], p0[1], p1[0], p1[1]];
-      const neigh = t >= 0 ? seeds[t]!.owner : undefined; // undefined ⇒ map boundary
-      if (t >= 0 && owner !== null && neigh === owner) {
-        if (idx < t) bucket(ownedInner, palette.ownerColor(owner)).push(seg); // same empire, draw once
-      } else if (owner !== null) {
-        bucket(ownedFront, palette.ownerColor(owner)).push(seg); // empire frontier (each side glows)
-      } else if (t === BOUNDARY || idx < t) {
-        neutralEdge.push(seg); // neutral province division (faint, drawn once)
-      }
-    }
-  }
-  const strokeSegs = (segs: Seg[], style: string, width: number): void => {
+  // Pass 2 — classify every cell edge (pure, see classifyBorders), then stroke.
+  const { ownedFront, ownedInner, neutralEdge } = classifyBorders(cells, seeds);
+  const strokeSegs = (segs: BorderSegment[], style: string, width: number): void => {
     if (segs.length === 0) return;
     g.strokeStyle = style;
     g.lineWidth = width;
@@ -291,9 +268,63 @@ export function drawTerritory(
   g.save();
   g.lineJoin = 'round';
   g.lineCap = 'round';
-  for (const [col, segs] of ownedInner) strokeSegs(segs, rgba(col, 0.18), 0.65); // inner hairlines
+  for (const [owner, segs] of ownedInner)
+    strokeSegs(segs, rgba(palette.ownerColor(owner), 0.18), 0.65); // inner hairlines
   strokeSegs(neutralEdge, 'rgba(67,98,110,0.34)', 1); // neutral divisions
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.14), 5.5); // frontier glow
-  for (const [col, segs] of ownedFront) strokeSegs(segs, rgba(col, 0.9), 1.6); // frontier crisp
+  for (const [owner, segs] of ownedFront)
+    strokeSegs(segs, rgba(palette.ownerColor(owner), 0.14), 5.5); // frontier glow
+  for (const [owner, segs] of ownedFront)
+    strokeSegs(segs, rgba(palette.ownerColor(owner), 0.9), 1.6); // frontier crisp
   g.restore();
+}
+
+/** A cell edge as a stroke segment: [x0, y0, x1, y1]. */
+export type BorderSegment = [number, number, number, number];
+
+export interface ClassifiedBorders {
+  /** Empire frontiers, per owner — the glowing outer border (each side glows). */
+  ownedFront: Map<string, BorderSegment[]>;
+  /** Same-owner province divisions, per owner — faint inner hairlines, deduped
+   *  (`idx < t` keeps one of the two coincident edges). */
+  ownedInner: Map<string, BorderSegment[]>;
+  /** Neutral-vs-neutral divisions and neutral map-boundary edges, deduped. */
+  neutralEdge: BorderSegment[];
+}
+
+/** Classify every cell edge by what lies across it — the political-border logic
+ *  behind {@link drawTerritory}, pure so the dedup and owner-comparison rules are
+ *  unit-testable without a canvas. Same-owner borders are thin INNER hairlines
+ *  (an empire stays one colour field with subtle province divisions); an
+ *  owner-vs-(other owner / neutral / void) border is that owner's FRONTIER. */
+export function classifyBorders(
+  cells: readonly TerritoryCell[],
+  seeds: readonly TerritorySeed[],
+): ClassifiedBorders {
+  const ownedFront = new Map<string, BorderSegment[]>();
+  const ownedInner = new Map<string, BorderSegment[]>();
+  const neutralEdge: BorderSegment[] = [];
+  const bucket = (m: Map<string, BorderSegment[]>, key: string): BorderSegment[] => {
+    let arr = m.get(key);
+    if (!arr) m.set(key, (arr = []));
+    return arr;
+  };
+  for (const cell of cells) {
+    const { poly, tags, owner, idx } = cell;
+    const m = poly.length;
+    for (let k = 0; k < m; k++) {
+      const t = tags[k]!;
+      const p0 = poly[k]!;
+      const p1 = poly[(k + 1) % m]!;
+      const seg: BorderSegment = [p0[0], p0[1], p1[0], p1[1]];
+      const neigh = t >= 0 ? seeds[t]!.owner : undefined; // undefined ⇒ map boundary
+      if (t >= 0 && owner !== null && neigh === owner) {
+        if (idx < t) bucket(ownedInner, owner).push(seg); // same empire, draw once
+      } else if (owner !== null) {
+        bucket(ownedFront, owner).push(seg); // empire frontier (each side glows)
+      } else if (t === BOUNDARY || idx < t) {
+        neutralEdge.push(seg); // neutral province division (faint, drawn once)
+      }
+    }
+  }
+  return { ownedFront, ownedInner, neutralEdge };
 }

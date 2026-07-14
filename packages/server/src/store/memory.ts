@@ -25,6 +25,12 @@ import type {
   UserRecord,
   UserStore,
 } from './types';
+import {
+  DEFAULT_AUDIT_LIMIT,
+  DEFAULT_CHALLENGES_LIMIT,
+  DEFAULT_LOCKED_MATCHUPS_LIMIT,
+  DEFAULT_RESULTS_LIMIT,
+} from './types';
 
 /** In-memory match store — the default for dev/tests (a restart still loses the
  *  match; for durability use the Postgres adapter). Clones on save so the stored
@@ -298,7 +304,7 @@ export class MemoryCorpStore implements CorpStore {
     return Promise.resolve();
   }
 
-  auditOf(corpId: string, limit = 50): Promise<CorpAuditEntry[]> {
+  auditOf(corpId: string, limit = DEFAULT_AUDIT_LIMIT): Promise<CorpAuditEntry[]> {
     const rows = this.audit.filter((e) => e.corpId === corpId);
     return Promise.resolve(
       rows
@@ -335,7 +341,7 @@ export class MemoryAvaChallengeStore implements AvaChallengeStore {
     return Promise.resolve(row ? { ...row } : null);
   }
 
-  challengesOf(corpId: string, limit = 50): Promise<AvaChallenge[]> {
+  challengesOf(corpId: string, limit = DEFAULT_CHALLENGES_LIMIT): Promise<AvaChallenge[]> {
     const mine = [...this.rows.values()]
       .filter((r) => r.challengerCorp === corpId || r.targetCorp === corpId)
       .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? -1 : 1));
@@ -380,7 +386,7 @@ export class MemoryAvaChallengeStore implements AvaChallengeStore {
     );
   }
 
-  lockedMatchups(limit = 100): Promise<AvaChallenge[]> {
+  lockedMatchups(limit = DEFAULT_LOCKED_MATCHUPS_LIMIT): Promise<AvaChallenge[]> {
     return Promise.resolve(
       [...this.rows.values()]
         .filter((r) => r.status === 'locked')
@@ -414,7 +420,7 @@ export class MemoryAvaResultStore implements AvaResultStore {
     return Promise.resolve(row ? { ...row } : null);
   }
 
-  recent(limit = 50): Promise<AvaResult[]> {
+  recent(limit = DEFAULT_RESULTS_LIMIT): Promise<AvaResult[]> {
     return Promise.resolve(
       [...this.rows.values()]
         .sort((a, b) => b.at - a.at || (a.matchupId < b.matchupId ? -1 : 1))

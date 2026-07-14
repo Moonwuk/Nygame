@@ -7,6 +7,7 @@ import type {
   AvaRosterEntry,
   AvaRosterStore,
   AvaSide,
+  CorpMembership,
   CorpStore,
   CorpSummary,
 } from './store';
@@ -191,7 +192,11 @@ export class AvaService {
       return { ok: false, code: 'E_NOT_READY' };
     }
     // Spend BEFORE creating the row (fail-secure: no unpaid challenge); refund if the
-    // insert loses the one-pending-per-pair race.
+    // insert loses the one-pending-per-pair race. KNOWN WINDOW: spend and create are
+    // two separate stores — a process crash between them loses the influence (the
+    // compensation below only covers the lost race). Tolerated for now: the window is
+    // one await wide and the loss is bounded by `cost`; closing it needs a shared
+    // store transaction (both Postgres adapters share one Pool) or a sweep-side audit.
     const spend = await this.corps.spendInfluence(challengerCorp, this.cost);
     if (!spend.ok) return { ok: false, code: 'E_INSUFFICIENT' };
     const at = this.now();
@@ -324,23 +329,18 @@ export class AvaService {
   /** The caller's view of a matchup roster: own side listed, the opponent's private
    *  (headcount only) — corporation-wars.md: чужой ростер до боя не раскрывается. */
   async rosterView(who: CorpActor, matchupId: string): Promise<AvaRosterView | AvaFail> {
-    const matchup = await this.challenges.getChallenge(matchupId);
-    if (!matchup) return { ok: false, code: 'E_NO_CHALLENGE' };
-    const membership = await this.corps.membershipOf(who.accountId);
-    const side = membership ? sideOf(matchup, membership.corpId) : null;
-    if (!membership || membership.role === 'recruit' || !side) {
-      return { ok: false, code: 'E_FORBIDDEN' };
-    }
+    const gate = await this.partyGate(who, matchupId);
+    if (!gate.ok) return gate;
+    if (gate.membership.role === 'recruit') return { ok: false, code: 'E_FORBIDDEN' };
+    const { matchup, side } = gate;
     const rows = await this.roster.rosterOf(matchupId);
-    const counts: Record<AvaSide, number> = { challenger: 0, target: 0 };
-    for (const row of rows) counts[row.side] += 1;
     return {
       matchupId,
       side,
       status: matchup.status,
       ...(matchup.pauseEndsAt === undefined ? {} : { pauseEndsAt: matchup.pauseEndsAt }),
       mine: rows.filter((row) => row.side === side),
-      counts,
+      counts: countsBySide(rows),
     };
   }
 
@@ -354,8 +354,7 @@ export class AvaService {
     let cancelled = 0;
     for (const matchup of due) {
       const rows = await this.roster.rosterOf(matchup.id);
-      const counts: Record<AvaSide, number> = { challenger: 0, target: 0 };
-      for (const row of rows) counts[row.side] += 1;
+      const counts = countsBySide(rows);
       const full = counts.challenger >= this.minPerSide && counts.target >= this.minPerSide;
       if (!(await this.challenges.closeMatchup(matchup.id, full ? 'locked' : 'cancelled'))) {
         continue; // lost the transition race — another sweep already resolved it
@@ -449,20 +448,31 @@ export class AvaService {
   /** Gate a roster write (AVA-6): the matchup exists; the actor holds one of `roles`
    *  in a PARTY corp; the roster is not locked/cancelled; the pause window is open.
    *  Fail-secure ordering: identity → phase → window (stable codes at each step). */
+  /** The identity slice every matchup read shares: the matchup exists and the
+   *  caller's corp is a PARTY to it. Role/phase/window gates are the caller's. */
+  private async partyGate(
+    who: CorpActor,
+    matchupId: string,
+  ): Promise<
+    { ok: true; matchup: AvaChallenge; membership: CorpMembership; side: AvaSide } | AvaFail
+  > {
+    const matchup = await this.challenges.getChallenge(matchupId);
+    if (!matchup) return { ok: false, code: 'E_NO_CHALLENGE' };
+    const membership = await this.corps.membershipOf(who.accountId);
+    const side = membership ? sideOf(matchup, membership.corpId) : null;
+    if (!membership || !side) return { ok: false, code: 'E_FORBIDDEN' };
+    return { ok: true, matchup, membership, side };
+  }
+
   private async rosterWindowGate(
     who: CorpActor,
     matchupId: string,
     roles: ReadonlyArray<'head' | 'officer' | 'member'>,
   ): Promise<{ ok: true; corpId: string; side: AvaSide } | AvaFail> {
-    const matchup = await this.challenges.getChallenge(matchupId);
-    if (!matchup) return { ok: false, code: 'E_NO_CHALLENGE' };
-    const membership = await this.corps.membershipOf(who.accountId);
-    const side = membership ? sideOf(matchup, membership.corpId) : null;
-    if (
-      !membership ||
-      !side ||
-      !(roles as readonly string[]).includes(membership.role)
-    ) {
+    const gate = await this.partyGate(who, matchupId);
+    if (!gate.ok) return gate;
+    const { matchup, membership, side } = gate;
+    if (!(roles as readonly string[]).includes(membership.role)) {
       return { ok: false, code: 'E_FORBIDDEN' };
     }
     if (matchup.status === 'locked') return { ok: false, code: 'E_ROSTER_LOCKED' };
@@ -497,6 +507,13 @@ export class AvaService {
 }
 
 /** Which side of a matchup a corp fights for, or null when it is not a party. */
+/** Per-side headcount of a roster — the same tally the view and the sweep read. */
+function countsBySide(rows: readonly AvaRosterEntry[]): Record<AvaSide, number> {
+  const counts: Record<AvaSide, number> = { challenger: 0, target: 0 };
+  for (const row of rows) counts[row.side] += 1;
+  return counts;
+}
+
 function sideOf(matchup: AvaChallenge, corpId: string): AvaSide | null {
   if (corpId === matchup.challengerCorp) return 'challenger';
   if (corpId === matchup.targetCorp) return 'target';

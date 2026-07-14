@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import rateLimit from '@fastify/rate-limit';
 import { createDevMatch, loadAvaMaps, loadShippedData } from './scenario';
 import { createMultiplayerServer } from './wsServer';
-import { startClockDriver, type ClockDriverHandle } from './clockDriver';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
+import { createMatchLoader } from './serverWiring';
 import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
 import { registerAuthApi } from './authApi';
 import { registerCorpApi } from './corpApi';
@@ -13,9 +13,7 @@ import { registerAvaApi } from './avaApi';
 import { AvaService } from './avaService';
 import { AvaOrchestrator, warDeclarationsFor } from './avaOrchestrator';
 import { MatchKeeper } from './matchFactory';
-import { LazyRoomRegistry, type LoadedMatch } from './roomRegistry';
-import type { RoomObservation } from './matchRoom';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import { LazyRoomRegistry } from './roomRegistry';
 
 /**
  * Runnable server entrypoint on the real simulation core. Hosts MANY matches from one
@@ -49,77 +47,38 @@ const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory
 const data = loadShippedData();
 const stores = await createStores();
 
-/**
- * Rebuild a LIVE, fully-wired room from its durable snapshot (persist + clock driver), or
- * null if no such match exists in the store. The registry calls this on demand; `dispose`
- * persists the final state and stops the driver when the match hibernates or the server
- * stops.
- */
-async function loadMatch(matchId: string): Promise<LoadedMatch | null> {
-  const snap = await stores.store.load(matchId);
-  if (!snap) return null;
-  const initialReceipts = await stores.receiptStore.loadAll(matchId);
+// The registry's match loader — the persist/observe/driver wiring lives in
+// serverWiring.ts so tests exercise the real composition, not a mirror of it.
+const loadMatch = createMatchLoader({
+  stores,
+  data,
+  gateFactory,
+  onStall: (matchId) =>
+    process.stderr.write(
+      `match ${matchId}: world clock stalled (a same-instant scheduling loop) — ` +
+        'check for a module scheduling events at its own instant.\n',
+    ),
   // An AvA session (AVA-8): the orchestrator owns the diplomacy stances (peace S5 →
   // war S6 by timer), so PLAYER declarations are refused at the wire; and the match
-  // end must settle the matchup (archive + influence, S7).
-  const avaSession = await stores.sessionStore.byMatch(matchId);
-
-  let driver: ClockDriverHandle | null = null;
-  // Strict commit-before-broadcast: the room awaits this durable write of the new snapshot
-  // + receipt before committing state / broadcasting the delta.
-  const persist = async (snapshot: MatchSnapshot, receipt: StoredReceipt): Promise<void> => {
-    await stores.store.save(snapshot);
-    await stores.receiptStore.save(matchId, receipt);
-  };
-  // The committed path already persists each action; `observe` re-arms the driver (an
-  // action may have scheduled a new event the sleeping timer can't see) and, for an
-  // AvA session, hands the match end to the orchestrator's settlement (exactly-once
-  // by the matchup's own transition — a replayed `end` no-ops).
-  const observe = (event: RoomObservation): void => {
-    if (event.kind === 'action') driver?.reschedule();
-    if (event.kind === 'end' && avaSession) {
-      void avaOrchestrator.onMatchEnded(matchId, event.winner).catch((err) => {
-        process.stderr.write(
-          `ava settlement failed for ${matchId} — ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      });
-    }
-  };
-
-  const room = createDevMatch(data, {
-    id: matchId,
-    now: () => Date.now(),
-    observe,
-    persist,
-    initialState: snap.state,
-    initialReceipts,
-    initialSeq: snap.seq,
-    gate: gateFactory?.(),
-    ...(avaSession
-      ? {
-          denyPlayerActions: (type: string) =>
-            type === 'diplomacy.declare' ? 'E_AVA_DIPLOMACY' : null,
-        }
-      : {}),
-  });
-
-  // The 24/7 heartbeat while this match is live: fire due scheduled events with no player
-  // action, persisting each advance. (While hibernated, the registry's wake timer does it.)
-  driver = startClockDriver(room, {
-    onTick: () => void stores.store.save(snapshotOf(room)),
-    onStall: () =>
-      process.stderr.write(
-        `match ${matchId}: world clock stalled (a same-instant scheduling loop) — ` +
-          'check for a module scheduling events at its own instant.\n',
-      ),
-  });
-
-  const dispose = async (): Promise<void> => {
-    driver?.stop();
-    await stores.store.save(snapshotOf(room));
-  };
-  return { room, dispose };
-}
+  // end is handed to the settlement (exactly-once by the matchup's own transition —
+  // a replayed `end` no-ops). `avaOrchestrator` is initialized below, before any
+  // connection can trigger a load.
+  matchExtras: async (matchId) => {
+    const avaSession = await stores.sessionStore.byMatch(matchId);
+    if (!avaSession) return null;
+    return {
+      denyPlayerActions: (type: string) =>
+        type === 'diplomacy.declare' ? 'E_AVA_DIPLOMACY' : null,
+      onEnd: (winner: string | null) => {
+        void avaOrchestrator.onMatchEnded(matchId, winner).catch((err) => {
+          process.stderr.write(
+            `ava settlement failed for ${matchId} — ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      },
+    };
+  },
+});
 
 // Seed the `dev` match into the store on boot if absent, so the registry can load it on the
 // first connection (dev continuity — a real match is created via the SV-2.4 /matches API).

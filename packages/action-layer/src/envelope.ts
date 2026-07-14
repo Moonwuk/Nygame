@@ -76,8 +76,13 @@ export function authorizeActionEnvelope(
   return ok(envelope);
 }
 
+/** Builds a v1 envelope around an intent. The factory is the ONLY owner of
+ *  `schemaVersion` — callers cannot (and need not) pass one. */
 export function createActionEnvelope(
-  input: Omit<ActionEnvelope, 'actionId' | 'action'> & { type: string; payload: unknown },
+  input: Omit<ActionEnvelope, 'schemaVersion' | 'actionId' | 'action'> & {
+    type: string;
+    payload: unknown;
+  },
 ): ActionEnvelope {
   const actionId = `${input.sessionId}:${input.playerId}:${input.clientSeq}`;
   return {

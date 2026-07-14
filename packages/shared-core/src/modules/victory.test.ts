@@ -329,6 +329,131 @@ describe('victory module', () => {
     expect(r.state.match.winners).toBeUndefined();
   });
 
+  it('two units over their thresholds at the SAME total → no call, the race goes on', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: { p1: player('p1'), p2: player('p2'), p3: player('p3'), p4: player('p4') },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }), // 50
+        B: planet('B', 'p2', { kind: 'planet' }),
+        B2: planet('B2', 'p2', { kind: 'planet' }), // p2 = 100 → {p1,p2} = 150
+        C: planet('C', 'p3', { kind: 'planet' }),
+        C2: planet('C2', 'p3', { kind: 'planet' }), // p3 = 100 → {p3,p4} = 150
+        D: planet('D', 'p4', { kind: 'planet' }), // 50
+      },
+    };
+    setStance(state, 'p1', 'p2', 'alliance');
+    setStance(state, 'p3', 'p4', 'alliance');
+
+    // Pair threshold = 70 × 2 × 0.7 = 98 — both coalitions clear it at exactly 150.
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 70 } })),
+    );
+    expect(r.state.match.status).toBe('ongoing');
+    expect(r.state.match.winners).toBeUndefined();
+  });
+
+  it('a coalition whose members tie falls back to the sorted-first member as `winner`', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: { p1: player('p1'), p2: player('p2'), p3: player('p3') },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }), // 50
+        B: planet('B', 'p2', { kind: 'planet' }), // 50 — members tie inside the unit
+        C: planet('C', 'p3', { kind: 'planet' }),
+        D: planet('D', null, { kind: 'planet' }),
+        E: planet('E', null, { kind: 'planet' }),
+      },
+    };
+    setStance(state, 'p1', 'p2', 'alliance');
+
+    // Threshold = 70 × 2 × 0.7 = 98 ≤ 100. highestScore inside {p1,p2} is a tie →
+    // the single-champion `winner` falls back to the unit's sorted-first member.
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 70 } })),
+    );
+    expect(r.state.match).toMatchObject({ status: 'ended', reason: 'score', winner: 'p1' });
+    expect(r.state.match.winners).toEqual(['p1', 'p2']);
+  });
+
+  it('when EVERY active player is landless nobody is eliminated (no-contenders guard)', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(), // p1 and p2, no planets at all
+      planets: { A: planet('A', null, { kind: 'planet' }) },
+      fleets: { F: fleet('F', 'p1') },
+    };
+    const r = okAdvance(kernel.advanceTo(state, ctx(HOUR, { timeScale: 1 })));
+    expect(r.state.players.p1?.status).toBe('active'); // a mutual wipe-out is not an elimination
+    expect(r.state.players.p2?.status).toBe('active');
+    expect(r.state.fleets.F).toBeDefined(); // no fleet disbanding either
+    expect(r.state.match.status).toBe('ongoing');
+  });
+
+  it('ends by the DEFAULT session cap (100 game-days at ×1) without any victory config', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }),
+        B: planet('B', 'p1', { kind: 'planet' }), // p1 = 100, but 2/4 = 50% — no domination
+        C: planet('C', 'p2', { kind: 'planet' }), // p2 = 50
+        D: planet('D', null, { kind: 'planet' }),
+      },
+    };
+    const DAY = 24 * HOUR;
+    // One tick short of the cap the match still runs…
+    const early = okAdvance(kernel.advanceTo(state, ctx(100 * DAY - 1)));
+    expect(early.state.match.status).toBe('ongoing');
+    // …at the cap the time-crisis backstop ends it on score.
+    const r = okAdvance(kernel.advanceTo(early.state, ctx(100 * DAY)));
+    expect(r.state.match).toMatchObject({ status: 'ended', reason: 'timeout', winner: 'p1' });
+  });
+
+  it('enumerates EVERY maximal clique — a coalition a greedy pass misses still wins', () => {
+    const kernel = createKernel([victoryModule]);
+    const state: GameState = {
+      ...baseState(),
+      players: {
+        p1: player('p1'),
+        p2: player('p2'),
+        p3: player('p3'),
+        p4: player('p4'),
+        p5: player('p5'),
+      },
+      planets: {
+        A: planet('A', 'p1', { kind: 'planet' }), // 50
+        B: planet('B', 'p2', { kind: 'planet' }), // 50
+        C: planet('C', 'p3', { kind: 'planet' }), // 50
+        D: planet('D', 'p4', { kind: 'planet' }), // 50
+        D2: planet('D2', 'p4', { kind: 'planet' }), // 50 → p4 = 100
+        E: planet('E', 'p5', { kind: 'planet' }), // 50
+      },
+    };
+    // Alliance web whose maximal cliques are {p1,p3,p5}, {p3,p4,p5} and {p2,p4}.
+    // A greedy growth from any seed absorbs a blocker before reaching {p3,p4,p5}
+    // (from p3 it grabs p1 first, from p4 it grabs p2, from p5 it grabs p1), so the
+    // pre-fix enumeration never saw that unit and the race ended in a phantom tie
+    // between {p1,p3,p5} and {p2,p4} at 150.
+    setStance(state, 'p1', 'p3', 'alliance');
+    setStance(state, 'p1', 'p5', 'alliance');
+    setStance(state, 'p3', 'p5', 'alliance');
+    setStance(state, 'p3', 'p4', 'alliance');
+    setStance(state, 'p4', 'p5', 'alliance');
+    setStance(state, 'p2', 'p4', 'alliance');
+
+    // 3-way threshold = 70 × 3 × 0.7 = 147: {p3,p4,p5} = 200 clears it and outscores
+    // {p1,p3,p5} = 150 — a clean single win, not a tie.
+    const r = okAdvance(
+      kernel.advanceTo(state, ctx(HOUR, { timeScale: 1, victory: { scoreLimit: 70 } })),
+    );
+
+    expect(r.state.match).toMatchObject({ status: 'ended', reason: 'score', winner: 'p4' });
+    expect(r.state.match.winners).toEqual(['p3', 'p4', 'p5']);
+  });
+
   it('the coalition threshold REPLACES the solo one for members', () => {
     const kernel = createKernel([victoryModule]);
     const state: GameState = {

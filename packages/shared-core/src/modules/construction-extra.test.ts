@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createKernel } from '../kernel/kernel';
+import type { GameModule } from '../kernel/module';
 import { constructionModule } from './construction';
 import {
   createInitialState,
@@ -326,20 +327,46 @@ describe('construction module — additional upgrade edge cases', () => {
 });
 
 describe('construction module — combat.damage hook phase guard', () => {
-  it('does not apply defense bonus in the orbital phase', () => {
-    const kernel = createKernel([constructionModule]);
-    // The hook only activates for phase='ground'. For orbital or absent phase, no reduction.
-    const hookResult = kernel.applyAction(
-      stateWith({
-        players: [player('p1')],
-        planets: [planet('A', 'p1', [{ type: 'fort', level: 1, hp: 30 }])],
-      }),
-      { id: 's:p1:1', type: 'noop', playerId: 'p1', payload: {}, issuedAt: 0 },
-      ctx(0),
+  // A probe module that runs the hook pipeline exactly the way combat does and
+  // reports the piped value, so the phase guard is actually exercised.
+  const probe: GameModule = {
+    id: 'hook-probe',
+    version: '1.0.0',
+    setup(api) {
+      api.onAction('probe.damage', (action, h) => {
+        const args = action.payload as { phase: string; location: string; defender: string };
+        h.emit('probe.result', { dmg: h.hook<number>('combat.damage', 100, args) });
+      });
+    },
+  };
+  const probeState = (): GameState =>
+    stateWith({
+      players: [player('p1')],
+      planets: [planet('A', 'p1', [{ type: 'fort', level: 1, hp: 30 }])],
+    });
+  const damageVia = (phase: string): number => {
+    const kernel = createKernel([constructionModule, probe]);
+    const r = okApply(
+      kernel.applyAction(
+        probeState(),
+        {
+          id: 's:p1:1',
+          type: 'probe.damage',
+          playerId: 'p1',
+          payload: { phase, location: 'A', defender: 'p1' },
+          issuedAt: 0,
+        },
+        ctx(0),
+      ),
     );
-    // This just ensures no crash with the construction module alone; the hook
-    // relies on being invoked with specific args in combat. The key assertion is
-    // that the module loads without error.
-    expect(hookResult.ok || !hookResult.ok).toBe(true);
+    return (r.events.find((e) => e.type === 'probe.result')?.payload as { dmg: number }).dmg;
+  };
+
+  it('reduces GROUND damage by the standing defenseBonus (fort 0.5 → ÷1.5)', () => {
+    expect(damageVia('ground')).toBeCloseTo(100 / 1.5, 10);
+  });
+
+  it('does not apply the defense bonus in the orbital phase', () => {
+    expect(damageVia('orbital')).toBe(100);
   });
 });

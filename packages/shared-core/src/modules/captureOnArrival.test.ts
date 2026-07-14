@@ -123,4 +123,25 @@ describe('captureOnArrival module (map-roadmap.md M2.2)', () => {
     expect(state.planets.B!.owner).toBe('p2'); // stays the ally's
     expect(events.some((e) => e.type === 'planet.captured')).toBe(false);
   });
+
+  it('captures an INTERMEDIATE hop in transit, not only the final destination', () => {
+    // A—B—C chain: the fleet marches A→C and announces `fleet.transit` at B —
+    // the module's second subscription, which must walk in exactly like an arrival.
+    const a = planet('A', 'p1', 0, { kind: 'planet' });
+    const b = planet('B', null, 30, { kind: 'planet' });
+    const c = planet('C', null, 60, { kind: 'planet' });
+    a.links = ['B'];
+    b.links = ['A', 'C'];
+    c.links = ['B'];
+    const kernel = createKernel([movementModule, captureOnArrivalModule]);
+    const state = baseState([a, b, c], [fleet('F', 'p1', 'A')]);
+    const dep = okApply(kernel.applyAction(state, move('F', 'C'), ctx(0)));
+    // 3h: the fleet transits B (30 units at speed 10) — B flips mid-journey.
+    const mid = okAdvance(kernel.advanceTo(dep.state, ctx(3 * HOUR)));
+    expect(mid.state.planets.B!.owner).toBe('p1');
+    expect(mid.events.some((e) => e.type === 'planet.captured')).toBe(true);
+    // 6h: it arrives at C and captures that too.
+    const end = okAdvance(kernel.advanceTo(mid.state, ctx(6 * HOUR)));
+    expect(end.state.planets.C!.owner).toBe('p1');
+  });
 });

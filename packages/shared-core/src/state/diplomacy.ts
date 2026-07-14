@@ -44,13 +44,6 @@ export function pairHas(key: string, id: PlayerId): boolean {
   return key.slice(0, sep) === id || key.slice(sep + 1) === id;
 }
 
-/** The two party ids a pair key names. Safe because player ids are barred from
- *  containing the separator at every seeding boundary (map schema / slot check). */
-export function pairParts(key: string): [PlayerId, PlayerId] {
-  const sep = key.indexOf(PAIR_SEP);
-  return [key.slice(0, sep), key.slice(sep + 1)];
-}
-
 /** True when either player of the pair is an AI seat (bot). The humans-only
  *  coalition rule keys off this (GDD: боты не приглашаются в коалиции). */
 export function isBotPair(state: GameState, a: PlayerId, b: PlayerId): boolean {

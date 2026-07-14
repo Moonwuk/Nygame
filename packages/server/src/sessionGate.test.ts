@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { ACTION_ENVELOPE_SCHEMA_VERSION, ActionGate, createActionEnvelope } from '@void/action-layer';
+import { ActionGate, createActionEnvelope } from '@void/action-layer';
 import { createDevMatch, loadShippedData } from './scenario';
 import { createMultiplayerServer } from './wsServer';
 import { hmacSecret, signJoinToken } from './auth';
@@ -23,7 +23,6 @@ function nextMessage(ws: WebSocket): Promise<ServerMessage> {
 
 function orbitEnvelope(sessionId: string) {
   return createActionEnvelope({
-    schemaVersion: ACTION_ENVELOPE_SCHEMA_VERSION,
     matchId: 'dev',
     playerId: 'green',
     sessionId,

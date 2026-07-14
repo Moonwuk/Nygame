@@ -25,6 +25,7 @@ import {
 } from './protocol';
 import type { MatchSnapshot, StoredReceipt } from './store';
 import { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
+import { PerKeyWindow } from './rateLimit';
 
 export interface RoomPeer {
   send(data: string): void;
@@ -322,10 +323,10 @@ export class MatchRoom {
   private readonly ephemeral: EphemeralStore;
   private pingSeq = 0;
   /** Per-player placement timestamps, for the (local, single-process) rate limit. */
-  private readonly pingTimes = new Map<PlayerId, number[]>();
+  private readonly pingWindow = new PerKeyWindow<PlayerId>(PING_RATE_MAX, PING_RATE_WINDOW_MS);
   private chatSeq = 0;
   /** Per-player chat timestamps (WALL clock), for the chat rate limit. */
-  private readonly chatTimes = new Map<PlayerId, number[]>();
+  private readonly chatWindow = new PerKeyWindow<PlayerId>(CHAT_RATE_MAX, CHAT_RATE_WINDOW_MS);
   /** Bounded session-chat back-log, replayed to a (re)joining peer. Room-local and
    *  ephemeral by design (dies with hibernation, like pings); a Redis-backed
    *  EphemeralStore is the seam that would carry it across processes/restarts. */
@@ -336,7 +337,7 @@ export class MatchRoom {
   private readonly actionRateMax: number;
   private readonly actionRateWindowMs: number;
   /** Per-player submit timestamps, for the action rate limit. */
-  private readonly actionTimes = new Map<PlayerId, number[]>();
+  private readonly actionWindow: PerKeyWindow<PlayerId>;
   /** Per-player wall time of the last desync-triggered resync reply (cool-down). */
   private readonly lastResyncAt = new Map<PlayerId, number>();
   /** Per-player wall time of the last accepted perf sample (rate limit). */
@@ -374,6 +375,7 @@ export class MatchRoom {
     this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
     this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
     this.actionRateWindowMs = options.actionRateWindowMs ?? ACTION_RATE_WINDOW_MS_DEFAULT;
+    this.actionWindow = new PerKeyWindow(this.actionRateMax, this.actionRateWindowMs);
     this.timeScale = options.timeScale && options.timeScale > 0 ? options.timeScale : 1;
     if (options.initialReceipts) {
       // Rehydration must respect the cap — seed only the most recent `maxReceipts`.
@@ -919,12 +921,8 @@ export class MatchRoom {
    *  not per-path. Pure check-and-record — the caller sends the transient reject. */
   private rateLimited(playerId: PlayerId): boolean {
     const rateNow = this.now();
-    const recent = (this.actionTimes.get(playerId) ?? []).filter(
-      (t) => rateNow - t < this.actionRateWindowMs,
-    );
-    if (recent.length >= this.actionRateMax) return true;
-    recent.push(rateNow);
-    this.actionTimes.set(playerId, recent);
+    if (this.actionWindow.limited(playerId, rateNow)) return true;
+    this.actionWindow.record(playerId, rateNow);
     return false;
   }
 
@@ -1366,7 +1364,16 @@ export class MatchRoom {
 
   /** Whether a domain event may be revealed to `playerId` — events leak intent
    *  too, so they pass the same fog as state: your own actions, anything at a
-   *  world you identify, and global clock/match events; everything else is cut. */
+   *  world you identify, and global clock/match events; everything else is cut.
+   *
+   *  ⚠ CONVENTION COUPLING: this filter reads the payload KEY NAMES every core
+   *  module uses today (audience: `owner`/`playerId`/`a`/`b`/`from`/`to`/
+   *  `buyer`/`seller`; place: `location`/`planetId`/`at`; ownership: `fleetId`)
+   *  — documented in docs/modulesystem.md («События и фог»). A new module that
+   *  names its addressee differently (`target`, `recipient`, …) will have its
+   *  events silently HIDDEN from that player (fail-closed, never a leak) until
+   *  the key is added here. Name payload keys by the convention — or extend the
+   *  lists below together with a test in matchRoom.test.ts. */
   private eventVisibleTo(event: DomainEvent, playerId: PlayerId, identify: Set<string>): boolean {
     if (event.type === 'time.advanced' || event.type.startsWith('match.')) return true;
     const p = (event.payload ?? {}) as Record<string, unknown>;
@@ -1451,8 +1458,10 @@ export class MatchRoom {
     const now = this.clock();
     // rate limit (local, single-process): at most PING_RATE_MAX placements per window.
     // Moves into the ephemeral store as an atomic counter once there's >1 process.
-    const recent = (this.pingTimes.get(playerId) ?? []).filter((t) => now - t < PING_RATE_WINDOW_MS);
-    if (recent.length >= PING_RATE_MAX) {
+    // WALL clock, like chat: on the frozen lobby clock the window would never
+    // expire and PING_RATE_MAX placements would lock the player out for good.
+    const wall = this.now();
+    if (this.pingWindow.limited(playerId, wall)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_PING_RATE' });
       return;
     }
@@ -1510,8 +1519,7 @@ export class MatchRoom {
     if (draft.payload?.building) ping.payload = { building: draft.payload.building };
     if (draft.label) ping.label = draft.label.slice(0, PING_LABEL_MAX);
     await this.ephemeral.set(this.pingKey(ping.id), ping, this.pingTtlMs);
-    recent.push(now);
-    this.pingTimes.set(playerId, recent);
+    this.pingWindow.record(playerId, wall);
     this.relayToViewers(ping, { type: 'ping.added', matchId: this.id, ping });
   }
 
@@ -1564,10 +1572,7 @@ export class MatchRoom {
     // need for flood protection (people talk in the lobby; a frozen window would
     // never expire and lock everyone out after CHAT_RATE_MAX lines).
     const wall = this.now();
-    const recent = (this.chatTimes.get(playerId) ?? []).filter(
-      (t) => wall - t < CHAT_RATE_WINDOW_MS,
-    );
-    if (recent.length >= CHAT_RATE_MAX) {
+    if (this.chatWindow.limited(playerId, wall)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_CHAT_RATE' });
       return;
     }
@@ -1591,8 +1596,7 @@ export class MatchRoom {
       }
       msg.to = message.to;
     }
-    recent.push(wall);
-    this.chatTimes.set(playerId, recent);
+    this.chatWindow.record(playerId, wall);
     this.chatHistory.push(msg);
     if (this.chatHistory.length > CHAT_HISTORY_MAX) this.chatHistory.shift();
     for (const [pid, peers] of this.peers) {
