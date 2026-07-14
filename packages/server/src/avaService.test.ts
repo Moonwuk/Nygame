@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { AvaService } from './avaService';
 import { CorpService, type CorpActor } from './corpService';
-import { MemoryAvaChallengeStore, MemoryAvaRosterStore, MemoryCorpStore } from './store';
+import {
+  MemoryAvaChallengeStore,
+  MemoryAvaResultStore,
+  MemoryAvaRosterStore,
+  MemoryCorpStore,
+} from './store';
 
 // AVA-2/3/4 — readiness + the S0→S2 challenge state machine — and AVA-6, the roster
 // window, enforced fail-secure. Every gate is exercised both ways; influence is
@@ -24,7 +29,13 @@ interface Fixture {
 
 /** Two corps A (head + member) and B (head), each with `influence` credited. */
 async function fixture(
-  opts: { influenceA?: number; influenceB?: number; cost?: number; capPerSide?: number } = {},
+  opts: {
+    influenceA?: number;
+    influenceB?: number;
+    cost?: number;
+    capPerSide?: number;
+    winReward?: number;
+  } = {},
 ): Promise<Fixture> {
   const store = new MemoryCorpStore();
   const challenges = new MemoryAvaChallengeStore();
@@ -35,12 +46,14 @@ async function fixture(
     corpStore: store,
     challengeStore: challenges,
     rosterStore: new MemoryAvaRosterStore(),
+    resultStore: new MemoryAvaResultStore(),
     now,
     challengeCost: opts.cost ?? 100,
     expiryMs: 1_000,
     pauseMs: 1_000,
     capPerSide: opts.capPerSide ?? 2,
     minPerSide: 1,
+    winReward: opts.winReward ?? 150,
   });
 
   const a = await corp.create(A_HEAD, 'Alliance A');
@@ -281,5 +294,74 @@ describe('AvaService — roster window S3 (AVA-6)', () => {
     const ch = await f.ava.challenge(A_HEAD, f.corpB);
     if (!ch.ok) throw new Error('challenge failed');
     expect(await f.ava.join(A_HEAD, ch.id)).toEqual({ ok: false, code: 'E_WINDOW_CLOSED' });
+  });
+});
+
+describe('AvaService — settlement (AVA-8, S7)', () => {
+  /** Ready → challenge → accept → both sides join → sweep-lock: the LOCKED matchup id. */
+  async function lockedMatchup(f: Fixture): Promise<string> {
+    await f.ava.setCorpReady(A_HEAD);
+    await f.ava.setCorpReady(B_HEAD);
+    const ch = await f.ava.challenge(A_HEAD, f.corpB);
+    if (!ch.ok) throw new Error('challenge failed');
+    if (!(await f.ava.accept(B_HEAD, ch.id)).ok) throw new Error('accept failed');
+    await f.ava.join(A_HEAD, ch.id);
+    await f.ava.join(B_HEAD, ch.id);
+    if ((await f.ava.sweepRosters(1_000_000)).locked !== 1) throw new Error('lock failed');
+    return ch.id;
+  }
+
+  it('archives the matchup, records the outcome, awards influence to the winner', async () => {
+    const f = await fixture();
+    const id = await lockedMatchup(f);
+    expect((await f.store.getCorp(f.corpA))?.influence).toBe(400); // cost spent, not refunded
+    expect(await f.ava.settleMatch(id, 'challenger')).toEqual({ ok: true, winnerCorp: f.corpA });
+    expect((await f.ava.challengesFor(A_HEAD))[0]?.status).toBe('ended'); // S7 archive
+    expect((await f.store.getCorp(f.corpA))?.influence).toBe(550); // +150 win reward
+    const history = await f.ava.matchHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      matchupId: id,
+      challengerCorp: f.corpA,
+      targetCorp: f.corpB,
+      winnerCorp: f.corpA,
+    });
+  });
+
+  it('is exactly-once: a replayed settle neither re-archives nor double-awards', async () => {
+    const f = await fixture();
+    const id = await lockedMatchup(f);
+    expect(await f.ava.settleMatch(id, 'target')).toEqual({ ok: true, winnerCorp: f.corpB });
+    expect((await f.store.getCorp(f.corpB))?.influence).toBe(650); // 500 + 150
+    expect(await f.ava.settleMatch(id, 'target')).toEqual({ ok: false, code: 'E_MATCHUP_CLOSED' });
+    expect((await f.store.getCorp(f.corpB))?.influence).toBe(650); // not awarded twice
+    expect(await f.ava.matchHistory()).toHaveLength(1);
+  });
+
+  it('a draw records the result but awards no influence', async () => {
+    const f = await fixture();
+    const id = await lockedMatchup(f);
+    expect(await f.ava.settleMatch(id, null)).toEqual({ ok: true, winnerCorp: null });
+    expect((await f.store.getCorp(f.corpA))?.influence).toBe(400);
+    expect((await f.store.getCorp(f.corpB))?.influence).toBe(500);
+    expect((await f.ava.matchHistory())[0]).toMatchObject({ matchupId: id, winnerCorp: null });
+  });
+
+  it('only a LOCKED matchup settles — an unlocked or missing one is rejected', async () => {
+    const f = await fixture();
+    await f.ava.setCorpReady(A_HEAD);
+    await f.ava.setCorpReady(B_HEAD);
+    const ch = await f.ava.challenge(A_HEAD, f.corpB);
+    if (!ch.ok) throw new Error('challenge failed');
+    await f.ava.accept(B_HEAD, ch.id); // accepted, never locked
+    expect(await f.ava.settleMatch(ch.id, 'challenger')).toEqual({
+      ok: false,
+      code: 'E_MATCHUP_CLOSED',
+    });
+    expect(await f.ava.settleMatch('nope', 'challenger')).toEqual({
+      ok: false,
+      code: 'E_NO_CHALLENGE',
+    });
+    expect(await f.ava.matchHistory()).toHaveLength(0);
   });
 });

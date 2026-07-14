@@ -41,6 +41,7 @@ const STATUS: Record<AvaErrorCode, number> = {
   E_ROSTER_FULL: 409,
   E_ROSTER_LOCKED: 409,
   E_WINDOW_CLOSED: 409,
+  E_MATCHUP_CLOSED: 409,
 };
 
 /** AvA writes are a spam surface like the corp API — share the same per-IP budget. */

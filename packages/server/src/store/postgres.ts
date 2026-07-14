@@ -6,6 +6,8 @@ import type {
   AvaChallenge,
   AvaChallengeStatus,
   AvaChallengeStore,
+  AvaResult,
+  AvaResultStore,
   AvaRosterEntry,
   AvaRosterStore,
   AvaSide,
@@ -154,6 +156,19 @@ export async function migrate(pool: Pool): Promise<void> {
       PRIMARY KEY (matchup_id, account_id)
     );
     CREATE INDEX IF NOT EXISTS ava_roster_side_idx ON ava_roster (matchup_id, side);
+
+    -- AvA results (AVA-8, MM-3.1 minimum): one recorded outcome per matchup. The PK is
+    -- an idempotent record (belt-and-braces; the matchup's locked→ended transition is
+    -- the primary exactly-once gate). winner_corp NULL = a draw. Foundation for the
+    -- public feed (AVA-9), medal conditions and rating.
+    CREATE TABLE IF NOT EXISTS ava_results (
+      matchup_id      text PRIMARY KEY,
+      challenger_corp text NOT NULL,
+      target_corp     text NOT NULL,
+      winner_corp     text,
+      at              bigint NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ava_results_at_idx ON ava_results (at DESC);
   `);
 }
 
@@ -813,6 +828,16 @@ export class PostgresAvaChallengeStore implements AvaChallengeStore {
     );
     return r.rows.map(challengeOf);
   }
+
+  async endMatchup(id: string): Promise<boolean> {
+    // Same exactly-once contract as closeMatchup, over the locked state: only a
+    // still-locked matchup transitions, so settlement can't award influence twice.
+    const r = await this.pool.query(
+      `UPDATE ava_challenges SET status = 'ended' WHERE id = $1 AND status = 'locked'`,
+      [id],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
 }
 
 interface RosterRow {
@@ -916,5 +941,56 @@ export class PostgresAvaRosterStore implements AvaRosterStore {
       [matchupId],
     );
     return r.rows.map(rosterEntryOf);
+  }
+}
+
+interface ResultRow {
+  matchup_id: string;
+  challenger_corp: string;
+  target_corp: string;
+  winner_corp: string | null;
+  at: string;
+}
+
+function resultOf(row: ResultRow): AvaResult {
+  return {
+    matchupId: row.matchup_id,
+    challengerCorp: row.challenger_corp,
+    targetCorp: row.target_corp,
+    winnerCorp: row.winner_corp,
+    at: Number(row.at),
+  };
+}
+
+/** Postgres AvA result store (AVA-8). `record` is idempotent via the matchup_id PK
+ *  (ON CONFLICT DO NOTHING) — belt-and-braces behind the locked→ended gate. */
+export class PostgresAvaResultStore implements AvaResultStore {
+  constructor(private readonly pool: Pool) {}
+
+  async record(result: AvaResult): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ava_results (matchup_id, challenger_corp, target_corp, winner_corp, at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (matchup_id) DO NOTHING`,
+      [result.matchupId, result.challengerCorp, result.targetCorp, result.winnerCorp, result.at],
+    );
+  }
+
+  async get(matchupId: string): Promise<AvaResult | null> {
+    const r = await this.pool.query<ResultRow>(
+      `SELECT matchup_id, challenger_corp, target_corp, winner_corp, at
+       FROM ava_results WHERE matchup_id = $1`,
+      [matchupId],
+    );
+    return r.rows[0] ? resultOf(r.rows[0]) : null;
+  }
+
+  async recent(limit = 50): Promise<AvaResult[]> {
+    const r = await this.pool.query<ResultRow>(
+      `SELECT matchup_id, challenger_corp, target_corp, winner_corp, at
+       FROM ava_results ORDER BY at DESC, matchup_id LIMIT $1`,
+      [limit],
+    );
+    return r.rows.map(resultOf);
   }
 }

@@ -4,6 +4,8 @@ import type {
   AccountStore,
   AvaChallenge,
   AvaChallengeStore,
+  AvaResult,
+  AvaResultStore,
   AvaRosterEntry,
   AvaRosterStore,
   AvaSide,
@@ -372,6 +374,39 @@ export class MemoryAvaChallengeStore implements AvaChallengeStore {
       [...this.rows.values()]
         .filter((r) => r.status === 'accepted' && r.pauseEndsAt !== undefined && r.pauseEndsAt <= now)
         .sort((a, b) => (a.pauseEndsAt ?? 0) - (b.pauseEndsAt ?? 0) || (a.id < b.id ? -1 : 1))
+        .map((r) => ({ ...r })),
+    );
+  }
+
+  endMatchup(id: string): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'locked') return Promise.resolve(false);
+    row.status = 'ended';
+    return Promise.resolve(true);
+  }
+}
+
+/** In-memory AvA result store (AVA-8) — `matchupId → result`, keyed idempotently. */
+export class MemoryAvaResultStore implements AvaResultStore {
+  private readonly rows = new Map<string, AvaResult>();
+
+  record(result: AvaResult): Promise<void> {
+    // The locked→ended transition guarantees one call per matchup; keep the first
+    // write should it ever be called twice (idempotent by matchupId).
+    if (!this.rows.has(result.matchupId)) this.rows.set(result.matchupId, { ...result });
+    return Promise.resolve();
+  }
+
+  get(matchupId: string): Promise<AvaResult | null> {
+    const row = this.rows.get(matchupId);
+    return Promise.resolve(row ? { ...row } : null);
+  }
+
+  recent(limit = 50): Promise<AvaResult[]> {
+    return Promise.resolve(
+      [...this.rows.values()]
+        .sort((a, b) => b.at - a.at || (a.matchupId < b.matchupId ? -1 : 1))
+        .slice(0, limit)
         .map((r) => ({ ...r })),
     );
   }

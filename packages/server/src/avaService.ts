@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AvaChallenge,
   AvaChallengeStore,
+  AvaResult,
+  AvaResultStore,
   AvaRosterEntry,
   AvaRosterStore,
   AvaSide,
@@ -39,7 +41,8 @@ export type AvaErrorCode =
   | 'E_NOT_FLAGGED'
   | 'E_ROSTER_FULL'
   | 'E_ROSTER_LOCKED'
-  | 'E_WINDOW_CLOSED';
+  | 'E_WINDOW_CLOSED'
+  | 'E_MATCHUP_CLOSED';
 
 export type AvaFail = { ok: false; code: AvaErrorCode };
 
@@ -64,12 +67,17 @@ const DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24h real-time
 const DEFAULT_PAUSE_MS = 24 * 60 * 60 * 1000; // 24h real-time
 const DEFAULT_CAP_PER_SIDE = 4;
 const DEFAULT_MIN_PER_SIDE = 1;
+/** Influence granted to the winning corp on settlement (AVA-8 S7). Balance constant —
+ *  tunable via deps like the challenge cost (see open questions in the roadmap). */
+const DEFAULT_WIN_REWARD = 150;
 
 export interface AvaServiceDeps {
   corpStore: CorpStore;
   challengeStore: AvaChallengeStore;
   /** Roster rows (AVA-6). */
   rosterStore: AvaRosterStore;
+  /** Recorded outcomes (AVA-8, MM-3.1). */
+  resultStore: AvaResultStore;
   /** Injectable clock (deterministic tests + the expiry sweep). */
   now?: () => number;
   challengeCost?: number;
@@ -80,29 +88,35 @@ export interface AvaServiceDeps {
   capPerSide?: number;
   /** Minimum fighters per side at lock time — a shorter side cancels the matchup. */
   minPerSide?: number;
+  /** Influence awarded to the winning corp on settlement (AVA-8 S7). */
+  winReward?: number;
 }
 
 export class AvaService {
   private readonly corps: CorpStore;
   private readonly challenges: AvaChallengeStore;
   private readonly roster: AvaRosterStore;
+  private readonly results: AvaResultStore;
   private readonly now: () => number;
   private readonly cost: number;
   private readonly expiryMs: number;
   private readonly pauseMs: number;
   private readonly capPerSide: number;
   private readonly minPerSide: number;
+  private readonly winReward: number;
 
   constructor(deps: AvaServiceDeps) {
     this.corps = deps.corpStore;
     this.challenges = deps.challengeStore;
     this.roster = deps.rosterStore;
+    this.results = deps.resultStore;
     this.now = deps.now ?? ((): number => Date.now());
     this.cost = deps.challengeCost ?? DEFAULT_CHALLENGE_COST;
     this.expiryMs = deps.expiryMs ?? DEFAULT_EXPIRY_MS;
     this.pauseMs = deps.pauseMs ?? DEFAULT_PAUSE_MS;
     this.capPerSide = deps.capPerSide ?? DEFAULT_CAP_PER_SIDE;
     this.minPerSide = deps.minPerSide ?? DEFAULT_MIN_PER_SIDE;
+    this.winReward = deps.winReward ?? DEFAULT_WIN_REWARD;
   }
 
   // ---- AVA-3 · readiness -------------------------------------------------
@@ -361,6 +375,58 @@ export class AvaService {
       }
     }
     return { locked, cancelled };
+  }
+
+  // ---- AVA-8 · settlement (S7) --------------------------------------------
+
+  /** settleMatch — the orchestrator calls this once a LOCKED matchup's war has ended:
+   *  archive it (locked→ended), record the outcome (MM-3.1 history), and award influence
+   *  to the winning corp (AVA-2). The atomic locked→ended transition is the exactly-once
+   *  gate — a replayed `match.ended` loses the race and no-ops, so influence is never
+   *  awarded twice. `winnerSide` is null for a draw (result recorded, no influence).
+   *  Server-driven (past the action gate) like the expiry/roster sweeps — no client. */
+  async settleMatch(
+    matchupId: string,
+    winnerSide: AvaSide | null,
+  ): Promise<{ ok: true; winnerCorp: string | null } | AvaFail> {
+    const matchup = await this.challenges.getChallenge(matchupId);
+    if (!matchup) return { ok: false, code: 'E_NO_CHALLENGE' };
+    // Only a LOCKED matchup ran a real session; winning this transition is the
+    // exactly-once guard for the influence award below.
+    if (!(await this.challenges.endMatchup(matchupId))) {
+      return { ok: false, code: 'E_MATCHUP_CLOSED' };
+    }
+    const winnerCorp =
+      winnerSide === null
+        ? null
+        : winnerSide === 'challenger'
+          ? matchup.challengerCorp
+          : matchup.targetCorp;
+    const at = this.now();
+    await this.results.record({
+      matchupId,
+      challengerCorp: matchup.challengerCorp,
+      targetCorp: matchup.targetCorp,
+      winnerCorp,
+      at,
+    });
+    if (winnerCorp !== null) {
+      await this.corps.addInfluence(winnerCorp, this.winReward);
+      await this.corps.appendAudit({
+        corpId: winnerCorp,
+        at,
+        actor: 'system',
+        action: 'influence',
+        detail: `+${this.winReward}: победа ${matchupId}`,
+      });
+    }
+    return { ok: true, winnerCorp };
+  }
+
+  /** Match history (AVA-8, MM-3.1 minimum) — recorded outcomes, newest first. The
+   *  foundation the public feed (AVA-9), medal conditions and rating read from. */
+  matchHistory(limit?: number): Promise<AvaResult[]> {
+    return this.results.recent(limit);
   }
 
   private async refund(challenge: AvaChallenge): Promise<void> {

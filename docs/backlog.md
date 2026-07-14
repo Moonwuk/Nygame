@@ -522,6 +522,14 @@
   (combat-lock бесплатно), война = оркестратор шлёт `diplomacy.declare(war)` по таймеру,
   итог на `match.ended` — влияние победителю + XP + запись результата (MM-3.1 минимум) +
   лента. Офлайн: пассив-экономика + оборона гарнизона, без авто-наступления.
+  **Приземлён срез S7 (самодостаточный, без живой сессии):** state-машина продлена
+  терминальным `ended` (`locked`→`ended`, exactly-once); `settleMatch(matchupId,
+  winnerSide)` — архив + `AvaResultStore` (история MM-3.1, Memory+Postgres `ava_results`)
+  + влияние победителю (AVA-2, `winReward` деф. 150) + аудит; ничья → исход без влияния;
+  `matchHistory` newest-first (фундамент AVA-9/медали/рейтинг); код `E_MATCHUP_CLOSED`.
+  XP отложен — нужен серверный аккаунт-XP (AC-0.3, не построен). **Ждут AVA-7 (живая
+  сессия):** S5 мир (посев `peace` уже в ядре) и S6 эскалация войны `diplomacy.declare`
+  по таймеру на `MatchRoom` + вызов `settleMatch` из оркестратора на `match.ended`.
 - **AVA-9** ⏳ `[srv]` **Публичная лента корпораций.** Матчап на S2 + итог на S7, read-model
   без приватного ростера; `GET /ava/feed`.
 - **AVA-C1/C2** ⏳ `[proto]` Клиент: прото-экран корпорации `#corp` → `/corps` (CORP-0);

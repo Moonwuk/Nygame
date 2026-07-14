@@ -207,14 +207,17 @@ export interface CorpStore {
  *  `expired` — the pending→terminal transition happens exactly once (atomic close).
  *  AVA-6 extends the machine past S2: an `accepted` matchup runs its roster window and
  *  transitions exactly once to `locked` (roster frozen — the orchestrator's S4 input)
- *  or `cancelled` (a side came up short — challenge cost refunded). */
+ *  or `cancelled` (a side came up short — challenge cost refunded). AVA-8 closes the
+ *  lifecycle: a `locked` matchup whose war has ended transitions exactly once to
+ *  `ended` (S7 archive — the outcome is recorded and influence awarded). */
 export type AvaChallengeStatus =
   | 'pending'
   | 'accepted'
   | 'declined'
   | 'expired'
   | 'locked'
-  | 'cancelled';
+  | 'cancelled'
+  | 'ended';
 
 /** One S0→S2 challenge row (AVA-4). An ACCEPTED row IS the S2 matchup contract —
  *  the roster phase (AVA-6) builds on it. */
@@ -273,6 +276,32 @@ export interface AvaChallengeStore {
   closeMatchup(id: string, status: 'locked' | 'cancelled'): Promise<boolean>;
   /** Accepted matchups whose roster window is due at `now` (for the roster sweep). */
   dueRosters(now: number): Promise<AvaChallenge[]>;
+  /** AVA-8: atomic locked→ended transition (S7 archive). False = the row was NOT
+   *  locked and NOTHING changed — the exactly-once gate for settlement, so a replayed
+   *  `match.ended` can't award influence twice. */
+  endMatchup(id: string): Promise<boolean>;
+  close?(): Promise<void>;
+}
+
+/** One recorded AvA outcome (AVA-8, MM-3.1 minimum: who fought whom, who won, when).
+ *  The foundation the public feed (AVA-9), medal conditions (corporations.md §3) and
+ *  rating read from. `winnerCorp` is null for a draw / no winner. */
+export interface AvaResult {
+  matchupId: string;
+  challengerCorp: string;
+  targetCorp: string;
+  winnerCorp: string | null;
+  at: number;
+}
+
+/** Persistence for AvA results (AVA-8). One row per matchup — the matchup's exactly-once
+ *  locked→ended transition is the primary write gate, so `record` is a plain append;
+ *  the PK makes it idempotent belt-and-braces. Newest-first reads feed history/rating. */
+export interface AvaResultStore {
+  record(result: AvaResult): Promise<void>;
+  get(matchupId: string): Promise<AvaResult | null>;
+  /** Recorded outcomes, newest first (bounded by `limit`). */
+  recent(limit?: number): Promise<AvaResult[]>;
   close?(): Promise<void>;
 }
 

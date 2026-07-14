@@ -3,7 +3,12 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { registerAvaApi } from './avaApi';
 import { AvaService } from './avaService';
 import { CorpService, type CorpActor } from './corpService';
-import { MemoryAvaChallengeStore, MemoryAvaRosterStore, MemoryCorpStore } from './store';
+import {
+  MemoryAvaChallengeStore,
+  MemoryAvaResultStore,
+  MemoryAvaRosterStore,
+  MemoryCorpStore,
+} from './store';
 import type { Identity } from './matchApi';
 
 // AVA-2/3/4 — the AvA HTTP routes. The service owns the state machine (see
@@ -35,6 +40,7 @@ async function harness(): Promise<Harness> {
     corpStore: store,
     challengeStore: challenges,
     rosterStore: new MemoryAvaRosterStore(),
+    resultStore: new MemoryAvaResultStore(),
     now,
     challengeCost: 100,
     expiryMs: 1000,

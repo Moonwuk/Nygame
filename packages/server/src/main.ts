@@ -161,12 +161,14 @@ if (auth && !allowedOrigins) {
   );
 }
 
-// AvA service (AVA-2/3/4/6): readiness pool + challenge state machine + roster window
-// over the durable stores. One instance is shared by the HTTP API and the sweeps.
+// AvA service (AVA-2/3/4/6/8): readiness pool + challenge state machine + roster window
+// + settlement over the durable stores. One instance is shared by the HTTP API and the
+// sweeps.
 const avaService = new AvaService({
   corpStore: stores.corpStore,
   challengeStore: stores.challengeStore,
   rosterStore: stores.rosterStore,
+  resultStore: stores.resultStore,
 });
 
 // Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
