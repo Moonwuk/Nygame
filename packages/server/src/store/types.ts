@@ -319,6 +319,13 @@ export interface AvaSession {
   mapId: string;
   seats: Record<string, string>;
   at: number;
+  /** When the S5 peace period ends and the orchestrator declares the war (AVA-8, S6).
+   *  Stamped at session creation (`at + peaceMs`); absent on pre-S6 rows — such a
+   *  session never enters the war queue (fail-secure: no surprise escalation). */
+  warAt?: number;
+  /** When the war was actually declared — the exactly-once marker the war sweep sets
+   *  (`markWarDeclared`); absent = still at peace. */
+  warDeclaredAt?: number;
 }
 
 /** Persistence for AvA sessions (AVA-7). One row per matchup (unique `matchupId`) and per
@@ -330,6 +337,12 @@ export interface AvaSessionStore {
   ): Promise<{ ok: true } | { ok: false; code: 'E_SESSION_EXISTS' }>;
   byMatch(matchId: string): Promise<AvaSession | null>;
   byMatchup(matchupId: string): Promise<AvaSession | null>;
+  /** AVA-8 (S6): sessions whose peace period is over (`warAt` ≤ now) and whose war has
+   *  not been declared yet — the war sweep's queue. Rows without `warAt` never appear. */
+  dueWar(now: number): Promise<AvaSession[]>;
+  /** AVA-8 (S6): stamp the war as declared — exactly once (false when already stamped
+   *  or the session has no war schedule; nothing changes on a lost race). */
+  markWarDeclared(matchId: string, at: number): Promise<boolean>;
   close?(): Promise<void>;
 }
 

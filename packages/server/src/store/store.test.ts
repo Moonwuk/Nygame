@@ -474,6 +474,32 @@ function sessionStoreContract(
         await store.create({ matchId: match, matchupId: uniq('s-mu3'), mapId: 'ava-duel-1', seats: {}, at: 3 }),
       ).toEqual({ ok: false, code: 'E_SESSION_EXISTS' });
     });
+
+    it('AVA-8: dueWar keys off warAt; markWarDeclared stamps exactly once', async () => {
+      const store = make();
+      const [match, matchup] = [uniq('s-m4'), uniq('s-mu4')];
+      await store.create({
+        matchId: match,
+        matchupId: matchup,
+        mapId: 'ava-duel-1',
+        seats: {},
+        at: 1,
+        warAt: 100,
+      });
+      // a session WITHOUT a war schedule never enters the queue (pre-S6 rows)
+      const [legacy, legacyMu] = [uniq('s-m5'), uniq('s-mu5')];
+      await store.create({ matchId: legacy, matchupId: legacyMu, mapId: 'ava-duel-1', seats: {}, at: 1 });
+      expect(await store.markWarDeclared(legacy, 50)).toBe(false);
+
+      expect((await store.dueWar(99)).map((s) => s.matchId)).not.toContain(match); // not due yet
+      expect((await store.dueWar(100)).map((s) => s.matchId)).toContain(match);
+      expect((await store.dueWar(100)).map((s) => s.matchId)).not.toContain(legacy);
+
+      expect(await store.markWarDeclared(match, 100)).toBe(true);
+      expect(await store.markWarDeclared(match, 101)).toBe(false); // exactly once
+      expect((await store.byMatch(match))?.warDeclaredAt).toBe(100);
+      expect((await store.dueWar(9999)).map((s) => s.matchId)).not.toContain(match); // out of the queue
+    });
   });
 }
 

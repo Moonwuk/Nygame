@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { pairKey } from '@void/shared-core';
-import { AvaOrchestrator, seatAvaRoster, type AvaSessionSpec } from './avaOrchestrator';
+import {
+  AvaOrchestrator,
+  seatAvaRoster,
+  warDeclarationsFor,
+  winnerSideOf,
+  type AvaSessionSpec,
+} from './avaOrchestrator';
 import { loadAvaMaps, loadShippedData } from './scenario';
 import {
   MemoryAvaChallengeStore,
@@ -200,5 +206,138 @@ describe('AvaOrchestrator.sweep (AVA-7) — no client needed', () => {
     expect(h.built).toHaveLength(2);
     expect(await h.orch.sweep()).toEqual({ raised: 0 }); // both already have sessions
     expect(h.built).toHaveLength(2);
+  });
+});
+
+// ---- AVA-8 · S6 war timer + S7 settlement hook -------------------------------
+
+interface WarHarness extends Harness {
+  escalated: string[];
+  settled: Array<{ matchupId: string; side: AvaSide | null }>;
+  /** Flip to false to simulate a transient escalation failure. */
+  escalateOk: { value: boolean };
+}
+
+function warHarness(peaceMs = 1_000): WarHarness {
+  const challenges = new MemoryAvaChallengeStore();
+  const roster = new MemoryAvaRosterStore();
+  const sessions = new MemoryAvaSessionStore();
+  const built: AvaSessionSpec[] = [];
+  const escalated: string[] = [];
+  const settled: Array<{ matchupId: string; side: AvaSide | null }> = [];
+  const escalateOk = { value: true };
+  const orch = new AvaOrchestrator({
+    challengeStore: challenges,
+    rosterStore: roster,
+    sessionStore: sessions,
+    data,
+    maps,
+    createRoom: (spec) => {
+      built.push(spec);
+      return Promise.resolve();
+    },
+    now: () => 42,
+    peaceMs,
+    escalateWar: (matchId) => {
+      if (escalateOk.value) escalated.push(matchId);
+      return Promise.resolve(escalateOk.value);
+    },
+    settle: (matchupId, side) => {
+      settled.push({ matchupId, side });
+      return Promise.resolve();
+    },
+  });
+  return { orch, challenges, roster, sessions, built, escalated, settled, escalateOk };
+}
+
+describe('AvaOrchestrator.sweepWar (AVA-8, S6) — the peace period ends on a timer', () => {
+  it('stamps warAt at session creation and escalates exactly once when due', async () => {
+    const h = warHarness(1_000);
+    await lockedMatchup(h, 'mu7', ['acc-a'], ['acc-b']);
+    await h.orch.orchestrate('mu7');
+    expect((await h.sessions.byMatchup('mu7'))?.warAt).toBe(42 + 1_000); // now + peaceMs
+
+    expect(await h.orch.sweepWar(42)).toEqual({ declared: 0 }); // peace still running
+    expect(h.escalated).toHaveLength(0);
+    expect(await h.orch.sweepWar(42 + 1_000)).toEqual({ declared: 1 }); // due → war opens
+    expect(h.escalated).toEqual(['ava-mu7']);
+    expect(await h.orch.sweepWar(42 + 2_000)).toEqual({ declared: 0 }); // exactly once
+    expect(h.escalated).toHaveLength(1);
+  });
+
+  it('a failed escalation stays queued and retries on the next pass', async () => {
+    const h = warHarness(100);
+    await lockedMatchup(h, 'mu8', ['acc-a'], ['acc-b']);
+    await h.orch.orchestrate('mu8');
+    h.escalateOk.value = false;
+    expect(await h.orch.sweepWar(9_999)).toEqual({ declared: 0 }); // transient failure
+    h.escalateOk.value = true;
+    expect(await h.orch.sweepWar(9_999)).toEqual({ declared: 1 }); // retried and landed
+  });
+
+  it('a matchup settled before its war is purged from the queue without escalating', async () => {
+    const h = warHarness(100);
+    await lockedMatchup(h, 'mu9', ['acc-a'], ['acc-b']);
+    await h.orch.orchestrate('mu9');
+    await h.challenges.endMatchup('mu9'); // e.g. a timeout ended the match in peace
+    expect(await h.orch.sweepWar(9_999)).toEqual({ declared: 0 });
+    expect(h.escalated).toHaveLength(0); // no stance flips on a finished match
+    expect(await h.orch.sweepWar(9_999)).toEqual({ declared: 0 }); // and it stays purged
+  });
+});
+
+describe('warDeclarationsFor (AVA-8, S6) — the system declarations that open the war', () => {
+  it('declares exactly the cross-team (still-at-peace) pairs, with deterministic ids', async () => {
+    const h = warHarness();
+    await lockedMatchup(h, 'mu10', ['acc-a1', 'acc-a2'], ['acc-b1']);
+    await h.orch.orchestrate('mu10');
+    const state = h.built[0]!.state;
+    const declares = warDeclarationsFor(state, 'ava-mu10');
+    // 2v2 map: side A slots (2 humans) × side B (1 human + 1 bot) = 4 cross pairs;
+    // the same-side ALLIANCE pairs are not declared.
+    expect(declares).toHaveLength(4);
+    for (const { playerId, action } of declares) {
+      expect(action.type).toBe('diplomacy.declare');
+      expect(action.playerId).toBe(playerId);
+      expect((action.payload as { stance: string }).stance).toBe('war');
+      expect(action.id.startsWith('ava-war:ava-mu10:')).toBe(true);
+    }
+    // Applying them all makes every cross pair hostile — nothing left to declare.
+    const ids = Object.keys(state.players).sort();
+    for (const { action } of declares) {
+      const { target } = action.payload as { target: string };
+      state.diplomacy![pairKey(action.playerId, target)] = 'war';
+    }
+    expect(warDeclarationsFor(state, 'ava-mu10')).toHaveLength(0);
+    expect(ids).toHaveLength(4);
+  });
+});
+
+describe('AvaOrchestrator.onMatchEnded (AVA-8, S7) — the settlement hook', () => {
+  it('maps the winning player (slot or bot) to its side and settles once', async () => {
+    const h = warHarness();
+    await lockedMatchup(h, 'mu11', ['acc-a'], ['acc-b']);
+    await h.orch.orchestrate('mu11');
+    await h.orch.onMatchEnded('ava-mu11', 'slot_a'); // team A slot → challenger side
+    expect(h.settled).toEqual([{ matchupId: 'mu11', side: 'challenger' }]);
+    await h.orch.onMatchEnded('ava-mu11', 'bot:slot_b'); // a bot win still credits its side
+    expect(h.settled[1]).toEqual({ matchupId: 'mu11', side: 'target' });
+  });
+
+  it('a draw settles with null; a non-AvA match is ignored', async () => {
+    const h = warHarness();
+    await lockedMatchup(h, 'mu12', ['acc-a'], ['acc-b']);
+    await h.orch.orchestrate('mu12');
+    await h.orch.onMatchEnded('ava-mu12', null); // timeout tie — no winner
+    expect(h.settled).toEqual([{ matchupId: 'mu12', side: null }]);
+    await h.orch.onMatchEnded('dev', 'green'); // a regular match — not ours
+    expect(h.settled).toHaveLength(1);
+  });
+
+  it('winnerSideOf: unknown slots yield null (no influence on a broken mapping)', () => {
+    const duel = maps.find((m) => m.id === 'ava-duel-1')!;
+    expect(winnerSideOf(duel, 'slot_a')).toBe('challenger');
+    expect(winnerSideOf(duel, 'bot:slot_b')).toBe('target');
+    expect(winnerSideOf(duel, 'ghost')).toBeNull();
   });
 });

@@ -74,6 +74,13 @@ export interface MatchRoomOptions {
    *  swap a Redis-backed impl in to share it across server processes (the seam from
    *  docs/tech-stack.md — no room-logic change). */
   ephemeral?: EphemeralStore;
+  /** Player-action deny-list (AVA-8): a WIRE rule applied in `receive` to both the
+   *  bare and the gated path — return a stable reject code to refuse that action
+   *  TYPE from players, or null/undefined to allow it. Server-internal drivers
+   *  (`submitAction`/`submitServerAction` — AI, standing orders, the AvA war
+   *  escalation) do not pass through `receive` and stay unaffected; e.g. an AvA
+   *  room denies `diplomacy.declare` because the orchestrator owns the stances. */
+  denyPlayerActions?: (type: string) => string | null | undefined;
   /** Observation-only room-event stream for metrics/playtest logging (M0). */
   observe?: (event: RoomObservation) => void;
   /** Seed the idempotency receipts (e.g. rehydrated from a ReceiptStore on restart),
@@ -285,6 +292,8 @@ export class MatchRoom {
   private readonly persist?: (snapshot: MatchSnapshot, receipt: StoredReceipt) => Promise<void>;
   /** Opt-in action-layer front-door (see options.gate). */
   private readonly gate?: ActionGate;
+  /** Player-action deny-list (see options.denyPlayerActions). */
+  private readonly denyPlayerActions?: (type: string) => string | null | undefined;
   /** The actor mailbox (SV-0.2): serializes state-touching operations whose critical
    *  section spans an `await` — a committed submit (its persist) and a lobby `start`
    *  — so one runs fully before the next, and neither interleaves with the other's
@@ -360,6 +369,7 @@ export class MatchRoom {
     this.observe = options.observe;
     this.persist = options.persist;
     this.gate = options.gate;
+    if (options.denyPlayerActions) this.denyPlayerActions = options.denyPlayerActions;
     if (options.initialSeq && options.initialSeq > 0) this.seq = options.initialSeq;
     this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
     this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
@@ -651,6 +661,21 @@ export class MatchRoom {
       // sessionId (bound by the transport at handshake) — without both there is nothing
       // to authorize against, so it is an unroutable message.
       if (this.gate && sessionId !== undefined) {
+        // Player-action deny-list (e.g. AvA mode owns the diplomacy stances, AVA-8):
+        // peek the envelope's action type BEFORE the gate — a denied type never
+        // reaches validation/sequencing, so it costs the client no `clientSeq`.
+        const envAction = (message.envelope as { action?: { id?: unknown; type?: unknown } } | null)
+          ?.action;
+        const deniedCode =
+          typeof envAction?.type === 'string' ? this.denyPlayerActions?.(envAction.type) : undefined;
+        if (deniedCode) {
+          this.sendReject(
+            peer,
+            typeof envAction?.id === 'string' ? envAction.id : 'unknown',
+            deniedCode,
+          );
+          return;
+        }
         await this.admitEnvelope(playerId, peer, message.envelope, sessionId);
       } else {
         this.send(peer, { type: 'error', matchId: this.id, code: 'E_BAD_MESSAGE' });
@@ -661,6 +686,14 @@ export class MatchRoom {
     // validation, authorization and the sequence gate.
     if (this.gate) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_BAD_MESSAGE' });
+      return;
+    }
+    // The same player deny-list on the bare path. Server-internal drivers (AI /
+    // standing orders / the AvA war escalation itself) do NOT pass through `receive`,
+    // so they stay unaffected — the deny is a WIRE rule, not a reducer rule.
+    const denied = this.denyPlayerActions?.(message.action.type);
+    if (denied) {
+      this.sendReject(peer, message.action.id, denied);
       return;
     }
     if (this.persist) {

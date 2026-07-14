@@ -82,6 +82,44 @@ function room(): MatchRoom {
   });
 }
 
+describe('MatchRoom — player-action deny-list (AVA-8)', () => {
+  function deniedRoom(): MatchRoom {
+    return new MatchRoom({
+      id: 'ava-room',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => 10,
+      // The AvA wire rule: the orchestrator owns this action type — players don't.
+      denyPlayerActions: (type) => (type === 'player.rename' ? 'E_AVA_DIPLOMACY' : null),
+    });
+  }
+
+  it('refuses a denied type on the wire with the stable code; nothing applies', async () => {
+    const r = deniedRoom();
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    await r.receive(
+      'p1',
+      p1,
+      JSON.stringify({ type: 'action', matchId: 'ava-room', action: action('a1', 'p1', 'Sneaky') }),
+    );
+    expect(p1.messages.at(-1)).toMatchObject({
+      type: 'rejection',
+      actionId: 'a1',
+      code: 'E_AVA_DIPLOMACY',
+    });
+    expect(r.state.players.p1?.name).toBe('One'); // the reducer never saw it
+  });
+
+  it('server-internal submits bypass the wire deny (the orchestrator owns the stances)', async () => {
+    const r = deniedRoom();
+    const result = await r.submitServerAction('p1', action('a2', 'p1', 'System'));
+    expect(result.ok).toBe(true);
+    expect(r.state.players.p1?.name).toBe('System');
+  });
+});
+
 describe('MatchRoom', () => {
   it('welcomes each player with the authoritative snapshot', () => {
     const r = room();
