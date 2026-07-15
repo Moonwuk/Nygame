@@ -194,3 +194,31 @@ export function registerAvaApi(app: FastifyInstance, deps: AvaApiDeps): void {
     return result;
   });
 }
+
+
+/** Largest feed page a single request returns. */
+const FEED_MAX = 50;
+
+export interface AvaFeedDeps {
+  service: Pick<AvaService, 'publicFeed'>;
+}
+
+/**
+ * AVA-9 — the PUBLIC AvA feed: `GET /ava/feed` lists confirmed matchups (S2) and their
+ * results (S7), newest first — public facts only (corp names + winner), NO roster. No
+ * session required (like the open-matches feed); registered on the public app, not the
+ * auth scope. `?limit` (1..50) and `?before=<at>` (an `at` cursor, exclusive) paginate.
+ */
+export function registerAvaFeed(app: FastifyInstance, deps: AvaFeedDeps): void {
+  app.get('/ava/feed', async (request) => {
+    const q = request.query as { limit?: string; before?: string };
+    const parsedLimit = Number(q.limit);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(FEED_MAX, Math.max(1, Math.floor(parsedLimit)))
+      : FEED_MAX;
+    const parsedBefore = Number(q.before);
+    const before =
+      q.before !== undefined && Number.isFinite(parsedBefore) ? parsedBefore : undefined;
+    return { feed: await deps.service.publicFeed(limit, before) };
+  });
+}

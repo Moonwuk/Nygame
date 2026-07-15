@@ -9,7 +9,7 @@ import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './
 import { registerAuthApi } from './authApi';
 import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
-import { registerAvaApi } from './avaApi';
+import { registerAvaApi, registerAvaFeed } from './avaApi';
 import { AvaService } from './avaService';
 import { AvaOrchestrator, warDeclarationsFor } from './avaOrchestrator';
 import { MatchKeeper } from './matchFactory';
@@ -192,6 +192,7 @@ const avaService = new AvaService({
   challengeStore: stores.challengeStore,
   rosterStore: stores.rosterStore,
   resultStore: stores.resultStore,
+  feedStore: stores.feedStore,
 });
 
 // Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
@@ -239,6 +240,8 @@ const server = createMultiplayerServer({
       occupiedSeats: (id) => accountStore.occupiedSeats(id),
       capacity: MATCH_CAPACITY,
     });
+    // The public AvA feed (AVA-9) — confirmed matchups + results, read-only, no session.
+    registerAvaFeed(app, { service: avaService });
     // The account + match WRITE surface only when auth is on (it mints tokens); no auth ⇒
     // the insecure dev ?player= handshake only. It sits behind @fastify/rate-limit in an
     // ENCAPSULATED scope so the coarse per-IP backstop covers only these write routes —
