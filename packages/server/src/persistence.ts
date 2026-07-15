@@ -2,6 +2,7 @@ import type { MatchRoom } from './matchRoom';
 import {
   MemoryAccountStore,
   MemoryAvaChallengeStore,
+  MemoryAvaFeedStore,
   MemoryAvaResultStore,
   MemoryAvaRosterStore,
   MemoryAvaSessionStore,
@@ -11,6 +12,7 @@ import {
   MemoryUserStore,
   PostgresAccountStore,
   PostgresAvaChallengeStore,
+  PostgresAvaFeedStore,
   PostgresAvaResultStore,
   PostgresAvaRosterStore,
   PostgresAvaSessionStore,
@@ -21,6 +23,7 @@ import {
   migrate,
   type AccountStore,
   type AvaChallengeStore,
+  type AvaFeedStore,
   type AvaResultStore,
   type AvaRosterStore,
   type AvaSessionStore,
@@ -56,6 +59,8 @@ export interface Stores {
   rosterStore: AvaRosterStore;
   /** AvA results (AVA-8) — recorded outcomes (MM-3.1 match history), durable. */
   resultStore: AvaResultStore;
+  /** AvA public feed (AVA-9) — confirmed matchups + results, no private data. */
+  feedStore: AvaFeedStore;
   /** AvA sessions (AVA-7) — the live match a locked matchup was raised into + its seating. */
   sessionStore: AvaSessionStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
@@ -75,6 +80,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       challengeStore: new MemoryAvaChallengeStore(),
       rosterStore: new MemoryAvaRosterStore(),
       resultStore: new MemoryAvaResultStore(),
+      feedStore: new MemoryAvaFeedStore(),
       sessionStore: new MemoryAvaSessionStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
@@ -94,6 +100,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     challengeStore: new PostgresAvaChallengeStore(pool),
     rosterStore: new PostgresAvaRosterStore(pool),
     resultStore: new PostgresAvaResultStore(pool),
+    feedStore: new PostgresAvaFeedStore(pool),
     sessionStore: new PostgresAvaSessionStore(pool),
     kind: 'postgres',
     close: () => pool.end(),

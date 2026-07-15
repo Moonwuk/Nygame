@@ -61,8 +61,15 @@ jobs:
       - name: Gate (lint + typecheck + test, incl. Postgres adapters)
         run: pnpm run check
 
-      - name: Dependency audit
-        run: pnpm audit --audit-level=high
+      # SCA over the same lockfiles the security workflow scans. `pnpm audit` is
+      # retired here: npm shut down both audit endpoints (HTTP 410, 2026-07) and
+      # pnpm has no bulk-advisory client yet — OSV-Scanner queries osv.dev (which
+      # mirrors GHSA) instead. Exits non-zero on findings AND on scanner failure
+      # (fail-secure: a scanner that couldn't run can't certify).
+      - name: Dependency audit (OSV-Scanner)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:v1.9.1 \
+            --lockfile=pnpm-lock.yaml --lockfile=mobile/package-lock.json
 
       # M2 perf report (metrics-roadmap): CPU frame cost of the prototype's render
       # loop (idle/pan/zoom) against the p95 budget. Non-blocking by design — the

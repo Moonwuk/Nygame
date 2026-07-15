@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { registerAvaApi } from './avaApi';
+import { registerAvaApi, registerAvaFeed } from './avaApi';
 import { AvaService } from './avaService';
 import { CorpService, type CorpActor } from './corpService';
 import {
   MemoryAvaChallengeStore,
+  MemoryAvaFeedStore,
   MemoryAvaResultStore,
   MemoryAvaRosterStore,
   MemoryCorpStore,
@@ -41,6 +42,7 @@ async function harness(): Promise<Harness> {
     challengeStore: challenges,
     rosterStore: new MemoryAvaRosterStore(),
     resultStore: new MemoryAvaResultStore(),
+    feedStore: new MemoryAvaFeedStore(),
     now,
     challengeCost: 100,
     expiryMs: 1000,
@@ -56,6 +58,7 @@ async function harness(): Promise<Harness> {
 
   const app = Fastify();
   registerAvaApi(app, { service, identify: identifyByHeader, now });
+  registerAvaFeed(app, { service }); // public — no session
   return { app, corpA: a.corpId, corpB: b.corpId };
 }
 
@@ -119,6 +122,17 @@ describe('AVA · readiness + challenge API', () => {
       challenges: Array<{ status: string }>;
     };
     expect(mine.challenges[0]).toMatchObject({ status: 'accepted' });
+
+    // AVA-9: the confirmed matchup shows up on the PUBLIC feed — no session header.
+    const feed = (await app.inject({ method: 'GET', url: '/ava/feed' })).json() as {
+      feed: Array<{ kind: string; challengerName: string; targetName: string }>;
+    };
+    expect(feed.feed).toHaveLength(1);
+    expect(feed.feed[0]).toMatchObject({
+      kind: 'matchup',
+      challengerName: 'Alliance A',
+      targetName: 'Alliance B',
+    });
     await app.close();
   });
 
