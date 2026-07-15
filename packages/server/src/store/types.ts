@@ -153,6 +153,7 @@ export const DEFAULT_AUDIT_LIMIT = 50;
 export const DEFAULT_CHALLENGES_LIMIT = 50;
 export const DEFAULT_LOCKED_MATCHUPS_LIMIT = 100;
 export const DEFAULT_RESULTS_LIMIT = 50;
+export const DEFAULT_FEED_LIMIT = 50;
 
 export interface CorpStore {
   /** Create a corp with `head` as its Глава — atomic, so a duplicate name or an
@@ -312,6 +313,32 @@ export interface AvaResultStore {
   get(matchupId: string): Promise<AvaResult | null>;
   /** Recorded outcomes, newest first (bounded by `limit`). */
   recent(limit?: number): Promise<AvaResult[]>;
+  close?(): Promise<void>;
+}
+
+/** One public AvA feed entry (AVA-9): a confirmed matchup (S2, on accept) or its result
+ *  (S7, on settlement). PUBLIC facts only — corp names + winner, NEVER the private roster.
+ *  Corp names are snapshotted at publish so the feed reads standalone (a later rename or
+ *  disband doesn't rewrite history). `winnerCorp` is set on a `result` (null = draw). */
+export type AvaFeedKind = 'matchup' | 'result';
+export interface AvaFeedEntry {
+  id: string;
+  at: number;
+  kind: AvaFeedKind;
+  challengerCorp: string;
+  challengerName: string;
+  targetCorp: string;
+  targetName: string;
+  /** `result` only: winning corp id, or null for a draw. */
+  winnerCorp?: string | null;
+}
+
+/** Persistence for the public AvA feed (AVA-9). Append-only; read newest-first with a
+ *  simple `before`-`at` cursor for pagination. No private data ever enters it. */
+export interface AvaFeedStore {
+  append(entry: AvaFeedEntry): Promise<void>;
+  /** Newest-first page (bounded by `limit`); `before` = an `at` cursor (exclusive). */
+  recent(limit?: number, before?: number): Promise<AvaFeedEntry[]>;
   close?(): Promise<void>;
 }
 

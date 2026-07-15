@@ -6,6 +6,8 @@ import type {
   AvaChallenge,
   AvaChallengeStatus,
   AvaChallengeStore,
+  AvaFeedEntry,
+  AvaFeedStore,
   AvaResult,
   AvaResultStore,
   AvaRosterEntry,
@@ -29,6 +31,7 @@ import type {
 } from './types';
 import {
   DEFAULT_AUDIT_LIMIT,
+  DEFAULT_FEED_LIMIT,
   DEFAULT_CHALLENGES_LIMIT,
   DEFAULT_LOCKED_MATCHUPS_LIMIT,
   DEFAULT_RESULTS_LIMIT,
@@ -192,6 +195,20 @@ export async function migrate(pool: Pool): Promise<void> {
     -- EXISTS backfills pre-S6 rows with NULL = no scheduled war (never escalated).
     ALTER TABLE ava_sessions ADD COLUMN IF NOT EXISTS war_at bigint;
     ALTER TABLE ava_sessions ADD COLUMN IF NOT EXISTS war_declared_at bigint;
+
+    -- AvA public feed (AVA-9): append-only, read newest-first. PUBLIC facts only (corp
+    -- names + winner), snapshotted at publish — no private roster ever enters this table.
+    CREATE TABLE IF NOT EXISTS ava_feed (
+      id              text PRIMARY KEY,
+      at              bigint NOT NULL,
+      kind            text NOT NULL,
+      challenger_corp text NOT NULL,
+      challenger_name text NOT NULL,
+      target_corp     text NOT NULL,
+      target_name     text NOT NULL,
+      winner_corp     text
+    );
+    CREATE INDEX IF NOT EXISTS ava_feed_at_idx ON ava_feed (at DESC, id DESC);
   `);
 }
 
@@ -1033,6 +1050,71 @@ export class PostgresAvaResultStore implements AvaResultStore {
       [limit],
     );
     return r.rows.map(resultOf);
+  }
+}
+
+interface FeedRow {
+  id: string;
+  at: string;
+  kind: string;
+  challenger_corp: string;
+  challenger_name: string;
+  target_corp: string;
+  target_name: string;
+  winner_corp: string | null;
+}
+
+function feedEntryOf(row: FeedRow): AvaFeedEntry {
+  return {
+    id: row.id,
+    at: Number(row.at),
+    kind: row.kind as AvaFeedEntry['kind'],
+    challengerCorp: row.challenger_corp,
+    challengerName: row.challenger_name,
+    targetCorp: row.target_corp,
+    targetName: row.target_name,
+    // A matchup entry has no winner concept; a result carries one (null = draw).
+    ...(row.kind === 'result' ? { winnerCorp: row.winner_corp } : {}),
+  };
+}
+
+/** Postgres AvA feed store (AVA-9) — append-only, newest-first with an `at` cursor. */
+export class PostgresAvaFeedStore implements AvaFeedStore {
+  constructor(private readonly pool: Pool) {}
+
+  async append(entry: AvaFeedEntry): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ava_feed
+         (id, at, kind, challenger_corp, challenger_name, target_corp, target_name, winner_corp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        entry.id,
+        entry.at,
+        entry.kind,
+        entry.challengerCorp,
+        entry.challengerName,
+        entry.targetCorp,
+        entry.targetName,
+        entry.winnerCorp ?? null,
+      ],
+    );
+  }
+
+  async recent(limit = DEFAULT_FEED_LIMIT, before?: number): Promise<AvaFeedEntry[]> {
+    const r =
+      before === undefined
+        ? await this.pool.query<FeedRow>(
+            `SELECT id, at, kind, challenger_corp, challenger_name, target_corp, target_name, winner_corp
+             FROM ava_feed ORDER BY at DESC, id DESC LIMIT $1`,
+            [limit],
+          )
+        : await this.pool.query<FeedRow>(
+            `SELECT id, at, kind, challenger_corp, challenger_name, target_corp, target_name, winner_corp
+             FROM ava_feed WHERE at < $2 ORDER BY at DESC, id DESC LIMIT $1`,
+            [limit, before],
+          );
+    return r.rows.map(feedEntryOf);
   }
 }
 
