@@ -80,23 +80,19 @@ jobs:
         id: check
         continue-on-error: true
         run: pnpm run check
-      - name: pnpm audit
-        continue-on-error: true
-        run: pnpm audit --json > pnpm-audit.json || true
+      # pnpm audit retired: npm shut down both audit endpoints (HTTP 410, 2026-07).
+      # SCA over the lockfiles is carried by the BLOCKING osv job below (osv.dev
+      # mirrors GHSA) and by ci.yml's OSV step — no separate audit sentinel.
       - name: sentinels
         env:
           CHECK_OUTCOME: ${{ steps.check.outcome }}
         run: |
           echo "{\"check\":\"$CHECK_OUTCOME\"}" > check-status.json
-          ok=true; [ -s pnpm-audit.json ] || ok=false
-          echo "{\"key\":\"audit\",\"ok\":$ok}" > status-audit.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report-check
           path: |
-            pnpm-audit.json
             check-status.json
-            status-audit.json
           if-no-files-found: warn
 
   semgrep:

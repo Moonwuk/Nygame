@@ -3,6 +3,7 @@ import { AvaService } from './avaService';
 import { CorpService, type CorpActor } from './corpService';
 import {
   MemoryAvaChallengeStore,
+  MemoryAvaFeedStore,
   MemoryAvaResultStore,
   MemoryAvaRosterStore,
   MemoryCorpStore,
@@ -47,6 +48,7 @@ async function fixture(
     challengeStore: challenges,
     rosterStore: new MemoryAvaRosterStore(),
     resultStore: new MemoryAvaResultStore(),
+    feedStore: new MemoryAvaFeedStore(),
     now,
     challengeCost: opts.cost ?? 100,
     expiryMs: 1_000,
@@ -363,5 +365,37 @@ describe('AvaService — settlement (AVA-8, S7)', () => {
       code: 'E_NO_CHALLENGE',
     });
     expect(await f.ava.matchHistory()).toHaveLength(0);
+  });
+});
+
+describe('AvaService — public feed (AVA-9)', () => {
+  it('publishes a matchup on accept and a result on settle; no roster leaks', async () => {
+    const f = await fixture();
+    await f.ava.setCorpReady(A_HEAD);
+    await f.ava.setCorpReady(B_HEAD);
+    const ch = await f.ava.challenge(A_HEAD, f.corpB);
+    if (!ch.ok) throw new Error('challenge failed');
+    expect(await f.ava.accept(B_HEAD, ch.id)).toEqual({ ok: true });
+    // S2: the confirmed matchup is public (corp names snapshotted, no winner yet).
+    let feed = await f.ava.publicFeed();
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      kind: 'matchup',
+      challengerCorp: f.corpA,
+      challengerName: 'Alliance A',
+      targetCorp: f.corpB,
+      targetName: 'Alliance B',
+    });
+    expect(feed[0]?.winnerCorp).toBeUndefined();
+    // Drive to a lock, then settle → the S7 result is appended (newest first).
+    await f.ava.join(A_HEAD, ch.id);
+    await f.ava.join(B_HEAD, ch.id);
+    await f.ava.sweepRosters(1_000_000);
+    expect((await f.ava.settleMatch(ch.id, 'challenger')).ok).toBe(true);
+    feed = await f.ava.publicFeed();
+    expect(feed).toHaveLength(2);
+    expect(feed[0]).toMatchObject({ kind: 'result', winnerCorp: f.corpA });
+    // The public feed never carries private roster data.
+    expect(JSON.stringify(feed)).not.toContain(A_MEMBER.accountId);
   });
 });

@@ -545,8 +545,14 @@
   fail-secure) → `settleMatch`. XP отложен (нужен AC-0.3). Тесты: стор-контракты
   (dueWar/markWarDeclared оба адаптера), оркестратор (таймер/exactly-once/ретрай/
   пурж/декларации/маппинг победителя/ничья/не-AvA), wire-deny `MatchRoom`.
-- **AVA-9** ⏳ `[srv]` **Публичная лента корпораций.** Матчап на S2 + итог на S7, read-model
-  без приватного ростера; `GET /ava/feed`.
+- **AVA-9** ✅ `[srv]` **Публичная лента корпораций.** `AvaFeedStore` (append-only,
+  Memory+Postgres `ava_feed`): `matchup` на accept (S2), `result` на settle (S7) — только
+  публичные факты (имена корп снапшотом + победитель, БЕЗ ростера). Публикация в
+  `AvaService.accept`/`settleMatch` (последним шагом, best-effort — не валит уже
+  закоммиченный переход); чтение `publicFeed(limit, before)` newest-first с курсором по
+  `at`. Публичный `GET /ava/feed` (без сессии, рядом с open-matches feed). Тесты:
+  стор-контракт обоих адаптеров + сервис (матчап на accept/итог на settle/без утечки
+  ростера) + HTTP (публичный, без заголовка сессии).
 - **AVA-C1/C2** ⏳ `[proto]` Клиент: прото-экран корпорации `#corp` → `/corps` (CORP-0);
   UI флагов/вызова/ростера/ленты поверх AVA-3…9.
 

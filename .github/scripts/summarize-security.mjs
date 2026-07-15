@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Aggregates every scanner's output (SARIF + pnpm-audit + TruffleHog NDJSON + per-tool
+// Aggregates every scanner's output (SARIF + TruffleHog NDJSON + per-tool
 // status sentinels) from a directory tree into one Markdown report.
 // Pure Node (no external deps — avoids the unpinned-install supply-chain vector).
 //   node .github/scripts/summarize-security.mjs <inputDir> <outFile>
@@ -27,7 +27,6 @@ const EXPECTED = [
   { key: 'gitleaks', name: 'Gitleaks — секреты (дерево)' },
   { key: 'trufflehog', name: 'TruffleHog — секреты (история + верификация)' },
   { key: 'osv', name: 'OSV-Scanner — SCA (osv.dev)' },
-  { key: 'audit', name: 'pnpm audit — SCA (GHSA)' },
   { key: 'trivy-fs', name: 'Trivy fs — vuln/secret/IaC' },
   { key: 'trivy-image', name: 'Trivy image — базовая ОС образа' },
   { key: 'zizmor', name: 'zizmor — безопасность workflow' },
@@ -140,22 +139,6 @@ if (thFile) {
   if (verified || unverified) sarifTools.add('TruffleHog');
 }
 
-// --- pnpm audit ---
-let auditLine = '_не запускался_';
-const auditFile = files.find((f) => /pnpm-audit\.json$/.test(f));
-if (auditFile) {
-  const a = readJson(auditFile);
-  const v = a?.metadata?.vulnerabilities ?? {};
-  const total =
-    (v.critical ?? 0) + (v.high ?? 0) + (v.moderate ?? 0) + (v.low ?? 0) + (v.info ?? 0);
-  auditLine =
-    a == null
-      ? '⚠️ отчёт нечитаем'
-      : total === 0
-        ? '✅ 0 уязвимостей'
-        : `🔴 critical ${v.critical ?? 0} · 🟠 high ${v.high ?? 0} · moderate ${v.moderate ?? 0} · low ${v.low ?? 0}`;
-}
-
 // --- pnpm run check ---
 let checkLine = '_неизвестно_';
 const checkFile = files.find((f) => /check-status\.json$/.test(f));
@@ -174,8 +157,7 @@ const confirm = EXPECTED.map((t) => {
   // whose SARIF is present with a driver counts as confirmed even without a sentinel.
   const ok =
     (s && s.ok === true) ||
-    (!s && t.key === 'sbom' && sboms.length > 0) ||
-    (!s && t.key === 'audit' && auditFile != null);
+    (!s && t.key === 'sbom' && sboms.length > 0);
   // A main-only job (Scorecard) that's absent off `main` was SKIPPED by design —
   // not a fail-open, so it must not raise the "NOT confirmed" alarm.
   let state;
@@ -225,7 +207,6 @@ L.push('| --- | --: |');
 for (const l of LEVELS) L.push(`| ${ICON[l]} ${l} | ${totals[l]} |`);
 L.push('');
 L.push(`**pnpm run check:** ${checkLine}  `);
-L.push(`**pnpm audit:** ${auditLine}  `);
 L.push(`**SBOM (CycloneDX):** ${sboms.length ? `✅ ${sboms.join(', ')}` : '—'}`);
 L.push('');
 

@@ -51,7 +51,8 @@ pnpm run format       # Prettier --write
 ```
 
 Run the gate locally before committing — `pnpm run check` = lint + typecheck + test
-(CI additionally runs `pnpm audit --audit-level=high`). CI mirrors it on every push:
+(CI additionally runs an OSV-Scanner SCA pass over the lockfiles; `pnpm audit` is
+retired — npm shut down its audit endpoints, 2026-07). CI mirrors it on every push:
 `.github/workflows/ci.yml` runs the gate + audit against a service Postgres (so the
 durable-store tests run too), `.github/workflows/security.yml` runs the gate + audit alongside
 a diverse scanner set (Semgrep, CodeQL, Trivy, OSV, Gitleaks, TruffleHog, zizmor), and

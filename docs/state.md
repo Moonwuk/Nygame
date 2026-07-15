@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1452 зелёных** (34 skip, 135 файлов).
+> **Гейт:** `pnpm run check` (lint + typecheck + test). **Тесты: 1454 зелёных** (35 skip, 135 файлов).
 
 ---
 
@@ -1179,7 +1179,14 @@ peace-парам (детерминированные id `ava-war:<match>:<a>:<b>
 `E_AVA_DIPLOMACY`. Проводка S7: observe-`end` AvA-комнаты → `onMatchEnded` →
 `winnerSideOf` (слот/`bot:`-слот → сторона тем же sorted-teams правилом, что рассадка;
 неизвестный → null-ничья, fail-secure) → `settleMatch` (реплей `end` — no-op).
-Из AvA-цикла осталась лента (AVA-9), `corporation-wars.md`.
+**AVA-9 публичная лента (блок AVA-1…9 закрыт):** `AvaFeedStore` (append-only,
+Memory + Postgres `ava_feed`) — только публичные факты: имена корпораций (снапшот на
+публикации) + победитель, БЕЗ ростера. Публикация в `AvaService`: `matchup` в конце
+`accept` (S2), `result` в конце `settleMatch` (S7, exactly-once его `locked→ended`
+гейтом) — последним шагом, best-effort (лента не валит закоммиченный переход).
+Чтение `publicFeed(limit, before)` newest-first с курсором по `at`; публичный
+`GET /ava/feed` (без сессии, `registerAvaFeed` рядом с open-matches feed;
+`?limit` 1..50, `?before`). `corporation-wars.md`.
 
 ## 9. Статус
 

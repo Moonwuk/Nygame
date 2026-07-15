@@ -5,6 +5,7 @@ import {
   MemoryAccountStore,
   MemoryUserStore,
   MemoryAvaChallengeStore,
+  MemoryAvaFeedStore,
   MemoryAvaResultStore,
   MemoryAvaRosterStore,
   MemoryAvaSessionStore,
@@ -16,6 +17,7 @@ import {
   PostgresAccountStore,
   PostgresUserStore,
   PostgresAvaChallengeStore,
+  PostgresAvaFeedStore,
   PostgresAvaResultStore,
   PostgresAvaRosterStore,
   PostgresAvaSessionStore,
@@ -29,6 +31,7 @@ import type {
   UserStore,
   AvaChallenge,
   AvaChallengeStore,
+  AvaFeedStore,
   AvaResultStore,
   AvaRosterEntry,
   AvaRosterStore,
@@ -622,10 +625,54 @@ function rosterStoreContract(
   });
 }
 
+
+// AVA-9 — the public feed store: append-only, newest-first, `before`-`at` pagination.
+// `at` values are salted per run so pages on the SHARED Postgres tables stay unique.
+function feedStoreContract(name: string, make: () => AvaFeedStore, uniq: (p: string) => string): void {
+  describe(`AvaFeedStore — ${name}`, () => {
+    it('appends matchup + result rows and reads them newest-first, paginating by `before`', async () => {
+      const store = make();
+      const [a, b] = [uniq('A'), uniq('B')];
+      const tag = uniq('t');
+      const base = Date.now();
+      await store.append({
+        id: uniq('f1'),
+        at: base + 10,
+        kind: 'matchup',
+        challengerCorp: a,
+        challengerName: `${tag}-A`,
+        targetCorp: b,
+        targetName: `${tag}-B`,
+      });
+      await store.append({
+        id: uniq('f2'),
+        at: base + 20,
+        kind: 'result',
+        challengerCorp: a,
+        challengerName: `${tag}-A`,
+        targetCorp: b,
+        targetName: `${tag}-B`,
+        winnerCorp: a,
+      });
+      const mine = (rows: Awaited<ReturnType<AvaFeedStore['recent']>>): typeof rows =>
+        rows.filter((r) => r.challengerName === `${tag}-A`);
+      const all = mine(await store.recent(50, base + 1_000));
+      expect(all.map((r) => r.kind)).toEqual(['result', 'matchup']); // newest first
+      expect(all[0]).toMatchObject({ kind: 'result', winnerCorp: a });
+      expect(all[1]).toMatchObject({ kind: 'matchup' }); // a matchup carries no winner
+      expect(all[1]?.winnerCorp).toBeUndefined();
+      // the `before` cursor excludes rows at/after the cursor `at`
+      const page = mine(await store.recent(50, base + 20));
+      expect(page.map((r) => r.kind)).toEqual(['matchup']);
+    });
+  });
+}
+
 matchStoreContract('memory', () => new MemoryMatchStore(), (p) => p);
 accountStoreContract('memory', () => new MemoryAccountStore(), (p) => p);
 receiptStoreContract('memory', () => new MemoryReceiptStore(), (p) => p);
 userStoreContract('memory', () => new MemoryUserStore(), (p) => p);
+feedStoreContract('memory', () => new MemoryAvaFeedStore(), (p) => p);
 corpStoreContract(
   'memory',
   () => new MemoryCorpStore(),
@@ -688,6 +735,7 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   accountStoreContract('postgres', () => new PostgresAccountStore(pool), (p) => `${p}_${stamp}`);
   receiptStoreContract('postgres', () => new PostgresReceiptStore(pool), (p) => `${p}_${stamp}`);
   userStoreContract('postgres', () => new PostgresUserStore(pool), (p) => `${p}_${stamp}`);
+  feedStoreContract('postgres', () => new PostgresAvaFeedStore(pool), (p) => `${p}_${stamp}`);
 
   it('migrates idempotently', async () => {
     await migrate(pool);
