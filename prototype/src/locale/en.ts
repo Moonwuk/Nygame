@@ -675,6 +675,7 @@ export const en: Record<string, string> = {
   'сборка {b}': 'build {b}',
   секторов: 'sectors',
   'сервер недоступен': 'server unreachable',
+  'сервер недоступен — укажи адрес сервера': 'server unreachable — enter the server address',
   скоро: 'soon',
   'следующий раунд через': 'next round in',
   снабжение: 'supply',

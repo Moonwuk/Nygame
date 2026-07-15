@@ -8696,10 +8696,12 @@ function connectToMatch(id: string): void {
   connect();
 }
 
-async function refreshMatches(): Promise<void> {
+async function refreshMatches(quiet = false): Promise<void> {
   const srv = resolveServer();
   if (!srv) return;
-  statusEl.textContent = t('загрузка матчей…');
+  // quiet = a background re-poll (player build): don't flash «загрузка…» over a
+  // list that is already on screen — only a real state change repaints.
+  if (!quiet) statusEl.textContent = t('загрузка матчей…');
   try {
     const res = await fetch(`${httpBase(srv.base)}/matches?nick=${encodeURIComponent(srv.nick)}`);
     if (!res.ok) throw new Error('http ' + res.status);
@@ -8735,6 +8737,16 @@ async function toggleArchive(id: string, restore: boolean): Promise<void> {
 
 function renderMatches(): void {
   const el = $('mlist');
+  const failed = statusEl.textContent === t('сервер недоступен');
+  if (__PLAYER_BUILD__) {
+    // The player screen is ONLY the three tabs + the list. The hidden server row
+    // resurfaces exactly while the list can't be loaded (an APK has no useful page
+    // origin — the player types the host's address once, then it hides again), and
+    // the status line is not duplicated under the list's own message.
+    const srvRow = srvInput.closest('.cfield') as HTMLElement | null;
+    if (srvRow) srvRow.style.display = matchLists ? 'none' : '';
+    if (failed) statusEl.textContent = '';
+  }
   // Never a dead end: whatever the server says (unreachable / empty list), the dev
   // client offers the path that ALWAYS works — a solo skirmish offline. The player
   // build has no single-player, so it states the situation honestly instead.
@@ -8750,7 +8762,15 @@ function renderMatches(): void {
     document.getElementById('msolo-go')?.addEventListener('click', () => openSetup('hub'));
   };
   if (!matchLists) {
-    soloCard(statusEl.textContent === t('сервер недоступен') ? t('сервер недоступен') : t('нажмите «Обновить список»'));
+    soloCard(
+      failed
+        ? __PLAYER_BUILD__
+          ? t('сервер недоступен — укажи адрес сервера')
+          : t('сервер недоступен')
+        : __PLAYER_BUILD__
+          ? t('загрузка матчей…')
+          : t('нажмите «Обновить список»'),
+    );
     return;
   }
   const rows = matchLists[activeTab] ?? [];
@@ -8801,6 +8821,30 @@ for (const btn of Array.from(document.querySelectorAll('.mtab'))) {
 
 // "Обновить список" reloads the read-model; per-row "Войти"/"В архив" act on a match.
 $('cgo').addEventListener('click', () => void refreshMatches());
+
+// Player build: the match screen is ONLY the tabs + list (Доступные/Активные/Архив).
+// The callsign comes from the welcome/hub identity step and the server from the page
+// origin, so their rows are noise here — hidden, NOT removed: the inputs stay in the
+// DOM as the state carriers resolveServer() reads. The server row resurfaces from
+// renderMatches only while the list can't be loaded (see there). With no «Обновить
+// список» button, the open screen keeps itself fresh instead: a quiet 10s re-poll
+// plus an immediate reload when the player edits the server address.
+if (__PLAYER_BUILD__) {
+  const browseEl = $('cbrowse');
+  const hide = (n: Element | null): void => {
+    if (n) (n as HTMLElement).style.display = 'none';
+  };
+  hide(browseEl.querySelector('.csub'));
+  hide(nickInput.closest('.cfield'));
+  hide(srvInput.closest('.cfield'));
+  hide($('cgo').closest('.crow'));
+  srvInput.addEventListener('change', () => void refreshMatches());
+  setInterval(() => {
+    if (connectEl.style.display === 'none') return; // overlay closed (hub / in match)
+    if (browseEl.style.display === 'none') return; // welcome stage, not the browser
+    void refreshMatches(true);
+  }, 10_000);
+}
 
 // The match browser (stage 2) loads its list on entry — "Новый командир" / "Вход"
 // call refreshMatches() themselves; nothing to prefetch while the clean welcome is up.
