@@ -8440,14 +8440,17 @@ purse.addEventListener('click', (ev) => {
   if (!el) return;
   const key = el.dataset.res!;
   const stock = Math.round(s.players[ME]?.resources?.[key] ?? 0);
-  const flow = Math.round(netIncome(s, ME)[key] ?? 0);
+  // Same rounding as the chip: one decimal below 1/ч, so a slow bleed reads as −0.4,
+  // not a lying 0. On phones this note is the only income readout (the bar hides flow).
+  const raw = netIncome(s, ME)[key] ?? 0;
+  const flow = Math.abs(raw) >= 1 ? Math.round(raw) : Math.round(raw * 10) / 10;
   const short = (s.players[ME]?.arrears ?? []).includes(key);
   note(
     t('{ic} {name}: {stock} в казне · {flow}/ч (производство минус содержание войск и зданий)', {
       ic: TECH_CUR[key] ?? '',
       name: el.title,
       stock: kfmt(stock),
-      flow: (flow >= 0 ? '+' : '') + kfmt(flow),
+      flow: (flow >= 0 ? '+' : '') + (Math.abs(flow) >= 1 ? kfmt(flow) : String(flow)),
     }) + (short ? ' ' + t('⚠ ДЕФИЦИТ — здания-потребители работают на 50%') : ''),
   );
 });
@@ -9395,12 +9398,18 @@ function frame(nowReal: number) {
     // Building/army upkeep makes sub-1/h drains common — one decimal keeps a slow
     // bleed visible instead of rounding it to a lying zero.
     const flow = Math.abs(raw) >= 1 ? Math.round(raw) : Math.round(raw * 10) / 10;
+    // A phone bar has no room for flow digits: the chip carries only the stock, a
+    // negative net flow paints that stock red, and the exact rate lives behind a tap
+    // (the #purse click handler). Desktop keeps the inline ±N/ч readout.
     const flowTxt =
-      flow !== 0 ? `<em class="${flow > 0 ? 'up' : 'dn'}">${flow > 0 ? '+' : ''}${Math.abs(flow) >= 1 ? kfmt(flow) : flow}/ч</em>` : '';
+      !MOBILE && flow !== 0
+        ? `<em class="${flow > 0 ? 'up' : 'dn'}">${flow > 0 ? '+' : ''}${Math.abs(flow) >= 1 ? kfmt(flow) : flow}/ч</em>`
+        : '';
     const dead = stock === 0 && flow === 0 ? ' dead' : '';
     // Unpaid upkeep on this resource → the chip flags the brownout (tap it for words).
     const short = myArrears.includes(key) ? ' short' : '';
-    return `<span class="res${dead}${short}" title="${tData(name)}" data-res="${key}"><i>${icon}</i><span class="rv"><b>${kfmt(stock)}</b>${short ? '<em class="dn">⚠</em>' : flowTxt}</span></span>`;
+    const bleed = MOBILE && flow < 0 ? ' class="neg"' : '';
+    return `<span class="res${dead}${short}" title="${tData(name)}" data-res="${key}"><i>${icon}</i><span class="rv"><b${bleed}>${kfmt(stock)}</b>${short ? '<em class="dn">⚠</em>' : flowTxt}</span></span>`;
   };
   const hudHtml =
     chip('¤', 'credits', 'Credits') +
