@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { PlayerId } from '@void/shared-core';
+import type { ArsenalItem, PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  ArsenalStore,
   AvaChallenge,
   AvaChallengeStore,
   AvaFeedEntry,
@@ -26,6 +27,7 @@ import type {
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
+  OwnedArsenalItem,
   UserRecord,
   UserStore,
 } from './types';
@@ -600,6 +602,56 @@ export class MemoryReceiptStore implements ReceiptStore {
     }
     if (!m.has(receipt.actionId)) m.set(receipt.actionId, receipt); // receipts are immutable
     return Promise.resolve();
+  }
+}
+
+/** In-memory arsenal store (ARS-2) — `itemId → owned item`, plus the structural
+ *  invariants: idempotent grant (first write wins), owner-guarded transfer/consume,
+ *  soulbound never transfers. */
+export class MemoryArsenalStore implements ArsenalStore {
+  private readonly items = new Map<string, OwnedArsenalItem>();
+
+  grant(item: OwnedArsenalItem): Promise<void> {
+    if (!this.items.has(item.itemId)) this.items.set(item.itemId, { ...item });
+    return Promise.resolve();
+  }
+
+  get(itemId: string): Promise<OwnedArsenalItem | null> {
+    const row = this.items.get(itemId);
+    return Promise.resolve(row ? { ...row } : null);
+  }
+
+  listOf(accountId: string): Promise<ArsenalItem[]> {
+    return Promise.resolve(
+      [...this.items.values()]
+        .filter((r) => r.accountId === accountId)
+        .sort(
+          (a, b) =>
+            a.kind.localeCompare(b.kind) ||
+            a.defId.localeCompare(b.defId) ||
+            a.itemId.localeCompare(b.itemId),
+        )
+        .map(({ accountId: _owner, ...item }) => ({ ...item })),
+    );
+  }
+
+  transfer(
+    itemId: string,
+    from: string,
+    to: string,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_NOT_OWNER' | 'E_SOULBOUND' }> {
+    const row = this.items.get(itemId);
+    if (!row || row.accountId !== from) return Promise.resolve({ ok: false, code: 'E_NOT_OWNER' });
+    if (row.soulbound) return Promise.resolve({ ok: false, code: 'E_SOULBOUND' });
+    row.accountId = to;
+    return Promise.resolve({ ok: true });
+  }
+
+  consume(itemId: string, accountId: string): Promise<boolean> {
+    const row = this.items.get(itemId);
+    if (!row || row.accountId !== accountId) return Promise.resolve(false);
+    this.items.delete(itemId);
+    return Promise.resolve(true);
   }
 }
 

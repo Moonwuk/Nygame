@@ -1,6 +1,7 @@
 import type { MatchRoom } from './matchRoom';
 import {
   MemoryAccountStore,
+  MemoryArsenalStore,
   MemoryAvaChallengeStore,
   MemoryAvaFeedStore,
   MemoryAvaResultStore,
@@ -12,6 +13,7 @@ import {
   MemoryReceiptStore,
   MemoryUserStore,
   PostgresAccountStore,
+  PostgresArsenalStore,
   PostgresAvaChallengeStore,
   PostgresAvaFeedStore,
   PostgresAvaResultStore,
@@ -24,6 +26,7 @@ import {
   PostgresUserStore,
   migrate,
   type AccountStore,
+  type ArsenalStore,
   type AvaChallengeStore,
   type AvaFeedStore,
   type AvaResultStore,
@@ -68,6 +71,9 @@ export interface Stores {
   sessionStore: AvaSessionStore;
   /** Earned medals (MED-1) — permanent per-account achievement record. */
   medalStore: MedalStore;
+  /** Personal arsenal (ARS-2) — hulls/modules/fittings an account owns between
+   *  sessions; snapshots (ARS-3) and the live build gate (LARS-1) read it. */
+  arsenalStore: ArsenalStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -88,6 +94,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       feedStore: new MemoryAvaFeedStore(),
       sessionStore: new MemoryAvaSessionStore(),
       medalStore: new MemoryMedalStore(),
+      arsenalStore: new MemoryArsenalStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -109,6 +116,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     feedStore: new PostgresAvaFeedStore(pool),
     sessionStore: new PostgresAvaSessionStore(pool),
     medalStore: new PostgresMedalStore(pool),
+    arsenalStore: new PostgresArsenalStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

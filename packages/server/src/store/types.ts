@@ -1,4 +1,4 @@
-import type { GameState, PlayerId } from '@void/shared-core';
+import type { ArsenalItem, GameState, PlayerId } from '@void/shared-core';
 
 /** A durable snapshot of a match — enough to resume it byte-for-byte after a
  *  server restart. `state` is the JSON-serializable `GameState` (the core invariant
@@ -442,5 +442,40 @@ export interface StoredReceipt {
 export interface ReceiptStore {
   loadAll(matchId: string): Promise<StoredReceipt[]>;
   save(matchId: string, receipt: StoredReceipt): Promise<void>;
+  close?(): Promise<void>;
+}
+
+/** One owned arsenal row (ARS-2): the shared `ArsenalItem` contract (ARS-1,
+ *  `shared-core/data/arsenalSchema.ts`) plus its owner. */
+export interface OwnedArsenalItem extends ArsenalItem {
+  accountId: string;
+}
+
+/** Persistence for the personal arsenal (ARS-2, `arsenal-roadmap.md`) — what an
+ *  account owns BETWEEN sessions. Deliberately dumb like the other stores: policy
+ *  (starter set, trade rules, snapshots) lives above; the store guards only the
+ *  invariants that need storage-level atomicity:
+ *   - `grant` is idempotent by `itemId` (first write wins — a replayed grant, e.g.
+ *     a re-registration or a retried drop batch, can never duplicate an item);
+ *   - `transfer`/`consume` are owner-guarded conditional writes — two racing buyers
+ *     of one instance cannot both win (double-sell impossible), and a SOULBOUND
+ *     item never transfers (anti-RMT, GDD §4.4 — enforced structurally, not just
+ *     by the trade service). */
+export interface ArsenalStore {
+  /** Insert the item unless its `itemId` already exists (idempotent, first wins). */
+  grant(item: OwnedArsenalItem): Promise<void>;
+  get(itemId: string): Promise<OwnedArsenalItem | null>;
+  /** The account's items, sorted (kind, defId, itemId) for determinism. */
+  listOf(accountId: string): Promise<ArsenalItem[]>;
+  /** Atomic ownership move: succeeds only while `from` CURRENTLY owns the item and
+   *  it is not soulbound. A lost race / wrong owner / soulbound changes nothing. */
+  transfer(
+    itemId: string,
+    from: string,
+    to: string,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_NOT_OWNER' | 'E_SOULBOUND' }>;
+  /** Atomic removal (craft input / burn): only the current owner's item goes;
+   *  false = not owned (nothing changed). */
+  consume(itemId: string, accountId: string): Promise<boolean>;
   close?(): Promise<void>;
 }

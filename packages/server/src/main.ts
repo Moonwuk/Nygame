@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import rateLimit from '@fastify/rate-limit';
-import { createDevMatch, loadAvaMaps, loadShippedData } from './scenario';
+import { createDevMatch, loadAvaMaps, loadShippedData, loadStarterArsenal } from './scenario';
+import { grantStarterArsenal } from './arsenal';
 import { createMultiplayerServer } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
@@ -48,6 +49,9 @@ const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory
 );
 
 const data = loadShippedData();
+// ARS-2: the starter blueprint set, validated against the shipped catalogs at boot
+// (a template naming content that does not ship refuses to start — fail-secure).
+const starterArsenal = loadStarterArsenal(data);
 const stores = await createStores();
 
 // The registry's match loader — the persist/observe/driver wiring lives in
@@ -264,7 +268,22 @@ const server = createMultiplayerServer({
     if (auth && signSession) {
       void app.register(async (scope) => {
         await scope.register(rateLimit, { max: 100, timeWindow: '1 minute' });
-        registerAuthApi(scope, { users: stores.userStore, signSession });
+        registerAuthApi(scope, {
+          users: stores.userStore,
+          signSession,
+          // ARS-2: every fresh account starts with the data-driven blueprint set —
+          // "an empty arsenal" never exists. Idempotent end to end (deterministic
+          // item ids + first-write-wins grant), so a crashed grant re-runs safely.
+          onRegistered: async (accountId) => {
+            try {
+              await grantStarterArsenal(stores.arsenalStore, accountId, starterArsenal, Date.now());
+            } catch (err) {
+              process.stderr.write(
+                `starter arsenal grant failed for ${accountId} — ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            }
+          },
+        });
         registerMatchApi(scope, matchApi);
         // Corporations (CORP-0) — session-gated on every route: the acting identity
         // comes from the session, so the API only exists where sessions do.

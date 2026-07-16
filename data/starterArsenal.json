@@ -1,0 +1,8 @@
+[
+  { "kind": "hull", "defId": "scout_drone" },
+  { "kind": "hull", "defId": "cruiser" },
+  { "kind": "hull", "defId": "dropship" },
+  { "kind": "module", "defId": "cargo_bay" },
+  { "kind": "module", "defId": "radar_module" },
+  { "kind": "module", "defId": "ion_engine" }
+]

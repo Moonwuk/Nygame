@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { createInitialState, type GameState } from '@void/shared-core';
 import {
   MemoryAccountStore,
+  MemoryArsenalStore,
   MemoryUserStore,
   MemoryAvaChallengeStore,
   MemoryAvaFeedStore,
@@ -16,6 +17,7 @@ import {
 } from './memory';
 import {
   PostgresAccountStore,
+  PostgresArsenalStore,
   PostgresUserStore,
   PostgresAvaChallengeStore,
   PostgresAvaFeedStore,
@@ -30,6 +32,8 @@ import {
 } from './postgres';
 import type {
   AccountStore,
+  ArsenalStore,
+  OwnedArsenalItem,
   UserStore,
   AvaChallenge,
   AvaChallengeStore,
@@ -526,6 +530,91 @@ function medalStoreContract(name: string, make: () => MedalStore, uniq: (p: stri
 }
 
 // AVA-7 — the session store: one per matchup/instance, read by match or by matchup.
+/** ARS-2 — the arsenal contract: idempotent grant, owner-guarded transfer/consume,
+ *  soulbound never moves. Run against BOTH adapters. */
+function arsenalStoreContract(
+  name: string,
+  make: () => ArsenalStore,
+  uniq: (p: string) => string,
+): void {
+  describe(`ArsenalStore — ${name}`, () => {
+    const blueprint = (itemId: string, accountId: string, defId = 'cruiser'): OwnedArsenalItem => ({
+      itemId,
+      accountId,
+      kind: 'hull',
+      form: 'blueprint',
+      defId,
+      soulbound: true,
+      origin: 'starter',
+      acquiredAt: 1,
+    });
+    const instance = (itemId: string, accountId: string): OwnedArsenalItem => ({
+      itemId,
+      accountId,
+      kind: 'module',
+      form: 'instance',
+      defId: 'ion_engine',
+      grade: 2,
+      soulbound: false,
+      durability: 5,
+      origin: 'auction',
+      acquiredAt: 2,
+    });
+
+    it('grant is idempotent by itemId — a replayed grant never duplicates or rewrites', async () => {
+      const store = make();
+      const [acc, item] = [uniq('acc-g'), uniq('it-g')];
+      await store.grant(blueprint(item, acc));
+      await store.grant({ ...blueprint(item, uniq('acc-thief')), defId: 'dropship' }); // replay → no-op
+      const owned = await store.get(item);
+      expect(owned).toMatchObject({ accountId: acc, defId: 'cruiser' }); // first write won
+      expect(await store.listOf(acc)).toHaveLength(1);
+    });
+
+    it('lists an account’s items round-tripped byte-for-byte, sorted', async () => {
+      const store = make();
+      const acc = uniq('acc-l');
+      await store.grant(instance(uniq('it-b'), acc));
+      await store.grant(blueprint(uniq('it-a'), acc, 'scout_drone'));
+      const items = await store.listOf(acc);
+      expect(items.map((i) => i.kind)).toEqual(['hull', 'module']); // sorted by kind first
+      expect(items[1]).toMatchObject({ grade: 2, durability: 5, origin: 'auction' });
+      expect(await store.listOf(uniq('acc-other'))).toHaveLength(0); // scoped by owner
+    });
+
+    it('transfer moves ownership exactly once — the double-sell loses', async () => {
+      const store = make();
+      const [seller, buyer1, buyer2, item] = [uniq('a-s'), uniq('a-b1'), uniq('a-b2'), uniq('it-t')];
+      await store.grant(instance(item, seller));
+      expect(await store.transfer(item, seller, buyer1)).toEqual({ ok: true });
+      // the second buyer's transfer references the OLD owner — nothing changes
+      expect(await store.transfer(item, seller, buyer2)).toEqual({ ok: false, code: 'E_NOT_OWNER' });
+      expect((await store.get(item))?.accountId).toBe(buyer1);
+    });
+
+    it('a SOULBOUND item never transfers (anti-RMT, structural)', async () => {
+      const store = make();
+      const [acc, item] = [uniq('a-sb'), uniq('it-sb')];
+      await store.grant(blueprint(item, acc)); // soulbound: true
+      expect(await store.transfer(item, acc, uniq('a-x'))).toEqual({
+        ok: false,
+        code: 'E_SOULBOUND',
+      });
+      expect((await store.get(item))?.accountId).toBe(acc);
+    });
+
+    it('consume removes only the owner’s item, once', async () => {
+      const store = make();
+      const [acc, item] = [uniq('a-c'), uniq('it-c')];
+      await store.grant(instance(item, acc));
+      expect(await store.consume(item, uniq('a-notmine'))).toBe(false); // owner-guard
+      expect(await store.consume(item, acc)).toBe(true);
+      expect(await store.consume(item, acc)).toBe(false); // already gone
+      expect(await store.get(item)).toBeNull();
+    });
+  });
+}
+
 function sessionStoreContract(
   name: string,
   make: () => AvaSessionStore,
@@ -723,6 +812,7 @@ rosterStoreContract(
 );
 resultStoreContract('memory', () => new MemoryAvaResultStore(), (p) => p);
 sessionStoreContract('memory', () => new MemoryAvaSessionStore(), (p) => p);
+arsenalStoreContract('memory', () => new MemoryArsenalStore(), (p) => p);
 medalStoreContract('memory', () => new MemoryMedalStore(), (p) => p);
 
 // Postgres adapters — only when a DATABASE_URL is provided (skipped in CI without a
@@ -763,6 +853,7 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   );
   resultStoreContract('postgres', () => new PostgresAvaResultStore(pool), (p) => `${p}_${stamp}`);
   sessionStoreContract('postgres', () => new PostgresAvaSessionStore(pool), (p) => `${p}_${stamp}`);
+  arsenalStoreContract('postgres', () => new PostgresArsenalStore(pool), (p) => `${p}_${stamp}`);
   medalStoreContract('postgres', () => new PostgresMedalStore(pool), (p) => `${p}_${stamp}`);
 
   // The SAME contracts the memory adapter runs — no weakened hand copies.

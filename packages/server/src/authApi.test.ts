@@ -24,6 +24,7 @@ interface AuthAppOptions {
   now?: () => number;
   rateMax?: number;
   rateWindowMs?: number;
+  onRegistered?: (accountId: string, login: string) => Promise<void>;
 }
 
 function authApp(options: AuthAppOptions = {}): FastifyInstance {
@@ -138,6 +139,31 @@ describe('SE-1.x · /auth/register + /auth/login', () => {
     clock += 60_001; // backoff past the window → attempts admit again
     const after = await post(server, '/auth/login', creds);
     expect(after.statusCode).toBe(200);
+  });
+
+  it('calls onRegistered once per successful registration (ARS-2 starter hook)', async () => {
+    const registered: string[] = [];
+    const server = authApp({
+      onRegistered: (accountId) => {
+        registered.push(accountId);
+        return Promise.resolve();
+      },
+    });
+    const r = await post(server, '/auth/register', { login: 'fresh', password: 'longenough' });
+    const body = r.json() as { accountId: string };
+    expect(registered).toEqual([body.accountId]);
+    // a duplicate login fails registration → the hook does not fire again
+    await post(server, '/auth/register', { login: 'fresh', password: 'longenough' });
+    expect(registered).toHaveLength(1);
+  });
+
+  it('a throwing onRegistered never fails the registration itself', async () => {
+    const server = authApp({
+      onRegistered: () => Promise.reject(new Error('store down')),
+    });
+    const r = await post(server, '/auth/register', { login: 'lucky', password: 'longenough' });
+    expect(r.statusCode).toBe(201); // the account exists; the idempotent hook re-runs out of band
+    expect((r.json() as { login: string }).login).toBe('lucky');
   });
 });
 
