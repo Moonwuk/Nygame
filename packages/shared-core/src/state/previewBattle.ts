@@ -1,6 +1,6 @@
 import type { UnitStack } from './gameState';
 import type { GameData } from '../data/schemas';
-import { damageUnits, MAX_COMBAT_ROUNDS } from '../util/combat';
+import { damageUnits, MAX_COMBAT_ROUNDS, stackHull } from '../util/combat';
 import { sumUnitStat } from '../util/stacks';
 import { effectiveStats } from '../util/loadout';
 import { deepClone } from '../util/clone';
@@ -46,19 +46,16 @@ export interface BattlePreviewSide {
 
 /** Current HULL pool of a stack list: Σ per-stack residual `hp` (a battle-worn
  *  stack keeps its partial pool), or full `count × effective hp` when healthy.
- *  Mirrors `damageUnits`' accounting exactly — same effective-stats read, same
- *  ≥1-hp floor per ship — so a fraction of this pool is a fraction of what the
- *  damage model actually chews through. Shields are deliberately EXCLUDED:
- *  they regenerate between engagements, so only lasting hull damage counts. */
+ *  The per-stack arithmetic IS `damageUnits`' own (`stackHull`, one shared
+ *  copy), so a fraction of this pool is a fraction of what the damage model
+ *  actually chews through. Shields are deliberately EXCLUDED: they regenerate
+ *  between engagements, so only lasting hull damage counts. */
 export function hullPool(units: readonly UnitStack[], data: GameData): number {
   let total = 0;
   for (const s of units) {
     const def = data.units[s.unit];
     if (!def || s.count <= 0) continue;
-    const eff = effectiveStats(def, s, data);
-    const effHp = eff.hp ?? 0;
-    const perShip = effHp > 0 ? effHp : 1;
-    total += s.hp ?? s.count * perShip;
+    total += stackHull(s, effectiveStats(def, s, data).hp).pool;
   }
   return total;
 }
@@ -131,9 +128,12 @@ export function previewBattle(
       : !stalemate && dAlive && !aAlive
         ? 'defender'
         : 'stalemate';
+  // No clamp needed: survivors are a subset of `before` whose pools only ever
+  // shrink (damageUnits subtracts, never adds), so the ratio is in [0,1] by
+  // construction — same insertion order, term-wise smaller, monotone float sum.
   const side = (before: readonly UnitStack[], after: UnitStack[]): BattlePreviewSide => {
     const total = hullPool(before, data);
-    const fraction = total > 0 ? Math.min(1, Math.max(0, 1 - hullPool(after, data) / total)) : 0;
+    const fraction = total > 0 ? 1 - hullPool(after, data) / total : 0;
     return { survivors: after, losses: lossesOf(before, after), damageFraction: fraction };
   };
   return {

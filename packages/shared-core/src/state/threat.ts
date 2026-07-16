@@ -1,9 +1,8 @@
 import type { Fleet, FleetId, GameState, PlanetId, PlayerId } from './gameState';
 import type { Context } from '../action/types';
-import { hoursToMs } from '../action/types';
 import { getStance } from './diplomacy';
 import { identifiedNodes, isVisibleTo } from './visibility';
-import { fleetBaseSpeed, routeDistance } from './route';
+import { journeyDestination, journeyEtaMs } from './route';
 
 /**
  * Node-threat scan — «враг близко к расположению» (ST-3.1, steward-roadmap).
@@ -11,7 +10,9 @@ import { fleetBaseSpeed, routeDistance } from './route';
  * A PURE, deterministic read answering one question for a defender: which
  * hostile fleets bear on this node right now — already at it, inbound to it,
  * or camped on one of its lanes? The Steward's evacuation/commit logic (and any
- * HUD warning) keys off this list; the scan itself decides nothing.
+ * HUD warning) keys off this list; the scan itself decides nothing. Call it on
+ * a state advanced to `ctx.now` (the server flow: `advanceTo` → read) — the
+ * visibility anchors interpolate moving fleets at `state.time`.
  *
  * FOG-HONEST by construction: only fleets `viewerId` currently IDENTIFIES are
  * reported (`isVisibleTo` — the exact rule `visibleState` projects by), so a
@@ -32,75 +33,60 @@ export interface NodeThreat {
    *  ends at it, or parked mid-lane on one of its incident lanes (standoff). */
   kind: 'present' | 'inbound' | 'nearby';
   /** Absolute game-time (ms) the force reaches the node — `ctx.now` for
-   *  `present`/`nearby` (it is already in effect), the journey's end for
-   *  `inbound` (exact for the final leg; later legs estimated at base speed,
-   *  and when no estimate is possible the CURRENT leg's arrival is used — the
-   *  earliest bound, so an unknown always errs toward reacting sooner). */
+   *  `present`/`nearby` (it is already in effect), `journeyEtaMs` for
+   *  `inbound` (exact final leg, estimated earlier hops — see route.ts). */
   eta: number;
 }
 
-/** The node a journey ends at: the last remaining hop, falling back to the
- *  current leg's `to`. A `parkT`/`endT` short-stop still counts — the fleet
- *  ends ON a lane at the node's doorstep, which is a bearing threat all the
- *  same (artillery standoff range); the scan is a tripwire, not a rangefinder. */
-function journeyEnd(mv: NonNullable<Fleet['movement']>): PlanetId {
-  if (mv.destination !== undefined) return mv.destination;
-  if (mv.path && mv.path.length > 0) return mv.path[mv.path.length - 1]!;
-  return mv.to;
-}
-
-/** ETA (absolute ms) of a moving fleet at its journey's end: the current leg is
- *  exact (`arrivesAt`); remaining hops are estimated at the fleet's base speed
- *  (the same client-preview math as `estimateTravelHours` — the authoritative
- *  legs additionally run the `fleet.speed` hook, so the estimate can drift a
- *  little). No estimate possible (zero speed / broken map) → the current leg's
- *  arrival, the earliest plausible bound (fail-safe: react sooner, not later). */
-function journeyEta(state: GameState, fleet: Fleet, ctx: Context): number {
-  const mv = fleet.movement!;
-  if (!mv.path || mv.path.length === 0) return mv.arrivesAt;
-  const speed = fleetBaseSpeed(fleet, ctx.data);
-  if (speed <= 0) return mv.arrivesAt;
-  const rest = routeDistance(state, mv.to, mv.path);
-  return mv.arrivesAt + hoursToMs(ctx, rest / speed);
+/** How `fleet` bears on `nodeId`, or null if it does not. A hostile merely
+ *  passing THROUGH on an incident lane is not a bearing — it aims at its own
+ *  destination, not this node. */
+function classify(
+  state: GameState,
+  fleet: Fleet,
+  nodeId: PlanetId,
+  ctx: Context,
+): Pick<NodeThreat, 'kind' | 'eta'> | null {
+  if (fleet.location === nodeId) {
+    return { kind: 'present', eta: ctx.now };
+  }
+  const mv = fleet.movement;
+  if (mv && journeyDestination(mv) === nodeId) {
+    return { kind: 'inbound', eta: journeyEtaMs(state, fleet, mv, ctx) };
+  }
+  const e = fleet.edge;
+  if (e && (e.from === nodeId || e.to === nodeId)) {
+    return { kind: 'nearby', eta: ctx.now };
+  }
+  return null;
 }
 
 /**
  * All hostile fleets bearing on `nodeId` that `viewerId` can currently see,
- * soonest first (ties by fleet id — deterministic). Pure: reads state only.
+ * soonest first (ties by fleet id — the total (eta, fleetId) order alone pins
+ * determinism, no pre-sorting needed). Pure: reads state only.
  *
- * `present` — hostile parked/orbiting at the node (battle possible now).
- * `inbound` — in transit, journey ends at the node; `eta` says when.
- * `nearby`  — parked mid-lane on a lane incident to the node (standoff camp).
- *
- * A hostile merely passing THROUGH on an incident lane is not reported — it
- * bears on its own destination, not this node.
+ * `identified` — optional pre-hoisted `identifiedNodes(state, viewerId, data)`
+ * (the `isVisibleTo` pattern): a driver scanning MANY nodes for one seat
+ * computes the coverage once and passes it in; omitted, it is computed here.
  */
 export function scanNodeThreats(
   state: GameState,
   nodeId: PlanetId,
   viewerId: PlayerId,
   ctx: Context,
+  identified?: Set<PlanetId>,
 ): NodeThreat[] {
   const out: NodeThreat[] = [];
-  // Hoisted once — each per-fleet visibility check is then a set lookup.
-  const identified = identifiedNodes(state, viewerId, ctx.data);
-  for (const fleetId of Object.keys(state.fleets).sort()) {
+  const seen = identified ?? identifiedNodes(state, viewerId, ctx.data);
+  for (const fleetId of Object.keys(state.fleets)) {
     const fleet = state.fleets[fleetId]!;
     if (fleet.owner === viewerId) continue;
     if (getStance(state, viewerId, fleet.owner) !== 'war') continue;
-    let kind: NodeThreat['kind'] | null = null;
-    let eta = ctx.now;
-    if (fleet.location === nodeId) {
-      kind = 'present';
-    } else if (fleet.movement && journeyEnd(fleet.movement) === nodeId) {
-      kind = 'inbound';
-      eta = journeyEta(state, fleet, ctx);
-    } else if (fleet.edge && (fleet.edge.from === nodeId || fleet.edge.to === nodeId)) {
-      kind = 'nearby';
-    }
-    if (kind === null) continue;
-    if (!isVisibleTo(state, viewerId, { fleetId }, ctx.data, identified)) continue;
-    out.push({ fleetId, owner: fleet.owner, kind, eta });
+    const bearing = classify(state, fleet, nodeId, ctx);
+    if (bearing === null) continue;
+    if (!isVisibleTo(state, viewerId, { fleetId }, ctx.data, seen)) continue;
+    out.push({ fleetId, owner: fleet.owner, ...bearing });
   }
   out.sort((a, b) => a.eta - b.eta || (a.fleetId < b.fleetId ? -1 : a.fleetId > b.fleetId ? 1 : 0));
   return out;

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { scanNodeThreats } from './threat';
+import { identifiedNodes } from './visibility';
 import { createInitialState, type Fleet, type GameState, type Planet } from './gameState';
 import { pairKey } from './diplomacy';
 import { parseGameData, type GameData } from '../data/schemas';
@@ -71,9 +72,11 @@ function baseState(fleets: Fleet[], diplomacy?: Record<string, 'war' | 'peace'>)
 describe('scanNodeThreats — «враг близко» tripwire (ST-3.1)', () => {
   it('reports a hostile parked at the node as present, effective now', () => {
     const s = baseState([fleet('F1', 'p2', { location: 'A' })]);
-    expect(scanNodeThreats(s, 'A', 'p1', ctx)).toEqual([
-      { fleetId: 'F1', owner: 'p2', kind: 'present', eta: NOW },
-    ]);
+    const expected = [{ fleetId: 'F1', owner: 'p2', kind: 'present', eta: NOW }];
+    expect(scanNodeThreats(s, 'A', 'p1', ctx)).toEqual(expected);
+    // A pre-hoisted coverage set (the multi-node driver pattern) is equivalent.
+    const hoisted = identifiedNodes(s, 'p1', data);
+    expect(scanNodeThreats(s, 'A', 'p1', ctx, hoisted)).toEqual(expected);
   });
 
   it('reports a final-leg approach as inbound with the EXACT leg arrival', () => {

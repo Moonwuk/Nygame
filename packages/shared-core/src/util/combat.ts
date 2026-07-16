@@ -101,6 +101,19 @@ export function isHostile(h: HandlerContext, a: string, b: string): boolean {
 
 // --- damage ------------------------------------------------------------------
 
+/** THE one copy of the damage model's hull accounting, shared with the battle
+ *  forecast (`previewBattle`'s `hullPool`): per-ship hull floors at 1 (a
+ *  zero-hp def still takes a hit to die), a stack's current pool is its
+ *  residual `hp` or full `count × perShip`. Change it here and the live model
+ *  and the forecast's denominator move together — they must never drift. */
+export function stackHull(
+  stack: UnitStack,
+  effHp: number | undefined,
+): { perShip: number; pool: number } {
+  const perShip = effHp !== undefined && effHp > 0 ? effHp : 1;
+  return { perShip, pool: stack.hp ?? stack.count * perShip };
+}
+
 /**
  * The PURE damage model: applies `totalDamage` to a unit list, filling the
  * receiving lines in tier order. Tracks each stack's remaining HP pool so
@@ -136,8 +149,7 @@ export function damageUnits(
         continue;
       }
       const eff = effectiveStats(def, stack, data);
-      const effHp = eff.hp ?? 0;
-      const perShip = effHp > 0 ? effHp : 1;
+      const { perShip, pool: startPool } = stackHull(stack, eff.hp);
 
       // Ablative shield absorbs first (shields-roadmap SH-0.2); only the overflow
       // reaches the hull. A shield never kills — a ship dies only when its hull hits 0.
@@ -153,7 +165,7 @@ export function damageUnits(
         }
       }
 
-      let pool = stack.hp ?? stack.count * perShip;
+      let pool = startPool;
       const absorbed = Math.min(remaining, pool);
       pool -= absorbed;
       remaining -= absorbed;

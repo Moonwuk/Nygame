@@ -1,5 +1,7 @@
 import type { Fleet, GameState, PlanetId } from './gameState';
 import type { GameData } from '../data/schemas';
+import type { Context } from '../action/types';
+import { hoursToMs } from '../action/types';
 import { effectiveStats } from '../util/loadout';
 
 /**
@@ -140,4 +142,34 @@ export function estimateTravelHours(
     return null;
   }
   return routeDistance(state, fromId, route) / speed;
+}
+
+/** The node a fleet's CURRENT journey ends at — the one reading of
+ *  `FleetMovement`'s journey fields (the movement module always stamps
+ *  `destination`; the `path`-tail and `to` fallbacks keep hand-built or legacy
+ *  records reading sanely). A `parkT`/`endT` short-stop still names this node:
+ *  the journey ends on a lane at its doorstep. */
+export function journeyDestination(mv: NonNullable<Fleet['movement']>): PlanetId {
+  if (mv.destination !== undefined) return mv.destination;
+  if (mv.path && mv.path.length > 0) return mv.path[mv.path.length - 1]!;
+  return mv.to;
+}
+
+/** ETA (absolute ms) of a moving fleet at its journey's end: the current leg is
+ *  authoritative (`arrivesAt`); remaining hops are estimated over the COMMITTED
+ *  `path` at the fleet's base speed ÷ timeScale (the authoritative legs
+ *  additionally run the `fleet.speed` hook, so the estimate can drift a
+ *  little). No estimate possible (zero speed / broken map) → the current leg's
+ *  arrival, the earliest plausible bound (fail-safe: callers react sooner,
+ *  never later). */
+export function journeyEtaMs(
+  state: GameState,
+  fleet: Fleet,
+  mv: NonNullable<Fleet['movement']>,
+  ctx: Context,
+): number {
+  if (!mv.path || mv.path.length === 0) return mv.arrivesAt;
+  const speed = fleetBaseSpeed(fleet, ctx.data);
+  if (speed <= 0) return mv.arrivesAt;
+  return mv.arrivesAt + hoursToMs(ctx, routeDistance(state, mv.to, mv.path) / speed);
 }

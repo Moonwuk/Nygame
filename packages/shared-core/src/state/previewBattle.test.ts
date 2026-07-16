@@ -128,6 +128,12 @@ describe('previewBattle — parity with the real battle on a hook-free kernel', 
         Object.fromEntries(u.map((s) => [s.unit, s.count]));
       expect(counts(pv.attacker.survivors)).toEqual(counts(real.aSurvivors));
       expect(counts(pv.defender.survivors)).toEqual(counts(real.dSurvivors));
+      // Residual HULL POOLS match too — pins the shared stackHull accounting
+      // (damageFraction's numerator) to the live engine, not just headcounts.
+      const pools = (u: UnitStack[]): Record<string, number | null> =>
+        Object.fromEntries(u.map((s) => [s.unit, s.hp ?? null]));
+      expect(pools(pv.attacker.survivors)).toEqual(pools(real.aSurvivors));
+      expect(pools(pv.defender.survivors)).toEqual(pools(real.dSurvivors));
     });
   }
 
