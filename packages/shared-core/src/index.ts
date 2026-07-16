@@ -129,6 +129,22 @@ export type {
   ModuleManifestEntry,
 } from './kernel/module';
 
+// Arsenal — the persistent meta-inventory contract (ARS-1; ownership lives on the
+// server, the core only speaks the item shape for snapshots/validation)
+export {
+  ArsenalItemSchema,
+  ArsenalItemKindSchema,
+  ArsenalItemFormSchema,
+  ArsenalOriginSchema,
+  parseArsenalItem,
+  safeParseArsenalItem,
+  validateArsenalItem,
+  type ArsenalItem,
+  type ArsenalItemKind,
+  type ArsenalItemForm,
+  type ArsenalOrigin,
+} from './data/arsenalSchema';
+
 // Map-as-content (data-driven match setup)
 export {
   MatchMapSchema,
