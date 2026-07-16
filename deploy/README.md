@@ -1,117 +1,208 @@
-# Деплой Void Dominion — runbook (REL-3)
+# 🚀 Void Dominion — Развертывание на Ubuntu Server
 
-Сервер игры поднимается **одной командой** и сам себя чинит. Всё в этом каталоге.
+Полный пакет скриптов и документации для однокликовой установки игрового сервера на Ubuntu.
 
-## Запуск (одна команда)
+## 📖 Быстрый старт
+
+### Вариант 1: Автоматическая установка (рекомендуется)
+
+```bash
+# На Ubuntu Server, от пользователя с sudo доступом:
+sudo bash deploy/install-ubuntu.sh
+```
+
+**Это делает:**
+- ✅ Установит Docker + Docker Compose
+- ✅ Клонирует репозиторий в `/opt/moongame`
+- ✅ Настроит systemd сервис для автозапуска
+- ✅ Запустит сервер (2-3 минуты)
+
+**Результат:**
+```bash
+moongame status      # проверить статус
+moongame logs        # просмотреть логи
+moongame update      # быстрое обновление кода
+```
+
+### Вариант 2: Docker Compose вручную (как прежде)
 
 ```bash
 cd deploy && docker compose up -d --build
 ```
 
-Это собирает образ (multi-stage → distroless, non-root) и поднимает **два сервиса**:
+Поднимает **два сервиса**:
 
-| Сервис     | Что это                                                | Порт                      |
-| ---------- | ------------------------------------------------------ | ------------------------- |
-| `server`   | прото-сервер: игра по адресу `/` + WebSocket-матч      | `8788` (наружу)           |
-| `postgres` | durable-хранилище матчей (рестарт сервера не теряет их) | `127.0.0.1:5432` (только loopback) |
+| Сервис     | Назначение | Порт |
+|-----------|-----------|------|
+| `server` | Игровой сервер + WebSocket | `8788` |
+| `postgres` | База данных (durable хранилище) | `127.0.0.1:5432` (только локально) |
 
-Игроки просто открывают `http://<хост>:8788/` — connect-оверлей сам подставляет
-`ws(s)://` того же origin'а.
+## 📋 Переменные окружения
 
-Переменные (можно в `.env` рядом с `docker-compose.yml`):
+Все переменные в `server.env` (см. `server.env.example`):
 
-- `POSTGRES_PASSWORD` — пароль БД (обязательно смените вне локального теста);
-- `GATE` — action-гейт (REL-4): по умолчанию `1` — принимаются только валидированные
-  `action.v1`-конверты (клиент сам определяет по `welcome.gated`); `GATE=0` — дев-откат
-  к голым actions;
-- `SEAT_LOCK` — замок мест (REL-5): по умолчанию `1` — первый вход ника минтит
-  посадочный билет (клиент хранит его и предъявляет при реконнекте; сервер хранит
-  только hash), чужой ник/URL больше не забирает место, `?player=` отклоняется;
-  `SEAT_LOCK=0` — открытое дев-рукопожатие;
-- `TIME_SCALE` — множитель wall→game времени (по умолчанию `1` = real-time 24/7;
-  для быстрых плейтестов удобно `200`).
+| Переменная | Описание | Значение по умолчанию |
+|-----------|---------|----------------------|
+| `PORT` | Порт сервера | `8788` |
+| `TIME_SCALE` | Ускорение времени (1=реальное) | `100` (разработка) |
+| `GATE` | Включить валидацию action.v1 | `0` (разработка) |
+| `SEAT_LOCK` | Блокировка мест | `0` (разработка) |
+| `DATABASE_URL` | Строка подключения PostgreSQL | `postgres://void:void@postgres:5432/void` |
+| `POSTGRES_PASSWORD` | Пароль БД | генерируется случайно |
 
-## Отказоустойчивость — что уже сделано
+**Для разработки** используется конфиг из `install-ubuntu.sh`:
+- `TIME_SCALE=100` — 1 сек = 100 игровых сек (быстрые тесты)
+- `GATE=0` — простая авторизация
+- `SEAT_LOCK=0` — без блокировки мест
 
-- **Автоперезапуск**: `restart: unless-stopped` на обоих сервисах — краш/OOM/ребут
-  хоста самовосстанавливаются. Один раз включите автозапуск демона:
-  `sudo systemctl enable docker`.
-- **Durable-матчи**: сервер снапшотит мир в Postgres (`DATABASE_URL` уже прописан на
-  compose-сеть) — после рестарта контейнера матч **продолжается**, а не теряется.
-  Данные Postgres живут в volume `void-pgdata` и переживают пересоздание контейнеров.
-- **Healthchecks**: образ сервера сам проверяет `GET /health`; `server` стартует только
-  после **здорового** Postgres (`condition: service_healthy`).
-- **Ограниченные логи**: json-file 10MB×3 на сервис — диск не переполняется.
-- **Безопасность поверхности**: distroless-образ без shell/apt (см. `Dockerfile`),
-  digest-pinned базовые слои, non-root; Postgres не выставлен наружу.
+## 🛠️ Управление сервером (после автоустановки)
 
-## Обновление до свежего main
+После запуска `install-ubuntu.sh` используй команду `moongame`:
 
 ```bash
-cd <repo> && git pull
-cd deploy && docker compose up -d --build   # пересборка + бесшовная замена сервера
+moongame start      # запустить сервер
+moongame stop       # остановить
+moongame restart    # перезапустить
+moongame status     # статус сервера
+moongame logs       # просмотреть логи (реальное время)
+moongame update     # быстрое обновление кода (10-15 сек)
+moongame shell      # shell в директории проекта
 ```
 
-Матч переживает обновление за счёт снапшота в Postgres.
+## 🔄 Отказоустойчивость
 
-## Статус · логи · здоровье
+- **Автоперезапуск**: systemd сервис `moongame` автоматически перезапускает контейнеры при краше
+- **Durable-матчи**: состояние сохраняется в PostgreSQL → матч продолжается после рестарта
+- **Healthchecks**: образ проверяет `/health` endpoint; сервер стартует только после здорового PostgreSQL
+- **Автозапуск**: при перезагрузке сервера сервис запускается автоматически
+- **Ограниченные логи**: логи ротируются (10MB×3) чтобы не переполнить диск
+
+## 🌐 Внешний доступ
+
+Для доступа через `94.190.83.220:95367` запусти:
 
 ```bash
-docker compose ps                        # состояние + health
-docker compose logs -f server            # живые логи сервера
-curl -s http://127.0.0.1:8788/health     # liveness руками
+sudo bash deploy/setup-proxy.sh
 ```
 
-## Замок мест (SEAT_LOCK) — острые края и восстановление
+Это настроит Nginx проксирование с поддержкой WebSocket.
 
-- **Потерян билет** (игрок почистил localStorage / сменил устройство): сервер хранит
-  только hash и переиздать билет не может. Сбросьте замок его места — следующий вход
-  этого ника сминтит новый билет:
+Или настрой Port Forwarding на роутере:
+- Внешний порт: `95367 TCP`
+- Внутренний IP: `192.168.1.7`
+- Внутренний порт: `8788 TCP`
 
-  ```bash
-  docker compose exec postgres psql -U void void \
-    -c "UPDATE seats SET ticket_hash = NULL WHERE room='proto' AND nick='Имя';"
-  ```
+## 📚 Документация
 
-  (`DELETE FROM seats WHERE …` — жёстче: освободит место целиком.)
+| Файл | Для кого | Время |
+|------|----------|-------|
+| **[QUICK-START.md](QUICK-START.md)** | Я спешу | 5 мин |
+| **[INSTALLATION.md](INSTALLATION.md)** | Я хочу все понять | 15 мин |
+| **[README-UBUNTU.md](README-UBUNTU.md)** | Мне нужна справка | справочник |
 
-- **Включение замка на уже идущем матче** (ряды `seats` созданы до REL-5): каждое
-  старое место дозамыкается **первым, кто войдёт этим ником** (TOFU). Окно короткое,
-  но честное: попросите игроков переподключиться сразу после включения — кто вошёл,
-  тот и заперся.
-- **Билет — bearer-секрет в query-строке** (`?ticket=`): не публикуйте access-логи
-  реверс-прокси и не пересылайте ссылки с ним; утечка = чужой доступ к месту до
-  сброса по рецепту выше.
-
-## Бэкап и восстановление БД
+## 🔍 Статус и логи
 
 ```bash
-# бэкап (можно в cron, например ежедневно в 04:00)
+# Автоустановка
+moongame status                    # статус сервера
+moongame logs                      # логи (реальное время)
+moongame logs | tail -50           # последние 50 строк
+
+# Docker Compose (вручную)
+docker compose ps                  # состояние контейнеров
+docker compose logs -f server      # логи сервера
+curl -s http://127.0.0.1:8788/health  # проверка здоровья
+```
+
+## 🛠️ Отладка и восстановление
+
+### Если сервер не запускается
+
+```bash
+# 1. Проверь логи
+moongame logs | head -50
+
+# 2. Проверь статус Docker
+docker ps -a | grep moongame
+
+# 3. Попробуй перезапустить
+moongame restart
+
+# 4. Если проблема продолжается
+sudo journalctl -u moongame -n 100
+```
+
+### Замок мест (SEAT_LOCK) — восстановление
+
+Если игрок потерял билет (почистил localStorage / сменил устройство):
+
+```bash
+# Сбросить замок места (следующий вход сминтит новый билет)
+docker compose exec postgres psql -U void void \
+  -c "UPDATE seats SET ticket_hash = NULL WHERE room='proto' AND nick='Имя';"
+
+# Или полностью освободить место
+# docker compose exec postgres psql -U void void \
+#   -c "DELETE FROM seats WHERE room='proto' AND nick='Имя';"
+```
+
+**Важно:** не публикуй ссылки с `?ticket=` в access-логах реверс-прокси — это bearer-секрет.
+
+## 💾 Бэкап и восстановление БД
+
+```bash
+# Экспорт БД
 docker compose exec -T postgres pg_dump -U void void | gzip > void-$(date +%F).sql.gz
 
-# восстановление в чистый volume
+# Восстановление в чистый volume
 docker compose down && docker volume rm deploy_void-pgdata
 docker compose up -d postgres
 gunzip -c void-2026-07-10.sql.gz | docker compose exec -T postgres psql -U void void
 docker compose up -d --build
 ```
 
-Пример cron-строки (`crontab -e`):
-
-```
+Автоматический бэкап (crontab):
+```bash
+# Ежедневно в 04:00
 0 4 * * * cd /path/to/repo/deploy && docker compose exec -T postgres pg_dump -U void void | gzip > /backups/void-$(date +\%F).sql.gz
 ```
 
-## Альтернатива без Docker (tmux на VPS)
+## 🔗 Альтернативные пути развертывания
 
-`bash deploy/serve.sh` — прежний путь: pull (по deploy-ключу/токену) + `pnpm serve`
-в detached-tmux. Конфиг — `deploy/server.env` (см. `server.env.example`). Postgres при
-этом поднимайте compose'ом (только сервис `postgres`) или укажите свой `DATABASE_URL`.
+### Docker Compose вручную (как раньше)
 
-## Известные границы (честно)
+```bash
+cd deploy && docker compose up -d --build
+```
 
-- **Один процесс — один хост**: мульти-процессное масштабирование (pg-boss шов в
-  `LazyRoomRegistry`) — следующий этап; текущая отказоустойчивость = автоперезапуск +
-  durable-резюме, не горячий резерв.
-- **TLS**: наружный HTTPS/WSS вешайте реверс-прокси (Caddy/Traefik/nginx) перед `8788`
-  — приложение слушает голый HTTP за прокси.
+### Без Docker (tmux на VPS) — legacy
+
+```bash
+bash deploy/serve.sh
+```
+
+Требует:
+- Node.js >= 20
+- pnpm
+- PostgreSQL (или используй `docker compose up -d postgres`)
+- Конфиг: `deploy/server.env` (см. `server.env.example`)
+
+## 📊 Известные границы
+
+- **Один процесс**: мульти-процессное масштабирование (pg-boss) — будущий этап
+- **TLS**: вешай реверс-прокси (Nginx/Traefik/Caddy) перед `8788` — приложение слушает HTTP
+- **Один хост**: отказоустойчивость = автоперезапуск + durable-резюме (не горячий резерв)
+
+## 📞 Помощь и дальнейшее
+
+1. Прочитай **[QUICK-START.md](QUICK-START.md)** (5 мин)
+2. Полное руководство: **[INSTALLATION.md](INSTALLATION.md)** (15 мин)
+3. Все вопросы: **[README-UBUNTU.md](README-UBUNTU.md)** (справочник)
+4. Проблемы: `moongame logs` и `sudo journalctl -u moongame -n 100`
+
+---
+
+**Готово!** Запусти:
+```bash
+sudo bash deploy/install-ubuntu.sh
+```
