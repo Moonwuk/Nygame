@@ -21,6 +21,8 @@ import type {
   CorpSummary,
   MatchSnapshot,
   MatchStore,
+  Medal,
+  MedalStore,
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
@@ -429,6 +431,45 @@ export class MemoryAvaResultStore implements AvaResultStore {
         .sort((a, b) => b.at - a.at || (a.matchupId < b.matchupId ? -1 : 1))
         .slice(0, limit)
         .map((r) => ({ ...r })),
+    );
+  }
+
+  statsForCorp(corpId: string): Promise<{ matches: number; wins: number }> {
+    let matches = 0;
+    let wins = 0;
+    for (const r of this.rows.values()) {
+      if (r.challengerCorp === corpId || r.targetCorp === corpId) matches += 1;
+      if (r.winnerCorp === corpId) wins += 1;
+    }
+    return Promise.resolve({ matches, wins });
+  }
+}
+
+/** In-memory medal store (MED-1) — `accountId → medalId → medal`; the nested key is the
+ *  one-per-(account,medal) idempotency invariant. */
+export class MemoryMedalStore implements MedalStore {
+  private readonly byAccount = new Map<string, Map<string, Medal>>();
+
+  grant(medal: Medal): Promise<boolean> {
+    let mine = this.byAccount.get(medal.accountId);
+    if (!mine) {
+      mine = new Map();
+      this.byAccount.set(medal.accountId, mine);
+    }
+    if (mine.has(medal.medalId)) return Promise.resolve(false); // already earned — no dup
+    mine.set(medal.medalId, { ...medal });
+    return Promise.resolve(true);
+  }
+
+  has(accountId: string, medalId: string): Promise<boolean> {
+    return Promise.resolve(this.byAccount.get(accountId)?.has(medalId) ?? false);
+  }
+
+  medalsOf(accountId: string): Promise<Medal[]> {
+    return Promise.resolve(
+      [...(this.byAccount.get(accountId)?.values() ?? [])]
+        .sort((a, b) => b.at - a.at || (a.medalId < b.medalId ? -1 : 1))
+        .map((m) => ({ ...m })),
     );
   }
 }

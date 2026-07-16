@@ -8,6 +8,7 @@ import {
   MemoryAvaSessionStore,
   MemoryCorpStore,
   MemoryMatchStore,
+  MemoryMedalStore,
   MemoryReceiptStore,
   MemoryUserStore,
   PostgresAccountStore,
@@ -18,6 +19,7 @@ import {
   PostgresAvaSessionStore,
   PostgresCorpStore,
   PostgresMatchStore,
+  PostgresMedalStore,
   PostgresReceiptStore,
   PostgresUserStore,
   migrate,
@@ -30,6 +32,7 @@ import {
   type CorpStore,
   type MatchSnapshot,
   type MatchStore,
+  type MedalStore,
   type ReceiptStore,
   type UserStore,
 } from './store';
@@ -63,6 +66,8 @@ export interface Stores {
   feedStore: AvaFeedStore;
   /** AvA sessions (AVA-7) — the live match a locked matchup was raised into + its seating. */
   sessionStore: AvaSessionStore;
+  /** Earned medals (MED-1) — permanent per-account achievement record. */
+  medalStore: MedalStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -82,6 +87,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       resultStore: new MemoryAvaResultStore(),
       feedStore: new MemoryAvaFeedStore(),
       sessionStore: new MemoryAvaSessionStore(),
+      medalStore: new MemoryMedalStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -102,6 +108,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     resultStore: new PostgresAvaResultStore(pool),
     feedStore: new PostgresAvaFeedStore(pool),
     sessionStore: new PostgresAvaSessionStore(pool),
+    medalStore: new PostgresMedalStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

@@ -21,6 +21,8 @@ export type {
   CorpSummary,
   MatchSnapshot,
   MatchStore,
+  Medal,
+  MedalStore,
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
@@ -36,6 +38,7 @@ export {
   MemoryAvaSessionStore,
   MemoryCorpStore,
   MemoryMatchStore,
+  MemoryMedalStore,
   MemoryReceiptStore,
   MemoryUserStore,
 } from './memory';
@@ -49,6 +52,7 @@ export {
   PostgresAvaSessionStore,
   PostgresCorpStore,
   PostgresMatchStore,
+  PostgresMedalStore,
   PostgresReceiptStore,
   PostgresUserStore,
 } from './postgres';

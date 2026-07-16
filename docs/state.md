@@ -1132,10 +1132,23 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
 записи + аудит-лог. Структурные инварианты на уровне стора: одна корпа на аккаунт (PK
 по `account_id`), уникальное имя без регистра, атомарные `createCorp`/`swapHead` в
 транзакции, аудит переживает роспуск. Контрактные тесты обоих адаптеров +
-матрица прав + HTTP-контракт (memory + Postgres 16). Отложено (не спекулятивно): медали
-(нужна история матчей MM-3.1), гейт создания по уровню аккаунта (нужен серверный XP
-AC-0.3). Клиентский экран (§7 mock) пока на локальных данных — проводка к `/corps`
-дальше.
+матрица прав + HTTP-контракт (memory + Postgres 16). Отложено (не спекулятивно):
+гейт создания по уровню аккаунта (нужен серверный XP AC-0.3). Клиентский экран (§7 mock)
+пока на локальных данных — проводка к `/corps` дальше.
+
+**Медали / достижения (MED-1, corporations.md §3).** Каталог-ДАННЫЕ `data/medals.json`
+(вне ядрового `GameData`-загрузчика: свой fail-secure парсер `medalCatalog.ts`,
+`E_INVALID_MEDALS` на кривой форме — неизвестное условие никогда не читается как
+«eligible»). Условия ОБЪЕКТИВНЫ и проверяются сервером из истории AvA
+(`AvaResultStore.statsForCorp` — матчи корпы с любой стороны + победы), не самозаявкой
+клиента. MVP — корп-медаль `scope:corp`+`grant:manual`: сервер помечает корпу eligible
+по условию, глава/офицер вручает медаль члену своей корпы, сервер ПЕРЕПРОВЕРЯЕТ
+eligibility на выдаче (`E_NOT_ELIGIBLE`), грант идемпотентен и перманентен (PK
+`(account, medal)`, `MedalStore` memory+Postgres), аудит-запись `medal`. HTTP
+session-gated: `GET /medals` (каталог) · `/medals/me` · `/medals/eligible` ·
+`POST /medals/grant {target, medalId}`. Отложено (нужен пер-аккаунт леджер участия):
+`scope:account`+`grant:auto` авто-достижения. `medalCatalog/medalService/medalApi`
++ стор-контракт `statsForCorp`/`MedalStore` (оба адаптера).
 
 **AVA-2/3/4 (готовность + вызов/принятие AvA)** — серверный слой поверх CORP-0.
 **AVA-2 очки влияния:** корп-валюта `influence` в `CorpStore` (`addInfluence`/

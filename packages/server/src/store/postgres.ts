@@ -23,6 +23,8 @@ import type {
   CorpSummary,
   MatchSnapshot,
   MatchStore,
+  Medal,
+  MedalStore,
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
@@ -209,6 +211,18 @@ export async function migrate(pool: Pool): Promise<void> {
       winner_corp     text
     );
     CREATE INDEX IF NOT EXISTS ava_feed_at_idx ON ava_feed (at DESC, id DESC);
+
+    -- Medals / achievements (corporations.md §3, MED-1): permanent per-account record. PK
+    -- (account, medal) is the idempotency + one-per invariant; corp_id snapshots the corp
+    -- a corp-scoped medal was earned with (kept after the player leaves).
+    CREATE TABLE IF NOT EXISTS medals (
+      account_id text NOT NULL,
+      medal_id   text NOT NULL,
+      corp_id    text,
+      at         bigint NOT NULL,
+      PRIMARY KEY (account_id, medal_id)
+    );
+    CREATE INDEX IF NOT EXISTS medals_account_idx ON medals (account_id, at DESC);
   `);
 }
 
@@ -1050,6 +1064,62 @@ export class PostgresAvaResultStore implements AvaResultStore {
       [limit],
     );
     return r.rows.map(resultOf);
+  }
+
+  async statsForCorp(corpId: string): Promise<{ matches: number; wins: number }> {
+    const r = await this.pool.query<{ matches: string; wins: string }>(
+      `SELECT
+         count(*) FILTER (WHERE challenger_corp = $1 OR target_corp = $1)::text AS matches,
+         count(*) FILTER (WHERE winner_corp = $1)::text AS wins
+       FROM ava_results`,
+      [corpId],
+    );
+    return { matches: Number(r.rows[0]?.matches ?? 0), wins: Number(r.rows[0]?.wins ?? 0) };
+  }
+}
+
+interface MedalRow {
+  account_id: string;
+  medal_id: string;
+  corp_id: string | null;
+  at: string;
+}
+
+/** Postgres medal store (MED-1) — PK (account, medal) makes `grant` idempotent (ON CONFLICT
+ *  DO NOTHING; the affected-row count says whether it was newly earned). */
+export class PostgresMedalStore implements MedalStore {
+  constructor(private readonly pool: Pool) {}
+
+  async grant(medal: Medal): Promise<boolean> {
+    const r = await this.pool.query(
+      `INSERT INTO medals (account_id, medal_id, corp_id, at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (account_id, medal_id) DO NOTHING`,
+      [medal.accountId, medal.medalId, medal.corpId, medal.at],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async has(accountId: string, medalId: string): Promise<boolean> {
+    const r = await this.pool.query(
+      `SELECT 1 FROM medals WHERE account_id = $1 AND medal_id = $2`,
+      [accountId, medalId],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async medalsOf(accountId: string): Promise<Medal[]> {
+    const r = await this.pool.query<MedalRow>(
+      `SELECT account_id, medal_id, corp_id, at FROM medals
+       WHERE account_id = $1 ORDER BY at DESC, medal_id`,
+      [accountId],
+    );
+    return r.rows.map((row) => ({
+      accountId: row.account_id,
+      medalId: row.medal_id,
+      corpId: row.corp_id,
+      at: Number(row.at),
+    }));
   }
 }
 

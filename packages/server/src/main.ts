@@ -11,6 +11,9 @@ import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
 import { registerAvaApi, registerAvaFeed } from './avaApi';
 import { AvaService } from './avaService';
+import { registerMedalApi } from './medalApi';
+import { MedalService } from './medalService';
+import { loadMedalCatalog } from './medalCatalog';
 import { AvaOrchestrator, warDeclarationsFor } from './avaOrchestrator';
 import { MatchKeeper } from './matchFactory';
 import { LazyRoomRegistry } from './roomRegistry';
@@ -195,6 +198,16 @@ const avaService = new AvaService({
   feedStore: stores.feedStore,
 });
 
+// Medals (MED-1, corporations.md §3): objective, server-checked corp achievements from the
+// AvA match history. The catalog is fixed data (`data/medals.json`), validated once at boot;
+// the service authorizes the head/officer manual-grant path over the durable stores.
+const medalService = new MedalService({
+  corpStore: stores.corpStore,
+  resultStore: stores.resultStore,
+  medalStore: stores.medalStore,
+  catalog: loadMedalCatalog(),
+});
+
 // Match factory (SV-2.5): keep OPEN_MATCHES joinable matches available so the feed is
 // never empty — when one fills or ends, seed another. The open count is read from the
 // durable store, so a restart reconciles instead of over-creating. OPEN_MATCHES=0 off.
@@ -262,6 +275,8 @@ const server = createMultiplayerServer({
           });
           // AvA readiness + challenges (AVA-2/3/4) — the same session gate.
           registerAvaApi(scope, { service: avaService, identify });
+          // Medals (MED-1) — head/officer grant + read, session-gated like the corp API.
+          registerMedalApi(scope, { service: medalService, identify });
         }
       });
     }

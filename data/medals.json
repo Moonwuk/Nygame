@@ -1,0 +1,26 @@
+{
+  "version": "1",
+  "medals": {
+    "ava_first_victory": {
+      "name": "Первая кровь",
+      "description": "Корпорация одержала первую победу в войне альянсов.",
+      "scope": "corp",
+      "grant": "manual",
+      "condition": { "type": "corp_wins", "count": 1 }
+    },
+    "ava_champion_5": {
+      "name": "Чемпион AvA",
+      "description": "Корпорация выиграла пять войн альянсов.",
+      "scope": "corp",
+      "grant": "manual",
+      "condition": { "type": "corp_wins", "count": 5 }
+    },
+    "ava_veteran_10": {
+      "name": "Ветеран AvA",
+      "description": "Корпорация провела десять войн альянсов.",
+      "scope": "corp",
+      "grant": "manual",
+      "condition": { "type": "corp_matches", "count": 10 }
+    }
+  }
+}
