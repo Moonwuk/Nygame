@@ -94,9 +94,11 @@ export { hashState } from './state/hash';
 export {
   previewBattle,
   previewLossCount,
+  hullPool,
   type BattlePreview,
   type BattlePreviewSide,
 } from './state/previewBattle';
+export { scanNodeThreats, type NodeThreat } from './state/threat';
 
 // Action contract
 export {
@@ -280,6 +282,7 @@ export {
   stewardModule,
   stewardActive,
   STEWARD_POSTURES,
+  STEWARD_LOSS_LIMIT,
   type StewardPosture,
 } from './modules/steward';
 export { effectsModule, type EffectImpl, type EffectOccurrence } from './modules/effects';

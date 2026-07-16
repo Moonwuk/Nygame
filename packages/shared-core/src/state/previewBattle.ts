@@ -2,6 +2,7 @@ import type { UnitStack } from './gameState';
 import type { GameData } from '../data/schemas';
 import { damageUnits, MAX_COMBAT_ROUNDS } from '../util/combat';
 import { sumUnitStat } from '../util/stacks';
+import { effectiveStats } from '../util/loadout';
 import { deepClone } from '../util/clone';
 
 /**
@@ -35,6 +36,31 @@ export interface BattlePreviewSide {
   survivors: UnitStack[];
   /** Units lost, aggregated per unit id. */
   losses: UnitStack[];
+  /** Share of this side's HULL the forecast says it loses, in [0,1] — the
+   *  «ответный урон» number a commit-or-retreat rule thresholds on (ST-3.1).
+   *  Measured on hull pools ({@link hullPool}): a wing ground down to 1% hp
+   *  reads as ~1, where a whole-units count would read ~0. An empty side is 0
+   *  (nothing to lose) — callers gate on emptiness separately. */
+  damageFraction: number;
+}
+
+/** Current HULL pool of a stack list: Σ per-stack residual `hp` (a battle-worn
+ *  stack keeps its partial pool), or full `count × effective hp` when healthy.
+ *  Mirrors `damageUnits`' accounting exactly — same effective-stats read, same
+ *  ≥1-hp floor per ship — so a fraction of this pool is a fraction of what the
+ *  damage model actually chews through. Shields are deliberately EXCLUDED:
+ *  they regenerate between engagements, so only lasting hull damage counts. */
+export function hullPool(units: readonly UnitStack[], data: GameData): number {
+  let total = 0;
+  for (const s of units) {
+    const def = data.units[s.unit];
+    if (!def || s.count <= 0) continue;
+    const eff = effectiveStats(def, s, data);
+    const effHp = eff.hp ?? 0;
+    const perShip = effHp > 0 ? effHp : 1;
+    total += s.hp ?? s.count * perShip;
+  }
+  return total;
 }
 
 /** The forecast: winner (by the combat module's rule — the side left standing;
@@ -105,11 +131,16 @@ export function previewBattle(
       : !stalemate && dAlive && !aAlive
         ? 'defender'
         : 'stalemate';
+  const side = (before: readonly UnitStack[], after: UnitStack[]): BattlePreviewSide => {
+    const total = hullPool(before, data);
+    const fraction = total > 0 ? Math.min(1, Math.max(0, 1 - hullPool(after, data) / total)) : 0;
+    return { survivors: after, losses: lossesOf(before, after), damageFraction: fraction };
+  };
   return {
     outcome,
     roundsEst: rounds,
-    attacker: { survivors: a, losses: lossesOf(attacker, a) },
-    defender: { survivors: d, losses: lossesOf(defender, d) },
+    attacker: side(attacker, a),
+    defender: side(defender, d),
   };
 }
 

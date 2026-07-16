@@ -22,6 +22,13 @@ import type { GameState, Player, PlayerId } from '../state/gameState';
 export const STEWARD_POSTURES = ['defend'] as const;
 export type StewardPosture = (typeof STEWARD_POSTURES)[number];
 
+/** Acceptable forecast loss share for a delegated seat's combat decisions (ST-3):
+ *  the driver keeps/commits a wing only while the battle forecast puts its own
+ *  hull-damage fraction (`BattlePreviewSide.damageFraction`) STRICTLY UNDER this;
+ *  at/above it the Steward disengages or evacuates. One shared number so the HUD
+ *  and the driver can never disagree about what «потери приемлемы» means. */
+export const STEWARD_LOSS_LIMIT = 0.35;
+
 function isPosture(v: unknown): v is StewardPosture {
   return typeof v === 'string' && (STEWARD_POSTURES as readonly string[]).includes(v);
 }

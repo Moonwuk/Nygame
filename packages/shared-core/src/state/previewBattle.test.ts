@@ -4,7 +4,7 @@ import type { GameModule } from '../kernel/module';
 import { combatModule } from './../modules/combat';
 import { orbitalModule } from './../modules/orbital';
 import { sectorModule } from './../modules/sector';
-import { previewBattle, previewLossCount } from './previewBattle';
+import { hullPool, previewBattle, previewLossCount } from './previewBattle';
 import { createInitialState, type Fleet, type GameState, type Planet, type UnitStack } from './gameState';
 import { parseGameData, type GameData } from '../data/schemas';
 import { deepFreeze } from '../util/clone';
@@ -187,5 +187,48 @@ describe('previewBattle — contract', () => {
     // absorbs, so the fight runs to the stalemate valve — same as the real engine.
     const pv = previewBattle(stacks([['mystery', 3]]), stacks([['fighter', 1]]), data);
     expect(pv.outcome).toBe('stalemate');
+  });
+});
+
+describe('damageFraction — the «ответный урон» share the Steward gate reads (ST-3.1)', () => {
+  it('hand-checked: 3 fighters break on 1 guardian — attacker 1.0, defender 0.6', () => {
+    // fighter atk10/hp20, guardian def20/hp100. Rounds: 30→70|60−20=40 (2 left),
+    // 20→50|40−20=20 (1 left), 10→40|20−20=0 → wiped. Defender keeps 40/100 hull.
+    const pv = previewBattle(stacks([['fighter', 3]]), stacks([['guardian', 1]]), data);
+    expect(pv.outcome).toBe('defender');
+    expect(pv.attacker.damageFraction).toBe(1);
+    expect(pv.defender.damageFraction).toBeCloseTo(0.6, 10);
+  });
+
+  it('an untouched side reads 0; an empty side reads 0 (nothing to lose)', () => {
+    // Pacifists never fire back — the attacker walks through unscathed.
+    const clean = previewBattle(stacks([['fighter', 2]]), stacks([['pacifist', 1]]), data);
+    expect(clean.attacker.damageFraction).toBe(0);
+    expect(clean.defender.damageFraction).toBe(1);
+    const walkover = previewBattle(stacks([['fighter', 1]]), [], data);
+    expect(walkover.defender.damageFraction).toBe(0);
+  });
+
+  it('measures against the RESIDUAL hull pool: a battle-worn wing has less left to lose', () => {
+    // count 2, pool 30 of max 40 (a consistent mid-battle stack): the denominator
+    // must be 30, so an untouched fight still reads 0 — not a phantom 25% loss.
+    const worn: UnitStack[] = [{ unit: 'fighter', count: 2, hp: 30 }];
+    expect(hullPool(worn, data)).toBe(30);
+    const pv = previewBattle(worn, stacks([['pacifist', 1]]), data);
+    expect(pv.attacker.damageFraction).toBe(0);
+  });
+
+  it('hullPool: healthy = count × effective hp; unknown units and empty stacks are skipped', () => {
+    expect(hullPool(stacks([['fighter', 2]]), data)).toBe(40);
+    expect(hullPool(stacks([['mystery', 5]]), data)).toBe(0);
+    expect(hullPool([{ unit: 'fighter', count: 0 }], data)).toBe(0);
+  });
+
+  it('shields are excluded: losing only shield reads as 0 hull damage', () => {
+    // aegis shield 15×2=30 absorbs the whole 20-dmg alpha of 2 fighters in round 1
+    // while its return fire (def 4×2=8) chews fighters — hull stays intact longer
+    // than shields; assert the pool ignores shieldHp entirely.
+    const shielded: UnitStack[] = [{ unit: 'aegis', count: 2, shieldHp: 5 }];
+    expect(hullPool(shielded, data)).toBe(100); // 2 × hp50 — shield state irrelevant
   });
 });
