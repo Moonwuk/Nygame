@@ -1,5 +1,6 @@
 export type {
   AccountStore,
+  ArsenalStore,
   AvaChallenge,
   AvaChallengeStatus,
   AvaChallengeStore,
@@ -23,6 +24,7 @@ export type {
   MatchStore,
   Medal,
   MedalStore,
+  OwnedArsenalItem,
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
@@ -31,6 +33,7 @@ export type {
 } from './types';
 export {
   MemoryAccountStore,
+  MemoryArsenalStore,
   MemoryAvaChallengeStore,
   MemoryAvaFeedStore,
   MemoryAvaResultStore,
@@ -45,6 +48,7 @@ export {
 export {
   migrate,
   PostgresAccountStore,
+  PostgresArsenalStore,
   PostgresAvaChallengeStore,
   PostgresAvaFeedStore,
   PostgresAvaResultStore,

@@ -21,6 +21,12 @@ export interface AuthApiDeps {
   users: UserStore;
   /** Mint a session token for an authenticated account (from serverConfig). */
   signSession(accountId: string, login: string): Promise<string>;
+  /** Post-registration hook (e.g. the starter-arsenal grant, ARS-2), awaited before
+   *  the 201 so the account's first read sees its grant. MUST be resilient: a throw
+   *  is swallowed here (registration already succeeded — never fail it for a
+   *  side-effect), so the hook owns its retries/logging; idempotent hooks are safe
+   *  to re-run out of band. */
+  onRegistered?(accountId: string, login: string): Promise<void>;
   /** Injectable clock + limits for deterministic tests. */
   now?: () => number;
   rateMax?: number;
@@ -90,6 +96,16 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
     if (!created.ok) {
       void reply.code(409);
       return { error: created.code };
+    }
+    // Post-registration side-effects (starter arsenal, ARS-2): awaited so the new
+    // account's first read sees them, but NEVER allowed to fail the registration
+    // itself — the account exists; an idempotent hook re-runs safely out of band.
+    if (deps.onRegistered) {
+      try {
+        await deps.onRegistered(created.userId, creds.login);
+      } catch {
+        /* the hook owns its logging/retries */
+      }
     }
     // Auto-login: registration IS the first login — hand the session token right away.
     const token = await deps.signSession(created.userId, creds.login);

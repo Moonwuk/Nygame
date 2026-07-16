@@ -37,6 +37,7 @@ import {
 import type { ActionGate } from '@void/action-layer';
 import { MatchRoom, type ActionReceipt, type RoomObservation } from './matchRoom';
 import type { MatchSnapshot, StoredReceipt } from './store';
+import { validateStarterArsenal, type StarterArsenalTemplate } from './arsenal';
 
 /**
  * A runnable dev match on the *real* simulation core — the smallest faithful
@@ -51,6 +52,18 @@ export function loadShippedData(): GameData {
   return loadGameData((name) =>
     JSON.parse(readFileSync(new URL(`../../../data/${name}`, import.meta.url), 'utf8')),
   );
+}
+
+/** The shipped starter-arsenal templates (ARS-2), validated against the shipped
+ *  catalogs — a template naming content that does not ship fails the boot
+ *  (fail-secure; the set itself is data — balancing it is a JSON edit). */
+export function loadStarterArsenal(data: GameData): StarterArsenalTemplate[] {
+  const templates = JSON.parse(
+    readFileSync(new URL('../../../data/starterArsenal.json', import.meta.url), 'utf8'),
+  ) as StarterArsenalTemplate[];
+  const issues = validateStarterArsenal(templates, data);
+  if (issues.length > 0) throw new Error(`E_INVALID_STARTER_ARSENAL: ${issues.join('; ')}`);
+  return templates;
 }
 
 /** The AvA-eligible map pool (AVA-5/7): every validated map in `data/maps` tagged

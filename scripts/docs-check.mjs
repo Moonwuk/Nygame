@@ -20,7 +20,7 @@
 //     предложенные и отклонённые доки).
 //   - ALLOW: точечные forward-ссылки на ещё не созданные файлы.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, dirname, normalize, basename } from 'node:path';
+import { join, dirname, normalize, basename, sep } from 'node:path';
 
 const ROOT = normalize(join(import.meta.dirname, '..'));
 
@@ -61,7 +61,9 @@ const fileSet = new Set(allFiles);
 const byBasename = new Set(allFiles.map((f) => basename(f)));
 
 const mdFiles = allFiles.filter(
-  (f) => f.endsWith('.md') && !HISTORICAL.some((h) => f.startsWith(h + '/')),
+  // `sep`, не '/': normalize даёт платформенный разделитель — с '/' историческое
+  // исключение не срабатывало на Windows и локальный гейт краснел на чистом main.
+  (f) => f.endsWith('.md') && !HISTORICAL.some((h) => f.startsWith(h + sep)),
 );
 
 // --- проверки ------------------------------------------------------------------

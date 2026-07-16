@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import type { PlayerId } from '@void/shared-core';
+import type { ArsenalItem, PlayerId } from '@void/shared-core';
 import type {
   AccountStore,
+  ArsenalStore,
   AvaChallenge,
   AvaChallengeStatus,
   AvaChallengeStore,
@@ -25,6 +26,7 @@ import type {
   MatchStore,
   Medal,
   MedalStore,
+  OwnedArsenalItem,
   ReceiptStore,
   SeatAssignment,
   StoredReceipt,
@@ -223,6 +225,23 @@ export async function migrate(pool: Pool): Promise<void> {
       PRIMARY KEY (account_id, medal_id)
     );
     CREATE INDEX IF NOT EXISTS medals_account_idx ON medals (account_id, at DESC);
+
+    -- Personal arsenal (ARS-2): what an account owns between sessions. item_id PK is
+    -- the idempotent-grant invariant (first write wins); transfer/consume are
+    -- owner-guarded conditional writes (double-sell impossible, soulbound never moves).
+    CREATE TABLE IF NOT EXISTS arsenal (
+      item_id     text PRIMARY KEY,
+      account_id  text NOT NULL,
+      kind        text NOT NULL,
+      form        text NOT NULL,
+      def_id      text NOT NULL,
+      grade       integer,
+      soulbound   boolean NOT NULL,
+      durability  integer,
+      origin      text NOT NULL,
+      acquired_at bigint NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS arsenal_account_idx ON arsenal (account_id);
   `);
 }
 
@@ -1276,6 +1295,112 @@ export class PostgresAvaSessionStore implements AvaSessionStore {
       `UPDATE ava_sessions SET war_declared_at = $2
        WHERE match_id = $1 AND war_at IS NOT NULL AND war_declared_at IS NULL`,
       [matchId, at],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+}
+
+interface ArsenalRow {
+  item_id: string;
+  account_id: string;
+  kind: string;
+  form: string;
+  def_id: string;
+  grade: number | null;
+  soulbound: boolean;
+  durability: number | null;
+  origin: string;
+  acquired_at: string;
+}
+
+function ownedItemOf(row: ArsenalRow): OwnedArsenalItem {
+  return {
+    itemId: row.item_id,
+    accountId: row.account_id,
+    kind: row.kind as ArsenalItem['kind'],
+    form: row.form as ArsenalItem['form'],
+    defId: row.def_id,
+    ...(row.grade === null ? {} : { grade: row.grade }),
+    soulbound: row.soulbound,
+    ...(row.durability === null ? {} : { durability: row.durability }),
+    origin: row.origin as ArsenalItem['origin'],
+    acquiredAt: Number(row.acquired_at),
+  };
+}
+
+const ARSENAL_COLS =
+  'item_id, account_id, kind, form, def_id, grade, soulbound, durability, origin, acquired_at';
+
+/** Postgres arsenal store (ARS-2). The PK makes `grant` idempotent (ON CONFLICT DO
+ *  NOTHING — first write wins); transfer/consume are owner-guarded conditional writes,
+ *  so a double-sell race and a soulbound move are impossible at the storage level. */
+export class PostgresArsenalStore implements ArsenalStore {
+  constructor(private readonly pool: Pool) {}
+
+  async grant(item: OwnedArsenalItem): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO arsenal (${ARSENAL_COLS})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (item_id) DO NOTHING`,
+      [
+        item.itemId,
+        item.accountId,
+        item.kind,
+        item.form,
+        item.defId,
+        item.grade ?? null,
+        item.soulbound,
+        item.durability ?? null,
+        item.origin,
+        item.acquiredAt,
+      ],
+    );
+  }
+
+  async get(itemId: string): Promise<OwnedArsenalItem | null> {
+    const r = await this.pool.query<ArsenalRow>(
+      `SELECT ${ARSENAL_COLS} FROM arsenal WHERE item_id = $1`,
+      [itemId],
+    );
+    return r.rows[0] ? ownedItemOf(r.rows[0]) : null;
+  }
+
+  async listOf(accountId: string): Promise<ArsenalItem[]> {
+    const r = await this.pool.query<ArsenalRow>(
+      `SELECT ${ARSENAL_COLS} FROM arsenal WHERE account_id = $1
+       ORDER BY kind, def_id, item_id`,
+      [accountId],
+    );
+    return r.rows.map((row) => {
+      const { accountId: _owner, ...item } = ownedItemOf(row);
+      return item;
+    });
+  }
+
+  async transfer(
+    itemId: string,
+    from: string,
+    to: string,
+  ): Promise<{ ok: true } | { ok: false; code: 'E_NOT_OWNER' | 'E_SOULBOUND' }> {
+    // The conditional UPDATE is the invariant: only the current owner's, non-soulbound
+    // item moves — atomically, so two racing buyers cannot both win.
+    const r = await this.pool.query(
+      `UPDATE arsenal SET account_id = $3
+       WHERE item_id = $1 AND account_id = $2 AND NOT soulbound`,
+      [itemId, from, to],
+    );
+    if ((r.rowCount ?? 0) > 0) return { ok: true };
+    // Post-hoc classification only (the guard above already held the invariant).
+    const row = await this.get(itemId);
+    return row && row.accountId === from && row.soulbound
+      ? { ok: false, code: 'E_SOULBOUND' }
+      : { ok: false, code: 'E_NOT_OWNER' };
+  }
+
+  async consume(itemId: string, accountId: string): Promise<boolean> {
+    const r = await this.pool.query(
+      `DELETE FROM arsenal WHERE item_id = $1 AND account_id = $2`,
+      [itemId, accountId],
     );
     return (r.rowCount ?? 0) > 0;
   }

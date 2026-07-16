@@ -1,0 +1,66 @@
+import {
+  parseArsenalItem,
+  validateArsenalItem,
+  type ArsenalItem,
+  type GameData,
+} from '@void/shared-core';
+import type { ArsenalStore } from './store';
+
+/**
+ * ARS-2 — the starter arsenal: every fresh account owns a small blueprint set from
+ * its first second, so "an empty arsenal" never exists as a state (the same lesson
+ * as the one-tap scientist pick: a first choice must never be a wall of empty
+ * slots). The set itself is DATA (`data/starterArsenal.json`) — balancing it is a
+ * JSON edit, not code.
+ *
+ * Grant rules:
+ *  - item ids are deterministic (`starter:<accountId>:<kind>:<defId>`), and the
+ *    store's grant is idempotent by id — a replayed registration (or a re-run of
+ *    the grant after a crash) can never duplicate the set;
+ *  - everything is a SOULBOUND blueprint: tradable starter items would make
+ *    registration farming a mint for the auction (anti-abuse; ARS-0 anti-RMT).
+ */
+
+/** One line of `data/starterArsenal.json` — the template the grant stamps per account. */
+export interface StarterArsenalTemplate {
+  kind: ArsenalItem['kind'];
+  defId: string;
+}
+
+/** Validate the starter templates against the shipped catalogs (fail-secure at
+ *  boot: a template referencing content that does not ship refuses to load). */
+export function validateStarterArsenal(
+  templates: readonly StarterArsenalTemplate[],
+  data: GameData,
+): string[] {
+  const issues: string[] = [];
+  for (const t of templates) {
+    const item = parseArsenalItem({ itemId: `starter:template:${t.kind}:${t.defId}`, ...t });
+    issues.push(...validateArsenalItem(item, data));
+  }
+  return issues;
+}
+
+/** Grant the starter set to an account — idempotent end to end (deterministic item
+ *  ids + the store's first-write-wins grant), so calling it twice, or replaying a
+ *  registration, changes nothing. Returns the granted item count (the full set). */
+export async function grantStarterArsenal(
+  store: ArsenalStore,
+  accountId: string,
+  templates: readonly StarterArsenalTemplate[],
+  now: number,
+): Promise<number> {
+  for (const t of templates) {
+    await store.grant({
+      itemId: `starter:${accountId}:${t.kind}:${t.defId}`,
+      accountId,
+      kind: t.kind,
+      form: 'blueprint',
+      defId: t.defId,
+      soulbound: true, // starter items never trade — registration farming mints nothing
+      origin: 'starter',
+      acquiredAt: now,
+    });
+  }
+  return templates.length;
+}
