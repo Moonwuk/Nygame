@@ -1390,7 +1390,6 @@ function divisionsHtml(planetId: string): string {
   h += btn('mobilize', pick.officer ? `o${idx - officerBase}` : String(idx), t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }), afford && f.count > 0);
   h += btn('divdesign', '', t('⚙ Конструктор'), true);
   h += `</div>`;
-  h += `<div class="hint">${t('Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.')}</div>`;
   return h;
 }
 
@@ -4304,9 +4303,10 @@ function cardHeader(color: string, title: string, sub: string): string {
     <button class="pclose" data-act="close" data-arg="">✕</button>
   </div>`;
 }
-function tabButton(tab: PlanetTab, label: string, count: number): string {
+function tabButton(tab: PlanetTab, label: string, count: number, desc?: string): string {
   const on = planetTab === tab ? ' on' : '';
-  return `<button class="ptab${on}" data-act="tab" data-arg="${tab}">${label}<b>${count}</b></button>`;
+  const d = desc ? ` data-desc="${desc}"` : '';
+  return `<button class="ptab${on}" data-act="tab" data-arg="${tab}"${d}>${label}<b>${count}</b></button>`;
 }
 function unitRows(stacks: Array<{ unit: string; count: number }>): string {
   if (!stacks.length) {
@@ -4703,7 +4703,7 @@ function planetPanelHtml(p: Planet): string {
     }</div>`;
   }
 
-  h += `<div class="ptabs">${tabButton('ground', t('Земля'), ground.length)}${tabButton(
+  h += `<div class="ptabs">${tabButton('ground', t('Земля'), ground.length, 'tab:ground')}${tabButton(
     'ships',
     t('Флот'),
     ships.length + here.length,
@@ -4713,7 +4713,9 @@ function planetPanelHtml(p: Planet): string {
   // side-by-side columns (filling the wide panel), on phones they stack vertically.
   const cols: string[] = [];
   if (planetTab === 'ground') {
-    cols.push(`<div class="sec">${t('Наземные части')}</div>` + unitRows(ground));
+    // One tile row (icon · count · name) instead of a row-per-unit list; the tab's
+    // old bottom hint moved into the ЗЕМЛЯ tab's hover dossier ('tab:ground').
+    cols.push(`<div class="sec">${t('Наземные части')}</div>` + garrisonTilesHtml(ground));
     if (mine) {
       cols.push(divisionsHtml(p.id));
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
@@ -4723,9 +4725,6 @@ function planetPanelHtml(p: Planet): string {
           buildButtons(p.id, groundBuilds, 'unit'),
       );
     }
-    cols.push(
-      `<div class="hint">${t('Наземные части обороняют миры; грузятся на флот из панели флота.')}</div>`,
-    );
   } else if (planetTab === 'ships') {
     // Built ships now auto-rally to orbit (see fleetLaunchModule), so the garrison
     // normally holds no spacecraft — only surface the section if some linger.
@@ -5061,6 +5060,13 @@ function objDossier(key: string): Dossier | null {
     return {
       name: t('Флот'),
       body: t('Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.'),
+    };
+  }
+  if (key === 'tab:ground') {
+    // The ЗЕМЛЯ tab's hover dossier — carries what used to be the tab's bottom hint.
+    return {
+      name: t('Земля'),
+      body: t('Наземные части обороняют миры; грузятся на флот из панели флота.'),
     };
   }
   if (key.startsWith('c:')) return constructionDossier(key);
@@ -5643,6 +5649,18 @@ function codexTile(kind: 'b' | 'u', id: string, label: string): string {
   const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
   const name = kind === 'b' ? buildingName(id) : unitDossier(id)?.name ?? displayUnit(id);
   return `<button class="ptile" data-codex="${kind}:${id}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+}
+/** Ground-garrison tiles (the ЗЕМЛЯ tab): one flowing row of icon·count·name chips.
+ *  Tap = full codex dossier; on PC the data-desc also feeds the cursor tooltip. */
+function garrisonTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
+  const tiles = stacks
+    .filter((u) => u.count > 0)
+    .map((u) => {
+      const name = unitDossier(u.unit)?.name ?? displayUnit(u.unit);
+      return `<button class="ptile" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}×</span><span class="pt-n">${esc(name)}</span></button>`;
+    })
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : `<div class="row dim">${t('нет')}</div>`;
 }
 /** A row of ship/troop tiles for a fleet's composition — tap one for its full specs. */
 function unitTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
@@ -8076,7 +8094,9 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 /** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
-const FORM_ICON: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
+// Text-presentation glyphs only (match UNIT_ICON) — the emoji originally here
+// (🪖👥🎖) have no text glyph in common monospace stacks and rendered as tofu ▯.
+const FORM_ICON: Record<string, string> = { militia: '▿', heavy_infantry: '◆', special_forces: '✱', tank: '▰' };
 const FORM_RU: Record<string, string> = { militia: 'Ополчение', heavy_infantry: 'Тяжёлая пехота', special_forces: 'Спецназ', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 

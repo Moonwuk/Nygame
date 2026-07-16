@@ -965,8 +965,6 @@ export const en: Record<string, string> = {
   '≥4 ополчения — берут числом': '≥4 militia — winning by numbers',
   'Именной шаблон офицера: состав закреплён, редактировать нельзя.':
     "An officer's named template: composition locked, no editing.",
-  'Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.':
-    'A division is a snapshot of its template: editing a design never touches armies already fielded. On your own world it heals +1 HP/unit/day; wiped out, it disappears.',
   'Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.':
     'Tap a slot to cycle the unit type: militia → heavy infantry → special forces → tank. Tanks shred any infantry; special forces are the one infantry that threatens armour; heavy infantry holds the line.',
   '‹ назад': '‹ back',

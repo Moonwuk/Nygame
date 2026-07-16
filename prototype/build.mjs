@@ -167,6 +167,8 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .ptile:active{background:rgba(53,214,230,.24);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
+.ptile .pt-n{font-size:9px;color:var(--ink);letter-spacing:.3px;white-space:nowrap;
+  max-width:86px;overflow:hidden;text-overflow:ellipsis;}
 /* long-press name bubble over a codex tile (mobile — touch has no hover/title) */
 #holdtip{position:fixed;z-index:60;display:none;max-width:70vw;padding:6px 10px;pointer-events:none;
   background:rgba(4,16,22,.96);border:1px solid var(--cyan);border-radius:7px;color:var(--cyan);
@@ -1687,21 +1689,23 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #toasts{max-width:min(61vw,520px);}
   #railtools{max-height:calc(66.7vh - 120px);max-height:calc(66.7dvh - 120px);}
   #goals{max-width:min(230px,40vw);}
-  #codex .cxbox{width:min(440px,62.5vw);max-height:56vh;}
-  #codexhub .chbox{width:min(460px,62.5vw);max-height:57vh;}
+  /* content windows widen to ~80% of the screen (53.4vw layout × zoom 1.5) — the
+     console windows outgrew their phone-sized boxes (long RU copy overflowed) */
+  #codex .cxbox{width:53.4vw;max-height:56vh;}
+  #codexhub .chbox{width:53.4vw;max-height:57vh;}
   #intro .inbox{width:min(400px,61vw);max-height:56vh;}
   #recap .rcbox{width:min(440px,62.5vw);max-height:57vh;}
   #playercard .pcbox{width:min(380px,61vw);max-height:57vh;}
   #settings .setbox{width:min(380px,61vw);max-height:57vh;}
   #warprompt .wpbox{width:min(360px,61vw);}
-  #diplo .dpbox{width:min(460px,64vw);max-height:58.5vh;}
+  #diplo .dpbox{width:53.4vw;max-height:58.5vh;}
   .dp-convo{height:min(41vh,440px);}
   #splitdlg .sbox{width:min(440px,62.5vw);max-height:56vh;}
-  #logwin .lwbox{width:min(440px,62.5vw);max-height:46.5vh;}
-  #tech .twbox,#steward .twbox,#hero .twbox,#divdesign .twbox{width:min(460px,62.5vw);max-height:54.5vh;}
-  #scipick .twbox{width:min(560px,64vw);max-height:58.5vh;}
-  #market .mkbox{width:min(460px,62.5vw);max-height:54.5vh;}
-  #constructor .cnbox{width:min(960px,64vw);max-height:60vh;}
+  #logwin .lwbox{width:53.4vw;max-height:46.5vh;}
+  #tech .twbox,#steward .twbox,#hero .twbox,#divdesign .twbox{width:53.4vw;max-height:54.5vh;}
+  #scipick .twbox{width:53.4vw;max-height:58.5vh;}
+  #market .mkbox{width:53.4vw;max-height:54.5vh;}
+  #constructor .cnbox{width:53.4vw;max-height:60vh;}
   #endscreen .es-box{width:min(440px,62.5vw);max-height:61vh;}
   #connect .cbox,#connect .cwrap{width:min(520px,62.5vw);}
   #connect .mlist{max-height:30.5vh;}
@@ -1723,7 +1727,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #updbar{width:min(440px,calc(66.7vw - 20px));}
   #testmode .tmbox{width:min(620px,64vw);max-height:61vh;}
   #emblempick .ep-box{width:min(340px,61vw);}
-  #corp .corpbox{width:min(760px,64vw);max-height:61vh;}
+  #corp .corpbox{width:53.4vw;max-height:61vh;}
   /* base (portrait) bottom-sheet panel + the bars it lifts */
   #side{max-height:22.5vh;}
   body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:calc(22.5vh + 12px);}
