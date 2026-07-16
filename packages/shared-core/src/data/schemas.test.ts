@@ -21,7 +21,7 @@ function loadShippedBundle(): Record<string, unknown> {
 describe('game data schema (docs/architecture.md §2)', () => {
   it('validates the shipped data bundle', () => {
     const data = parseGameData(loadShippedBundle());
-    expect(data.version).toBe('0.1.0');
+    expect(data.version).toBe('0.1.1');
     expect(data.resources).toContain('microelectronics');
     expect(data.units.siege_lance?.stats.range).toBe(300); // artillery firing radius (map units)
     expect(data.units.cruiser?.upkeep.credits).toBe(8); // daily upkeep
@@ -163,9 +163,9 @@ describe('game data schema (docs/architecture.md §2)', () => {
     expect(radar).toBeDefined();
     expect(buildingMaxLevel(radar!)).toBe(3);
     // radarRange is a Euclidean distance (map units), not jumps.
-    expect(buildingLevel(radar!, 1).radarRange).toBe(300);
-    expect(buildingLevel(radar!, 2).radarRange).toBe(500);
-    expect(buildingLevel(radar!, 3).radarRange).toBe(700);
+    expect(buildingLevel(radar!, 1).radarRange).toBe(180);
+    expect(buildingLevel(radar!, 2).radarRange).toBe(300);
+    expect(buildingLevel(radar!, 3).radarRange).toBe(420);
   });
 
   it('applies defaults for omitted optional fields', () => {

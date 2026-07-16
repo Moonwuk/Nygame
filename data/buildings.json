@@ -85,7 +85,7 @@
     "buildTimeHours": 6,
     "produces": {},
     "hp": 18,
-    "radarRange": 300,
+    "radarRange": 180,
     "scoreValue": 6,
     "upgrades": [
       {
@@ -95,7 +95,7 @@
         },
         "buildTimeHours": 10,
         "hp": 26,
-        "radarRange": 500,
+        "radarRange": 300,
         "upkeep": {
           "energy": 16
         }
@@ -107,7 +107,7 @@
         },
         "buildTimeHours": 14,
         "hp": 34,
-        "radarRange": 700,
+        "radarRange": 420,
         "upkeep": {
           "energy": 24
         }

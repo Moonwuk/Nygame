@@ -11,7 +11,7 @@
     "name": "Радар-модуль",
     "slot": "utility",
     "tag": "horizontal",
-    "effects": { "stats": { "radarRange": 300 } },
+    "effects": { "stats": { "radarRange": 180 } },
     "cost": { "metal": 55 },
     "allowed": { "domain": "space" }
   },

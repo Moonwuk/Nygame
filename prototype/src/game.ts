@@ -245,7 +245,7 @@ export const data: GameData = parseGameData({
       faction: 'blue',
       stats: { attack: 5, defense: 4, speed: 64, hp: 12, cargoCapacity: 1 },
       signature: 1, // quiet recon hull
-      radarRange: 350, // projects fleet radar — read by both the core fog and the prototype view
+      radarRange: 210, // projects fleet radar — read by both the core fog and the prototype view
       cost: { metal: 20 },
       buildTimeHours: 1,
       upkeep: { credits: 1 },
@@ -395,7 +395,7 @@ export const data: GameData = parseGameData({
     },
     radar_module: {
       name: 'Радар-модуль', slot: 'utility', tag: 'horizontal',
-      effects: { stats: { radarRange: 300 } }, cost: { metal: 55 }, allowed: { domain: 'space' },
+      effects: { stats: { radarRange: 180 } }, cost: { metal: 55 }, allowed: { domain: 'space' },
     },
     ion_engine: {
       name: 'Ионный двигатель', slot: 'utility', tag: 'vertical',
@@ -564,13 +564,13 @@ export const data: GameData = parseGameData({
       // they agree by construction. A radar only paints a SIGNATURE for a node in its
       // outer band that is not already identified, so the reach must clear your own
       // border to the next ring of worlds — on the current map neighbours sit ~205 out
-      // (auto-identified, 1 hop) and the next ring ~349, so L1 (400) reaches past 349.
-      radarRange: 400,
+      // (auto-identified, 1 hop) and the next ring ~349, so only L3 (420) reaches past 349.
+      radarRange: 240,
       upkeep: { energy: 6 },
       scoreValue: 2,
       upgrades: [
-        { cost: { metal: 180, credits: 80 }, buildTimeHours: 5, hp: 28, radarRange: 550, upkeep: { energy: 10 } },
-        { cost: { metal: 300, credits: 140 }, buildTimeHours: 7, hp: 38, radarRange: 700, upkeep: { energy: 16 } },
+        { cost: { metal: 180, credits: 80 }, buildTimeHours: 5, hp: 28, radarRange: 330, upkeep: { energy: 10 } },
+        { cost: { metal: 300, credits: 140 }, buildTimeHours: 7, hp: 38, radarRange: 420, upkeep: { energy: 16 } },
       ],
     },
     // space fortress — only built in an asteroid field; turns the junction into a
