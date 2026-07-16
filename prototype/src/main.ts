@@ -7981,6 +7981,7 @@ if ((localStorage.getItem('void.nick') ?? '').trim()) openHub();
 const setupEl = $('setup');
 const setupMapEl = $('setupmap');
 const setupSlotsEl = $('setupslots');
+const setupFactionsEl = $('setupfactions');
 const setupSpeedEl = $('setupspeed');
 const setupHintEl = $('setuphint');
 const setupGoEl = $('setupgo') as HTMLButtonElement;
@@ -8070,19 +8071,22 @@ function factionBonusLine(fid: string): string {
 
 function renderSetupSlots(): void {
   // The faction picker (H3): four houses, each a pure passive bonus — pick yours.
-  let h = `<div class="fph">${t('Фракция — пассивный бонус дома')}</div><div class="fpick">`;
+  // Lives in its own container (#setupfactions, the left setup column); the team
+  // toggle + seat rows fill #setupslots (the right column).
+  let f2 = `<div class="fph">${t('Фракция — пассивный бонус дома')}</div><div class="fpick">`;
   for (const fid of Object.keys(data.factions)) {
     const f = data.factions[fid];
     if (!f) continue;
     const on = fid === setupFaction;
-    h +=
+    f2 +=
       `<button class="fchip${on ? ' on' : ''}" data-fpick="${fid}"><b>${esc(tData(f.name))}</b>` +
       `<span>${factionBonusLine(fid)}</span></button>`;
   }
-  h += `</div>`;
+  f2 += `</div>`;
+  setupFactionsEl.innerHTML = f2;
   // Team-battle toggle: sides fight as allies. Only meaningful with ≥2 rivals (a 2v2
   // needs three AI seats on); shown always so the player can arm it before adding them.
-  h +=
+  let h =
     `<div class="tmrow"><button class="tmtog${setupTeams ? ' on' : ''}" data-teamtog="1">` +
     `${setupTeams ? '⚔ ' + t('Командный бой: ВКЛ') : t('Командный бой: выкл')}</button>` +
     (setupTeams ? `<span class="tmhint">${t('одна сторона — союзники')}</span>` : '') +
@@ -8413,13 +8417,13 @@ setupMapEl.addEventListener('click', (ev) => {
   setupStart = pick;
   renderSetup();
 });
-setupSlotsEl.addEventListener('click', (ev) => {
+setupFactionsEl.addEventListener('click', (ev) => {
   const fp = (ev.target as Element).closest('[data-fpick]');
-  if (fp) {
-    setupFaction = fp.getAttribute('data-fpick') ?? setupFaction;
-    renderSetup();
-    return;
-  }
+  if (!fp) return;
+  setupFaction = fp.getAttribute('data-fpick') ?? setupFaction;
+  renderSetup();
+});
+setupSlotsEl.addEventListener('click', (ev) => {
   if ((ev.target as Element).closest('[data-teamtog]')) {
     setupTeams = !setupTeams;
     renderSetup();

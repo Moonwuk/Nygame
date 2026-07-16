@@ -1709,7 +1709,17 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #connect .ccrest .wtag{letter-spacing:clamp(2px,.93vw,5px);}
   #lobby .lbox{width:min(420px,62.5vw);max-height:62.5vh;}
   #lobby .lroster{max-height:min(38.5vh,520px);}
-  #setup .sbox{width:min(560px,63vw);max-height:61vh;}
+  /* skirmish setup on PC: two side-by-side card-columns (map+faction | seats+speed)
+     instead of one narrow scrolling stack — the box widens to fit both. Each column
+     scrolls on its own; the title and the LAUNCH/Back buttons never leave the screen. */
+  #setup .sbox{width:min(1080px,62vw);max-height:61vh;display:flex;flex-direction:column;overflow:hidden;}
+  #setup .spane{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;}
+  #setup .scol{min-height:0;overflow-y:auto;border:1px solid var(--line-hi);border-radius:12px;
+    padding:14px 16px;background:rgba(255,255,255,.015);}
+  #setup .scol .ssub{margin-top:0;}
+  #setup .scol .fpick,#setup .scol .sspeed{margin-bottom:2px;}
+  #setup .sgo{margin-top:14px;}
+  #setup .sgo,#setup .scancel{flex:0 0 auto;}
   #updbar{width:min(440px,calc(66.7vw - 20px));}
   #testmode .tmbox{width:min(620px,64vw);max-height:61vh;}
   #emblempick .ep-box{width:min(340px,61vw);}
@@ -1974,19 +1984,24 @@ const page = (js) => `<!doctype html>
   <div class="sbox">
     <div class="stitle"><span class="dia"></span><b data-i18n>НАСТРОЙКА СХВАТКИ</b></div>
     <div id="setup-start" class="spane">
-      <p class="ssub" data-i18n>Выберите свой домашний мир на карте, задайте число соперников-ботов и запускайте. Пустые места займут боты — выключите место, чтобы командовать меньшим сектором, или выключите все ради мирной одиночной песочницы для знакомства с интерфейсом.</p>
-      <svg id="setupmap" class="smap" preserveAspectRatio="xMidYMid meet"></svg>
-      <p class="smaphint" id="setuphint" data-i18n>Тапните светящийся мир, чтобы выбрать старт</p>
-      <div id="setupslots" class="sslots"></div>
-      <div class="sspeedlabel" data-i18n>Скорость времени</div>
-      <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.</p>
-      <div id="setupspeed" class="sspeed">
-        <button class="spdchip" type="button" data-spd="1">×1</button>
-        <button class="spdchip" type="button" data-spd="2">×2</button>
-        <button class="spdchip" type="button" data-spd="5">×5</button>
-        <button class="spdchip" type="button" data-spd="10">×10</button>
-        <button class="spdchip" type="button" data-spd="50">×50</button>
-        <button class="spdchip" type="button" data-spd="100">×100</button>
+      <div class="scol">
+        <p class="ssub" data-i18n>Выберите свой домашний мир на карте, задайте число соперников-ботов и запускайте. Пустые места займут боты — выключите место, чтобы командовать меньшим сектором, или выключите все ради мирной одиночной песочницы для знакомства с интерфейсом.</p>
+        <svg id="setupmap" class="smap" preserveAspectRatio="xMidYMid meet"></svg>
+        <p class="smaphint" id="setuphint" data-i18n>Тапните светящийся мир, чтобы выбрать старт</p>
+        <div id="setupfactions"></div>
+      </div>
+      <div class="scol">
+        <div id="setupslots" class="sslots"></div>
+        <div class="sspeedlabel" data-i18n>Скорость времени</div>
+        <p class="sspeedhint" data-i18n>×1 — реальное время (час пути = час жизни, мир живёт и офлайн). Для быстрой партии выбери ×10–×100.</p>
+        <div id="setupspeed" class="sspeed">
+          <button class="spdchip" type="button" data-spd="1">×1</button>
+          <button class="spdchip" type="button" data-spd="2">×2</button>
+          <button class="spdchip" type="button" data-spd="5">×5</button>
+          <button class="spdchip" type="button" data-spd="10">×10</button>
+          <button class="spdchip" type="button" data-spd="50">×50</button>
+          <button class="spdchip" type="button" data-spd="100">×100</button>
+        </div>
       </div>
     </div>
     <button id="setupgo" class="sgo" disabled data-i18n>ЗАПУСК</button>
