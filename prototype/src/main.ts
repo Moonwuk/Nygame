@@ -363,6 +363,7 @@ function esc(s: string): string {
 // canvas ctx (`cx`) + current DPR, and the module owns the dpr-keyed sprite caches. `rgba`
 // is imported directly (a pure colour helper).
 function blitGlow(color: string, x: number, y: number, r: number, a: number): void {
+  if (!glowFx) return; // graphics pref: glow & haloes off → skip the bloom discs entirely
   hdBlitGlow(cx, DPR, color, x, y, r, a);
 }
 function blitSphere(color: string, x: number, y: number, r: number, a = 1): void {
@@ -745,6 +746,33 @@ function setShowOwnPings(v: boolean): void {
   showOwnPings = v;
   try {
     localStorage.setItem('void.showOwnPings', v ? '1' : '0');
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
+// --- graphics preferences (client-only, localStorage) ------------------------
+// Cosmetic quality knobs, never sent to the server and never touching the sim.
+// Both default ON; a stored '0' turns the effect off on weaker devices / for a
+// flatter, faster read of the map.
+// Glow & haloes: the soft bloom discs (blitGlow) around worlds, fleets and
+// frontiers. Off makes blitGlow a no-op — cheaper frames, a crisper flat map.
+let glowFx = typeof localStorage === 'undefined' || localStorage.getItem('void.glowFx') !== '0';
+function setGlowFx(v: boolean): void {
+  glowFx = v;
+  try {
+    localStorage.setItem('void.glowFx', v ? '1' : '0');
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
+// Deep-space backdrop: the drifting nebulae + faint star ticks baked into the
+// static layer. Off leaves the flat fill + plotting grid. Toggling rebuilds the
+// bake (starfield flag rides the static-layer cache signature in buildStaticLayer).
+let starfield = typeof localStorage === 'undefined' || localStorage.getItem('void.starfield') !== '0';
+function setStarfield(v: boolean): void {
+  starfield = v;
+  try {
+    localStorage.setItem('void.starfield', v ? '1' : '0');
   } catch {
     /* private-mode / storage-full: keep the in-memory value, just don't persist */
   }
@@ -3128,7 +3156,7 @@ function buildStaticLayer(): void {
   // Rebuild only when the content/size changes, or when the camera has SETTLED at a
   // new spot. During an active pan/zoom we skip the O(n²) re-tessellation entirely
   // and let blitStaticLayer follow the camera with the last bake (transformed).
-  const content = `${VW}x${VH}:${DPR.toFixed(2)}|${ME}|${ownersSig()}`;
+  const content = `${VW}x${VH}:${DPR.toFixed(2)}|${ME}|${ownersSig()}|${starfield ? 1 : 0}`;
   const sizeOk = bg.width === Math.round(VW * DPR);
   const camSame = cam.x === bgCam.x && cam.y === bgCam.y && cam.scale === bgCam.scale;
   // Re-bake whenever the camera moved. The bake is viewport-sized, so following a pan
@@ -3149,15 +3177,17 @@ function buildStaticLayer(): void {
   //    "alive" motion comes from the live layers (lane packets, scan sweep, fleets).
   g.fillStyle = '#02060c';
   g.fillRect(0, 0, VW, VH);
-  for (const neb of NEBULAE) {
-    const r = neb.r * (MOBILE ? 0.7 : 1);
-    const grd = g.createRadialGradient(neb.x * VW, neb.y * VH, 0, neb.x * VW, neb.y * VH, r);
-    grd.addColorStop(0, rgba(neb.color, 0.06));
-    grd.addColorStop(0.45, rgba(neb.color, 0.024));
-    grd.addColorStop(1, 'rgba(2,6,12,0)');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, VW, VH);
-  }
+  // Graphics pref: `starfield` off leaves the flat fill + grid (nebulae/stars skipped).
+  if (starfield)
+    for (const neb of NEBULAE) {
+      const r = neb.r * (MOBILE ? 0.7 : 1);
+      const grd = g.createRadialGradient(neb.x * VW, neb.y * VH, 0, neb.x * VW, neb.y * VH, r);
+      grd.addColorStop(0, rgba(neb.color, 0.06));
+      grd.addColorStop(0.45, rgba(neb.color, 0.024));
+      grd.addColorStop(1, 'rgba(2,6,12,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, VW, VH);
+    }
   const gap = Math.max(28, 56 * cam.scale);
   const ox = ((cam.x % gap) + gap) % gap;
   const oy = ((cam.y % gap) + gap) % gap;
@@ -3173,10 +3203,11 @@ function buildStaticLayer(): void {
     g.lineTo(VW, y);
   }
   g.stroke();
-  for (const st of STARS) {
-    g.fillStyle = rgba('#9fe6e0', st.b);
-    g.fillRect(st.x * VW, st.y * VH, 1, 1);
-  }
+  if (starfield)
+    for (const st of STARS) {
+      g.fillStyle = rgba('#9fe6e0', st.b);
+      g.fillRect(st.x * VW, st.y * VH, 1, 1);
+    }
 
   // PROVINCES — political map (Bytro-style). Every sector is a filled CELL of a
   // weighted Voronoi (power diagram) over the sector centres: the cells tile the
@@ -5112,7 +5143,7 @@ function playerCardHtml(): string {
     row(t('Фракция'), esc(faction)) +
     row(t('Миров под контролем'), String(worlds)) +
     row(t('Юнитов'), String(units)) +
-    row(t('Очки'), `${score} / ${SCORE_LIMIT}${need === 0 ? ' · ★ ' + t('ПОБЕДА') : ' · ' + t('до победы {n}', { n: need })}`) +
+    row(t('Очки'), `${score} / ${SCORE_LIMIT}${need === 0 ? ' · ★ ' + t('ПОБЕДА') : ''}`) +
     `</div><div class="pc-sec">${t('Боевой счёт')}</div><div class="pc-stats">` +
     row(t('⚔ Уничтожено юнитов врага'), kfmt(killStats.destroyed)) +
     row(t('☠ Потеряно своих'), kfmt(killStats.lost)) +
@@ -7874,9 +7905,10 @@ for (const tile of Array.from(document.querySelectorAll('#hp-more .hub-tile[data
 }
 
 // --- settings overlay (hub → «Ещё» → Настройки) -----------------------------
-// Client-only display preferences (localStorage), never sent to the server. One control
-// for now: the radar sweep's visual opacity — 0% hides the rotating arm, anything between
-// just dims it. Purely cosmetic; the radar mechanic (contact detection) is unaffected.
+// Client-only display preferences (localStorage), never sent to the server, grouped into
+// «Интерфейс» (radar-sweep opacity, own ping markers) and «Графика» (glow & haloes,
+// star backdrop). All purely cosmetic — the radar mechanic (contact detection) and the
+// simulation are untouched at every setting.
 const settingsEl = $('settings');
 function renderSettings(): void {
   const pct = Math.round(sweepOpacity * 100);
@@ -7891,6 +7923,15 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Свои метки на карте')}<span class="set-sub">${t('булавки 📍 ваших пингов — метки союзников видны всегда')}</span></div>` +
     `<div class="set-ctl"><label class="set-switch"><input id="set-ownpings" type="checkbox"${showOwnPings ? ' checked' : ''} aria-label="${t('Свои метки на карте')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-ownpings-val" class="set-val">${showOwnPings ? t('вкл') : t('выкл')}</span></div>` +
     `</div>` +
+    `<div class="pc-sec">${t('Графика')}</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Свечение и ореолы')}<span class="set-sub">${t('мягкое сияние вокруг миров, флотов и границ — выключите ради чёткой карты и скорости')}</span></div>` +
+    `<div class="set-ctl"><label class="set-switch"><input id="set-glow" type="checkbox"${glowFx ? ' checked' : ''} aria-label="${t('Свечение и ореолы')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-glow-val" class="set-val">${glowFx ? t('вкл') : t('выкл')}</span></div>` +
+    `</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Звёздный фон')}<span class="set-sub">${t('дрейфующие туманности и звёзды на фоне — выключите для плоского фона')}</span></div>` +
+    `<div class="set-ctl"><label class="set-switch"><input id="set-starfield" type="checkbox"${starfield ? ' checked' : ''} aria-label="${t('Звёздный фон')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-starfield-val" class="set-val">${starfield ? t('вкл') : t('выкл')}</span></div>` +
+    `</div>` +
     `<button class="pc-close" id="set-close" type="button">${t('ГОТОВО')}</button>` +
     `</div>`;
   const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
@@ -7904,6 +7945,18 @@ function renderSettings(): void {
   own?.addEventListener('change', () => {
     setShowOwnPings(own.checked);
     if (ownVal) ownVal.textContent = own.checked ? t('вкл') : t('выкл');
+  });
+  const glow = document.getElementById('set-glow') as HTMLInputElement | null;
+  const glowVal = document.getElementById('set-glow-val');
+  glow?.addEventListener('change', () => {
+    setGlowFx(glow.checked);
+    if (glowVal) glowVal.textContent = glow.checked ? t('вкл') : t('выкл');
+  });
+  const star = document.getElementById('set-starfield') as HTMLInputElement | null;
+  const starVal = document.getElementById('set-starfield-val');
+  star?.addEventListener('change', () => {
+    setStarfield(star.checked);
+    if (starVal) starVal.textContent = star.checked ? t('вкл') : t('выкл');
   });
   document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
 }
@@ -9173,7 +9226,7 @@ function frame(nowReal: number) {
   const need = Math.max(0, SCORE_LIMIT - score);
   const statusHtml =
     `<span id="clock">${t('День {n}', { n: d })} · ${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}</span>` +
-    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ ' + t('ПОБЕДА') : ' · ' + t('до победы {n}', { n: need })}</span>` +
+    `<span class="dstat${need === 0 ? ' win' : ''}">✦ ${score}/${SCORE_LIMIT}${need === 0 ? ' · ★ ' + t('ПОБЕДА') : ''}</span>` +
     `<span class="dl-donate" title="${t('Суверены — донат-валюта')}"><i>◆</i>${kfmt(SOVEREIGNS)}</span>`;
   if (statusHtml !== lastClockText) {
     devlineEl.innerHTML = statusHtml;

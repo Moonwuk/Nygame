@@ -606,7 +606,6 @@ export const en: Record<string, string> = {
   'данные о флотах': 'fleet data',
   десант: 'landing',
   'до {n} очк.': 'up to {n} pts.',
-  'до победы {n}': '{n} to win',
   'доминированием в галактике': 'by galactic domination',
   'достижением лимита очков': 'by score limit',
   'ещё {left}': '{left} left',
@@ -1108,6 +1107,13 @@ export const en: Record<string, string> = {
   'Свои метки на карте': 'My map markers',
   'булавки 📍 ваших пингов — метки союзников видны всегда':
     "your own 📍 ping pins — allies' markers always show",
+  Графика: 'Graphics',
+  'Свечение и ореолы': 'Glow & haloes',
+  'мягкое сияние вокруг миров, флотов и границ — выключите ради чёткой карты и скорости':
+    'soft bloom around worlds, fleets and borders — turn off for a crisp, faster map',
+  'Звёздный фон': 'Star backdrop',
+  'дрейфующие туманности и звёзды на фоне — выключите для плоского фона':
+    'drifting nebulae and stars in the background — turn off for a flat backdrop',
   вкл: 'on',
   выкл: 'off',
   ГОТОВО: 'DONE',
