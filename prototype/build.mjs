@@ -167,8 +167,9 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .ptile:active{background:rgba(53,214,230,.24);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
-.ptile .pt-n{font-size:9px;color:var(--ink);letter-spacing:.3px;white-space:nowrap;
-  max-width:86px;overflow:hidden;text-overflow:ellipsis;}
+/* mini tile (ground garrison): a nameless icon·count chip — hover/tap dossier names it */
+.ptile.mini{flex-direction:row;gap:6px;min-width:0;min-height:0;padding:7px 11px;}
+.ptile.mini .pt-c{font-size:12px;color:var(--ink);font-weight:700;}
 /* long-press name bubble over a codex tile (mobile — touch has no hover/title) */
 #holdtip{position:fixed;z-index:60;display:none;max-width:70vw;padding:6px 10px;pointer-events:none;
   background:rgba(4,16,22,.96);border:1px solid var(--cyan);border-radius:7px;color:var(--cyan);

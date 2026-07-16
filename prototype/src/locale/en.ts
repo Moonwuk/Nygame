@@ -965,6 +965,22 @@ export const en: Record<string, string> = {
   '≥4 ополчения — берут числом': '≥4 militia — winning by numbers',
   'Именной шаблон офицера: состав закреплён, редактировать нельзя.':
     "An officer's named template: composition locked, no editing.",
+  'Постройки мира и строительный конвейер: состояние, уровни и улучшения.':
+    "The world's buildings and its construction conveyor: condition, levels, upgrades.",
+  Дивизия: 'Division',
+  'Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.':
+    'A ground formation mobilized from a template. Defends the world; loads onto a fleet from the fleet panel.',
+  'Суммарная атака кораблей флота.': "The fleet's total ship attack.",
+  'Суммарная защита кораблей флота.': "The fleet's total ship defense.",
+  'Очки здоровья': 'Hit points',
+  'Суммарная прочность кораблей флота.': "The fleet's total hull strength.",
+  'Скорость перелёта — флот идёт со скоростью самого медленного корабля.':
+    'Travel speed — the fleet moves at its slowest ship.',
+  Гарнизон: 'Garrison',
+  'Численность наземных войск, обороняющих мир.': 'The ground troops defending the world.',
+  'Пехота и техника на поверхности мира.': "Infantry and armour on the world's surface.",
+  'Корабли, стоящие в гарнизоне мира (не на орбите).': "Ships parked in the world's garrison (not in orbit).",
+  'Число построек на мире.': 'The number of buildings on the world.',
   'Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.':
     'Tap a slot to cycle the unit type: militia → heavy infantry → special forces → tank. Tanks shred any infantry; special forces are the one infantry that threatens armour; heavy infantry holds the line.',
   '‹ назад': '‹ back',

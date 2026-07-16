@@ -4450,7 +4450,7 @@ function fleetPanelHtml(f: Fleet): string {
       ? t('Пустая группа корпусов — кораблей на борту нет.')
       : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
   h += `<div class="row dim">${blurb}</div>`;
-  h += `<div class="pstats"><span>⚔ ${t('АТК')} ${atk}</span><span>🛡 ${t('ЗАЩ')} ${def}</span><span>❤ ${t('ОЗ')} ${hpTot}</span><span>⚡ ${t('СКР')} ${spdTxt}</span></div>`;
+  h += `<div class="pstats"><span data-desc="stat:atk">⚔ ${t('АТК')} ${atk}</span><span data-desc="stat:def">🛡 ${t('ЗАЩ')} ${def}</span><span data-desc="stat:hp">❤ ${t('ОЗ')} ${hpTot}</span><span data-desc="stat:spd">⚡ ${t('СКР')} ${spdTxt}</span></div>`;
   h += nShips ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units) : '';
   if (nTr > 0) h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
 
@@ -4671,7 +4671,7 @@ function planetPanelHtml(p: Planet): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span>${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span>${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span>▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
+    `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -4707,7 +4707,8 @@ function planetPanelHtml(p: Planet): string {
     'ships',
     t('Флот'),
     ships.length + here.length,
-  )}${tabButton('squadron', t('Крылья'), wing.length)}${tabButton('buildings', t('Здания'), p.buildings.length)}</div>`;
+    'tab:ships',
+  )}${tabButton('squadron', t('Крылья'), wing.length, 'tab:squadron')}${tabButton('buildings', t('Здания'), p.buildings.length, 'tab:buildings')}</div>`;
 
   // Tab content is split into self-contained blocks; on desktop they flow into
   // side-by-side columns (filling the wide panel), on phones they stack vertically.
@@ -5068,6 +5069,44 @@ function objDossier(key: string): Dossier | null {
       name: t('Земля'),
       body: t('Наземные части обороняют миры; грузятся на флот из панели флота.'),
     };
+  }
+  if (key === 'tab:ships') {
+    return {
+      name: t('Флот'),
+      body: t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.'),
+    };
+  }
+  if (key === 'tab:squadron') {
+    return {
+      name: t('Крылья'),
+      body: t('Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».'),
+    };
+  }
+  if (key === 'tab:buildings') {
+    return {
+      name: t('Здания'),
+      body: t('Постройки мира и строительный конвейер: состояние, уровни и улучшения.'),
+    };
+  }
+  if (key === 'division') {
+    return {
+      name: t('Дивизия'),
+      body: t('Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.'),
+    };
+  }
+  if (key.startsWith('stat:')) {
+    const STAT_DOSSIER: Record<string, [string, string]> = {
+      atk: [t('Атака'), t('Суммарная атака кораблей флота.')],
+      def: [t('Защита'), t('Суммарная защита кораблей флота.')],
+      hp: [t('Очки здоровья'), t('Суммарная прочность кораблей флота.')],
+      spd: [t('Скорость'), t('Скорость перелёта — флот идёт со скоростью самого медленного корабля.')],
+      garrison: [t('Гарнизон'), t('Численность наземных войск, обороняющих мир.')],
+      ground: [t('Наземные части'), t('Пехота и техника на поверхности мира.')],
+      gships: [t('Корабли в гарнизоне'), t('Корабли, стоящие в гарнизоне мира (не на орбите).')],
+      pbuild: [t('Постройки'), t('Число построек на мире.')],
+    };
+    const d = STAT_DOSSIER[key.slice(5)];
+    return d ? { name: d[0], body: d[1] } : null;
   }
   if (key.startsWith('c:')) return constructionDossier(key);
   const [kind, id, lvl] = key.split(':');
@@ -5648,16 +5687,16 @@ function codexTile(kind: 'b' | 'u', id: string, label: string): string {
   if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
   const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
   const name = kind === 'b' ? buildingName(id) : unitDossier(id)?.name ?? displayUnit(id);
-  return `<button class="ptile" data-codex="${kind}:${id}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+  return `<button class="ptile" data-codex="${kind}:${id}" data-desc="${kind}:${id}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
 }
-/** Ground-garrison tiles (the ЗЕМЛЯ tab): one flowing row of icon·count·name chips.
- *  Tap = full codex dossier; on PC the data-desc also feeds the cursor tooltip. */
+/** Ground-garrison tiles (the ЗЕМЛЯ tab): one flowing row of icon·count chips — no
+ *  names; the hover dossier (PC) / tap dossier (touch) carries the identification. */
 function garrisonTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
   const tiles = stacks
     .filter((u) => u.count > 0)
     .map((u) => {
       const name = unitDossier(u.unit)?.name ?? displayUnit(u.unit);
-      return `<button class="ptile" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}×</span><span class="pt-n">${esc(name)}</span></button>`;
+      return `<button class="ptile mini" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}</span></button>`;
     })
     .join('');
   return tiles ? `<div class="ptiles">${tiles}</div>` : `<div class="row dim">${t('нет')}</div>`;
