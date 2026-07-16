@@ -45,7 +45,11 @@ needs a real (secret) keystore — a later step.
 - **"App not installed — it conflicts with another package"** — you have an older build
   installed that was signed with a *different* key (older builds regenerated the debug
   key each time). **Uninstall Void Dominion once**, then install this build; from now on
-  the signature is stable, so future updates install straight over the top.
+  the signature is stable, so future updates install straight over the top. CI now
+  **asserts** every APK is signed by the committed `debug.keystore` (the build fails on
+  drift), so a signature mismatch can never silently ship again. Note the two lanes are
+  two separate apps (`…prototype` dev / `…player`) — an update of one never conflicts
+  with the other.
 - **Google Play Protect "blocked for your protection"** — expected for a sideloaded
   debug APK from an unverified developer. Tap **Подробнее → Установить всё равно**
   (More details → Install anyway). It's the same code you build here.
