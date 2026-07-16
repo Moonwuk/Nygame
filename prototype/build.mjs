@@ -1665,6 +1665,74 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #corp .cinput input{flex:1;padding:9px 11px;border-radius:7px;border:1px solid var(--line-hi);
   background:rgba(2,10,13,.7);color:var(--ink);font:12px ui-monospace,monospace;}
 #corp .cinput input:focus{outline:none;border-color:var(--cyan);}
+
+/* === PC (mouse-driven desktop): the whole HUD at 2× ============================
+   The UI was sized for phones — on a monitor the 12px console text is unreadably
+   small. zoom:2 doubles every font/control coherently. Two gotchas, both handled
+   here: (1) vw/vh units inside a zoomed element are ALSO doubled visually (50vw
+   renders as the full screen; calc(100vh - N) overflows it), so every vw/vh used
+   inside a zoomed layer is re-declared below at half its base value — keep this
+   list in sync when adding vw/vh rules; (2) layers whose position/size is set in
+   px from JS (#map canvas, #chatwin drag geometry, #pingpop / #holdtip / the
+   #spotlight ring anchored to getBoundingClientRect) must stay UNZOOMED, or the
+   JS px and the visual px disagree by 2× — they are deliberately absent from the
+   zoom list. Percentages resolve against the (zoomed) parent, so they need no
+   compensation — which is why the hub column below uses % and not vw. */
+@media (min-width:900px) and (hover:hover) and (pointer:fine){
+  #top,#devline,#toasts,#speedbar,#cmdbar,#rail,#side,#logwin,#tech,#steward,#scipick,
+  #divdesign,#market,#constructor,#codex,#codexhub,#intro,#recap,#goals,#playercard,
+  #settings,#warprompt,#diplo,#splitdlg,#pingmenu,#banner,#endscreen,#connect,#updbar,
+  #hub,#emblempick,#corp,#lobby,#setup,#testmode{zoom:2;}
+  /* vw/vh compensations (half the base values — see the note above) */
+  #toasts{max-width:min(46vw,520px);}
+  #railtools{max-height:calc(50vh - 120px);max-height:calc(50dvh - 120px);}
+  #goals{max-width:min(230px,30vw);}
+  #codex .cxbox{width:min(440px,47vw);max-height:42vh;}
+  #codexhub .chbox{width:min(460px,47vw);max-height:43vh;}
+  #intro .inbox{width:min(400px,46vw);max-height:42vh;}
+  #recap .rcbox{width:min(440px,47vw);max-height:43vh;}
+  #playercard .pcbox{width:min(380px,46vw);max-height:43vh;}
+  #settings .setbox{width:min(380px,46vw);max-height:43vh;}
+  #warprompt .wpbox{width:min(360px,46vw);}
+  #diplo .dpbox{width:min(460px,48vw);max-height:44vh;}
+  .dp-convo{height:min(31vh,440px);}
+  #splitdlg .sbox{width:min(440px,47vw);max-height:42vh;}
+  #logwin .lwbox{width:min(440px,47vw);max-height:35vh;}
+  #tech .twbox,#steward .twbox,#hero .twbox,#divdesign .twbox{width:min(460px,47vw);max-height:41vh;}
+  #scipick .twbox{width:min(560px,48vw);max-height:44vh;}
+  #market .mkbox{width:min(460px,47vw);max-height:41vh;}
+  #constructor .cnbox{width:min(960px,48vw);max-height:45vh;}
+  #endscreen .es-box{width:min(440px,47vw);max-height:46vh;}
+  #connect .cbox,#connect .cwrap{width:min(520px,47vw);}
+  #connect .mlist{max-height:23vh;}
+  #connect .ccrest .wm{font-size:clamp(20px,3.25vw,26px);letter-spacing:clamp(3px,1vw,8px);}
+  #connect .ccrest .wtag{letter-spacing:clamp(2px,.7vw,5px);}
+  #lobby .lbox{width:min(420px,47vw);max-height:47vh;}
+  #lobby .lroster{max-height:min(29vh,520px);}
+  #setup .sbox{width:min(560px,47.5vw);max-height:46vh;}
+  #updbar{width:min(440px,calc(50vw - 20px));}
+  #testmode .tmbox{width:min(620px,48vw);max-height:46vh;}
+  #emblempick .ep-box{width:min(340px,46vw);}
+  #corp .corpbox{width:min(760px,48vw);max-height:46vh;}
+  /* base (portrait) bottom-sheet panel + the bars it lifts */
+  #side{max-height:17vh;}
+  body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:calc(17vh + 12px);}
+  #fps{top:154px;}
+  /* main menu (hub): don't stretch the console across the whole monitor — a
+     centred half-screen column; the hub's own backdrop still fills the screen */
+  #hub .hub-banner,#hub .hub-id,#hub .hub-body,#hub .hub-note,#hub .hub-nav{
+    width:50%;margin-left:auto;margin-right:auto;
+    border-left:1px solid var(--line-hi);border-right:1px solid var(--line-hi);}
+}
+/* the right-dock panel layout (the ≥900px landscape query above) re-stated at
+   half-vw/vh for the zoomed PC HUD — those base rules would otherwise double
+   to 80vw-wide panels and off-screen heights */
+@media (min-width:900px) and (hover:hover) and (pointer:fine) and (orientation:landscape){
+  #side{width:min(380px,20vw);max-height:calc(50vh - 88px);}
+  #cmdbar{left:calc((100% - min(380px,20vw)) / 2);}
+  #speedbar,body.sheet-open #speedbar{right:calc(min(380px,20vw) + 14px);}
+  body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:14px;}
+}
 `;
 
 const page = (js) => `<!doctype html>

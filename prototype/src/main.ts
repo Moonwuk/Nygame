@@ -8810,7 +8810,7 @@ function renderMatches(): void {
     }
     el.innerHTML =
       `<div class="mempty">${msg}</div>` +
-      `<div class="msolo"><button class="mbtn" id="msolo-go">▶ ${t('Начать одиночный скирмиш')}</button>` +
+      `<div class="msolo"><button class="mbtn" id="msolo-go">▶ ${t('Одиночный режим')}</button>` +
       `<div class="msolo-sub">${t('Сервер не нужен — свободные места займут боты.')}</div></div>`;
     document.getElementById('msolo-go')?.addEventListener('click', () => openSetup('hub'));
   };

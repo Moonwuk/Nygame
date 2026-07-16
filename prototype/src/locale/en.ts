@@ -287,7 +287,6 @@ export const en: Record<string, string> = {
     "An imperial-style tax office: produces nothing itself, but registers the world's population and lifts its credit take by {b}. Built once — bureaucracy isn't scaled, it's tolerated.",
   'Напишите первое сообщение.': 'Write the first message.',
   Настройки: 'Settings',
-  'Начать одиночный скирмиш': 'Start a solo skirmish',
   'Не исследовано — вне сенсоров и радаров. Содержимое неизвестно.':
     'Unexplored — outside sensor and radar range. Contents unknown.',
   Нейтрал: 'Neutral',
@@ -850,6 +849,7 @@ export const en: Record<string, string> = {
   Обновить: 'Update',
   'Обновить список': 'Refresh list',
   'Одиночная игра': 'Solo game',
+  'Одиночный режим': 'Solo mode',
   'Ожидание в секторе сбора. Хост начнёт матч, когда будет готов.':
     'Waiting in the staging sector. The host starts the match when ready.',
   Поддержка: 'Support',
