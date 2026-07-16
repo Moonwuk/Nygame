@@ -69,62 +69,12 @@ function worthLogging(ev: RoomObservation): boolean {
   }
   return true;
 }
-let connected = 0; // live players currently connected (drives the running-match heartbeat)
-// Seats with a live human peer. Any seat in the match NOT in here is "empty" and is
-// driven by the server-side AI (mirrors single-player: empty slots are taken by the AI).
-const humans = new Set<string>();
 // BF-17: the AI stand-in must not seize a seat the MOMENT it looks empty. `humans`
 // is in-memory — after a server restart it is empty for everyone, and a mobile
 // network blip drops a live player for seconds — so every "empty" seat gets a grace
 // window (per-seat wall-clock deadline) before the expand-AI starts commanding it.
 // Steward delegation bypasses the grace: handing the seat over was the player's call.
 const AI_GRACE_MS = Number(process.env.AI_GRACE_MS ?? 10 * 60 * 1000);
-const aiEligibleAt = new Map<string, number>();
-const observe = (ev: RoomObservation): void => {
-  metrics.observe(ev);
-  if (worthLogging(ev)) appendFileSync(logFile, JSON.stringify({ t: Date.now(), ...ev }) + '\n');
-  if (ev.kind === 'join') {
-    connected++;
-    humans.add(ev.playerId);
-    aiEligibleAt.delete(ev.playerId); // the human is back — cancel any pending takeover
-  } else if (ev.kind === 'leave') {
-    connected = Math.max(0, connected - 1);
-    humans.delete(ev.playerId);
-    aiEligibleAt.set(ev.playerId, Date.now() + AI_GRACE_MS); // reconnect window
-  } else if (ev.kind === 'action') {
-    // Persist the receipt so a retried action stays deduped across a restart.
-    void receiptStore.save('proto', {
-      actionId: ev.actionId,
-      playerId: ev.playerId,
-      seq: ev.seq,
-      ok: ev.ok,
-      ...(ev.code ? { code: ev.code } : {}),
-    });
-  }
-  // Persist after anything that changes the world or the lobby (debounced below),
-  // and re-arm the offline wakeup: an action may schedule or consume events, and a
-  // lobby Start releases the frozen clock — both move the next-event time.
-  if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
-  // Re-arm on room events: an action may (un)schedule events, a lobby Start releases
-  // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
-  // external event also gives the stall guard a fresh chance (the situation may have
-  // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
-  // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
-  // back-off in `onWake` (an eternal 0ms wake spin). The M1 metrics kinds are excluded
-  // too: they describe work already done (fan-out size, timings, desync reports) and
-  // never move the next-event time — re-arming on every broadcast would churn the timer.
-  if (
-    ev.kind === 'join' ||
-    ev.kind === 'leave' ||
-    ev.kind === 'lobby' ||
-    ev.kind === 'action' ||
-    ev.kind === 'end' ||
-    ev.kind === 'dead_letter'
-  ) {
-    wakeStalls = 0;
-    armWakeup();
-  }
-};
 
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8788);
@@ -195,104 +145,19 @@ if (DATABASE_URL) {
   accountStore = new MemoryAccountStore();
   receiptStore = new MemoryReceiptStore();
 }
-const restored = await matchStore.load('proto');
 // The prototype host defaults to a ten-chair FFA. `TEAMS=5v5` keeps all ten chairs and
 // seeds two allied flanks; `TEAMS=2v2` preserves the smaller four-chair playtest. Every
 // chair is claimable by a human, while the server AI stands in after the reconnect grace.
 const NETWORK_MODE = parseNetworkMatchMode(process.env.TEAMS);
 const NET_SEATS = networkSeats(NETWORK_MODE);
-const initialState = restored?.state ?? newGame({ seats: NET_SEATS });
-// A NET seat is not a bot: every seat here is claimable by a human, and the
-// server-side AI merely stands in for an empty chair (`humans` is the live truth).
-// Strip the static `ai` branding newGame took from the seat config, or two humans
-// on DEFAULT_SETUP seats could never ally (E_BOT_ALLIANCE against seat p2 forever).
-for (const seat of Object.values(initialState.players)) delete seat.ai;
-// Rehydrate idempotency receipts so a retried action stays deduped across a restart.
-const initialReceipts = await receiptStore.loadAll('proto');
+// MATCHES=N hosts N independent sessions in THIS one process (default 1) — same mode
+// and time scale for all; the match browser lists every one, players pick a row. Ids:
+// `proto`, `proto-2`, … `proto-N` (the first keeps its historic id so an existing
+// durable snapshot / saved seat tickets keep working across the upgrade).
+const MATCHES = Math.max(1, Math.min(16, Number(process.env.MATCHES ?? 1) || 1));
+const matchIds = Array.from({ length: MATCHES }, (_, i) => (i === 0 ? 'proto' : `proto-${i + 1}`));
 
-// Lobby gate: the world clock starts at 0 ("Day 1") and stays frozen until the host
-// presses Start. On restore mid-match we skip the lobby and resume the running game.
-const room = new MatchRoom({
-  id: 'proto',
-  initialState,
-  kernel,
-  data,
-  now: () => Date.now(),
-  manualStart: true, // lobby: clock frozen until the host (first in) presses Start
-  initiallyStarted: !!restored, // restored snapshot → resume into the game, skip lobby
-  singlePeerPerPlayer: true, // one live connection per chair — no two people command one empire
-  emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
-  observe, // M0: log every room event to JSONL + count for the on-exit summary
-  initialReceipts, // rehydrated idempotency (deduped action stays deduped after restart)
-  // The kernel context config must match what the local sim (and the HUD) promise:
-  // without it victory falls back to its 600 default while the HUD counts to 450.
-  config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } },
-  initialSeq: restored?.seq, // resume the action counter — else the optimistic-by-seq
-  // store drops post-restart saves until seq climbs back past the stored value
-  // Strict commit-before-broadcast: await the durable write of the new snapshot +
-  // receipt before the room commits state / broadcasts. The debounced scheduleSave in
-  // `observe` above becomes a harmless coalesced extra for actions (still needed for
-  // tick-driven advances, which are recomputable and persist after the fact).
-  persist: async (snapshot, receipt) => {
-    await matchStore.save(snapshot);
-    await receiptStore.save('proto', receipt);
-  },
-  timeScale: TIME_SCALE, // playtest fast-forward (1 = real-time)
-  // REL-4: the action-layer front-door — envelope validate→authorize→sequence→dedup
-  // with per-type payload schemas BEFORE the reducer. Server-internal drivers
-  // (AI / standing orders) submit via room.submitAction and are unaffected.
-  ...(GATE ? { gate: new ActionGate({ payloadValidator: isValidActionPayload }) } : {}),
-});
-
-// BF-17: after a (re)start `humans` is empty for EVERY seat — a restarted server
-// must not immediately hand every human's empire to the expand-AI. Seed the same
-// reconnect grace window for all seats; a joining human clears it, a delegated
-// steward bypasses it, and a genuinely empty chair starts playing once it lapses.
-for (const seat of Object.keys(room.state.players)) {
-  aiEligibleAt.set(seat, Date.now() + AI_GRACE_MS);
-}
-
-// Snapshot the world after changes, debounced so a burst of actions is one write.
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-let saving = false;
-function scheduleSave(): void {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    void doSave();
-  }, 500);
-}
-async function doSave(): Promise<void> {
-  if (saving) {
-    scheduleSave(); // a save is in flight — coalesce into the next tick
-    return;
-  }
-  saving = true;
-  try {
-    await matchStore.save({
-      matchId: 'proto',
-      dataVersion: room.state.version?.data ?? 'proto',
-      seq: room.sequence,
-      status: room.state.match.status === 'ended' ? 'ended' : 'ongoing',
-      state: room.state,
-    });
-  } catch (e) {
-    process.stderr.write(`snapshot save failed: ${(e as Error)?.message ?? String(e)}\n`);
-  }
-  saving = false;
-}
-
-// Offline scheduler (PA-4.1): a single-process wakeup driver so the world runs
-// 24/7 even with nobody connected. The in-state schedule is mirrored as ONE
-// pending timer set to the soonest event; when it fires we `tick()` the room
-// (advance + broadcast the arrivals/battles/captures that came due) and re-arm.
-// `setTimeout` overflows past ~24.8 days, so a far-future event is capped to
-// MAX_TIMER_MS and we re-arm — a long sleep taken in hops. Note: NO downtime
-// catch-up — the room resumes its clock at the saved `state.time` (initiallyStarted),
-// so the gap while the process was down is simply skipped, not replayed. The
-// distributed/durable evolution is a job queue on Postgres (pg-boss): one shared
-// "wake match X at T" job across many server processes instead of one in-memory
-// timer per room — see docs/persistence-accounts-roadmap.md (PA-4).
+// Shared wakeup-driver tuning (one instance of these per hosted match below).
 const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift safety)
 // While a STARTED match has connected players, tick at least this often even if the
 // schedule is momentarily empty — otherwise the world only advances when someone issues
@@ -301,117 +166,305 @@ const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift s
 // the very first thing players see after Start is a frozen "Day 1 00:00".
 const HEARTBEAT_MS = 1_000;
 const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
-let wakeTimer: ReturnType<typeof setTimeout> | null = null;
-let wakeStalls = 0;
-let driversBusy = false; // re-entrancy guard: one async driver pass at a time
-function armWakeup(): void {
-  if (wakeTimer) {
-    clearTimeout(wakeTimer);
-    wakeTimer = null;
-  }
-  const ev = room.msUntilNextEvent(); // wall-ms to the next scheduled event, or null
-  const beat = room.isStarted && connected > 0 ? HEARTBEAT_MS : null; // live-player heartbeat
-  if (ev === null && beat === null) return; // nothing scheduled and nobody live → idle
-  const ms = ev === null ? beat : beat === null ? ev : Math.min(ev, beat);
-  wakeTimer = setTimeout(onWake, Math.min(ms ?? MAX_TIMER_MS, MAX_TIMER_MS));
+
+/** One hosted session: a MatchRoom plus ALL its per-match machinery — the empty-seat
+ *  AI (with the BF-17 reconnect grace), the standing-order drivers, the debounced
+ *  durable snapshot and the offline wakeup timer. Everything that used to be a
+ *  module-level single-match global lives in this closure now, one set per match. */
+interface HostedMatch {
+  id: string;
+  room: MatchRoom;
+  restored: boolean;
+  armWakeup(): void;
+  /** Final durable flush (shutdown). */
+  flush(): Promise<void>;
+  clearTimers(): void;
 }
-// Server-side AI for empty seats: every ~2 game-hours, any match seat with no live
-// human peer issues the same orders the single-player AI would (shared `aiOrders`),
-// submitted through the authoritative room. Runs only while the match is started and
-// someone is connected — otherwise the board just idles on its schedule. This is what
-// makes "empty multiplayer slots are taken by the AI" true: an unjoined seat plays.
-let aiLastAt = 0; // game-time of the last AI decision tick
-// Drivers submit via room.submitServerAction: on a DURABLE room a raw sync submit
-// would interleave with a commitApply persist await and be silently clobbered
-// (bug-hunt CRIT) — the server entry serializes through the room's actor mailbox.
-async function runServerAI(): Promise<void> {
-  if (!room.isStarted || connected === 0) return;
-  const now = room.state.time;
-  if (now - aiLastAt < 2 * HOUR) return;
-  aiLastAt = now;
+
+async function createHostedMatch(id: string): Promise<HostedMatch> {
+  let connected = 0; // live players in THIS match (drives its running-match heartbeat)
+  // Seats with a live human peer. Any seat NOT in here is "empty" and is driven by
+  // the server-side AI (mirrors single-player: empty slots are taken by the AI).
+  const humans = new Set<string>();
+  const aiEligibleAt = new Map<string, number>();
+
+  const restoredSnap = await matchStore.load(id);
+  const initialState = restoredSnap?.state ?? newGame({ seats: NET_SEATS });
+  // A NET seat is not a bot: every seat here is claimable by a human, and the
+  // server-side AI merely stands in for an empty chair (`humans` is the live truth).
+  // Strip the static `ai` branding newGame took from the seat config, or two humans
+  // on DEFAULT_SETUP seats could never ally (E_BOT_ALLIANCE against seat p2 forever).
+  for (const seat of Object.values(initialState.players)) delete seat.ai;
+  // Rehydrate idempotency receipts so a retried action stays deduped across a restart.
+  const initialReceipts = await receiptStore.loadAll(id);
+
+  const observe = (ev: RoomObservation): void => {
+    metrics.observe(ev);
+    if (worthLogging(ev)) {
+      appendFileSync(logFile, JSON.stringify({ t: Date.now(), match: id, ...ev }) + '\n');
+    }
+    if (ev.kind === 'join') {
+      connected++;
+      humans.add(ev.playerId);
+      aiEligibleAt.delete(ev.playerId); // the human is back — cancel any pending takeover
+    } else if (ev.kind === 'leave') {
+      connected = Math.max(0, connected - 1);
+      humans.delete(ev.playerId);
+      aiEligibleAt.set(ev.playerId, Date.now() + AI_GRACE_MS); // reconnect window
+    } else if (ev.kind === 'action') {
+      // Persist the receipt so a retried action stays deduped across a restart.
+      void receiptStore.save(id, {
+        actionId: ev.actionId,
+        playerId: ev.playerId,
+        seq: ev.seq,
+        ok: ev.ok,
+        ...(ev.code ? { code: ev.code } : {}),
+      });
+    }
+    // Persist after anything that changes the world or the lobby (debounced below),
+    // and re-arm the offline wakeup: an action may schedule or consume events, and a
+    // lobby Start releases the frozen clock — both move the next-event time.
+    if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
+    // Re-arm on room events: an action may (un)schedule events, a lobby Start releases
+    // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
+    // external event also gives the stall guard a fresh chance (the situation may have
+    // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
+    // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
+    // back-off in `onWake` (an eternal 0ms wake spin). The M1 metrics kinds are excluded
+    // too: they describe work already done (fan-out size, timings, desync reports) and
+    // never move the next-event time — re-arming on every broadcast would churn the timer.
+    if (
+      ev.kind === 'join' ||
+      ev.kind === 'leave' ||
+      ev.kind === 'lobby' ||
+      ev.kind === 'action' ||
+      ev.kind === 'end' ||
+      ev.kind === 'dead_letter'
+    ) {
+      wakeStalls = 0;
+      armWakeup();
+    }
+  };
+
+  // Lobby gate: the world clock starts at 0 ("Day 1") and stays frozen until the host
+  // presses Start. On restore mid-match we skip the lobby and resume the running game.
+  const room = new MatchRoom({
+    id,
+    initialState,
+    kernel,
+    data,
+    now: () => Date.now(),
+    manualStart: true, // lobby: clock frozen until the host (first in) presses Start
+    initiallyStarted: !!restoredSnap, // restored snapshot → resume into the game, skip lobby
+    singlePeerPerPlayer: true, // one live connection per chair — no two people command one empire
+    emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
+    observe, // M0: log every room event to JSONL + count for the on-exit summary
+    initialReceipts, // rehydrated idempotency (deduped action stays deduped after restart)
+    // The kernel context config must match what the local sim (and the HUD) promise:
+    // without it victory falls back to its 600 default while the HUD counts to 450.
+    config: { timeScale: 1, victory: { scoreLimit: SCORE_LIMIT } },
+    initialSeq: restoredSnap?.seq, // resume the action counter — else the optimistic-by-seq
+    // store drops post-restart saves until seq climbs back past the stored value
+    // Strict commit-before-broadcast: await the durable write of the new snapshot +
+    // receipt before the room commits state / broadcasts. The debounced scheduleSave in
+    // `observe` above becomes a harmless coalesced extra for actions (still needed for
+    // tick-driven advances, which are recomputable and persist after the fact).
+    persist: async (snapshot, receipt) => {
+      await matchStore.save(snapshot);
+      await receiptStore.save(id, receipt);
+    },
+    timeScale: TIME_SCALE, // playtest fast-forward (1 = real-time)
+    // REL-4: the action-layer front-door — envelope validate→authorize→sequence→dedup
+    // with per-type payload schemas BEFORE the reducer. Server-internal drivers
+    // (AI / standing orders) submit via room.submitAction and are unaffected.
+    ...(GATE ? { gate: new ActionGate({ payloadValidator: isValidActionPayload }) } : {}),
+  });
+
+  // BF-17: after a (re)start `humans` is empty for EVERY seat — a restarted server
+  // must not immediately hand every human's empire to the expand-AI. Seed the same
+  // reconnect grace window for all seats; a joining human clears it, a delegated
+  // steward bypasses it, and a genuinely empty chair starts playing once it lapses.
   for (const seat of Object.keys(room.state.players)) {
-    // «Хранитель»: a delegated seat is played by the AI on its posture (defend) even while
-    // its owner is connected but asleep; an unclaimed/empty seat gets the full expansion AI.
-    const posture = stewardActive(room.state, seat, now);
-    if (humans.has(seat) && !posture) continue; // a human is actively commanding this seat
-    // Grace window (BF-17): an empty seat without an explicit delegation waits for
-    // its human to come back (drop / server restart) before the AI takes the wheel.
-    if (!humans.has(seat) && !posture) {
-      const eligibleAt = aiEligibleAt.get(seat);
-      if (eligibleAt !== undefined && Date.now() < eligibleAt) continue;
-    }
-    for (const action of aiOrders(room.state, seat, posture ?? 'expand')) {
-      await room.submitServerAction(seat, action);
-    }
+    aiEligibleAt.set(seat, Date.now() + AI_GRACE_MS);
   }
-}
 
-// CC-2 / CC-4: drive the authoritative STANDING orders (auto-storm + дежурный вылет)
-// server-side — the pure decisions live in game.ts
-// (serverAutoAssaultActions / serverPatrolActions, tested); this just applies them
-// through the authoritative room. A rejected storm is simply skipped (a standing
-// stance has no chain to block); patrol runtime state persists via patrol.stamp.
-async function runServerStanding(): Promise<void> {
-  if (!room.isStarted) return;
-  for (const a of serverAutoAssaultActions(room.state)) {
-    for (const act of a.actions) if (!(await room.submitServerAction(a.owner, act)).ok) break;
+  // Snapshot the world after changes, debounced so a burst of actions is one write.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saving = false;
+  function scheduleSave(): void {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void doSave();
+    }, 500);
   }
-  for (const p of serverPatrolActions(room.state, room.state.time)) {
-    if (p.drop) {
-      if (p.owner) await room.submitServerAction(p.owner, orderScramble(p.owner, p.fleetId, false));
-      continue;
+  async function doSave(): Promise<void> {
+    if (saving) {
+      scheduleSave(); // a save is in flight — coalesce into the next tick
+      return;
     }
-    if (p.patch) {
-      await room.submitServerAction(p.owner, patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt));
+    saving = true;
+    try {
+      await matchStore.save({
+        matchId: id,
+        dataVersion: room.state.version?.data ?? 'proto',
+        seq: room.sequence,
+        status: room.state.match.status === 'ended' ? 'ended' : 'ongoing',
+        state: room.state,
+      });
+    } catch (e) {
+      process.stderr.write(`snapshot save failed (${id}): ${(e as Error)?.message ?? String(e)}\n`);
     }
-    for (const act of p.actions) await room.submitServerAction(p.owner, act);
+    saving = false;
   }
-}
 
-function onWake(): void {
-  wakeTimer = null;
-  const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
-  // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
-  // While stalled, SKIP the AI/standing-order drivers — their submissions (even rejected ones)
-  // emit `action` observations that would reset this guard and re-arm a 0ms wake — and
-  // back off after a few tries instead of busy-looping (the room has already surfaced
-  // an advance_overflow). A real player action re-arms via `observe`, which resets the
-  // counter and gives it a fresh chance.
-  const stalled = !progressed && room.msUntilNextEvent() === 0;
-  if (!stalled && !driversBusy) {
-    wakeStalls = 0;
-    // Async drivers (durable rooms await the mailbox); the busy flag stops a later
-    // heartbeat from double-running them while a slow persist is still in flight.
-    driversBusy = true;
-    void (async () => {
-      try {
-        await runServerAI(); // drive any empty seat once the clock has moved
-        await runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
-      } finally {
-        driversBusy = false;
+  // Offline scheduler (PA-4.1): a per-room wakeup driver so the world runs
+  // 24/7 even with nobody connected. The in-state schedule is mirrored as ONE
+  // pending timer set to the soonest event; when it fires we `tick()` the room
+  // (advance + broadcast the arrivals/battles/captures that came due) and re-arm.
+  // `setTimeout` overflows past ~24.8 days, so a far-future event is capped to
+  // MAX_TIMER_MS and we re-arm — a long sleep taken in hops. Note: NO downtime
+  // catch-up — the room resumes its clock at the saved `state.time` (initiallyStarted),
+  // so the gap while the process was down is simply skipped, not replayed. The
+  // distributed/durable evolution is a job queue on Postgres (pg-boss): one shared
+  // "wake match X at T" job across many server processes instead of one in-memory
+  // timer per room — see docs/persistence-accounts-roadmap.md (PA-4).
+  let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+  let wakeStalls = 0;
+  let driversBusy = false; // re-entrancy guard: one async driver pass at a time
+  function armWakeup(): void {
+    if (wakeTimer) {
+      clearTimeout(wakeTimer);
+      wakeTimer = null;
+    }
+    const ev = room.msUntilNextEvent(); // wall-ms to the next scheduled event, or null
+    const beat = room.isStarted && connected > 0 ? HEARTBEAT_MS : null; // live-player heartbeat
+    if (ev === null && beat === null) return; // nothing scheduled and nobody live → idle
+    const ms = ev === null ? beat : beat === null ? ev : Math.min(ev, beat);
+    wakeTimer = setTimeout(onWake, Math.min(ms ?? MAX_TIMER_MS, MAX_TIMER_MS));
+  }
+  // Server-side AI for empty seats: every ~2 game-hours, any match seat with no live
+  // human peer issues the same orders the single-player AI would (shared `aiOrders`),
+  // submitted through the authoritative room. Runs only while the match is started and
+  // someone is connected — otherwise the board just idles on its schedule. This is what
+  // makes "empty multiplayer slots are taken by the AI" true: an unjoined seat plays.
+  let aiLastAt = 0; // game-time of the last AI decision tick
+  // Drivers submit via room.submitServerAction: on a DURABLE room a raw sync submit
+  // would interleave with a commitApply persist await and be silently clobbered
+  // (bug-hunt CRIT) — the server entry serializes through the room's actor mailbox.
+  async function runServerAI(): Promise<void> {
+    if (!room.isStarted || connected === 0) return;
+    const now = room.state.time;
+    if (now - aiLastAt < 2 * HOUR) return;
+    aiLastAt = now;
+    for (const seat of Object.keys(room.state.players)) {
+      // «Хранитель»: a delegated seat is played by the AI on its posture (defend) even while
+      // its owner is connected but asleep; an unclaimed/empty seat gets the full expansion AI.
+      const posture = stewardActive(room.state, seat, now);
+      if (humans.has(seat) && !posture) continue; // a human is actively commanding this seat
+      // Grace window (BF-17): an empty seat without an explicit delegation waits for
+      // its human to come back (drop / server restart) before the AI takes the wheel.
+      if (!humans.has(seat) && !posture) {
+        const eligibleAt = aiEligibleAt.get(seat);
+        if (eligibleAt !== undefined && Date.now() < eligibleAt) continue;
       }
-    })();
+      for (const action of aiOrders(room.state, seat, posture ?? 'expand')) {
+        await room.submitServerAction(seat, action);
+      }
+    }
   }
-  scheduleSave(); // persist the advanced world
-  if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {
-    process.stderr.write(
-      'wakeup driver idling: the world clock stalled (a same-instant scheduling loop) — ' +
-        'check for a module scheduling events at its own instant.\n',
-    );
-    return; // idle — do not re-arm
+
+  // CC-2 / CC-4: drive the authoritative STANDING orders (auto-storm + дежурный вылет)
+  // server-side — the pure decisions live in game.ts
+  // (serverAutoAssaultActions / serverPatrolActions, tested); this just applies them
+  // through the authoritative room. A rejected storm is simply skipped (a standing
+  // stance has no chain to block); patrol runtime state persists via patrol.stamp.
+  async function runServerStanding(): Promise<void> {
+    if (!room.isStarted) return;
+    for (const a of serverAutoAssaultActions(room.state)) {
+      for (const act of a.actions) if (!(await room.submitServerAction(a.owner, act)).ok) break;
+    }
+    for (const p of serverPatrolActions(room.state, room.state.time)) {
+      if (p.drop) {
+        if (p.owner) await room.submitServerAction(p.owner, orderScramble(p.owner, p.fleetId, false));
+        continue;
+      }
+      if (p.patch) {
+        await room.submitServerAction(p.owner, patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt));
+      }
+      for (const act of p.actions) await room.submitServerAction(p.owner, act);
+    }
   }
-  armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
+
+  function onWake(): void {
+    wakeTimer = null;
+    const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
+    // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
+    // While stalled, SKIP the AI/standing-order drivers — their submissions (even rejected ones)
+    // emit `action` observations that would reset this guard and re-arm a 0ms wake — and
+    // back off after a few tries instead of busy-looping (the room has already surfaced
+    // an advance_overflow). A real player action re-arms via `observe`, which resets the
+    // counter and gives it a fresh chance.
+    const stalled = !progressed && room.msUntilNextEvent() === 0;
+    if (!stalled && !driversBusy) {
+      wakeStalls = 0;
+      // Async drivers (durable rooms await the mailbox); the busy flag stops a later
+      // heartbeat from double-running them while a slow persist is still in flight.
+      driversBusy = true;
+      void (async () => {
+        try {
+          await runServerAI(); // drive any empty seat once the clock has moved
+          await runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
+        } finally {
+          driversBusy = false;
+        }
+      })();
+    }
+    scheduleSave(); // persist the advanced world
+    if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {
+      process.stderr.write(
+        `wakeup driver idling (${id}): the world clock stalled (a same-instant scheduling loop) — ` +
+          'check for a module scheduling events at its own instant.\n',
+      );
+      return; // idle — do not re-arm
+    }
+    armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
+  }
+
+  return {
+    id,
+    room,
+    restored: !!restoredSnap,
+    armWakeup,
+    flush: doSave,
+    clearTimers(): void {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      if (wakeTimer) {
+        clearTimeout(wakeTimer);
+        wakeTimer = null;
+      }
+    },
+  };
 }
 
-// One match for now, exposed through the registry so the client's match browser
-// (GET /matches) lists it with its real status (map / rules / day / players).
+// Raise every hosted session, then expose them ALL through the registry so the
+// client's match browser (GET /matches) lists each with its real status
+// (map / rules / day / players) and joins go to `/matches/<id>`.
+const hosted: HostedMatch[] = [];
+for (const id of matchIds) hosted.push(await createHostedMatch(id));
+const restoredCount = hosted.filter((h) => h.restored).length;
 const registry = new MatchRegistry(accountStore);
-registry.register(room, {
-  mapId: 'nexus',
-  rules: { timeScale: TIME_SCALE },
-  createdAt: Date.now(),
-  startedAt: initialState.time,
-});
+for (const h of hosted) {
+  registry.register(h.room, {
+    mapId: 'nexus',
+    rules: { timeScale: TIME_SCALE },
+    createdAt: Date.now(),
+    startedAt: h.room.state.time,
+  });
+}
 const server = createMultiplayerServer({
   registry,
   host,
@@ -448,7 +501,7 @@ try {
   );
   process.exit(1);
 }
-const httpUrl = wsUrl.replace(/^ws/, 'http').replace(/\/matches\/.*$/, '');
+const httpUrl = wsUrl.replace(/^ws/, 'http').replace(/\/matches.*$/, '');
 
 // Pick the address a friend actually dials: a real LAN/public IPv4, never a
 // VM-NAT/link-local one. `pnpm doctor` prints the full reachability breakdown.
@@ -459,7 +512,7 @@ const onLan = shareIp !== null;
 const unreachableOnly = host === '0.0.0.0' && !onLan && addrs.length > 0;
 const localHttp = httpUrl.replace('0.0.0.0', 'localhost'); // 0.0.0.0 isn't openable
 const friendUrl = onLan ? `http://${shareIp}:${port}/` : null;
-const liveSeatIds = Object.keys(initialState.players);
+const liveSeatIds = Object.keys(hosted[0]!.room.state.players);
 const firstSeat = liveSeatIds[0] ?? 'p1';
 const lastSeat = liveSeatIds.at(-1) ?? firstSeat;
 
@@ -472,8 +525,8 @@ const lines = [
     : `  game   : run \`pnpm prototype\` first to serve the HTML at /`,
   `  health : ${localHttp}/health`,
   DATABASE_URL
-    ? `  store  : Postgres — durable${restored ? ' (resumed a saved match)' : ''}`
-    : '  store  : in-memory — a restart loses the match (set DATABASE_URL for durability)',
+    ? `  store  : Postgres — durable${restoredCount > 0 ? ` (resumed ${restoredCount} saved match${restoredCount > 1 ? 'es' : ''})` : ''}`
+    : '  store  : in-memory — a restart loses the matches (set DATABASE_URL for durability)',
   GATE
     ? '  gate   : ON — only validated action.v1 envelopes (clients auto-detect via welcome.gated)'
     : '  gate   : off — bare actions accepted (set GATE=1 for the release posture)',
@@ -483,13 +536,12 @@ const lines = [
   TIME_SCALE > 1
     ? `  time   : ×${TIME_SCALE} fast-forward (1 real min ≈ ${(TIME_SCALE / 60).toFixed(1)} game-hours) — playtest mode`
     : '  time   : ×1 real-time (set TIME_SCALE=100 to fast-forward a playtest)',
-  restored
-    ? `  mode   : resumed match — ${liveSeatIds.length} claimable chairs; empty chairs are AI-driven`
-    : NETWORK_MODE === '2v2'
-      ? '  mode   : 2v2 team battle — 4 claimable chairs; empty chairs are AI-driven'
-      : NETWORK_MODE === '5v5'
-        ? '  mode   : 5v5 team battle — 10 claimable chairs; empty chairs are AI-driven'
-        : '  mode   : 10-player FFA — empty chairs are AI-driven (set TEAMS=5v5 for teams)',
+  `  matches: ${MATCHES} session${MATCHES > 1 ? 's' : ''} in this process (${matchIds.join(', ')}) — set MATCHES=N for more; all listed in the in-game browser`,
+  NETWORK_MODE === '2v2'
+    ? '  mode   : 2v2 team battle — 4 claimable chairs each; empty chairs are AI-driven'
+    : NETWORK_MODE === '5v5'
+      ? '  mode   : 5v5 team battle — 10 claimable chairs each; empty chairs are AI-driven'
+      : '  mode   : 10-player FFA — empty chairs are AI-driven (set TEAMS=5v5 for teams)',
   '',
   '  Multiplayer test:',
   `   • You:     open ${localHttp}/  → enter a callsign → join`,
@@ -503,18 +555,22 @@ if (unreachableOnly) {
     `     Remote friend? Tunnel it:  cloudflared tunnel --url http://localhost:${port}   (or run \`pnpm doctor\`)`,
   );
 }
+// With ONE match listen() returns its full URL; with several it returns the base
+// prefix (the client appends /<matchId>) — the printed example always shows a full,
+// dialable URL for the first match.
+const rawWs = (MATCHES === 1 ? wsUrl : `${wsUrl}/${matchIds[0]}`).replace('0.0.0.0', 'localhost');
 lines.push(
   '',
   SEAT_LOCK
-    ? `  raw ws : ${wsUrl.replace('0.0.0.0', 'localhost')}?nick=<name>  (seat lock on — ?player= is refused)`
-    : `  raw ws : ${wsUrl.replace('0.0.0.0', 'localhost')}?player=${firstSeat}  ·  …?player=${lastSeat}`,
+    ? `  raw ws : ${rawWs}?nick=<name>  (seat lock on — ?player= is refused)`
+    : `  raw ws : ${rawWs}?player=${firstSeat}  ·  …?player=${lastSeat}`,
   '',
 );
 process.stdout.write(lines.join('\n'));
 
-// Start the offline heartbeat: if a restored match already has a due/pending event,
-// this arms the first wake (no burst — the clock resumes at the saved time).
-armWakeup();
+// Start the offline heartbeat per room: if a restored match already has a due/pending
+// event, this arms its first wake (no burst — the clock resumes at the saved time).
+for (const h of hosted) h.armWakeup();
 
 // On Ctrl-C: print the playtest summary (counts gathered by `observe`) and where
 // the raw JSONL landed, then close cleanly — the per-match data survives the run.
@@ -563,16 +619,10 @@ const shutdown = (): void => {
   } catch {
     /* the report just falls back to the partial per-line data */
   }
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
-  if (wakeTimer) {
-    clearTimeout(wakeTimer);
-    wakeTimer = null;
-  }
+  for (const h of hosted) h.clearTimers();
   void (async () => {
-    await doSave(); // final flush so the latest state is durable before we exit
+    // Final flush per room so the latest state of EVERY session is durable before exit.
+    for (const h of hosted) await h.flush();
     if (pool) await pool.end();
     await server.close();
     process.exit(0);

@@ -36,6 +36,9 @@ services:
       SEAT_LOCK: ${SEAT_LOCK:-1}
       # Playtest fast-forward (wall→game clock multiplier); 1 = real-time 24/7.
       TIME_SCALE: ${TIME_SCALE:-1}
+      # How many independent sessions this ONE process hosts (proto, proto-2, …):
+      # all appear in the in-game match browser; each is durable in Postgres.
+      MATCHES: ${MATCHES:-1}
       # Durable matches: snapshots to the postgres service over the compose network.
       DATABASE_URL: postgres://void:${POSTGRES_PASSWORD:-void}@postgres:5432/void
     depends_on:

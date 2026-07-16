@@ -889,6 +889,13 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
   `TEAMS=5v5` делит те же 10 мест на A: p1–p5 и B: p6–p10, а `TEAMS=2v2` сохраняет
   компактный режим на 4 места. Пустое кресло играет серверный ИИ после окна
   реконнекта; конфигурации и дипломатия закреплены в `networkSeats.test.ts` (5).
+  **Мульти-сессии:** `MATCHES=N` (деф. 1, кап 16) поднимает N независимых сессий в
+  ОДНОМ процессе (`proto`, `proto-2`, …) — вся пер-матчевая машинерия (комната,
+  wake-драйвер, ИИ пустых кресел, standing-приказы, debounced-снапшот, receipts,
+  BF-17 grace) закрыта в фабрике `createHostedMatch`; все сессии в `MatchRegistry`
+  → браузер матчей клиента показывает каждую строкой, вход по matchId; durable
+  restore пер-id (рестарт резюмирует все), shutdown флашит каждую; свой лобби-хост
+  у каждой сессии. Проверено e2e (реальный Chromium + Postgres-resume).
   Полный AvA-жизненный цикл
   (вызов/ростер/фазы, `corporation-wars.md`) — server/meta, дальше.
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты

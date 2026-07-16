@@ -97,7 +97,14 @@ Match modes are selected when starting the host:
 pnpm host                    # 10-player FFA
 TEAMS=5v5 pnpm host          # ten chairs: p1–p5 vs p6–p10
 TEAMS=2v2 pnpm host          # compact four-chair team test
+MATCHES=3 pnpm host          # three independent sessions in ONE process
 ```
+
+`MATCHES=N` (default 1, up to 16) hosts N sessions side by side — ids `proto`,
+`proto-2`, … Every one appears in the in-game match browser («Доступные»), players
+pick a row; each session has its own lobby (first joiner is its host), its own
+empty-seat AI and its own durable snapshot, so a restart resumes them all. The
+mode/`TIME_SCALE` apply to every session alike.
 
 Unsupported `TEAMS` values fail at startup. A durable saved match keeps its
 original roster; remove the saved `proto` snapshot or use an empty database before
