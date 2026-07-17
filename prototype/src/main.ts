@@ -402,6 +402,11 @@ let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
 let aiming = false; // "Move" command armed → next world tap orders the move
+// PC ШТУРМ: armed like "Move", but the target must be someone else's capturable
+// world — the fleet flies there and assaults on arrival (one-shot, not the CC-2
+// standing auto-storm). Keyed by fleet id → destination world.
+let assaultAim = false;
+const assaultOnArrival = new Map<string, string>();
 let barrageAim = false; // "Обстрел" armed → next tap picks the artillery's focus target
 // Hero window armed modes: a cast waits for its target world; a deploy waits for the
 // point the hero's ship rises at (own world / own fleet / allied world by markers).
@@ -423,6 +428,9 @@ let warPrompt: {
   destId: string;
   edge?: { from: string; to: string; t: number };
   blockers: string[];
+  /** PC ШТУРМ command: confirm → the moved fleets also assault on arrival; the
+   *  prompt reads as "this is a friendly faction's world — declare war?". */
+  assault?: boolean;
 } | null = null;
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
@@ -801,8 +809,13 @@ function setCompactPanel(v: boolean): void {
 // (ping button, conveyor idle line, upgrade buttons) must follow the same gate, or
 // a phone with the pref on would get PC-compact wording under phone styling.
 const PC_FINE = typeof matchMedia !== 'undefined' ? matchMedia('(min-width:900px) and (hover:hover) and (pointer:fine)') : null;
+/** True only in the PC layout mode (the same media query that gates the PC CSS).
+ *  Every JS-side PC-only tweak MUST ride this gate — the mobile build is frozen. */
+function pcUi(): boolean {
+  return PC_FINE?.matches ?? false;
+}
 function compactUi(): boolean {
-  return compactPanel && (PC_FINE?.matches ?? false);
+  return compactPanel && pcUi();
 }
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
@@ -1241,6 +1254,9 @@ function progressPct(active: ActiveBuild): number {
 }
 function queuedLabel(q: QueuedBuild): string {
   if (q.kind === 'unit') {
+    // PC: icon·count chips (like the garrison tiles) — the hover dossier names the
+    // unit. Mobile keeps the full name.
+    if (pcUi()) return `${unitIcon(q.id)} ${q.count}`;
     return `${q.count}× ${unitIcon(q.id)} ${displayUnit(q.id)}`;
   }
   if (q.kind === 'upgrade') {
@@ -1393,14 +1409,14 @@ function divisionsHtml(planetId: string): string {
   let h = `<div class="sec">${t('Дивизии')}</div>`;
   if (here.length) {
     for (const d of here) {
-      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join(' ') || '—';
+      const comp = d.units.map((u) => `${formIcon(u.type)}${u.count}`).join(' ') || '—';
       const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
       const off = d.officer ? t(OFFICERS[d.officer]?.name ?? '') : '';
       // Офицер — часть ИМЕННОГО шаблона (готовый, менять нельзя): показываем, не редактируем.
       h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(t(d.name))}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
     }
   } else {
-    h += `<div class="row dim">${t('Нет дивизий — мобилизуй по шаблону ниже.')}</div>`;
+    h += `<div class="row dim">${pcUi() ? t('Нет дивизий.') : t('Нет дивизий — мобилизуй по шаблону ниже.')}</div>`;
   }
   const tpls = templatesOf(s, ME);
   const res = s.players[ME]?.resources ?? {};
@@ -1422,16 +1438,35 @@ function divisionsHtml(planetId: string): string {
   }
   h += `</div>`;
   const f = formationStats(pick.tpl);
-  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
   const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
-  const comp = pick.tpl.slots.filter(Boolean).map((u) => FORM_ICON[u!] ?? '▪').join('') || '—';
+  const slots = pick.tpl.slots.filter(Boolean) as string[];
   const offLine = pick.officer ? ` · ★${esc(t(OFFICERS[pick.officer]?.name ?? ''))}` : '';
-  h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
+  if (pcUi()) {
+    // PC: every icon self-describes on hover — composition glyphs → unit dossiers,
+    // ⚔/🛡/❤ → the stat's name, cost glyphs → the resource's name.
+    const comp = slots.map((u) => `<span data-desc="u:${esc(u)}">${formIcon(u)}</span>`).join('') || '—';
+    const cost =
+      Object.entries(f.cost).map(([r, a]) => `<span data-desc="res:${esc(r)}">${a}${TECH_CUR[r] ?? r[0]}</span>`).join(' ') || '—';
+    h += `<div class="row dim">${comp} · <span data-desc="stat:datk">⚔${f.attack}</span> <span data-desc="stat:ddef">🛡${f.defense}</span> <span data-desc="stat:dhp">❤${f.hp}</span>${offLine} · ${cost}</div>`;
+  } else {
+    const comp = slots.map((u) => formIcon(u)).join('') || '—';
+    const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
+    h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
+  }
   h += `<div class="row">`;
-  h += btn('mobilize', pick.officer ? `o${idx - officerBase}` : String(idx), t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }), afford && f.count > 0);
-  h += btn('divdesign', '', t('⚙ Конструктор'), true);
+  h += btn(
+    'mobilize',
+    pick.officer ? `o${idx - officerBase}` : String(idx),
+    t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }),
+    afford && f.count > 0,
+    pcUi() ? 'division' : undefined,
+  );
+  h += btn('divdesign', '', t('⚙ Конструктор'), true, pcUi() ? 'act:divdesign' : undefined);
   h += `</div>`;
-  h += `<div class="hint">${t('Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.')}</div>`;
+  // PC dropped this hint (its content lives in hover dossiers); mobile keeps it.
+  if (!pcUi()) {
+    h += `<div class="hint">${t('Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.')}</div>`;
+  }
   return h;
 }
 
@@ -1459,7 +1494,7 @@ function fleetDivisionsHtml(f: Fleet, here: Planet): string {
   if (carried.length) {
     g += `<div class="row">`;
     for (const d of carried) {
-      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join('') || '—';
+      const comp = d.units.map((u) => `${formIcon(u.type)}${u.count}`).join('') || '—';
       g += btn('divunload', d.id, `▼ ${esc(d.name)} ${comp}`, true);
     }
     g += `</div>`;
@@ -2256,6 +2291,66 @@ function tryMoveGroup(fleetIds: string[], destId: string): void {
   }
   for (const id of movers) playerOrder(moveFleet(ME, id, destId));
 }
+/** PC ШТУРМ: send every selected fleet at `destId` (someone else's capturable world)
+ *  and assault on arrival. A peaceful target/route stages the war prompt first —
+ *  worded as "this is a friendly faction's world". */
+function tryAssaultGroup(fleetIds: string[], destId: string): void {
+  const movers = fleetIds.filter((id) => s.fleets[id]);
+  if (!movers.length) return;
+  const blockers = new Set<string>();
+  for (const id of movers) for (const b of peaceBlockers(fleetNode(s.fleets[id]!), destId)) blockers.add(b);
+  const owner = s.planets[destId]?.owner;
+  if (owner != null && owner !== ME && !canTraverse(s, ME, owner)) blockers.add(owner);
+  if (blockers.size) {
+    warPrompt = { fleetIds: movers, destId, blockers: [...blockers], assault: true };
+    renderWarPrompt();
+    return;
+  }
+  dispatchAssault(movers, destId);
+}
+function dispatchAssault(fleetIds: string[], destId: string): void {
+  for (const id of fleetIds) {
+    const f = s.fleets[id];
+    if (!f) continue;
+    if (f.location === destId && !f.movement) {
+      // already parked at the target — storm right away (orbit first if needed)
+      if (f.orbit !== 'near') playerOrder(orbitFleet(ME, id, 'near'));
+      playerOrder(assaultFleet(ME, id));
+    } else {
+      playerOrder(moveFleet(ME, id, destId));
+      assaultOnArrival.set(id, destId);
+    }
+  }
+}
+/** Fire the one-shot assault orders of fleets that reached their ШТУРМ target
+ *  (runs each frame beside autoEngage). Redirected fleets drop the order. */
+function pumpAssaultOrders(): void {
+  if (!assaultOnArrival.size) return;
+  for (const [id, destId] of [...assaultOnArrival]) {
+    const f = s.fleets[id];
+    if (!f) {
+      assaultOnArrival.delete(id);
+      continue;
+    }
+    if (f.movement) {
+      if ((f.movement.destination ?? f.movement.to) !== destId) assaultOnArrival.delete(id); // re-routed by hand
+      continue;
+    }
+    if (f.battleId) continue; // the arrival battle IS the assault path — wait it out
+    if (f.location !== destId) {
+      assaultOnArrival.delete(id); // parked elsewhere — the order lapsed
+      continue;
+    }
+    const here = s.planets[destId];
+    if (!here || here.owner === ME || here.owner == null) {
+      assaultOnArrival.delete(id); // captured meanwhile / emptied — nothing to storm
+      continue;
+    }
+    if (f.orbit !== 'near') playerOrder(orbitFleet(ME, id, 'near'));
+    playerOrder(assaultFleet(ME, id));
+    assaultOnArrival.delete(id);
+  }
+}
 /** As tryMoveGroup, but the target is a point on a lane (continuous order). Either lane
  *  endpoint sitting on PEACE territory blocks the march until war is declared. */
 function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; t: number }): void {
@@ -2280,9 +2375,13 @@ function confirmWarPrompt(): void {
   warPrompt = null;
   hideWarPrompt();
   for (const b of wp.blockers) playerOrder(declareWar(ME, b));
-  for (const id of wp.fleetIds) {
-    if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
-    else playerOrder(moveFleet(ME, id, wp.destId));
+  if (wp.assault) {
+    dispatchAssault(wp.fleetIds, wp.destId); // wars are declared → flies + storms on arrival
+  } else {
+    for (const id of wp.fleetIds) {
+      if (wp.edge) playerOrder(moveFleetEdge(ME, id, wp.edge));
+      else playerOrder(moveFleet(ME, id, wp.destId));
+    }
   }
   note(t('⚔ Война объявлена — флоты выдвигаются'));
 }
@@ -2294,12 +2393,15 @@ function renderWarPrompt(): void {
   const el = document.getElementById('warprompt');
   if (!el || !warPrompt) return;
   const names = warPrompt.blockers.map((b) => esc(blockerName(b))).join(', ');
+  const body = warPrompt.assault
+    ? t('Это мир дружественной фракции. Вы хотите объявить войну <b>{names}</b>?', { names })
+    : t('Маршрут проходит через миры <b>{names}</b>, с кем у вас <b>мир</b>. Мирного прохода нет — движение сюда объявит <b>войну</b>.', { names });
   el.innerHTML =
     `<div class="wpbox">` +
     `<div class="wp-head">⚔ ${t('ОБЪЯВИТЬ ВОЙНУ?')}</div>` +
-    `<div class="wp-body">${t('Маршрут проходит через миры <b>{names}</b>, с кем у вас <b>мир</b>. Мирного прохода нет — движение сюда объявит <b>войну</b>.', { names })}</div>` +
-    `<div class="wp-actions"><button class="wp-no">${t('ОТМЕНА')}</button>` +
-    `<button class="wp-yes">${t('ОБЪЯВИТЬ ВОЙНУ')}</button></div>` +
+    `<div class="wp-body">${body}</div>` +
+    `<div class="wp-actions"><button class="wp-no">${warPrompt.assault ? t('НЕТ') : t('ОТМЕНА')}</button>` +
+    `<button class="wp-yes">${warPrompt.assault ? t('ДА') : t('ОБЪЯВИТЬ ВОЙНУ')}</button></div>` +
     `</div>`;
   el.classList.add('show');
 }
@@ -3109,10 +3211,32 @@ function drawFleetRoutes() {
   }
 }
 
+/** While ШТУРМ is armed (PC): ring every valid target — someone else's capturable
+ *  world (enemy or friendly faction alike; the friendly path asks to declare war). */
+function drawAssaultTargets() {
+  if (!assaultAim) return;
+  cx.save();
+  cx.strokeStyle = 'rgba(255,90,77,.85)';
+  cx.lineWidth = 1.6;
+  cx.setLineDash([4, 4]);
+  cx.shadowColor = '#ff5a4d';
+  cx.shadowBlur = 8;
+  for (const n of MAP) {
+    const p = s.planets[n.id];
+    if (!p || p.owner == null || p.owner === ME) continue;
+    if (!(SECTOR_TYPES[SECTOR_OF[n.id]]?.capturable ?? false)) continue;
+    const c = world(n);
+    cx.beginPath();
+    cx.arc(c.x, c.y, 16, 0, TAU);
+    cx.stroke();
+  }
+  cx.restore();
+}
+
 /** While "Move" is armed: a dashed line from each selected fleet to the world under
  *  the pointer (snaps to the nearest blip) — preview before committing. */
 function drawAimPreview() {
-  if (!aiming || !aimPointer) return;
+  if (!(aiming || assaultAim) || !aimPointer) return;
   const ids = selectedFleetIds();
   if (!ids.length) return;
   // Prefer a node target; if none is near, aim at the closest point ON a lane —
@@ -4387,6 +4511,7 @@ function render(now: number) {
     cx.restore();
   }
   drawPings(now); // ally ping markers (coalition), with screen hit-boxes for taps
+  drawAssaultTargets();
   drawAimPreview();
 
 }
@@ -4407,15 +4532,19 @@ function pcols(blocks: string[]): string {
   return `<div class="pcols">${blocks.map(block).join('')}</div>`;
 }
 function cardHeader(color: string, title: string, sub: string): string {
+  // PC: the one-line header truncates the subtitle — drop the spaces around the
+  // separator dots so more of it fits. Mobile keeps the airy ' · '.
+  const subFit = pcUi() ? sub.replace(/ · /g, '·') : sub;
   return `<div class="phead">
     <span class="pflag" style="background:${color}"></span>
-    <div class="ptitle"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
+    <div class="ptitle"><b>${esc(title)}</b><span>${esc(subFit)}</span></div>
     <button class="pclose" data-act="close" data-arg="">✕</button>
   </div>`;
 }
-function tabButton(tab: PlanetTab, label: string, count: number): string {
+function tabButton(tab: PlanetTab, label: string, count: number, desc?: string): string {
   const on = planetTab === tab ? ' on' : '';
-  return `<button class="ptab${on}" data-act="tab" data-arg="${tab}">${label}<b>${count}</b></button>`;
+  const d = desc ? ` data-desc="${desc}"` : '';
+  return `<button class="ptab${on}" data-act="tab" data-arg="${tab}"${d}>${label}<b>${count}</b></button>`;
 }
 function unitRows(stacks: Array<{ unit: string; count: number }>): string {
   if (!stacks.length) {
@@ -4481,7 +4610,7 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
 function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit'): string {
   const k = kind === 'unit' ? 'u' : 'b';
   const tiles = ids
-    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost)))
+    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost), true))
     .join('');
   return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
@@ -4533,7 +4662,10 @@ function fleetPanelHtml(f: Fleet): string {
   let h = cardHeader(
     ownerColor(f.owner),
     t('ФЛОТ'),
-    t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr }) + hullTag + (inOrbit ? ' · ' + t('на орбите') : '') + (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
+    (pcUi() ? t('Корабли: {s} · Десант: {tr}', { s: nShips, tr: nTr }) : t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr })) +
+      hullTag +
+      (inOrbit ? ' · ' + t('на орбите') : '') +
+      (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
   );
   // Aggregate combat weight, summed across the squadron's ships (it moves at its
   // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
@@ -4554,12 +4686,15 @@ function fleetPanelHtml(f: Fleet): string {
   if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) flavor.push(t('с героем-флагманом'));
   if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery'))) flavor.push(t('с осадной артиллерией'));
   if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0)) flavor.push(t('со своим радарным дозором'));
-  const blurb =
-    nShips === 0
-      ? t('Пустая группа корпусов — кораблей на борту нет.')
-      : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
-  h += `<div class="row dim">${blurb}</div>`;
-  h += `<div class="pstats"><span>⚔ ${t('АТК')} ${atk}</span><span>🛡 ${t('ЗАЩ')} ${def}</span><span>❤ ${t('ОЗ')} ${hpTot}</span><span>⚡ ${t('СКР')} ${spdTxt}</span></div>`;
+  // PC drops the intro blurb (the header + stat chips already say it); phones keep it.
+  if (!pcUi()) {
+    const blurb =
+      nShips === 0
+        ? t('Пустая группа корпусов — кораблей на борту нет.')
+        : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
+    h += `<div class="row dim">${blurb}</div>`;
+  }
+  h += `<div class="pstats"><span data-desc="stat:atk">⚔ ${t('АТК')} ${atk}</span><span data-desc="stat:def">🛡 ${t('ЗАЩ')} ${def}</span><span data-desc="stat:hp">❤ ${t('ОЗ')} ${hpTot}</span><span data-desc="stat:spd">⚡ ${t('СКР')} ${spdTxt}</span></div>`;
   h += nShips ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units) : '';
   if (nTr > 0) h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
 
@@ -4609,9 +4744,12 @@ function fleetPanelHtml(f: Fleet): string {
   if (f.owner === ME) {
     const auto = isAutoAssault(f.id);
     h += `<div class="sec">${t('Дежурный режим')}</div><div class="row">`;
-    h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true);
+    h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true, pcUi() ? 'act:qauto' : undefined);
     h += `</div>`;
-    h += `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
+    // PC: the explanation lives in the button's hover dossier ('act:qauto')
+    if (!pcUi()) {
+      h += `<div class="hint">${t('Во «включено» флот сам входит в орбиту и штурмует вражеский мир, на который прибыл — без ручного приказа.')}</div>`;
+    }
   }
 
   if (f.movement) {
@@ -4728,8 +4866,10 @@ function fleetPanelHtml(f: Fleet): string {
     if (dh) cols.push(dh);
     h += pcols(cols);
   }
-  h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
-  h += btn('cancel', '', t('Снять выделение'), true);
+  if (!pcUi()) {
+    h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
+    h += btn('cancel', '', t('Снять выделение'), true);
+  }
   return h;
 }
 
@@ -4782,13 +4922,13 @@ function planetPanelHtml(p: Planet): string {
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
     cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`) +
-    `<div class="pstats"><span>⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span>${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span>${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span>▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
+    `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
     if (pt.productionBonus !== 0) parts.push(t('произв. {p}', { p: pct(pt.productionBonus) }));
     if (pt.defenseBonus !== 0) parts.push(t('оборона {p}', { p: pct(pt.defenseBonus) }));
-    h += `<div class="row dim">${t('Мир типа «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') })}</div>`;
+    h += `<div class="row dim">${pcUi() ? t('Тип: «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') }) : t('Мир типа «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') })}</div>`;
   }
 
   // Capital marker / designate — heroes respawn here (and re-fit modules, Phase C).
@@ -4829,17 +4969,21 @@ function planetPanelHtml(p: Planet): string {
     }</div>`;
   }
 
-  h += `<div class="ptabs">${tabButton('ground', t('Земля'), ground.length)}${tabButton(
+  h += `<div class="ptabs">${tabButton('ground', t('Земля'), ground.length, 'tab:ground')}${tabButton(
     'ships',
     t('Флот'),
     ships.length + here.length,
-  )}${tabButton('squadron', t('Крылья'), wing.length)}${tabButton('buildings', t('Здания'), p.buildings.length)}</div>`;
+    'tab:ships',
+  )}${tabButton('squadron', t('Крылья'), wing.length, 'tab:squadron')}${tabButton('buildings', t('Здания'), p.buildings.length, 'tab:buildings')}</div>`;
 
   // Tab content is split into self-contained blocks; on desktop they flow into
   // side-by-side columns (filling the wide panel), on phones they stack vertically.
   const cols: string[] = [];
   if (planetTab === 'ground') {
-    cols.push(`<div class="sec">${t('Наземные части')}</div>` + unitRows(ground));
+    // PC: one tile row of icon·count chips (the tab's old bottom hint lives in the
+    // ЗЕМЛЯ tab's hover dossier, 'tab:ground'). Mobile keeps the original row list
+    // and bottom hint untouched.
+    cols.push(`<div class="sec">${t('Наземные части')}</div>` + (pcUi() ? garrisonTilesHtml(ground) : unitRows(ground)));
     if (mine) {
       cols.push(divisionsHtml(p.id));
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
@@ -4849,9 +4993,11 @@ function planetPanelHtml(p: Planet): string {
           buildButtons(p.id, groundBuilds, 'unit'),
       );
     }
-    cols.push(
-      `<div class="hint">${t('Наземные части обороняют миры; грузятся на флот из панели флота.')}</div>`,
-    );
+    if (!pcUi()) {
+      cols.push(
+        `<div class="hint">${t('Наземные части обороняют миры; грузятся на флот из панели флота.')}</div>`,
+      );
+    }
   } else if (planetTab === 'ships') {
     // Built ships now auto-rally to orbit (see fleetLaunchModule), so the garrison
     // normally holds no spacecraft — only surface the section if some linger.
@@ -4876,9 +5022,12 @@ function planetPanelHtml(p: Planet): string {
           buildButtons(p.id, shipBuilds, 'unit'),
       );
     }
-    cols.push(
-      `<div class="hint">${t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.')}</div>`,
-    );
+    if (!pcUi()) {
+      // PC carries this in the ФЛОТ tab's hover dossier ('tab:ships')
+      cols.push(
+        `<div class="hint">${t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.')}</div>`,
+      );
+    }
   } else if (planetTab === 'squadron') {
     if (wing.length) {
       cols.push(`<div class="sec">${t('Авиагруппа в гарнизоне')}</div>` + unitRows(wing));
@@ -4891,9 +5040,12 @@ function planetPanelHtml(p: Planet): string {
           buildButtons(p.id, wingBuilds, 'unit'),
       );
     }
-    cols.push(
-      `<div class="hint">${t('Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».')}</div>`,
-    );
+    if (!pcUi()) {
+      // PC carries this in the КРЫЛЬЯ tab's hover dossier ('tab:squadron')
+      cols.push(
+        `<div class="hint">${t('Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».')}</div>`,
+      );
+    }
   } else {
     cols.push(
       `<div class="sec">${t('Строительный конвейер')}</div>` +
@@ -5069,7 +5221,9 @@ function unitDossier(id: string): Dossier | null {
         body: t('Боевая проекция самого командующего — флагман во главе родного флота: {a} атаки и {hp} корпуса. Но решает не это: его присутствие держит эскадру в кулаке, давая {b} к атаке и обороне всем кораблям рядом. Падёт — командующий лишается проекции, пока та не отстроится заново на родном мире.', { a: hl(st.attack), hp: hl(st.hp), b: hl('+5%') }),
       };
     default:
-      return { name: displayUnit(id), body: t('Боевая единица.') };
+      // PC hover tooltip: the name alone is enough (an empty body is skipped by the
+      // tooltip); the mobile tap-modal keeps the old filler line.
+      return { name: displayUnit(id), body: pcUi() ? '' : t('Боевая единица.') };
   }
 }
 
@@ -5187,6 +5341,68 @@ function objDossier(key: string): Dossier | null {
     return {
       name: t('Флот'),
       body: t('Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.'),
+    };
+  }
+  if (key === 'tab:ground') {
+    // The ЗЕМЛЯ tab's hover dossier — carries what used to be the tab's bottom hint.
+    return {
+      name: t('Земля'),
+      body: t('Наземные части обороняют миры; грузятся на флот из панели флота.'),
+    };
+  }
+  if (key === 'tab:ships') {
+    return {
+      name: t('Флот'),
+      body: t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.'),
+    };
+  }
+  if (key === 'tab:squadron') {
+    return {
+      name: t('Крылья'),
+      body: t('Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».'),
+    };
+  }
+  if (key === 'tab:buildings') {
+    return {
+      name: t('Здания'),
+      body: t('Постройки мира и строительный конвейер: состояние, уровни и улучшения.'),
+    };
+  }
+  if (key === 'division') {
+    return {
+      name: t('Дивизия'),
+      body: t('Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.'),
+    };
+  }
+  if (key.startsWith('stat:')) {
+    const STAT_DOSSIER: Record<string, [string, string]> = {
+      atk: [t('Атака'), t('Суммарная атака кораблей флота.')],
+      def: [t('Защита'), t('Суммарная защита кораблей флота.')],
+      hp: [t('Очки здоровья'), t('Суммарная прочность кораблей флота.')],
+      spd: [t('Скорость'), t('Скорость перелёта — флот движется со скоростью самого медленного корабля.')],
+      garrison: [t('Гарнизон'), t('Численность наземных войск, обороняющих мир.')],
+      ground: [t('Наземные части'), t('Пехота и техника на поверхности мира.')],
+      gships: [t('Корабли в гарнизоне'), t('Корабли, стоящие в гарнизоне мира (не на орбите).')],
+      pbuild: [t('Постройки'), t('Число построек на мире.')],
+      datk: [t('Атака'), t('Суммарная атака дивизии.')],
+      ddef: [t('Защита'), t('Суммарная защита дивизии.')],
+      dhp: [t('ОЗ'), t('Суммарные очки здоровья дивизии.')],
+    };
+    const d = STAT_DOSSIER[key.slice(5)];
+    return d ? { name: d[0], body: d[1] } : null;
+  }
+  if (key.startsWith('res:')) {
+    // Resource glyph → the resource's localized name (data name, e.g. metal/credits).
+    const r = key.slice(4);
+    return { name: tData(r), body: '' };
+  }
+  if (key === 'act:divdesign') {
+    return { name: t('Конструктор дивизий'), body: t('Редактор шаблонов: состав слотов и доктрина дивизий.') };
+  }
+  if (key === 'act:qauto') {
+    return {
+      name: t('Авто-штурм'),
+      body: t('ВКЛ — автоматически штурмовать вражеский мир при нахождении на его орбите.'),
     };
   }
   if (key.startsWith('c:')) return constructionDossier(key);
@@ -5764,11 +5980,26 @@ function scrollFeedToEnd(): void {
  *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
  *  panel — not in a global HUD strip. The LOCALIZED name rides both the desktop
  *  `title` (hover tooltip) and `data-name` — the mobile long-press bubble reads it. */
-function codexTile(kind: 'b' | 'u', id: string, label: string): string {
+function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false): string {
   if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
   const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
   const name = kind === 'b' ? buildingName(id) : unitDossier(id)?.name ?? displayUnit(id);
-  return `<button class="ptile" data-codex="${kind}:${id}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+  // Build-menu tiles carry the enqueue order (PC right-click = build w/o the codex
+  // confirmation); composition/garrison tiles don't — right-click is inert there.
+  const order = orderable ? ` data-buildorder="${kind === 'u' ? 'unit' : 'building'}:${id}"` : '';
+  return `<button class="ptile" data-codex="${kind}:${id}" data-desc="${kind}:${id}"${order} data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+}
+/** Ground-garrison tiles (the ЗЕМЛЯ tab): one flowing row of icon·count chips — no
+ *  names; the hover dossier (PC) / tap dossier (touch) carries the identification. */
+function garrisonTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
+  const tiles = stacks
+    .filter((u) => u.count > 0)
+    .map((u) => {
+      const name = unitDossier(u.unit)?.name ?? displayUnit(u.unit);
+      return `<button class="ptile mini" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}</span></button>`;
+    })
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : `<div class="row dim">${t('нет')}</div>`;
 }
 /** A row of ship/troop tiles for a fleet's composition — tap one for its full specs. */
 function unitTilesHtml(stacks: Array<{ unit: string; count: number }>): string {
@@ -6084,6 +6315,7 @@ function renderCmdBar() {
   const ids = selectedFleetIds();
   if (ids.length === 0) {
     if (aiming) aiming = false;
+    if (assaultAim) assaultAim = false;
     if (merging) merging = false;
     cmdbar.classList.remove('show');
     lastCmdHtml = '';
@@ -6092,13 +6324,17 @@ function renderCmdBar() {
   const fleets = ids.map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
   const anyMoving = fleets.some((f) => f.movement);
   const docked = fleets.filter((f) => f.location && !f.movement && !f.battleId);
-  const canAssault = docked.some(
-    (f) =>
-      f.orbit === 'near' &&
-      f.location &&
-      s.planets[f.location]?.owner !== f.owner &&
-      SECTOR_TYPES[SECTOR_OF[f.location]]?.capturable, // empty space can't be taken
-  );
+  // PC: ШТУРМ is a targeting command (fly there + storm on arrival) — armable
+  // whenever the selection has ships. Mobile keeps the in-orbit-only button.
+  const canAssault = pcUi()
+    ? fleets.some((f) => sumUnits(f.units) > 0)
+    : docked.some(
+        (f) =>
+          f.orbit === 'near' &&
+          f.location &&
+          s.planets[f.location]?.owner !== f.owner &&
+          SECTOR_TYPES[SECTOR_OF[f.location]]?.capturable, // empty space can't be taken
+      );
   // Merge: a group fuses in one tap; a lone fleet arms target-pick (needs a partner).
   const myFleetTotal = Object.values(s.fleets).filter((f) => f.owner === ME).length;
   const canMerge = ids.length >= 2 || (ids.length === 1 && myFleetTotal >= 2);
@@ -6111,7 +6347,7 @@ function renderCmdBar() {
     `<span class="cmdlabel">${ids.length > 1 ? t('{n} ФЛОТОВ', { n: ids.length }) : t('ФЛОТ')}</span>` +
     cmdBtn('move', '⤳', t('Курс'), aiming ? 'on' : '', false) +
     cmdBtn('stop', '■', t('Стоп'), 'danger', !anyMoving) +
-    cmdBtn('attack', '⚔', t('Штурм'), '', !canAssault) +
+    cmdBtn('attack', '⚔', t('Штурм'), assaultAim ? 'on' : '', !canAssault) +
     (anyArtillery ? cmdBtn('barrage', '🎯', t('Обстрел'), barrageAim ? 'on' : '', false) : '') +
     cmdBtn('merge', '⛬', ids.length > 1 ? t('Слить') : t('Слить…'), merging ? 'on' : '', !canMerge) +
     cmdBtn('split', '⊟', t('Разделить'), splitState ? 'on' : '', !canSplit);
@@ -6239,7 +6475,11 @@ side.addEventListener('click', (ev) => {
     // on hover — building/task name, current vs full output, ETA.
     if (MOBILE) {
       const key = (ev.target as HTMLElement).closest('[data-desc]')?.dataset.desc ?? null;
-      if (key !== null) openDossier(key);
+      // stat:/tab:/division dossiers exist for the PC hover tooltip only — the
+      // mobile tap behaviour stays exactly as it was before they were added.
+      if (key !== null && !key.startsWith('stat:') && !key.startsWith('tab:') && key !== 'division') {
+        openDossier(key);
+      }
     }
     return;
   }
@@ -6389,7 +6629,9 @@ side.addEventListener('pointermove', (ev) => {
       hoverObj = key;
       const d = key ? objDossier(key) : null;
       if (d) {
-        objTipEl.innerHTML = `<div class="pd-title">${dossierTitleHtml(key!, d)}</div><div class="pd-body">${d.body}</div>`;
+        // A body-less dossier (bare names — resources, plain units) shows just the title.
+        objTipEl.innerHTML =
+          `<div class="pd-title">${dossierTitleHtml(key!, d)}</div>` + (d.body ? `<div class="pd-body">${d.body}</div>` : '');
         objTipEl.style.display = 'block';
       } else {
         objTipEl.style.display = 'none';
@@ -6412,6 +6654,37 @@ side.addEventListener('pointerleave', () => {
     hoverObj = null;
     renderObjDesc();
   }
+});
+
+// PC: the browser context menu is suppressed across the whole game surface (the
+// map, the HUD, every overlay) — right-click is a game input now. Text fields keep
+// their native menu (paste!).
+document.addEventListener('contextmenu', (ev) => {
+  if (!pcUi()) return;
+  if ((ev.target as HTMLElement).closest('input,textarea')) return;
+  ev.preventDefault();
+});
+
+// PC: right-click on a build tile orders it immediately — same enqueue path as the
+// codex «Построить здесь» button, minus the confirmation window (left-click keeps
+// opening the full dossier). The browser context menu is suppressed on these tiles.
+side.addEventListener('contextmenu', (ev) => {
+  if (!pcUi()) return;
+  const tile = (ev.target as HTMLElement).closest('[data-buildorder]') as HTMLElement | null;
+  if (!tile) return;
+  ev.preventDefault();
+  const [kind, id] = (tile.dataset.buildorder ?? '').split(':');
+  if (!kind || !id || !selPlanet) return;
+  const p = s.planets[selPlanet];
+  if (!p || p.owner !== ME) return;
+  if (kind === 'building') {
+    // mirror codexBuildBtn's gates: the sector must allow it, one copy per world
+    const buildable = (SECTOR_TYPES[SECTOR_OF[p.id]]?.allowedBuildings ?? BUILDABLE).includes(id);
+    if (!buildable || p.buildings.some((b) => b.type === id)) return;
+  }
+  enqueueBuild(selPlanet, { kind: kind as BuildKind, id, count: 1 });
+  lastPanelHtml = '';
+  renderPanel();
 });
 
 // Mobile long-press on a codex tile (.ptile): touch has no hover, so the desktop
@@ -6494,10 +6767,12 @@ cmdbar.addEventListener('click', (ev) => {
   const ids = selectedFleetIds();
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
+  if (cmd !== 'attack') assaultAim = false; // any other command disarms assault-targeting
   heroAim = null; // any command disarms a pending hero cast / deploy
   heroSpawnAim = null;
   if (cmd === 'move') {
     aiming = !aiming; // arm / disarm the move order
+    assaultAim = false;
   } else if (cmd === 'merge') {
     if (ids.length >= 2) mergeGroup(ids);
     else {
@@ -6508,8 +6783,16 @@ cmdbar.addEventListener('click', (ev) => {
   } else if (cmd === 'stop') {
     for (const id of ids) if (s.fleets[id]?.movement) playerOrder(stopFleet(ME, id));
   } else if (cmd === 'attack') {
-    for (const id of ids) if (s.fleets[id]?.orbit === 'near') playerOrder(assaultFleet(ME, id));
-    aiming = false;
+    if (pcUi()) {
+      // PC: ШТУРМ aims like «Курс» — the next click on someone else's world sends
+      // the fleet there and it storms on arrival (valid targets ring up on the map).
+      assaultAim = !assaultAim;
+      aiming = false;
+      if (assaultAim) note(t('⚔ выберите чужой мир для штурма'));
+    } else {
+      for (const id of ids) if (s.fleets[id]?.orbit === 'near') playerOrder(assaultFleet(ME, id));
+      aiming = false;
+    }
   } else if (cmd === 'split') {
     const id = ids[0];
     if (id) {
@@ -6613,6 +6896,27 @@ function selectAt(mx: number, my: number) {
     if (host) playerOrder(spawnHero(ME, heroId, host.id));
     else if (n) playerOrder(spawnHero(ME, heroId, n.id));
     else note(t('✖ развёртывание отменено'));
+    lastPanelHtml = '';
+    return;
+  }
+  // ШТУРМ armed (PC): the click picks the target world — someone else's capturable
+  // world only. An enemy at war → fly + storm on arrival; a peaceful owner → the
+  // "friendly faction — declare war?" dialog. Anything else keeps the aim armed.
+  if (assaultAim) {
+    const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
+    if (!n) {
+      assaultAim = false; // empty space — cancel, like an armed move
+      lastPanelHtml = '';
+      return;
+    }
+    const target = s.planets[n.id];
+    const capturable = SECTOR_TYPES[SECTOR_OF[n.id]]?.capturable ?? false;
+    if (!target || !capturable || target.owner == null || target.owner === ME) {
+      note(t('⚔ штурмовать можно только чужой мир'));
+      return; // stay armed — pick another target
+    }
+    tryAssaultGroup(selectedFleetIds(), n.id);
+    assaultAim = false;
     lastPanelHtml = '';
     return;
   }
@@ -6737,7 +7041,7 @@ canvas.addEventListener('pointerdown', (ev) => {
     additive = ev.ctrlKey || ev.metaKey; // Ctrl/⌘-click → add to the fleet selection
     selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
-    if (aiming) aimPointer = p; // the aim preview starts under the finger at once
+    if (aiming || assaultAim) aimPointer = p; // the aim preview starts under the finger at once
     // Touch long-press: a still finger for ~350ms picks a fleet ADDITIVELY (the
     // Ctrl-click of phones) or opens a BOX-SELECT from empty space (the Shift-drag).
     // Not while an armed mode (move/merge/barrage) owns the taps.
@@ -6788,10 +7092,12 @@ canvas.addEventListener('pointermove', (ev) => {
     if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
     pinchDist = d;
     dragged = true;
-  } else if (aiming) {
-    // Move is armed: the finger DRAGS THE AIM (live preview via aimPointer), the
-    // camera stays put — releasing commits. Panning used to hijack this drag and
-    // silently swallow the order (the audit's blind-order finding).
+  } else if ((aiming || assaultAim) && !pcUi()) {
+    // TOUCH with Move/ШТУРМ armed: the finger DRAGS THE AIM (live preview via
+    // aimPointer), the camera stays put — releasing commits. Panning used to hijack
+    // this drag and silently swallow the order (the audit's blind-order finding).
+    // On PC the mouse hovers to aim, so an LMB drag stays a normal camera pan and
+    // the armed order survives it (commit is a clean click).
     void 0;
   } else if (boxSelecting && dragStart) {
     selectionBox = { x1: dragStart.x, y1: dragStart.y, x2: p.x, y2: p.y };
@@ -6833,9 +7139,11 @@ function endPointer(ev: PointerEvent) {
     longPressFired = false; // the long-press already acted; this release is spent
     return;
   }
-  if (single && p && (aiming || !dragged)) {
-    // While aiming, a DRAGGED release still commits — the finger was steering the
-    // aim preview, and letting go is the confirmation.
+  // Touch: while an aim is armed the drag steered the preview, so a dragged release
+  // still commits. PC: a drag is a camera pan — only a clean click commits, and the
+  // armed order stays armed through pans.
+  const aimDragCommits = (aiming || assaultAim) && !pcUi();
+  if (single && p && (aimDragCommits || !dragged)) {
     tapByTouch = ev.pointerType === 'touch';
     selectAt(p.x, p.y);
   }
@@ -7069,7 +7377,7 @@ function renderDivDesign(): void {
   h += `<div class="dd-slots">`;
   for (let i = 0; i < FORMATION_SLOTS; i++) {
     const u = pick.tpl.slots[i] ?? null;
-    h += `<button data-ddslot="${i}"${locked ? ' disabled' : ''}>${u ? `${FORM_ICON[u] ?? '▪'} ${esc(t(FORM_RU[u] ?? u))}` : '＋'}</button>`;
+    h += `<button data-ddslot="${i}"${locked ? ' disabled' : ''}>${u ? `${formIcon(u)} ${esc(t(FORM_RU[u] ?? u))}` : '＋'}</button>`;
   }
   h += `</div>`;
   const f = formationStats(pick.tpl);
@@ -7080,7 +7388,7 @@ function renderDivDesign(): void {
   h += `<div class="dd-vs">`;
   for (const tgt of FORMATION_UNITS) {
     const v = vs(tgt);
-    h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${FORM_ICON[tgt]} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
+    h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${formIcon(tgt)} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
   }
   h += `</div>`;
   const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
@@ -7920,7 +8228,7 @@ function conArmyPane(): string {
   const slots = tpl.slots
     .map((u, i) => {
       const inner = u
-        ? `<span class="cn-fic">${FORM_ICON[u] ?? '▪'}</span><span class="cn-fn">${esc(FORM_RU[u] ?? u)}</span>`
+        ? `<span class="cn-fic">${formIcon(u)}</span><span class="cn-fn">${esc(FORM_RU[u] ?? u)}</span>`
         : `<span class="cn-fic dim">＋</span><span class="cn-fn dim">${t('пусто')}</span>`;
       return `<button class="cn-fslot${u ? ' filled' : ''}" data-confslot="${idx}|${i}">${inner}</button>`;
     })
@@ -8353,10 +8661,12 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Свои метки на карте')}<span class="set-sub">${t('булавки 📍 ваших пингов — метки союзников видны всегда')}</span></div>` +
     `<div class="set-ctl"><label class="set-switch"><input id="set-ownpings" type="checkbox"${showOwnPings ? ' checked' : ''} aria-label="${t('Свои метки на карте')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-ownpings-val" class="set-val">${showOwnPings ? t('вкл') : t('выкл')}</span></div>` +
     `</div>` +
-    `<div class="set-row">` +
-    `<div class="set-lbl">${t('Компактный режим меню')}<span class="set-sub">${t('плотная панель сектора — меньше отступов, мельче шрифт (на ПК)')}</span></div>` +
-    `<div class="set-ctl"><label class="set-switch"><input id="set-compact" type="checkbox"${compactPanel ? ' checked' : ''} aria-label="${t('Компактный режим меню')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-compact-val" class="set-val">${compactPanel ? t('вкл') : t('выкл')}</span></div>` +
-    `</div>` +
+    (pcUi()
+      ? `<div class="set-row">` +
+        `<div class="set-lbl">${t('Компактный режим меню')}<span class="set-sub">${t('плотная панель сектора — меньше отступов, мельче шрифт (на ПК)')}</span></div>` +
+        `<div class="set-ctl"><label class="set-switch"><input id="set-compact" type="checkbox"${compactPanel ? ' checked' : ''} aria-label="${t('Компактный режим меню')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-compact-val" class="set-val">${compactPanel ? t('вкл') : t('выкл')}</span></div>` +
+        `</div>`
+      : '') +
     `<div class="pc-sec">${t('Графика')}</div>` +
     `<div class="set-row">` +
     `<div class="set-lbl">${t('Свечение и ореолы')}<span class="set-sub">${t('мягкое сияние вокруг миров, флотов и границ — выключите ради чёткой карты и скорости')}</span></div>` +
@@ -8440,7 +8750,14 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 /** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
-const FORM_ICON: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
+// Mobile keeps the original emoji (phone fonts render them); PC monospace stacks
+// have no text glyph for 🪖👥🎖 (they rendered as tofu ▯) and use UNIT_ICON-style
+// text glyphs instead. Resolved per render via formIcon() on the pcUi() gate.
+const FORM_ICON_EMOJI: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
+const FORM_ICON_TEXT: Record<string, string> = { militia: '▿', heavy_infantry: '◆', special_forces: '✱', tank: '▰' };
+function formIcon(type: string): string {
+  return (pcUi() ? FORM_ICON_TEXT[type] : FORM_ICON_EMOJI[type]) ?? '▪';
+}
 const FORM_RU: Record<string, string> = { militia: 'Ополчение', heavy_infantry: 'Тяжёлая пехота', special_forces: 'Спецназ', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 
@@ -8806,6 +9123,8 @@ function installMatch(state: GameState, aiPlayers: Set<string>): void {
   pendingMerges = [];
   pendingLoads = [];
   aiming = false;
+  assaultAim = false;
+  assaultOnArrival.clear();
   merging = false;
   additive = false;
   splitState = null;
@@ -9656,6 +9975,7 @@ function inMatch(): boolean {
 function topLayerOpen(): boolean {
   return Boolean(
     aiming ||
+      assaultAim ||
       merging ||
       barrageAim ||
       pingMenuLoc !== null ||
@@ -9679,8 +9999,9 @@ function topLayerOpen(): boolean {
  *  mirrors visual stacking: armed order modes → popups → windows → menus →
  *  the selection sheet → the setup screen. */
 function closeTopLayer(): boolean {
-  if (aiming || merging || barrageAim) {
+  if (aiming || assaultAim || merging || barrageAim) {
     aiming = false;
+    assaultAim = false;
     merging = false;
     barrageAim = false;
     lastPanelHtml = '';
@@ -9788,6 +10109,7 @@ function frame(nowReal: number) {
     const target = s.time + (dt / 1000) * speed * HOUR;
     apply(advance(s, target));
     autoEngage();
+    pumpAssaultOrders();
     checkFleetClashes();
     drivePatrols(); // CC-4: squadrons on дежурный вылет auto-strike contacts in range
     runAI();

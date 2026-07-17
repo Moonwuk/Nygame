@@ -319,6 +319,14 @@ export const en: Record<string, string> = {
   'Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.':
     'The meta-map is generated the moment war is declared (metagame.md). This is a showcase of server-side state.',
   'Мир типа «{pt}» — {mods}': 'A {pt} world — {mods}',
+  'Тип: «{pt}» — {mods}': 'Type: “{pt}” — {mods}',
+  'Нет дивизий.': 'No divisions.',
+  'Суммарная атака дивизии.': "The division's total attack.",
+  'Суммарная защита дивизии.': "The division's total defense.",
+  'Суммарные очки здоровья дивизии.': "The division's total hit points.",
+  'Конструктор дивизий': 'Division builder',
+  'Редактор шаблонов: состав слотов и доктрина дивизий.':
+    'The template editor: slot composition and division doctrine.',
   'Миров под контролем': 'Worlds held',
   'Мобилизовать дивизию': 'Mobilize a division',
   'Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.':
@@ -353,6 +361,16 @@ export const en: Record<string, string> = {
   'Новый командир на борту — обучение скоро появится здесь.': 'New commander aboard — the tutorial is coming soon.',
   'ОБЪЯВИТЬ ВОЙНУ': 'DECLARE WAR',
   'ОБЪЯВИТЬ ВОЙНУ?': 'DECLARE WAR?',
+  'Это мир дружественной фракции. Вы хотите объявить войну <b>{names}</b>?':
+    "This is a friendly faction's world. Do you want to declare war on <b>{names}</b>?",
+  ДА: 'YES',
+  НЕТ: 'NO',
+  '⚔ выберите чужой мир для штурма': "⚔ pick someone else's world to storm",
+  '⚔ штурмовать можно только чужой мир': "⚔ only someone else's world can be stormed",
+  'Корабли: {s} · Десант: {tr}': 'Ships: {s} · Landing: {tr}',
+  'Авто-штурм': 'Auto-storm',
+  'ВКЛ — автоматически штурмовать вражеский мир при нахождении на его орбите.':
+    'ON — automatically storm an enemy world while in its orbit.',
   'ОПЕРАТИВНАЯ ГРУППА': 'TASK GROUP',
   ОТМЕНА: 'CANCEL',
   'Обновите данные флотом или радаром.': 'Re-scan with a fleet or radar to refresh.',
@@ -1012,6 +1030,22 @@ export const en: Record<string, string> = {
     "An officer's named template: composition locked, no editing.",
   'Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.':
     'A division is a snapshot of its template: editing a design never touches armies already fielded. On your own world it heals +1 HP/unit/day; wiped out, it disappears.',
+  'Постройки мира и строительный конвейер: состояние, уровни и улучшения.':
+    "The world's buildings and its construction conveyor: condition, levels, upgrades.",
+  Дивизия: 'Division',
+  'Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.':
+    'A ground formation mobilized from a template. Defends the world; loads onto a fleet from the fleet panel.',
+  'Суммарная атака кораблей флота.': "The fleet's total ship attack.",
+  'Суммарная защита кораблей флота.': "The fleet's total ship defense.",
+  'Очки здоровья': 'Hit points',
+  'Суммарная прочность кораблей флота.': "The fleet's total hull strength.",
+  'Скорость перелёта — флот движется со скоростью самого медленного корабля.':
+    'Travel speed — the fleet moves at its slowest ship.',
+  Гарнизон: 'Garrison',
+  'Численность наземных войск, обороняющих мир.': 'The ground troops defending the world.',
+  'Пехота и техника на поверхности мира.': "Infantry and armour on the world's surface.",
+  'Корабли, стоящие в гарнизоне мира (не на орбите).': "Ships parked in the world's garrison (not in orbit).",
+  'Число построек на мире.': 'The number of buildings on the world.',
   'Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.':
     'Tap a slot to cycle the unit type: militia → heavy infantry → special forces → tank. Tanks shred any infantry; special forces are the one infantry that threatens armour; heavy infantry holds the line.',
   '‹ назад': '‹ back',
