@@ -26,6 +26,7 @@
     "tier": 2,
     "cost": { "credits": 260, "metal": 220 },
     "researchTimeHours": 10,
+    "dayGate": 3,
     "prerequisites": ["orbital_logistics"],
     "unlocks": { "units": ["siege_lance"] },
     "effects": { "combatDamageBonus": 0.08 }
@@ -37,6 +38,7 @@
     "tier": 2,
     "cost": { "credits": 180, "metal": 240 },
     "researchTimeHours": 8,
+    "dayGate": 3,
     "prerequisites": ["industrial_automation"],
     "unlocks": { "buildings": ["fort"] }
   },
@@ -47,9 +49,151 @@
     "tier": 2,
     "cost": { "credits": 220, "metal": 180, "energy": 120 },
     "researchTimeHours": 10,
+    "dayGate": 2,
     "prerequisites": ["industrial_automation"],
     "unlocks": { "buildings": ["fabricator"] },
     "effects": { "productionBonus": 0.05 }
+  },
+  "deep_survey": {
+    "name": "Deep-Space Survey",
+    "description": "Long-range sensor lattices: +15% radar range.",
+    "branch": "space",
+    "tier": 2,
+    "cost": { "credits": 200, "metal": 140 },
+    "researchTimeHours": 8,
+    "dayGate": 2,
+    "prerequisites": ["industrial_automation"],
+    "effects": { "radarRangeBonus": 0.15 }
+  },
+  "void_armadas": {
+    "name": "Void Armadas",
+    "description": "Large-formation doctrine: +6% damage and fleet speed. Requires 5 owned sectors.",
+    "branch": "space",
+    "tier": 3,
+    "cost": { "credits": 420, "metal": 300, "microelectronics": 60 },
+    "researchTimeHours": 16,
+    "dayGate": 8,
+    "prerequisites": ["siege_doctrine"],
+    "conditions": [{ "type": "own_sectors", "min": 5 }],
+    "effects": { "combatDamageBonus": 0.06, "fleetSpeedBonus": 0.06 }
+  },
+  "combined_arms": {
+    "name": "Combined Arms",
+    "description": "Infantry and armor operating as one: +5% damage.",
+    "branch": "ground",
+    "tier": 1,
+    "cost": { "credits": 140, "metal": 100 },
+    "researchTimeHours": 5,
+    "effects": { "combatDamageBonus": 0.05 }
+  },
+  "garrison_networks": {
+    "name": "Garrison Networks",
+    "description": "Self-supplying rear echelons: +5% production.",
+    "branch": "ground",
+    "tier": 2,
+    "cost": { "credits": 240, "metal": 200 },
+    "researchTimeHours": 10,
+    "dayGate": 5,
+    "prerequisites": ["combined_arms"],
+    "effects": { "productionBonus": 0.05 }
+  },
+  "planetary_bastions": {
+    "name": "Planetary Bastions",
+    "description": "Full-cycle defense industry: +8% damage. Ground marshal capstone.",
+    "branch": "ground",
+    "tier": 3,
+    "cost": { "credits": 480, "metal": 360, "microelectronics": 40 },
+    "researchTimeHours": 18,
+    "dayGate": 12,
+    "prerequisites": ["fortified_infrastructure"],
+    "conditions": [{ "type": "has_scientist", "branch": "ground" }],
+    "effects": { "combatDamageBonus": 0.08 }
+  },
+  "flight_decks": {
+    "name": "Flight Decks",
+    "description": "Fast sortie cycles: +6% fleet speed.",
+    "branch": "squadron",
+    "tier": 1,
+    "cost": { "credits": 160, "metal": 120 },
+    "researchTimeHours": 6,
+    "dayGate": 2,
+    "effects": { "fleetSpeedBonus": 0.06 }
+  },
+  "strike_vectors": {
+    "name": "Strike Vectors",
+    "description": "Computed squadron attack runs: +8% damage.",
+    "branch": "squadron",
+    "tier": 2,
+    "cost": { "credits": 280, "metal": 220, "microelectronics": 30 },
+    "researchTimeHours": 12,
+    "dayGate": 5,
+    "prerequisites": ["flight_decks"],
+    "effects": { "combatDamageBonus": 0.08 }
+  },
+  "ace_programs": {
+    "name": "Ace Programs",
+    "description": "Elite flight crews: +6% damage and fleet speed. Wing commander capstone.",
+    "branch": "squadron",
+    "tier": 3,
+    "cost": { "credits": 500, "metal": 380, "microelectronics": 60 },
+    "researchTimeHours": 20,
+    "dayGate": 12,
+    "prerequisites": ["strike_vectors"],
+    "conditions": [{ "type": "has_scientist", "branch": "squadron" }],
+    "effects": { "combatDamageBonus": 0.06, "fleetSpeedBonus": 0.06 }
+  },
+  "guidance_arrays": {
+    "name": "Guidance Arrays",
+    "description": "Long-range targeting telemetry: +10% radar range.",
+    "branch": "missile",
+    "tier": 1,
+    "cost": { "credits": 150, "metal": 110 },
+    "researchTimeHours": 6,
+    "dayGate": 2,
+    "effects": { "radarRangeBonus": 0.1 }
+  },
+  "warhead_miniaturization": {
+    "name": "Warhead Miniaturization",
+    "description": "Denser salvos per ton: +6% damage.",
+    "branch": "missile",
+    "tier": 2,
+    "cost": { "credits": 260, "metal": 240, "microelectronics": 30 },
+    "researchTimeHours": 12,
+    "dayGate": 5,
+    "prerequisites": ["guidance_arrays"],
+    "effects": { "combatDamageBonus": 0.06 }
+  },
+  "saturation_barrage": {
+    "name": "Saturation Barrage",
+    "description": "Overwhelms any missile defense: +10% damage. Missile chief capstone.",
+    "branch": "missile",
+    "tier": 3,
+    "cost": { "credits": 520, "metal": 400, "microelectronics": 80 },
+    "researchTimeHours": 20,
+    "dayGate": 12,
+    "prerequisites": ["warhead_miniaturization"],
+    "conditions": [{ "type": "has_scientist", "branch": "missile" }],
+    "effects": { "combatDamageBonus": 0.1 }
+  },
+  "signal_corps": {
+    "name": "Signal Corps",
+    "description": "One shared battle picture: +8% radar range.",
+    "branch": "command",
+    "tier": 1,
+    "cost": { "credits": 130, "metal": 90 },
+    "researchTimeHours": 4,
+    "effects": { "radarRangeBonus": 0.08 }
+  },
+  "logistics_command": {
+    "name": "Logistics Command",
+    "description": "Convoys on schedule: +5% production and fleet speed.",
+    "branch": "command",
+    "tier": 2,
+    "cost": { "credits": 300, "metal": 220 },
+    "researchTimeHours": 12,
+    "dayGate": 5,
+    "prerequisites": ["signal_corps"],
+    "effects": { "productionBonus": 0.05, "fleetSpeedBonus": 0.05 }
   },
   "ai_stewardship": {
     "name": "Steward Protocol",

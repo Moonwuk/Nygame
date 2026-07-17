@@ -7076,88 +7076,241 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
 const branchLabel = (key: string): string => t(TECH_BRANCHES.find((b) => b.key === key)?.label ?? key);
 const techCost = (c: Record<string, number>): string =>
   Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
+// --- TT-3.1: экран-дерево (макет v4) — вкладки-ветки, рельса дней, досье по тапу ----
+// Presentation-only layout: named sub-columns per branch, ids in day order. The
+// canonical data stays layout-free; a tech missing from this map falls into an
+// auto-column appended at the end, so fresh data never breaks the screen.
+const TECH_COLS: Record<string, Array<{ label: string; ids: string[] }>> = {
+  space: [
+    { label: 'Индустрия', ids: ['industrial_automation', 'microelectronics_fabrication'] },
+    { label: 'Флот', ids: ['orbital_logistics', 'siege_doctrine', 'void_armadas'] },
+    { label: 'Сенсоры', ids: ['deep_survey'] },
+  ],
+  ground: [
+    { label: 'Доктрины', ids: ['combined_arms', 'garrison_networks'] },
+    { label: 'Укрепления', ids: ['fortified_infrastructure', 'planetary_bastions'] },
+  ],
+  squadron: [{ label: 'Авиакрыло', ids: ['flight_decks', 'strike_vectors', 'ace_programs'] }],
+  missile: [{ label: 'Арсенал', ids: ['guidance_arrays', 'warhead_miniaturization', 'saturation_barrage'] }],
+  command: [
+    { label: 'Связь', ids: ['signal_corps', 'logistics_command'] },
+    { label: 'Автоматизация', ids: ['ai_stewardship'] },
+  ],
+};
+const TECH_ICONS: Record<string, string> = {
+  industrial_automation: '⚙', microelectronics_fabrication: '▦', deep_survey: '📡',
+  orbital_logistics: '⛽', siege_doctrine: '☄', void_armadas: '🛸',
+  combined_arms: '⚔', garrison_networks: '⛺', fortified_infrastructure: '🏰', planetary_bastions: '🛡',
+  flight_decks: '🛫', strike_vectors: '🎯', ace_programs: '🎖',
+  guidance_arrays: '🧭', warhead_miniaturization: '🧨', saturation_barrage: '🚀',
+  signal_corps: '📶', logistics_command: '🧠', ai_stewardship: '😴',
+};
+const TECH_FX_LABEL: Record<string, string> = {
+  productionBonus: 'производство',
+  fleetSpeedBonus: 'скорость флотов',
+  combatDamageBonus: 'урон',
+  radarRangeBonus: 'радиус радаров',
+};
+let techTab = 'space'; // активная вкладка-ветка
+let techModalId: string | null = null; // открытое досье узла
+type TechDefLike = (typeof data.technologies)[string];
+type TechCond = TechDefLike['conditions'][number];
+function techCondText(c: TechCond): string {
+  switch (c.type) {
+    case 'has_scientist':
+      return t('нужен учёный: {b}', { b: c.branch ? branchLabel(c.branch) : t('любой ветки') });
+    case 'own_sectors':
+      return t('своих секторов: {n}', { n: c.min });
+    case 'has_building':
+      return t('здание: {b} ×{n}', { b: tData(data.buildings[c.building]?.name ?? c.building), n: c.min });
+    case 'controls_planet_type':
+      return t('мир типа {p} ×{n}', { p: tData(c.planetType), n: c.min });
+    case 'has_unit':
+      return t('юнит: {u} ×{n}', { u: tData(data.units[c.unit]?.name ?? c.unit), n: c.min });
+    default:
+      return t('особое условие');
+  }
+}
+// Клиентская проверка — только для подсветки узла; финальную правду говорит ядро
+// (technologyLock, fail-secure). Типы, которых нет в живых данных, честно показываем
+// закрытыми — reducer их всё равно проверит сам.
+function techCondOk(c: TechCond): boolean {
+  const me = s.players[ME];
+  switch (c.type) {
+    case 'has_scientist':
+      return (me?.scientists ?? []).some((sc) => {
+        const def = data.scientists[sc.id];
+        return !!def && (!c.branch || def.branch === c.branch) && (sc.level ?? 1) >= (c.minLevel ?? 1);
+      });
+    case 'own_sectors':
+      return Object.values(s.planets).filter((p) => p.owner === ME).length >= c.min;
+    default:
+      return false;
+  }
+}
+/** «+10% производство · открывает: Fort» — эффекты и анлоки узла одной строкой. */
+function techFx(td: TechDefLike): string {
+  const fx = Object.entries(td.effects ?? {})
+    .filter(([, v]) => (v as number) !== 0)
+    .map(([k, v]) => `+${Math.round((v as number) * 100)}% ${t(TECH_FX_LABEL[k] ?? k)}`);
+  for (const u of td.unlocks?.units ?? []) fx.push(t('открывает: {x}', { x: esc(tData(data.units[u]?.name ?? u)) }));
+  for (const b of td.unlocks?.buildings ?? []) fx.push(t('открывает: {x}', { x: esc(tData(data.buildings[b]?.name ?? b)) }));
+  for (const a of td.unlocks?.abilities ?? []) fx.push(t('способность: {x}', { x: a === 'steward' ? t('Хранитель') : esc(a) }));
+  return fx.join(' · ');
+}
 function renderTech(): void {
   const body = $('techbody');
   const me = s.players[ME];
   // Meta-progression grants (meta_*) are account perks, not researchable session
-  // techs — the window lists only the real tree.
+  // techs — the tree shows only the real nodes.
   const techs = Object.fromEntries(Object.entries(data.technologies).filter(([id]) => !id.startsWith('meta_')));
   const done = new Set(me?.technologies?.completed ?? []);
-  // Research now runs in CONCURRENT slots (core: technologies.active is a list), so
-  // normalise to an array and show a progress banner per active slot.
+  // Research runs in CONCURRENT slots (core: technologies.active is a list).
   const activeRaw = me?.technologies?.active;
   const activeList = Array.isArray(activeRaw) ? activeRaw : activeRaw ? [activeRaw] : [];
   const res = (me?.resources ?? {}) as Record<string, number>;
   const started = s.startedAt ?? 0;
-  let html = '';
-  // Read-only council header: the 2 leaders chosen at setup (immutable) + the branches
-  // they open, so it's clear why the gated nodes below are reachable.
-  const council = me?.scientists ?? [];
-  if (council.length) {
-    html +=
-      `<div class="tw-council">🧪 ${t('Ваши учёные:')} ` +
-      council
-        .map((c) => {
-          const def = data.scientists[c.id];
-          const br = def?.branch ? ` <span class="tw-cb">${branchLabel(def.branch)}</span>` : '';
-          return `<b>${esc(tData(def?.name ?? c.id))}</b>${br}`;
-        })
-        .join(' · ') +
-      `</div>`;
-  }
-  for (const a of activeList) {
-    const def = techs[a.technology];
-    const total = a.completesAt - a.startedAt;
-    const prog = total > 0 ? clamp((s.time - a.startedAt) / total, 0, 1) : 1;
-    const etaH = Math.max(0, Math.ceil((a.completesAt - s.time) / HOUR));
-    html +=
-      `<div class="tw-active"><div class="tw-an">${t('⚛ Исследуется: {tech}', { tech: esc(tData(def?.name ?? a.technology)) })}</div>` +
-      `<div class="tw-bar"><div class="tw-fill" style="width:${Math.round(prog * 100)}%"></div></div>` +
-      `<div class="tw-eta">${t('≈ {n} ч осталось', { n: etaH })}</div></div>`;
-  }
-  for (const br of TECH_BRANCHES) {
-    const ids = Object.keys(techs)
-      .filter((id) => (techs[id]!.branch ?? 'space') === br.key)
-      .sort((a, b) => techs[a]!.tier - techs[b]!.tier || a.localeCompare(b));
-    if (!ids.length) continue;
-    html += `<div class="tw-branch">${t(br.label)}</div>`;
-    for (const id of ids) {
-      const td = techs[id]!;
-      const isActive = activeList.some((a) => a.technology === id);
-      const prereqMissing = (td.prerequisites ?? []).filter((p) => !done.has(p));
-      const dayGate = td.dayGate ?? 0;
-      const gatedByDay = dayGate > 0 && s.time - started < dayGate * DAY;
-      const affordable = Object.entries(td.cost).every(([k, v]) => (res[k] ?? 0) >= (v as number));
-      let cls = '';
-      let action = '';
-      if (done.has(id)) {
-        cls = 'done';
-        action = `<span class="tw-badge">${t('✓ изучено')}</span>`;
-      } else if (isActive) {
-        action = `<span class="tw-badge wait">${t('⏳ идёт…')}</span>`;
-      } else if (prereqMissing.length) {
-        cls = 'locked';
-        action = `<span class="tw-badge wait">🔒 ${prereqMissing.map((p) => esc(tData(techs[p]?.name ?? p))).join(', ')}</span>`;
-      } else if (gatedByDay) {
-        cls = 'locked';
-        action = `<span class="tw-badge wait">${t('🔒 с дня {n}', { n: dayGate })}</span>`;
-      } else {
-        // Concurrent slots: don't block on "something is researching" — the core
-        // rejects (with a note) if every research slot is already full.
-        const dis = !affordable;
-        action = `<button class="tw-go" data-tech="${id}"${dis ? ' disabled' : ''}>${t('Исследовать')}</button>`;
-      }
-      html +=
-        `<div class="tw-card ${cls}"><div class="tw-info">` +
-        `<div class="tw-name">${esc(tData(td.name))}<span class="tier">T${td.tier}</span></div>` +
-        `<div class="tw-meta"><span class="tw-cost">${techCost(td.cost)}</span> · ${t('{n}ч', { n: td.researchTimeHours })}` +
-        (td.description ? `<br>${esc(t(td.description))}` : '') +
-        `</div></div>${action}</div>`;
+  const hudDay = floor(s.time / DAY) + 1; // счёт статус-бара: день 1 — первый
+  // Рельса дней: объединение day-гейтов ВСЕХ веток (+ старт) — календарь общий,
+  // при смене вкладки строки не прыгают (правило макета). Подпись = dayGate+1,
+  // тот же счёт, что у часов в статус-баре.
+  const gates = [...new Set(Object.values(techs).map((td) => td.dayGate ?? 0).concat(0))].sort((a, b) => a - b);
+  const nowGate = gates.filter((g) => g + 1 <= hudDay).pop() ?? 0;
+  // Пилюля слотов зеркалит кламп ядра: 2 базовых, +1 от учёного, максимум 3.
+  const slotBonus = (me?.scientists ?? []).reduce((n, c) => n + (data.scientists[c.id]?.slotBonus ?? 0), 0);
+  const slots = Math.min(3, Math.max(2, 2 + slotBonus));
+  // Состояние узла в порядке проверок ядра (technologyLock): prereq → день → условия.
+  const nodeState = (id: string): { st: string; prog: number; eta: number } => {
+    const td = techs[id]!;
+    if (done.has(id)) return { st: 'done', prog: 1, eta: 0 };
+    const act = activeList.find((a) => a.technology === id);
+    if (act) {
+      const total = act.completesAt - act.startedAt;
+      return {
+        st: 'res',
+        prog: total > 0 ? clamp((s.time - act.startedAt) / total, 0, 1) : 1,
+        eta: Math.max(0, Math.ceil((act.completesAt - s.time) / HOUR)),
+      };
     }
+    if ((td.prerequisites ?? []).some((p) => !done.has(p))) return { st: 'chain', prog: 0, eta: 0 };
+    if ((td.dayGate ?? 0) > 0 && s.time - started < (td.dayGate ?? 0) * DAY) return { st: 'gate', prog: 0, eta: 0 };
+    if ((td.conditions ?? []).some((c) => !techCondOk(c))) return { st: 'cond', prog: 0, eta: 0 };
+    return { st: 'avail', prog: 0, eta: 0 };
+  };
+  const tabs = TECH_BRANCHES.map(
+    (b) => `<button class="tt-tab${b.key === techTab ? ' on' : ''}" data-ttab="${b.key}">${t(b.label)}</button>`,
+  ).join('');
+  // Кто из совета курирует эту ветку — и честное предупреждение, если никто.
+  const lead = (me?.scientists ?? []).map((c) => data.scientists[c.id]).find((d) => d?.branch === techTab);
+  const leadHtml = lead
+    ? `🧪 ${t('Ветку курирует')} <b>${esc(tData(lead.name))}</b>`
+    : `🔭 ${t('Без лидера ветки — узлы с условием «учёный» закрыты')}`;
+  // Колонки вкладки: из карты раскладки; техи вне карты — в автоколонку в конце.
+  const colsDef = TECH_COLS[techTab] ?? [];
+  const branchIds = Object.keys(techs).filter((id) => (techs[id]!.branch ?? 'space') === techTab);
+  const placed = new Set(colsDef.flatMap((c) => c.ids));
+  const extras = branchIds
+    .filter((id) => !placed.has(id))
+    .sort((a, b) => techs[a]!.tier - techs[b]!.tier || a.localeCompare(b));
+  const cols = [
+    ...colsDef.map((c) => ({ label: c.label, ids: c.ids.filter((id) => branchIds.includes(id)) })),
+    ...(extras.length ? [{ label: '—', ids: extras }] : []),
+  ].filter((c) => c.ids.length);
+  const wide = cols.length <= 2 ? ' w2' : '';
+  let rail = `<div class="tt-rail"><div class="tt-dhead">${t('ДЕНЬ')}</div>`;
+  for (const g of gates) {
+    const cls = g === nowGate ? ' now' : g + 1 > hudDay ? ' future' : '';
+    rail += `<div class="tt-drow${cls}"><b>${g + 1}</b><small>${g === 0 ? t('старт') : t('день')}</small></div>`;
   }
+  rail += `</div>`;
+  let colsHtml = '';
+  for (const col of cols) {
+    let cells = '';
+    for (const g of gates) {
+      const nodes = col.ids
+        .filter((id) => (techs[id]!.dayGate ?? 0) === g)
+        .map((id) => {
+          const td = techs[id]!;
+          const st = nodeState(id);
+          const badge =
+            st.st === 'done' ? `<span class="tt-tick">✓</span>`
+            : st.st === 'gate' ? `<span class="tt-lock">🔒</span>`
+            : st.st === 'cond' ? `<span class="tt-cnd">⚗</span>`
+            : '';
+          const prog = st.st === 'res' ? `<span class="tt-prog"><i style="width:${Math.round(st.prog * 100)}%"></i></span>` : '';
+          return (
+            `<div class="tt-node st-${st.st}" data-tech="${id}">` +
+            `<div class="tt-box">${TECH_ICONS[id] ?? '🔬'}${prog}${badge}</div>` +
+            `<div class="tt-lbl">${esc(tData(td.name))}</div></div>`
+          );
+        })
+        .join('');
+      cells += `<div class="tt-cell${g === nowGate ? ' now' : ''}">${nodes}</div>`;
+    }
+    colsHtml += `<div class="tt-col${wide}"><div class="tt-chead">${t(col.label)}</div><div class="tt-cellwrap">${cells}</div></div>`;
+  }
+  // Досье узла (тап) — рендерится из состояния, так что живой 500мс-ререндер
+  // обновляет прогресс/день, не закрывая окно.
+  let modal = '';
+  if (techModalId && !techs[techModalId]) techModalId = null;
+  if (techModalId) {
+    const id = techModalId;
+    const td = techs[id]!;
+    const st = nodeState(id);
+    const gate = td.dayGate ?? 0;
+    const prereqNames = (td.prerequisites ?? []).map((p) => esc(tData(techs[p]?.name ?? p))).join(', ');
+    const condRows = (td.conditions ?? [])
+      .map((c) => `<span>${techCondOk(c) ? '☑' : '⚗'} <b>${esc(techCondText(c))}</b></span>`)
+      .join('');
+    const affordable = Object.entries(td.cost).every(([k, v]) => (res[k] ?? 0) >= (v as number));
+    const tag =
+      st.st === 'done' ? `<span class="tt-tag">${t('ИЗУЧЕНО')}</span>`
+      : st.st === 'res' ? `<span class="tt-tag amb">${t('ИССЛЕДУЕТСЯ')}</span>`
+      : st.st === 'avail' ? `<span class="tt-tag">${t('ДОСТУПНО')}</span>`
+      : `<span class="tt-tag dim">${t('ЗАКРЫТО')}</span>`;
+    const btn =
+      st.st === 'avail'
+        ? `<button class="tt-mbtn" data-go="${id}"${affordable ? '' : ' disabled'}>🔬 ${affordable ? t('Исследовать') : t('Не хватает ресурсов')}</button>`
+        : st.st === 'done' ? `<button class="tt-mbtn wait" disabled>✓ ${t('Изучено')}</button>`
+        : st.st === 'res' ? `<button class="tt-mbtn wait" disabled>⏳ ${t('Идёт — ≈ {n} ч', { n: st.eta })}</button>`
+        : st.st === 'gate' ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Откроется в День {n}', { n: gate + 1 })}</button>`
+        : st.st === 'chain' ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Сначала изучите узел выше')}</button>`
+        : `<button class="tt-mbtn wait" disabled>⚗ ${t('Условие не выполнено')}</button>`;
+    modal =
+      `<div class="tt-modal"><div class="tt-mback" data-mclose="1"></div><div class="tt-mwin">` +
+      `<button class="tt-mx" data-mclose="1">✕</button>` +
+      `<div class="tt-mhead"><div class="tt-mico">${TECH_ICONS[id] ?? '🔬'}</div><div>` +
+      `<div class="tt-mname">${esc(tData(td.name))}<span class="tt-tier">T${td.tier}</span></div>` +
+      `<div class="tt-mtags">${tag}</div></div></div>` +
+      (td.description ? `<div class="tt-mdesc">${esc(t(td.description))}</div>` : '') +
+      `<div class="tt-mstats">` +
+      `<span>💰 <b>${techCost(td.cost)} · ${t('{n}ч', { n: td.researchTimeHours })}</b></span>` +
+      (techFx(td) ? `<span>✦ <b>${techFx(td)}</b></span>` : '') +
+      (gate > 0 ? `<span>📅 <b>${t('с дня {n}', { n: gate + 1 })}</b></span>` : '') +
+      (prereqNames ? `<span>🔗 <b>${t('Требует:')} ${prereqNames}</b></span>` : '') +
+      condRows +
+      `</div>${btn}</div></div>`;
+  }
+  const html =
+    `<div class="tt-top"><span class="tt-day">📅 ${t('День {n}', { n: hudDay })}</span>` +
+    `<span class="tt-slots">⚛ ${t('слоты {a}/{b}', { a: activeList.length, b: slots })}</span></div>` +
+    `<div class="tt-tabs">${tabs}</div>` +
+    `<div class="tt-lead${lead ? '' : ' closed'}">${leadHtml}</div>` +
+    `<div class="tt-scroll"><div class="tt-grid">${rail}${colsHtml}</div></div>` +
+    modal;
+  // Живой ререндер (innerHTML) сбрасывал бы скролл панели — сохраняем и возвращаем.
+  const scr0 = body.querySelector('.tt-scroll');
+  const sx = scr0?.scrollLeft ?? 0;
+  const sy = scr0?.scrollTop ?? 0;
   body.innerHTML = html;
+  const scr1 = body.querySelector('.tt-scroll');
+  if (scr1) {
+    scr1.scrollLeft = sx;
+    scr1.scrollTop = sy;
+  }
 }
 document.getElementById('rail-tech')?.addEventListener('click', () => {
+  techModalId = null; // свежее открытие — без прошлого досье
   techWin.classList.add('show');
   renderTech();
   maybeIntro('tech');
@@ -7165,12 +7318,33 @@ document.getElementById('rail-tech')?.addEventListener('click', () => {
 techWin.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement;
   if (tg.id === 'tech' || tg.classList.contains('tw-close')) {
+    techModalId = null;
     techWin.classList.remove('show');
     return;
   }
-  const id = (tg.closest('.tw-go') as HTMLElement | null)?.dataset.tech;
-  if (id) {
-    playerOrder(researchTech(ME, id));
+  if (tg.closest('[data-mclose]')) {
+    techModalId = null;
+    renderTech();
+    return;
+  }
+  const go = (tg.closest('.tt-mbtn') as HTMLElement | null)?.dataset.go;
+  if (go) {
+    playerOrder(researchTech(ME, go));
+    renderTech(); // узел тут же перекрашивается в «исследуется»
+    return;
+  }
+  const tab = (tg.closest('.tt-tab') as HTMLElement | null)?.dataset.ttab;
+  if (tab) {
+    if (tab !== techTab) {
+      techTab = tab;
+      techModalId = null;
+    }
+    renderTech();
+    return;
+  }
+  const node = (tg.closest('.tt-node') as HTMLElement | null)?.dataset.tech;
+  if (node) {
+    techModalId = node;
     renderTech();
   }
 });
@@ -7257,10 +7431,10 @@ function renderSteward(): void {
       `<div class="st-row"><button class="st-btn warn" data-stew="recall">${t('Вернуть управление')}</button></div>` +
       `<div class="st-note">${t('«Автопилот держит вас в игре — побеждает активная игра.» Оборонительная поза не ходит в атаку и не ведёт дипломатию.')}</div>`;
   } else if (!stewardTechDone()) {
-    const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY);
+    const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY) + 1; // счёт статус-бара: день 1 — первый
     html +=
       `<div class="st-status locked">🔒 <b>${t('«Протокол Хранитель» ещё не изучен.')}</b><br>` +
-      t('Ветка <b>Командование</b>, открывается с <b>дня 15</b> учёному <b>Куратор</b> (сейчас день {day}).', { day: String(day) }) +
+      t('Ветка <b>Командование</b>, открывается в <b>День 16</b> учёному <b>Куратор</b> (сейчас день {day}).', { day: String(day) }) +
       `<br>` +
       `${t('Изучите его в окне технологий — затем сможете передать место ИИ на время сна.')}</div>` +
       `<div class="st-row"><button class="st-btn" data-stew="tech">${t('Открыть технологии')}</button></div>`;
