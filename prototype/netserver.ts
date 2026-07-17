@@ -24,14 +24,19 @@ import {
   MemoryAccountStore,
   MemoryMatchStore,
   MemoryReceiptStore,
+  MemoryUserStore,
   PostgresAccountStore,
   PostgresMatchStore,
   PostgresReceiptStore,
+  PostgresUserStore,
   migrate,
+  registerAuthApi,
+  configFromEnv,
   type AccountStore,
   type MatchStore,
   type ReceiptStore,
   type RoomObservation,
+  type UserStore,
 } from '../packages/server/src/index';
 import {
   newGame,
@@ -152,17 +157,30 @@ let pool: InstanceType<typeof Pool> | null = null;
 let matchStore: MatchStore;
 let accountStore: AccountStore;
 let receiptStore: ReceiptStore;
+let userStore: UserStore;
 if (DATABASE_URL) {
   pool = new Pool({ connectionString: DATABASE_URL });
   await migrate(pool);
   matchStore = new PostgresMatchStore(pool);
   accountStore = new PostgresAccountStore(pool);
   receiptStore = new PostgresReceiptStore(pool);
+  userStore = new PostgresUserStore(pool);
 } else {
   matchStore = new MemoryMatchStore();
   accountStore = new MemoryAccountStore();
   receiptStore = new MemoryReceiptStore();
+  userStore = new MemoryUserStore();
 }
+
+// Accounts on the PLAYABLE path (SES-2.5): with AUTH_JWT_SECRET set, the full account
+// contour switches on — POST /auth/register + /auth/login (scrypt, uniform-401,
+// per-IP limits) hand out a session JWT; GET /matches/:id/join exchanges it for a
+// short-lived join token; the WS handshake then requires `?token=` and the nick/ticket
+// dev handshakes are REFUSED (the token is the sole identity — same shape as the
+// production entry). Unset ⇒ the nick+ticket flow stays (LAN playtests, zero setup).
+// One env, both worlds; the client self-configures via GET /auth/status.
+const authCfg = configFromEnv(process.env);
+const AUTH = authCfg.auth !== undefined;
 // The prototype host defaults to a ten-chair FFA. `TEAMS=5v5` keeps all ten chairs and
 // seeds two allied flanks; `TEAMS=2v2` preserves the smaller four-chair playtest. Every
 // chair is claimable by a human, while the server AI stands in after the reconnect grace.
@@ -497,15 +515,69 @@ const server = createMultiplayerServer({
   indexHtml,
   accountStore, // `?nick=` WS login resolves its seat here
   seatLock: SEAT_LOCK, // REL-5: nick+ticket identity; `?player=` refused when on
+  // Accounts (SES-2.5): with AUTH on, the WS handshake requires a verified join token
+  // (`?token=`) and ignores nick/ticket entirely — the token is minted by the join
+  // route below, AFTER the session + entry-window checks passed.
+  ...(AUTH ? { auth: authCfg.auth } : {}),
   // Entry window (SES-2.3): the transport refuses a FIRST-time nick once the session's
   // window has closed (a returning seat-holder always reconnects). Same window the
-  // browser feed uses to keep a closed session out of «Доступные».
+  // browser feed uses to keep a closed session out of «Доступные». (In AUTH mode the
+  // claim happens in the join ROUTE below — this transport gate covers the nick path.)
   admitNewSeat: (matchId) => registry.entryOpen(matchId),
   // The match-browser read-model + archive intents (GET /matches, POST …/archive),
   // plus the dev client at `/dev` when the player build owns `/` (same no-store
   // headers as `/` — a stale dev client is as confusing as a stale player one).
   httpRoutes: (app) => {
     registerBrowserApi(app, registry);
+    // The client self-configures: accounts mode shows the password field + goes
+    // через register/login+join-token; nick mode keeps the old handshake.
+    app.get('/auth/status', async () => ({ enabled: AUTH }));
+    if (AUTH) {
+      // Register/login (SE-1.x contour, shared with the production entry): scrypt
+      // hashes, uniform-401 + decoy timing, per-IP rate limit — hands out the
+      // session JWT the join route below authenticates.
+      registerAuthApi(app, { users: userStore, signSession: authCfg.signSession! });
+      // Exchange a session for a seat + short-lived join token (SES-2.5). The seat
+      // belongs to the SESSION's login (nobody joins as somebody else); the entry
+      // window (SES-2.3) gates a FIRST-time claim exactly like the nick path — the
+      // non-assigning seatOf runs BEFORE resolveSeat, so a refused newcomer never
+      // burns a chair; a seated login reconnects at any time.
+      app.get('/matches/:id/join', async (request, reply) => {
+        const header = request.headers.authorization;
+        const bearer =
+          typeof header === 'string' && header.startsWith('Bearer ')
+            ? header.slice('Bearer '.length).trim()
+            : null;
+        const who = bearer ? await authCfg.verifySession!(bearer) : null;
+        if (!who?.ok) {
+          void reply.code(401);
+          return { error: 'E_AUTH' as const };
+        }
+        const { id } = request.params as { id: string };
+        const room = registry.get(id);
+        if (!room) {
+          void reply.code(404);
+          return { error: 'E_NO_MATCH' as const };
+        }
+        const login = who.claim.login;
+        const held = await accountStore.seatOf(id, login);
+        if (!held && !registry.entryOpen(id)) {
+          void reply.code(403);
+          return { error: 'E_ENTRY_CLOSED' as const };
+        }
+        const seat = held
+          ? { playerId: held }
+          : await accountStore.resolveSeat(id, login, Object.keys(room.state.players));
+        if (!seat) {
+          void reply.code(409);
+          return { error: 'E_MATCH_FULL' as const };
+        }
+        return {
+          playerId: seat.playerId,
+          token: await authCfg.signToken!(id, seat.playerId, who.claim.accountId),
+        };
+      });
+    }
     if (playerHtml !== undefined && devHtml !== undefined) {
       app.get('/dev', async (_request, reply) => {
         void reply.header('content-type', 'text/html; charset=utf-8');
@@ -559,9 +631,11 @@ const lines = [
   GATE
     ? '  gate   : ON — only validated action.v1 envelopes (clients auto-detect via welcome.gated)'
     : '  gate   : off — bare actions accepted (set GATE=1 for the release posture)',
-  SEAT_LOCK
-    ? '  seats  : LOCKED — a nick’s first join mints a ticket its client must present to reconnect'
-    : '  seats  : open — any nick takes any free seat (set SEAT_LOCK=1 for the release posture)',
+  AUTH
+    ? '  auth   : ACCOUNTS — POST /auth/register|login → session JWT; GET /matches/<id>/join → join token (nick/ticket handshakes refused)'
+    : SEAT_LOCK
+      ? '  seats  : LOCKED — a nick’s first join mints a ticket its client must present to reconnect'
+      : '  seats  : open — any nick takes any free seat (set SEAT_LOCK=1 for the release posture)',
   TIME_SCALE > 1
     ? `  time   : ×${TIME_SCALE} fast-forward (1 real min ≈ ${(TIME_SCALE / 60).toFixed(1)} game-hours) — playtest mode`
     : '  time   : ×1 real-time (set TIME_SCALE=100 to fast-forward a playtest)',

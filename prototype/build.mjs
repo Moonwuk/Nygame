@@ -1930,6 +1930,9 @@ const page = (js) => `<!doctype html>
         <label class="cfield"><span data-i18n>Позывной</span>
           <input id="cnick" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="24" placeholder="позывной" data-i18n-ph>
         </label>
+        <label class="cfield" id="cpassrow" style="display:none"><span data-i18n>Пароль</span>
+          <input id="cpass" type="password" autocomplete="current-password" maxlength="128" placeholder="пароль (аккаунт создастся сам)" data-i18n-ph>
+        </label>
         <div class="crow">
           <button id="cgo" class="cbtn" type="button" data-i18n>Обновить список</button>
         </div>

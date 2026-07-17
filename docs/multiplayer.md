@@ -289,10 +289,25 @@ seats N players — each gets a homeworld (spread around the neutral `nexus`) an
    it, memory-only state is lost — expected for a throwaway dev run).
 5. Bad / oversized messages are rejected (`E_BAD_MESSAGE` / `E_PAYLOAD_TOO_LARGE`), not crashing.
 
+### Accounts on the playable path (SES-2.5)
+
+With `AUTH_JWT_SECRET` set, the prototype host runs the FULL account flow — the same
+SE-1.x contour as the production entry: `POST /auth/register` / `/auth/login` (scrypt
+hashes, uniform 401 + decoy timing, per-IP rate limit) hand out a session JWT (days);
+`GET /matches/:id/join` (Bearer) exchanges it for a short-lived join token (15 min);
+the WS handshake then requires `?token=` and REFUSES the nick/ticket dev handshakes.
+The seat belongs to the session's login (nobody joins as somebody else), a rejoin
+returns the same seat, and the entry window (SES-2.3) gates a first-time login's claim
+in the join route (403 `E_ENTRY_CLOSED`) with the same non-assigning `seatOf` check.
+The bundled client self-configures via `GET /auth/status`: it shows the password field,
+logs in (or auto-registers a fresh login — registration IS the first login), stores
+only the session JWT per server, and re-fetches a fresh join token on every reconnect.
+Unset ⇒ the zero-setup nick+ticket flow below stays as-is.
+
 **Known constraints before this is "real" multiplayer** (see limitations below): auth and the
 action gate are opt-in (env-switched, default off for dev), the client does not yet send
-`action.v1` envelopes, identity is nick-based (no OIDC), and the scheduler is single-process
-(pg-boss v2 is the multi-process step).
+`action.v1` envelopes on the production entry, identity is login+password (no OIDC), and the
+scheduler is single-process (pg-boss v2 is the multi-process step).
 
 ## Protocol
 

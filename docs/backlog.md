@@ -1053,7 +1053,24 @@ requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psion
   сервер/dev) не рисует ничего. Реконнект своих в «Активных» окном не гейтится —
   там строки нет. RU/EN, CSS `.mwin`; контракт проверен живым `GET /matches`
   (`entryOpen:true`, `entryClosesInMs:345600000`=4 дня), i18n-гейт, чистый билд.
-- **SES-2.5** ⏳ `[srv]` `[proto]` Регистрация/логин на игровом пути (контур SV-2.4 готов).
+- **SES-2.5** ✅ `[srv]` `[proto]` **Регистрация/логин на игровом пути.** С
+  `AUTH_JWT_SECRET` прото-хост включает ПОЛНЫЙ контур аккаунтов (тот же SE-1.x,
+  что на боевом входе): `POST /auth/register|login` (scrypt, uniform-401 + decoy,
+  per-IP лимит) → session-JWT (7 дней) → `GET /matches/:id/join` (Bearer) →
+  join-токен (15 мин) → WS `?token=` — nick/ticket-рукопожатия ОТКЛОНЯЮТСЯ
+  (токен — единственная identity). Join-роут повторяет гейт SES-2.3: неассигнящий
+  `seatOf` ДО `resolveSeat`, закрытое окно → 403 `E_ENTRY_CLOSED` только для
+  ПЕРВОГО входа логина; место принадлежит логину сессии (никем другим не зайдёшь),
+  реджойн возвращает то же место. Без секрета — прежний nick+ticket (LAN, zero-setup);
+  клиент самонастраивается по `GET /auth/status`. Клиент: поле «Пароль» на connect
+  (показывается только в auth-режиме), zero-friction identity (login → 401 →
+  register → 201; 409 = «неверный пароль»), session-JWT в localStorage per-server
+  (пароль не хранится), реконнект сам минтит свежий join-токен (протухшая сессия →
+  «введите пароль»). `users`-таблица в общей миграции (Memory/Postgres).
+  `configFromEnv` экспортирован из index. Compose: `AUTH_JWT_SECRET` passthrough.
+  Живой e2e (10 проверок): register→дубль 409→неверный 401→login→join без сессии
+  401→join→WS token→welcome на своём месте→nick отклонён 401→реджойн то же место;
+  плюс окно входа на auth-пути (window=0 → 403 E_ENTRY_CLOSED).
 - **SES-2.6** ⏳ `[srv]` `[ops]` Плейтест-цикл ×24: полный e2e от регистрации до конца сессии.
 
 ## Кросс-каттинг

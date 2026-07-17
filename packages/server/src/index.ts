@@ -60,6 +60,7 @@ export {
   type VerifyKey,
 } from './auth';
 export { registerAuthApi, type AuthApiDeps } from './authApi';
+export { configFromEnv, type ServerConfig } from './serverConfig';
 export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {
   ClientActionMessage,

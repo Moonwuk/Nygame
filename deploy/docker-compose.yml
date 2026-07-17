@@ -36,6 +36,11 @@ services:
       SEAT_LOCK: ${SEAT_LOCK:-1}
       # Playtest fast-forward (wall→game clock multiplier); 1 = real-time 24/7.
       TIME_SCALE: ${TIME_SCALE:-1}
+      # Accounts (SES-2.5): set a real secret to switch the playable path to full
+      # register/login (session JWT + join tokens; nick/ticket handshakes refused).
+      # Unset ⇒ the nick+ticket flow (zero-setup LAN playtests). Keep the secret
+      # STABLE across restarts or every player must log in again.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
       # How many independent sessions this ONE process hosts (proto, proto-2, …):
       # all appear in the in-game match browser; each is durable in Postgres.
       MATCHES: ${MATCHES:-1}

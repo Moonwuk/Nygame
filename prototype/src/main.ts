@@ -8915,11 +8915,16 @@ function connect(): void {
   // our nick. Keyed per server+match+nick (the ticket is seat-scoped).
   const ticketKey = `void.ticket.${base}|${currentMatchId}|${nick}`;
   const seatTicket = localStorage.getItem(ticketKey);
-  // Nick-login: the server maps this name → a fixed side and hands it back, so we
+  // Identity on the wire: accounts mode (SES-2.5) dials with the short-lived join
+  // token minted by /matches/:id/join — nick/ticket are refused by the server there.
+  // Nick mode: the server maps the name → a fixed side and hands it back, so we
   // learn our seat from the welcome (snap.playerId), not from a side picker.
   const url =
-    `${base}/matches/${encodeURIComponent(currentMatchId)}?nick=${encodeURIComponent(nick)}` +
-    (seatTicket ? `&ticket=${encodeURIComponent(seatTicket)}` : '');
+    authMode && pendingJoinToken
+      ? `${base}/matches/${encodeURIComponent(currentMatchId)}?token=${encodeURIComponent(pendingJoinToken)}`
+      : `${base}/matches/${encodeURIComponent(currentMatchId)}?nick=${encodeURIComponent(nick)}` +
+        (seatTicket ? `&ticket=${encodeURIComponent(seatTicket)}` : '');
+  pendingJoinToken = null; // one dial per token fetch — a reconnect mints a fresh one
   statusEl.textContent = t('Подключение: {nick}…', { nick });
   localStorage.setItem('void.server', base);
   localStorage.setItem('void.nick', nick); // resume this seat next visit
@@ -9170,6 +9175,114 @@ function resolveServer(): { base: string; nick: string } | null {
 
 const httpBase = (wsBase: string): string => wsBase.replace(/^ws/, 'http');
 
+// --- accounts (SES-2.5) -------------------------------------------------------
+// With AUTH on the server, the playable path runs the full account flow: the nick
+// is a LOGIN, a password guards it, and joining goes register/login → session JWT →
+// GET /matches/:id/join → short-lived join token → WS `?token=`. The client
+// self-configures from GET /auth/status; without accounts the nick+ticket handshake
+// stays exactly as before. The password is never persisted — only the session JWT
+// (a revocable, expiring credential) lands in localStorage, keyed per server.
+let authMode = false;
+const passRow = document.getElementById('cpassrow') as HTMLElement | null;
+const passInput = document.getElementById('cpass') as HTMLInputElement | null;
+const sessionKey = (base: string): string => `void.session.${base}`;
+
+/** Probe the server's identity mode and show/hide the password field. Network
+ *  failure ⇒ assume nick mode (the old handshake) — the join itself will surface
+ *  a real error if the server actually wants accounts. */
+async function probeAuthMode(base: string): Promise<void> {
+  try {
+    const res = await fetch(`${httpBase(base)}/auth/status`);
+    authMode = res.ok && ((await res.json()) as { enabled?: boolean }).enabled === true;
+  } catch {
+    authMode = false;
+  }
+  if (passRow) passRow.style.display = authMode ? '' : 'none';
+}
+
+/** A valid session JWT for this server, or null (with the status line explaining).
+ *  Zero-friction identity: try LOGIN first; unknown-or-wrong is a uniform 401, so
+ *  then try REGISTER — a fresh login creates the account (registration IS the first
+ *  login), while a taken one (409) means the password was simply wrong. */
+async function ensureSession(base: string, login: string): Promise<string | null> {
+  const cached = localStorage.getItem(sessionKey(base));
+  if (cached) return cached;
+  const password = passInput?.value ?? '';
+  if (password.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    return null;
+  }
+  const call = async (path: string): Promise<{ status: number; token?: string }> => {
+    const res = await fetch(`${httpBase(base)}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ login, password }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { token?: string };
+    return { status: res.status, token: body.token };
+  };
+  try {
+    const login1 = await call('/auth/login');
+    if (login1.token) {
+      localStorage.setItem(sessionKey(base), login1.token);
+      return login1.token;
+    }
+    if (login1.status === 401) {
+      const reg = await call('/auth/register');
+      if (reg.token) {
+        localStorage.setItem(sessionKey(base), reg.token);
+        note('✔ ' + t('Аккаунт создан'));
+        return reg.token;
+      }
+      statusEl.textContent =
+        reg.status === 409 ? t('Неверный пароль') : t('Регистрация отклонена');
+      return null;
+    }
+    statusEl.textContent = login1.status === 429 ? t('Слишком часто — подождите') : t('Вход отклонён');
+    return null;
+  } catch {
+    statusEl.textContent = t('сервер недоступен');
+    return null;
+  }
+}
+
+/** Exchange the session for a seat + join token. Клиент запоминает токен для
+ *  немедленного коннекта; протухший (15 мин TTL) реконнект просто запрашивает
+ *  новый — сессия живёт днями. 401 ⇒ сессия истекла: чистим её и просим пароль. */
+async function fetchJoinToken(
+  base: string,
+  matchId: string,
+  session: string,
+): Promise<{ token: string; playerId: string } | null> {
+  try {
+    const res = await fetch(`${httpBase(base)}/matches/${encodeURIComponent(matchId)}/join`, {
+      headers: { authorization: `Bearer ${session}` },
+    });
+    if (res.status === 401) {
+      localStorage.removeItem(sessionKey(base)); // session expired/revoked — re-login
+      statusEl.textContent = t('Сессия истекла — введите пароль ещё раз');
+      return null;
+    }
+    if (res.status === 403) {
+      statusEl.textContent = t('вход закрыт'); // entry window shut (SES-2.3)
+      return null;
+    }
+    if (!res.ok) {
+      statusEl.textContent = res.status === 409 ? t('все места заняты') : t('не удалось войти');
+      return null;
+    }
+    const body = (await res.json()) as { token?: string; playerId?: string };
+    if (!body.token || !body.playerId) return null;
+    return { token: body.token, playerId: body.playerId };
+  } catch {
+    statusEl.textContent = t('сервер недоступен');
+    return null;
+  }
+}
+
+/** The join token for the CURRENT dial attempt (auth mode) — consumed by connect(). */
+let pendingJoinToken: string | null = null;
+
 interface MatchRow {
   matchId: string;
   mapId: string;
@@ -9207,7 +9320,9 @@ function ruleSummary(r: MatchRow['rules']): string {
   return parts.join(' · ');
 }
 
-/** Join a chosen match: set it as the (re)connect target, then dial via `connect()`. */
+/** Join a chosen match: set it as the (re)connect target, then dial via `connect()`.
+ *  Accounts mode (SES-2.5) first exchanges the session for a join token (register/
+ *  login happens lazily inside `ensureSession` on the first join). */
 function connectToMatch(id: string): void {
   currentMatchId = id;
   reconnecting = false;
@@ -9217,7 +9332,20 @@ function connectToMatch(id: string): void {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  connect();
+  if (!authMode) {
+    connect();
+    return;
+  }
+  void (async () => {
+    const srv = resolveServer();
+    if (!srv) return;
+    const session = await ensureSession(srv.base, srv.nick);
+    if (!session) return; // status line already explains (password / refused)
+    const join = await fetchJoinToken(srv.base, id, session);
+    if (!join) return;
+    pendingJoinToken = join.token;
+    connect();
+  })();
 }
 
 async function refreshMatches(quiet = false): Promise<void> {
@@ -9226,6 +9354,9 @@ async function refreshMatches(quiet = false): Promise<void> {
   // quiet = a background re-poll (player build): don't flash «загрузка…» over a
   // list that is already on screen — only a real state change repaints.
   if (!quiet) statusEl.textContent = t('загрузка матчей…');
+  // Identity mode first (SES-2.5): accounts servers get the password row shown
+  // BEFORE the player clicks «Войти» on a row — no surprise prompt mid-join.
+  await probeAuthMode(srv.base);
   try {
     const res = await fetch(`${httpBase(srv.base)}/matches?nick=${encodeURIComponent(srv.nick)}`);
     if (!res.ok) throw new Error('http ' + res.status);
@@ -9404,7 +9535,30 @@ function scheduleReconnect(): void {
   const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    connect(); // reuse the saved server + nick; don't reset the attempt counter
+    if (!authMode) {
+      connect(); // reuse the saved server + nick; don't reset the attempt counter
+      return;
+    }
+    // Accounts mode (SES-2.5): the join token is short-lived (15 min), so a redial
+    // mints a fresh one off the long-lived session first; an expired session drops
+    // the redial to the connect screen with «введите пароль» (fail-explicit).
+    void (async () => {
+      const srv = resolveServer();
+      const session = srv ? localStorage.getItem(sessionKey(srv.base)) : null;
+      if (!srv || !session) {
+        reconnecting = false;
+        banner = null;
+        showConnect(true);
+        return;
+      }
+      const join = await fetchJoinToken(srv.base, currentMatchId, session);
+      if (!join) {
+        scheduleReconnect(); // transient (or session expired — status line explains)
+        return;
+      }
+      pendingJoinToken = join.token;
+      connect();
+    })();
   }, delay);
 }
 
