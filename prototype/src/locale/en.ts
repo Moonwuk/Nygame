@@ -733,8 +733,10 @@ export const en: Record<string, string> = {
   'десант возьмёт мир': 'the landing takes the world',
   'гарнизон устоит': 'the garrison holds',
   'затяжной пат': 'a drawn-out stalemate',
-  'Прогноз штурма: {v} · ~{r} р. · потери {a} дес. / {d} гарн.':
-    'Assault forecast: {v} · ~{r} rounds · losses {a} landing / {d} garrison',
+  '⚠ Враг идёт к {node}: прибытие через {dur}': '⚠ An enemy is heading for {node}: arrival in {dur}',
+  '⚠ Враг у {node}!': '⚠ An enemy at {node}!',
+  'Прогноз штурма: {v} · ~{r} р. · потери {a} дес. ({pa}%) / {d} гарн. ({pd}%)':
+    'Assault forecast: {v} · ~{r} rounds · losses {a} landing ({pa}%) / {d} garrison ({pd}%)',
   'Прогноз по видимым составам, без бонусов местности, укреплений и технологий — реальный бой может отличаться.':
     'Forecast from visible compositions only — terrain, fortification and technology bonuses are not included; the real battle may differ.',
   '⚔ Война объявлена — флоты выдвигаются': '⚔ War declared — fleets advancing',
