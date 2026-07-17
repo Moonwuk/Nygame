@@ -34,8 +34,11 @@ services:
       # stores and must present to reconnect, so a URL+nick alone can't take a seat.
       # Set SEAT_LOCK=0 to fall back to the open dev handshake.
       SEAT_LOCK: ${SEAT_LOCK:-1}
-      # Playtest fast-forward (wall→game clock multiplier); 1 = real-time 24/7.
-      TIME_SCALE: ${TIME_SCALE:-1}
+      # Wall→game clock multiplier. The FIRST playtest session runs ×24 (SES-2.6:
+      # 1 real hour = 1 game day — a full session cycle inside days, not weeks);
+      # the absence/entry windows stay in REAL time regardless (3d grace, 4d join).
+      # Set TIME_SCALE=1 for the real-time 24/7 posture.
+      TIME_SCALE: ${TIME_SCALE:-24}
       # Accounts (SES-2.5): set a real secret to switch the playable path to full
       # register/login (session JWT + join tokens; nick/ticket handshakes refused).
       # Unset ⇒ the nick+ticket flow (zero-setup LAN playtests). Keep the secret
