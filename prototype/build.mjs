@@ -1263,29 +1263,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   justify-content:center;gap:6px 16px;padding:0 8px;}
 #connect .cfoot a{color:var(--cyan-dim);font-size:10px;letter-spacing:.5px;text-decoration:none;cursor:pointer;opacity:.85;}
 #connect .cfoot a:hover{color:var(--cyan);opacity:1;}
-#lobby{position:fixed;inset:0;z-index:55;display:none;align-items:center;justify-content:center;
-  background:rgba(2,8,11,.66);}
-#lobby .lbox{width:min(420px,94vw);background:var(--glass);border:1px solid var(--line-hi);
-  border-radius:14px;padding:22px;box-shadow:0 0 40px rgba(0,0,0,.6);max-height:94vh;
-  display:flex;flex-direction:column;}
-#lobby .ltitle{display:flex;align-items:center;gap:10px;font-size:18px;letter-spacing:3px;color:var(--cyan);}
-#lobby .ltitle .dia{width:12px;height:12px;transform:rotate(45deg);background:var(--cyan);box-shadow:0 0 10px var(--cyan);border:none;}
-#lobby .lsub{margin:8px 0 16px;color:var(--dim);font-size:12px;line-height:1.5;}
-#lobby .lroster{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;min-height:0;
-  max-height:min(58vh,520px);overflow:auto;padding-right:3px;}
-#lobby .lrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-hi);
-  border-radius:8px;font:13px ui-monospace,monospace;color:var(--ink);}
-#lobby .lrow .dot{width:10px;height:10px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor;}
-#lobby .lrow .nm{flex:1;}
-#lobby .lrow .me{font-size:10px;color:var(--cyan);letter-spacing:1px;}
-#lobby .lrow .host{font-size:9px;letter-spacing:.5px;border:1px solid var(--line-hi);border-radius:3px;
-  padding:2px 5px;color:var(--amber);}
-#lobby .lrow.off{opacity:.5;}
-#lobby .lbtn{width:100%;padding:13px 10px;border-radius:8px;border:1px solid var(--cyan);
-  background:rgba(53,214,230,.14);color:var(--cyan);font:13px ui-monospace,monospace;letter-spacing:1px;cursor:pointer;}
-#lobby .lbtn:disabled{opacity:.4;cursor:not-allowed;}
-#lobby .lbtn.ghost{margin-top:8px;border-color:var(--line-hi);background:transparent;color:var(--dim);}
-#lobby .lwait{text-align:center;color:var(--dim);font-size:12px;margin-bottom:8px;}
 #setup{position:fixed;inset:0;z-index:58;display:none;align-items:center;justify-content:center;
   background:rgba(2,8,11,.72);}
 #setup .sbox{width:min(560px,95vw);max-height:92vh;overflow:auto;background:var(--glass);
@@ -1736,7 +1713,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #top,#devline,#toasts,#speedbar,#cmdbar,#rail,#side,#logwin,#tech,#steward,#scipick,
   #divdesign,#market,#constructor,#codex,#codexhub,#intro,#recap,#goals,#playercard,
   #settings,#warprompt,#diplo,#splitdlg,#pingmenu,#banner,#endscreen,#connect,#updbar,
-  #hub,#emblempick,#corp,#lobby,#setup,#testmode{zoom:1.5;}
+  #hub,#emblempick,#corp,#setup,#testmode{zoom:1.5;}
   /* vw/vh compensations (base values ÷ 1.5 — see the note above) */
   #toasts{max-width:min(61vw,520px);}
   #railtools{max-height:calc(66.7vh - 120px);max-height:calc(66.7dvh - 120px);}
@@ -1761,8 +1738,6 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #connect .mlist{max-height:30.5vh;}
   #connect .ccrest .wm{font-size:clamp(20px,4.33vw,26px);letter-spacing:clamp(3px,1.33vw,8px);}
   #connect .ccrest .wtag{letter-spacing:clamp(2px,.93vw,5px);}
-  #lobby .lbox{width:min(420px,62.5vw);max-height:62.5vh;}
-  #lobby .lroster{max-height:min(38.5vh,520px);}
   /* skirmish setup on PC: two side-by-side card-columns (map+faction | seats+speed)
      instead of one narrow scrolling stack — the box widens to fit both. Each column
      scrolls on its own; the title and the LAUNCH/Back buttons never leave the screen. */
@@ -2070,14 +2045,6 @@ const page = (js) => `<!doctype html>
     <div id="corphd" class="corphd"></div>
     <div id="corptabs" class="corptabs"></div>
     <div id="corpbody" class="corpbody"></div>
-  </div>
-</div>
-<div id="lobby">
-  <div class="lbox">
-    <div class="ltitle"><span class="dia"></span><b data-i18n>ЛОББИ</b></div>
-    <p class="lsub" data-i18n>Ожидание в секторе сбора. Хост начнёт матч, когда будет готов.</p>
-    <div id="lroster" class="lroster"></div>
-    <div id="lactions"></div>
   </div>
 </div>
 <div id="setup">

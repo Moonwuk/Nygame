@@ -521,8 +521,6 @@ let perfTimer: ReturnType<typeof setInterval> | null = null;
 const PERF_SAMPLE_MS = 30_000;
 let netDesync = false; // last snapshot's hash mismatched (server vs our rebuild)
 let netDesyncCount = 0; // how many snapshots have mismatched this session
-// Manual-start lobby roster from the server (host + who's connected + started).
-let lobbyInfo: { host: string | null; connected: string[]; started: boolean } | null = null;
 // Auto-reconnect: on an UNEXPECTED drop (not a user action), rejoin our seat with
 // backoff — the server keeps the match running and the nick maps us back.
 let userClosed = false;
@@ -9004,10 +9002,10 @@ function connect(): void {
         // mirror apply()'s selection cleanup (we replace `s` directly here)
         if (selFleet && !s.fleets[selFleet]) selFleet = null;
         selFleets = new Set([...selFleets].filter((id) => s.fleets[id]?.owner === ME));
-        // Lobby roster (manual-start). The lobby overlay (renderLobby) supersedes the
-        // old "⏳ waiting" banner; fall back to the banner only if no roster is sent.
-        lobbyInfo = snap.lobby ?? null;
-        if (!lobbyInfo && snap.waiting) {
+        // No lobby (SES-2.1): sessions run from creation, a join lands in a live
+        // world. `waiting` survives only for the transport's waitForPlayers mode
+        // (unused by our hosts) — show the banner, clear it once the clock runs.
+        if (snap.waiting) {
           banner = '⏳ ' + t('Ждём, пока хост начнёт…');
         } else if (banner && banner.startsWith('⏳')) {
           banner = null;
@@ -9110,7 +9108,6 @@ function connect(): void {
     rttEma = null;
     if (NET) {
       NET = false;
-      lobbyInfo = null; // drop the lobby overlay if we were still in it
       if (userClosed) {
         statusEl.textContent = 'disconnected';
         note(t('● отключён от сервера'));
@@ -9379,65 +9376,6 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
-// --- lobby overlay (manual-start) -------------------------------------------
-// Pre-match staging screen: shows every side with its connection status, marks the
-// host + you, and gives the host a Start button. The world clock stays frozen
-// (server-side) until the host presses it.
-const lobbyEl = $('lobby');
-const lrosterEl = $('lroster');
-const lactionsEl = $('lactions');
-let lastLobbyHtml = '';
-// Leave the lobby BEFORE the match starts: your seat isn't committed yet, so this
-// releases the slot (the server frees a pre-start slot on disconnect) and returns to
-// the hub. Once the match has started the lobby is gone and the in-game "⌂ В меню"
-// leave hands your committed seat to the AI instead — you can't free it, only step away.
-function leaveLobby(): void {
-  userClosed = true; // intentional — no auto-reconnect
-  NET = false;
-  if (netSock) netSock.close();
-  lobbyInfo = null;
-  lobbyEl.style.display = 'none';
-  openHub();
-}
-// One delegated handler: the host's Start button begins; either side can leave.
-lactionsEl.addEventListener('click', (e) => {
-  const id = (e.target as HTMLElement | null)?.id;
-  if (id === 'lstart') netClient?.start();
-  else if (id === 'lleave') leaveLobby();
-});
-function renderLobby(): void {
-  const info = lobbyInfo;
-  if (!info || info.started) {
-    if (lobbyEl.style.display === 'flex') {
-      lobbyEl.style.display = 'none';
-      lastLobbyHtml = '';
-    }
-    return;
-  }
-  const rosterHtml = Object.keys(s.players)
-    .map((id) => {
-      const on = info.connected.includes(id);
-      const color = ownerColor(id);
-      const badges =
-        (id === ME ? `<span class="me">${t('ВЫ')}</span>` : '') +
-        (id === info.host ? `<span class="host">${t('ХОСТ')}</span>` : '');
-      return `<div class="lrow ${on ? '' : 'off'}"><span class="dot" style="background:${color};color:${color}"></span><span class="nm">${esc(NAME[id] ?? id)}</span>${badges}<span style="font-size:10px;opacity:.75">${on ? t('на связи') : t('ожидание')}</span></div>`;
-    })
-    .join('');
-  const actionsHtml =
-    (ME === info.host
-      ? `<button id="lstart" class="lbtn">▶ ${t('НАЧАТЬ МАТЧ')}</button>`
-      : `<div class="lwait">${t('Ждём, пока хост начнёт…')}</div>`) +
-    `<button id="lleave" class="lbtn ghost">${t('Покинуть лобби')}</button>`;
-  const html = rosterHtml + '|' + actionsHtml;
-  if (html !== lastLobbyHtml) {
-    lrosterEl.innerHTML = rosterHtml;
-    lactionsEl.innerHTML = actionsHtml;
-    lastLobbyHtml = html;
-  }
-  if (lobbyEl.style.display !== 'flex') lobbyEl.style.display = 'flex';
-}
-
 // --- loop --------------------------------------------------------------------
 
 const fpsEl = $('fps');
@@ -9683,7 +9621,6 @@ function frame(nowReal: number) {
   renderPanel();
   renderCmdBar();
   renderSplitDialog();
-  renderLobby();
   // Status strip below the top bar: day/time + victory progress, plus the donate currency
   // (Суверены ◆) pushed to the right end — it sits one level down, directly under the
   // resource bar, instead of crowding the six session-resource chips. (World/fleet counts

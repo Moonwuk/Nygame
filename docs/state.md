@@ -6,7 +6,7 @@
 > `deep-technical-roadmap.md`, `multiplayer.md`, `metagame.md`, `map-roadmap.md`, `security-a06.md` (модель угроз/A06), корневой `CLAUDE.md` / `CONTRIBUTING.md`.
 >
 > **Ветка:** feature-ветка · **PR:** создаётся после изменений.
-> **Гейт:** `pnpm run check` (lint + typecheck + test + docs-check). **Тесты: 1546 зелёных** (42 skip, 143 файла).
+> **Гейт:** `pnpm run check` (lint + typecheck + test + docs-check). **Тесты: 1547 зелёных** (42 skip, 143 файла).
 
 **Быстрый старт сессии** (навигация — факты живут в секциях и не дублируются здесь):
 
@@ -894,8 +894,12 @@ botDiplomacy, market, division, capital, standingOrders])` (26 модулей), 
   wake-драйвер, ИИ пустых кресел, standing-приказы, debounced-снапшот, receipts,
   BF-17 grace) закрыта в фабрике `createHostedMatch`; все сессии в `MatchRegistry`
   → браузер матчей клиента показывает каждую строкой, вход по matchId; durable
-  restore пер-id (рестарт резюмирует все), shutdown флашит каждую; свой лобби-хост
-  у каждой сессии. Проверено e2e (реальный Chromium + Postgres-resume).
+  restore пер-id (рестарт резюмирует все), shutdown флашит каждую. **Автостарт
+  (SES-2.1, модель Iron Order):** лобби нет — часы сессии идут с момента её
+  создания (`MatchRoom.initiallyStarted` без `manualStart`: якорь на
+  `initialState.time`, `TIME_SCALE` работает), вход всегда в живой мир; клиентский
+  лобби-оверлей и кнопка «Старт» удалены. Проверено e2e (реальный Chromium +
+  Postgres-resume; автостарт — живой raw-ws смоук).
   Полный AvA-жизненный цикл
   (вызов/ростер/фазы, `corporation-wars.md`) — server/meta, дальше.
   Миры размечены типами (terran/barren/oceanic/volcanic/gas_giant) — карточка планеты

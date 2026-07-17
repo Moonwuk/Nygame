@@ -159,11 +159,11 @@ const matchIds = Array.from({ length: MATCHES }, (_, i) => (i === 0 ? 'proto' : 
 
 // Shared wakeup-driver tuning (one instance of these per hosted match below).
 const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift safety)
-// While a STARTED match has connected players, tick at least this often even if the
+// While a match has connected players, tick at least this often even if the
 // schedule is momentarily empty — otherwise the world only advances when someone issues
 // an order (submitAction), so the published clock/economy/in-flight fleets freeze
 // on-screen between actions. newGame() starts with NO scheduled events, so without this
-// the very first thing players see after Start is a frozen "Day 1 00:00".
+// the very first thing players see after joining is a frozen "Day 1 00:00".
 const HEARTBEAT_MS = 1_000;
 const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
 
@@ -221,12 +221,13 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
         ...(ev.code ? { code: ev.code } : {}),
       });
     }
-    // Persist after anything that changes the world or the lobby (debounced below),
-    // and re-arm the offline wakeup: an action may schedule or consume events, and a
-    // lobby Start releases the frozen clock — both move the next-event time.
+    // Persist after anything that changes the world (debounced below), and re-arm
+    // the offline wakeup: an action may schedule or consume events — both move the
+    // next-event time. ('lobby' kept for transport parity; auto-started sessions
+    // never emit it — SES-2.1.)
     if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
-    // Re-arm on room events: an action may (un)schedule events, a lobby Start releases
-    // the clock, and a join/leave starts/stops the live-player heartbeat below. A genuine
+    // Re-arm on room events: an action may (un)schedule events, and a join/leave
+    // starts/stops the live-player heartbeat below. A genuine
     // external event also gives the stall guard a fresh chance (the situation may have
     // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
     // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
@@ -246,16 +247,20 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
     }
   };
 
-  // Lobby gate: the world clock starts at 0 ("Day 1") and stays frozen until the host
-  // presses Start. On restore mid-match we skip the lobby and resume the running game.
+  // No lobby (SES-2.1, Iron Order model): the session's world clock runs from the
+  // moment the session is CREATED, 24/7 — a player always joins a live world (the
+  // feed shows which game day it is). There is no host and no Start press to wait
+  // for; empty chairs defend themselves until claimed (and the stand-in AI takes
+  // an abandoned one after the real-days grace, SES-2.2).
   const room = new MatchRoom({
     id,
     initialState,
     kernel,
     data,
     now: () => Date.now(),
-    manualStart: true, // lobby: clock frozen until the host (first in) presses Start
-    initiallyStarted: !!restoredSnap, // restored snapshot → resume into the game, skip lobby
+    // Born running: the clock anchors at the initial game time (fresh world: Day 1
+    // now; restored snapshot: its saved instant) and TIME_SCALE applies from here.
+    initiallyStarted: true,
     singlePeerPerPlayer: true, // one live connection per chair — no two people command one empire
     emitStateHash: true, // attach hashState(view) so the client overlay can flag desync
     observe, // M0: log every room event to JSONL + count for the on-exit summary

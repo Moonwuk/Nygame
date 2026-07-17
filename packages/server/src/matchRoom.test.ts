@@ -671,6 +671,33 @@ describe('MatchRoom — manualStart lobby', () => {
     r.submitAction('p1', action('a1', 'p1', 'Go'), p1);
     expect(r.state.time).toBe(3500); // 3000 + (5500 − 5000)
   });
+
+  it('auto-start (initiallyStarted, NO manualStart): born running, anchored, scaled — no lobby on the wire', () => {
+    // SES-2.1 (Iron Order model): a session's clock runs from creation. The anchor
+    // matters — without it a fresh world (time 0) against a raw wall-clock `now`
+    // would fast-forward decades on the first tick.
+    let real = 100_000;
+    const r = new MatchRoom({
+      id: 'auto',
+      initialState: testState(), // fresh world, time 0
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => real,
+      initiallyStarted: true,
+      timeScale: 10, // TIME_SCALE keeps working without a lobby gate
+    });
+    expect(r.isStarted).toBe(true);
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    // No lobby machinery leaks into snapshots: no roster, no waiting flag.
+    expect((p1.messages[0] as { waiting?: boolean }).waiting).toBeUndefined();
+    expect(lobbyOf(p1.messages[0])).toBeUndefined();
+    expect((p1.messages[0] as { serverTime: number }).serverTime).toBe(0); // anchored at creation
+    // 2 real seconds later the world is 20 game-seconds in — anchored AND scaled.
+    real += 2000;
+    r.submitAction('p1', action('a1', 'p1', 'Go'), p1);
+    expect(r.state.time).toBe(20_000);
+  });
 });
 
 // SRV-1: a rejected action must still flush the world-advance the room already
