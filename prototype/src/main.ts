@@ -798,8 +798,13 @@ function setCompactPanel(v: boolean): void {
 // (ping button, conveyor idle line, upgrade buttons) must follow the same gate, or
 // a phone with the pref on would get PC-compact wording under phone styling.
 const PC_FINE = typeof matchMedia !== 'undefined' ? matchMedia('(min-width:900px) and (hover:hover) and (pointer:fine)') : null;
+/** True only in the PC layout mode (the same media query that gates the PC CSS).
+ *  Every JS-side PC-only tweak MUST ride this gate — the mobile build is frozen. */
+function pcUi(): boolean {
+  return PC_FINE?.matches ?? false;
+}
 function compactUi(): boolean {
-  return compactPanel && (PC_FINE?.matches ?? false);
+  return compactPanel && pcUi();
 }
 const SWEEP_DIV = 1600; // sweep angular rate: ang = now / SWEEP_DIV
 const SWEEP_PERIOD = TAU * SWEEP_DIV; // ms for a full rotation (~10s) — the radar refresh tick
@@ -1352,7 +1357,7 @@ function divisionsHtml(planetId: string): string {
   let h = `<div class="sec">${t('Дивизии')}</div>`;
   if (here.length) {
     for (const d of here) {
-      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join(' ') || '—';
+      const comp = d.units.map((u) => `${formIcon(u.type)}${u.count}`).join(' ') || '—';
       const hp = Math.round(d.units.reduce((n, u) => n + u.hp, 0));
       const off = d.officer ? t(OFFICERS[d.officer]?.name ?? '') : '';
       // Офицер — часть ИМЕННОГО шаблона (готовый, менять нельзя): показываем, не редактируем.
@@ -1383,13 +1388,17 @@ function divisionsHtml(planetId: string): string {
   const f = formationStats(pick.tpl);
   const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
   const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
-  const comp = pick.tpl.slots.filter(Boolean).map((u) => FORM_ICON[u!] ?? '▪').join('') || '—';
+  const comp = pick.tpl.slots.filter(Boolean).map((u) => formIcon(u!)).join('') || '—';
   const offLine = pick.officer ? ` · ★${esc(t(OFFICERS[pick.officer]?.name ?? ''))}` : '';
   h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
   h += `<div class="row">`;
   h += btn('mobilize', pick.officer ? `o${idx - officerBase}` : String(idx), t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }), afford && f.count > 0);
   h += btn('divdesign', '', t('⚙ Конструктор'), true);
   h += `</div>`;
+  // PC dropped this hint (its content lives in hover dossiers); mobile keeps it.
+  if (!pcUi()) {
+    h += `<div class="hint">${t('Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.')}</div>`;
+  }
   return h;
 }
 
@@ -1417,7 +1426,7 @@ function fleetDivisionsHtml(f: Fleet, here: Planet): string {
   if (carried.length) {
     g += `<div class="row">`;
     for (const d of carried) {
-      const comp = d.units.map((u) => `${FORM_ICON[u.type] ?? '▪'}${u.count}`).join('') || '—';
+      const comp = d.units.map((u) => `${formIcon(u.type)}${u.count}`).join('') || '—';
       g += btn('divunload', d.id, `▼ ${esc(d.name)} ${comp}`, true);
     }
     g += `</div>`;
@@ -4714,9 +4723,10 @@ function planetPanelHtml(p: Planet): string {
   // side-by-side columns (filling the wide panel), on phones they stack vertically.
   const cols: string[] = [];
   if (planetTab === 'ground') {
-    // One tile row (icon · count · name) instead of a row-per-unit list; the tab's
-    // old bottom hint moved into the ЗЕМЛЯ tab's hover dossier ('tab:ground').
-    cols.push(`<div class="sec">${t('Наземные части')}</div>` + garrisonTilesHtml(ground));
+    // PC: one tile row of icon·count chips (the tab's old bottom hint lives in the
+    // ЗЕМЛЯ tab's hover dossier, 'tab:ground'). Mobile keeps the original row list
+    // and bottom hint untouched.
+    cols.push(`<div class="sec">${t('Наземные части')}</div>` + (pcUi() ? garrisonTilesHtml(ground) : unitRows(ground)));
     if (mine) {
       cols.push(divisionsHtml(p.id));
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
@@ -4724,6 +4734,11 @@ function planetPanelHtml(p: Planet): string {
         `<div class="sec">${t('Наземный конвейер')}</div>` +
           conveyorHtml(p.id, 'units') +
           buildButtons(p.id, groundBuilds, 'unit'),
+      );
+    }
+    if (!pcUi()) {
+      cols.push(
+        `<div class="hint">${t('Наземные части обороняют миры; грузятся на флот из панели флота.')}</div>`,
       );
     }
   } else if (planetTab === 'ships') {
@@ -6170,7 +6185,11 @@ side.addEventListener('click', (ev) => {
     // on hover — building/task name, current vs full output, ETA.
     if (MOBILE) {
       const key = (ev.target as HTMLElement).closest('[data-desc]')?.dataset.desc ?? null;
-      if (key !== null) openDossier(key);
+      // stat:/tab:/division dossiers exist for the PC hover tooltip only — the
+      // mobile tap behaviour stays exactly as it was before they were added.
+      if (key !== null && !key.startsWith('stat:') && !key.startsWith('tab:') && key !== 'division') {
+        openDossier(key);
+      }
     }
     return;
   }
@@ -6998,7 +7017,7 @@ function renderDivDesign(): void {
   h += `<div class="dd-slots">`;
   for (let i = 0; i < FORMATION_SLOTS; i++) {
     const u = pick.tpl.slots[i] ?? null;
-    h += `<button data-ddslot="${i}"${locked ? ' disabled' : ''}>${u ? `${FORM_ICON[u] ?? '▪'} ${esc(t(FORM_RU[u] ?? u))}` : '＋'}</button>`;
+    h += `<button data-ddslot="${i}"${locked ? ' disabled' : ''}>${u ? `${formIcon(u)} ${esc(t(FORM_RU[u] ?? u))}` : '＋'}</button>`;
   }
   h += `</div>`;
   const f = formationStats(pick.tpl);
@@ -7009,7 +7028,7 @@ function renderDivDesign(): void {
   h += `<div class="dd-vs">`;
   for (const tgt of FORMATION_UNITS) {
     const v = vs(tgt);
-    h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${FORM_ICON[tgt]} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
+    h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${formIcon(tgt)} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
   }
   h += `</div>`;
   const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
@@ -7613,7 +7632,7 @@ function conArmyPane(): string {
   const slots = tpl.slots
     .map((u, i) => {
       const inner = u
-        ? `<span class="cn-fic">${FORM_ICON[u] ?? '▪'}</span><span class="cn-fn">${esc(FORM_RU[u] ?? u)}</span>`
+        ? `<span class="cn-fic">${formIcon(u)}</span><span class="cn-fn">${esc(FORM_RU[u] ?? u)}</span>`
         : `<span class="cn-fic dim">＋</span><span class="cn-fn dim">${t('пусто')}</span>`;
       return `<button class="cn-fslot${u ? ' filled' : ''}" data-confslot="${idx}|${i}">${inner}</button>`;
     })
@@ -8046,10 +8065,12 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Свои метки на карте')}<span class="set-sub">${t('булавки 📍 ваших пингов — метки союзников видны всегда')}</span></div>` +
     `<div class="set-ctl"><label class="set-switch"><input id="set-ownpings" type="checkbox"${showOwnPings ? ' checked' : ''} aria-label="${t('Свои метки на карте')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-ownpings-val" class="set-val">${showOwnPings ? t('вкл') : t('выкл')}</span></div>` +
     `</div>` +
-    `<div class="set-row">` +
-    `<div class="set-lbl">${t('Компактный режим меню')}<span class="set-sub">${t('плотная панель сектора — меньше отступов, мельче шрифт (на ПК)')}</span></div>` +
-    `<div class="set-ctl"><label class="set-switch"><input id="set-compact" type="checkbox"${compactPanel ? ' checked' : ''} aria-label="${t('Компактный режим меню')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-compact-val" class="set-val">${compactPanel ? t('вкл') : t('выкл')}</span></div>` +
-    `</div>` +
+    (pcUi()
+      ? `<div class="set-row">` +
+        `<div class="set-lbl">${t('Компактный режим меню')}<span class="set-sub">${t('плотная панель сектора — меньше отступов, мельче шрифт (на ПК)')}</span></div>` +
+        `<div class="set-ctl"><label class="set-switch"><input id="set-compact" type="checkbox"${compactPanel ? ' checked' : ''} aria-label="${t('Компактный режим меню')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-compact-val" class="set-val">${compactPanel ? t('вкл') : t('выкл')}</span></div>` +
+        `</div>`
+      : '') +
     `<div class="pc-sec">${t('Графика')}</div>` +
     `<div class="set-row">` +
     `<div class="set-lbl">${t('Свечение и ореолы')}<span class="set-sub">${t('мягкое сияние вокруг миров, флотов и границ — выключите ради чёткой карты и скорости')}</span></div>` +
@@ -8133,9 +8154,14 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
   slots: [...t.slots],
 }));
 /** Unit-type → icon, used by the in-match division roster readout (panelHtml). */
-// Text-presentation glyphs only (match UNIT_ICON) — the emoji originally here
-// (🪖👥🎖) have no text glyph in common monospace stacks and rendered as tofu ▯.
-const FORM_ICON: Record<string, string> = { militia: '▿', heavy_infantry: '◆', special_forces: '✱', tank: '▰' };
+// Mobile keeps the original emoji (phone fonts render them); PC monospace stacks
+// have no text glyph for 🪖👥🎖 (they rendered as tofu ▯) and use UNIT_ICON-style
+// text glyphs instead. Resolved per render via formIcon() on the pcUi() gate.
+const FORM_ICON_EMOJI: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
+const FORM_ICON_TEXT: Record<string, string> = { militia: '▿', heavy_infantry: '◆', special_forces: '✱', tank: '▰' };
+function formIcon(type: string): string {
+  return (pcUi() ? FORM_ICON_TEXT[type] : FORM_ICON_EMOJI[type]) ?? '▪';
+}
 const FORM_RU: Record<string, string> = { militia: 'Ополчение', heavy_infantry: 'Тяжёлая пехота', special_forces: 'Спецназ', tank: 'Танк' };
 const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
 

@@ -545,6 +545,10 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #rail .badge{position:absolute;right:5px;top:4px;min-width:15px;height:15px;border-radius:8px;
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
+/* settings/leave-session rail tools are a PC addition — hidden on phones (the PC
+   media block below turns them on), so the mobile rail stays exactly as it was.
+   Double-id selector: must outweigh the phone query's "#railtools button". */
+#railtools #rail-settings,#railtools #rail-exit{display:none;}
 
 #side{position:fixed;left:58px;right:14px;bottom:0;top:auto;width:auto;max-height:34vh;overflow:hidden;z-index:20;
   display:none;align-items:stretch;padding:0;background:var(--glass);border:1px solid var(--line-hi);
@@ -1729,6 +1733,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #testmode .tmbox{width:min(620px,64vw);max-height:61vh;}
   #emblempick .ep-box{width:min(340px,61vw);}
   #corp .corpbox{width:53.4vw;max-height:61vh;}
+  #railtools #rail-settings,#railtools #rail-exit{display:grid;}
   /* base (portrait) bottom-sheet panel + the bars it lifts */
   #side{max-height:22.5vh;}
   body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:calc(22.5vh + 12px);}

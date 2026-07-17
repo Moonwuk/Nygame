@@ -965,6 +965,8 @@ export const en: Record<string, string> = {
   '≥4 ополчения — берут числом': '≥4 militia — winning by numbers',
   'Именной шаблон офицера: состав закреплён, редактировать нельзя.':
     "An officer's named template: composition locked, no editing.",
+  'Дивизия — снапшот шаблона: правка шаблона в конструкторе не меняет уже собранные. На своём мире +1 HP/юнит/день; выбитая исчезает.':
+    'A division is a snapshot of its template: editing a design never touches armies already fielded. On your own world it heals +1 HP/unit/day; wiped out, it disappears.',
   'Постройки мира и строительный конвейер: состояние, уровни и улучшения.':
     "The world's buildings and its construction conveyor: condition, levels, upgrades.",
   Дивизия: 'Division',
