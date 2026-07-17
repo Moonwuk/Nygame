@@ -1692,7 +1692,17 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #hub,#emblempick,#corp,#lobby,#setup,#testmode{zoom:1.5;}
   /* vw/vh compensations (base values ÷ 1.5 — see the note above) */
   #toasts{max-width:min(61vw,520px);}
-  #railtools{max-height:calc(66.7vh - 120px);max-height:calc(66.7dvh - 120px);}
+  /* rail tool list: cap at ~7 items and scroll; the sticky ▲/▾ ticks (not buttons)
+     hint that the list scrolls both ways */
+  #railtools{max-height:min(330px,calc(66.7vh - 120px));}
+  #railtools::before,#railtools::after{display:block;position:sticky;z-index:1;flex:0 0 auto;
+    text-align:center;font-size:8px;line-height:1;padding:1px 0;color:var(--cyan-dim);
+    pointer-events:none;}
+  #railtools::before{content:'▲';top:-6px;background:linear-gradient(180deg,rgba(3,12,16,.95) 55%,transparent);}
+  #railtools::after{content:'▼';bottom:-6px;background:linear-gradient(0deg,rgba(3,12,16,.95) 55%,transparent);}
+  /* division-designer window: its body pane had no padding of its own — text sat
+     flush against the frame */
+  #divdesignbody{flex:1;min-height:0;overflow:auto;padding:14px 16px;}
   #goals{max-width:min(230px,40vw);}
   /* content windows widen to ~80% of the screen (53.4vw layout × zoom 1.5) — the
      console windows outgrew their phone-sized boxes (long RU copy overflowed) */
@@ -1749,6 +1759,7 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
     box-shadow:0 6px 24px rgba(0,0,0,.55),inset 0 0 0 1px rgba(53,214,230,.06);}
   #objtip .pd-title{font-size:18px;font-weight:700;letter-spacing:1.5px;color:#eafffb;
     margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid var(--line);}
+  #objtip .pd-title:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none;}
   #objtip .pd-body{font-size:16px;line-height:1.55;color:#9fc9c4;}
   #objtip .hl{font-style:normal;font-weight:700;color:var(--amber);text-shadow:0 0 7px rgba(255,180,58,.35);}
   /* main menu (hub): don't stretch the console across the whole monitor — a
@@ -1763,7 +1774,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 @media (min-width:900px) and (hover:hover) and (pointer:fine) and (orientation:landscape){
   #side{width:min(380px,26.7vw);max-height:calc(66.7vh - 88px);}
   #cmdbar{left:calc((100% - min(380px,26.7vw)) / 2);}
-  #speedbar,body.sheet-open #speedbar{right:calc(min(380px,26.7vw) + 14px);}
+  /* time controls hug the right edge — clear of the (now shorter) sector panel and
+     of the fleet command bar centred over the map */
+  #speedbar,body.sheet-open #speedbar{right:14px;}
   body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:14px;}
 }
 /* «Компактный режим меню» (settings toggle, PC only): a denser sector panel — the

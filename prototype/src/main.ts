@@ -1205,6 +1205,9 @@ function progressPct(active: ActiveBuild): number {
 }
 function queuedLabel(q: QueuedBuild): string {
   if (q.kind === 'unit') {
+    // PC: icon·count chips (like the garrison tiles) — the hover dossier names the
+    // unit. Mobile keeps the full name.
+    if (pcUi()) return `${unitIcon(q.id)} ${q.count}`;
     return `${q.count}× ${unitIcon(q.id)} ${displayUnit(q.id)}`;
   }
   if (q.kind === 'upgrade') {
@@ -1364,7 +1367,7 @@ function divisionsHtml(planetId: string): string {
       h += `<div class="asset-row" data-desc="division"><span class="bicon">⊞</span><b>${esc(t(d.name))}</b><span class="dim">${comp} · ❤${hp}${off ? ' · ★' + esc(off) : ''}</span></div>`;
     }
   } else {
-    h += `<div class="row dim">${t('Нет дивизий — мобилизуй по шаблону ниже.')}</div>`;
+    h += `<div class="row dim">${pcUi() ? t('Нет дивизий.') : t('Нет дивизий — мобилизуй по шаблону ниже.')}</div>`;
   }
   const tpls = templatesOf(s, ME);
   const res = s.players[ME]?.resources ?? {};
@@ -1386,14 +1389,30 @@ function divisionsHtml(planetId: string): string {
   }
   h += `</div>`;
   const f = formationStats(pick.tpl);
-  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
   const afford = Object.entries(f.cost).every(([r, a]) => (res[r] ?? 0) >= a);
-  const comp = pick.tpl.slots.filter(Boolean).map((u) => formIcon(u!)).join('') || '—';
+  const slots = pick.tpl.slots.filter(Boolean) as string[];
   const offLine = pick.officer ? ` · ★${esc(t(OFFICERS[pick.officer]?.name ?? ''))}` : '';
-  h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
+  if (pcUi()) {
+    // PC: every icon self-describes on hover — composition glyphs → unit dossiers,
+    // ⚔/🛡/❤ → the stat's name, cost glyphs → the resource's name.
+    const comp = slots.map((u) => `<span data-desc="u:${esc(u)}">${formIcon(u)}</span>`).join('') || '—';
+    const cost =
+      Object.entries(f.cost).map(([r, a]) => `<span data-desc="res:${esc(r)}">${a}${TECH_CUR[r] ?? r[0]}</span>`).join(' ') || '—';
+    h += `<div class="row dim">${comp} · <span data-desc="stat:datk">⚔${f.attack}</span> <span data-desc="stat:ddef">🛡${f.defense}</span> <span data-desc="stat:dhp">❤${f.hp}</span>${offLine} · ${cost}</div>`;
+  } else {
+    const comp = slots.map((u) => formIcon(u)).join('') || '—';
+    const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
+    h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
+  }
   h += `<div class="row">`;
-  h += btn('mobilize', pick.officer ? `o${idx - officerBase}` : String(idx), t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }), afford && f.count > 0);
-  h += btn('divdesign', '', t('⚙ Конструктор'), true);
+  h += btn(
+    'mobilize',
+    pick.officer ? `o${idx - officerBase}` : String(idx),
+    t('Мобилизовать «{name}»', { name: esc(t(pick.tpl.name)) }),
+    afford && f.count > 0,
+    pcUi() ? 'division' : undefined,
+  );
+  h += btn('divdesign', '', t('⚙ Конструктор'), true, pcUi() ? 'act:divdesign' : undefined);
   h += `</div>`;
   // PC dropped this hint (its content lives in hover dossiers); mobile keeps it.
   if (!pcUi()) {
@@ -4306,9 +4325,12 @@ function pcols(blocks: string[]): string {
   return `<div class="pcols">${blocks.map(block).join('')}</div>`;
 }
 function cardHeader(color: string, title: string, sub: string): string {
+  // PC: the one-line header truncates the subtitle — drop the spaces around the
+  // separator dots so more of it fits. Mobile keeps the airy ' · '.
+  const subFit = pcUi() ? sub.replace(/ · /g, '·') : sub;
   return `<div class="phead">
     <span class="pflag" style="background:${color}"></span>
-    <div class="ptitle"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
+    <div class="ptitle"><b>${esc(title)}</b><span>${esc(subFit)}</span></div>
     <button class="pclose" data-act="close" data-arg="">✕</button>
   </div>`;
 }
@@ -4686,7 +4708,7 @@ function planetPanelHtml(p: Planet): string {
     const parts: string[] = [];
     if (pt.productionBonus !== 0) parts.push(t('произв. {p}', { p: pct(pt.productionBonus) }));
     if (pt.defenseBonus !== 0) parts.push(t('оборона {p}', { p: pct(pt.defenseBonus) }));
-    h += `<div class="row dim">${t('Мир типа «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') })}</div>`;
+    h += `<div class="row dim">${pcUi() ? t('Тип: «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') }) : t('Мир типа «{pt}» — {mods}', { pt: esc(ptName), mods: parts.join(' · ') })}</div>`;
   }
 
   // Capital marker / designate — heroes respawn here (and re-fit modules, Phase C).
@@ -4958,7 +4980,9 @@ function unitDossier(id: string): Dossier | null {
         body: t('Боевая проекция самого командующего — флагман во главе родного флота: {a} атаки и {hp} корпуса. Но решает не это: его присутствие держит эскадру в кулаке, давая {b} к атаке и обороне всем кораблям рядом. Падёт — командующий лишается проекции, пока та не отстроится заново на родном мире.', { a: hl(st.attack), hp: hl(st.hp), b: hl('+5%') }),
       };
     default:
-      return { name: displayUnit(id), body: t('Боевая единица.') };
+      // PC hover tooltip: the name alone is enough (an empty body is skipped by the
+      // tooltip); the mobile tap-modal keeps the old filler line.
+      return { name: displayUnit(id), body: pcUi() ? '' : t('Боевая единица.') };
   }
 }
 
@@ -5119,9 +5143,20 @@ function objDossier(key: string): Dossier | null {
       ground: [t('Наземные части'), t('Пехота и техника на поверхности мира.')],
       gships: [t('Корабли в гарнизоне'), t('Корабли, стоящие в гарнизоне мира (не на орбите).')],
       pbuild: [t('Постройки'), t('Число построек на мире.')],
+      datk: [t('Атака'), t('Суммарная атака дивизии.')],
+      ddef: [t('Защита'), t('Суммарная защита дивизии.')],
+      dhp: [t('ОЗ'), t('Суммарные очки здоровья дивизии.')],
     };
     const d = STAT_DOSSIER[key.slice(5)];
     return d ? { name: d[0], body: d[1] } : null;
+  }
+  if (key.startsWith('res:')) {
+    // Resource glyph → the resource's localized name (data name, e.g. metal/credits).
+    const r = key.slice(4);
+    return { name: tData(r), body: '' };
+  }
+  if (key === 'act:divdesign') {
+    return { name: t('Конструктор дивизий'), body: t('Редактор шаблонов: состав слотов и доктрина дивизий.') };
   }
   if (key.startsWith('c:')) return constructionDossier(key);
   const [kind, id, lvl] = key.split(':');
@@ -6337,7 +6372,9 @@ side.addEventListener('pointermove', (ev) => {
       hoverObj = key;
       const d = key ? objDossier(key) : null;
       if (d) {
-        objTipEl.innerHTML = `<div class="pd-title">${dossierTitleHtml(key!, d)}</div><div class="pd-body">${d.body}</div>`;
+        // A body-less dossier (bare names — resources, plain units) shows just the title.
+        objTipEl.innerHTML =
+          `<div class="pd-title">${dossierTitleHtml(key!, d)}</div>` + (d.body ? `<div class="pd-body">${d.body}</div>` : '');
         objTipEl.style.display = 'block';
       } else {
         objTipEl.style.display = 'none';

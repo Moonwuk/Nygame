@@ -263,6 +263,14 @@ export const en: Record<string, string> = {
   'Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.':
     'The meta-map is generated the moment war is declared (metagame.md). This is a showcase of server-side state.',
   'Мир типа «{pt}» — {mods}': 'A {pt} world — {mods}',
+  'Тип: «{pt}» — {mods}': 'Type: “{pt}” — {mods}',
+  'Нет дивизий.': 'No divisions.',
+  'Суммарная атака дивизии.': "The division's total attack.",
+  'Суммарная защита дивизии.': "The division's total defense.",
+  'Суммарные очки здоровья дивизии.': "The division's total hit points.",
+  'Конструктор дивизий': 'Division builder',
+  'Редактор шаблонов: состав слотов и доктрина дивизий.':
+    'The template editor: slot composition and division doctrine.',
   'Миров под контролем': 'Worlds held',
   'Мобилизовать дивизию': 'Mobilize a division',
   'Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.':
