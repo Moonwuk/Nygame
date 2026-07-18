@@ -30,6 +30,7 @@ import {
   sectorModule,
   planetTypeModule,
   constructionModule,
+  arsenalSyncModule,
   armyModule,
   victoryModule,
   technologyModule,
@@ -3223,6 +3224,7 @@ export const MODULES: GameModule[] = [
   interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,
+  arsenalSyncModule, // LARS-1: server-driver refresh of live build-catalog ownership (bypasses gate)
   technologyModule, // session research: branch/day-gated techs → effect bonuses + content unlocks
   stewardModule, // «Хранитель»: delegate the seat to the AI while you sleep (gated by the Steward tech)
   armyModule,

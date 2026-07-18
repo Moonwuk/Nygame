@@ -55,8 +55,15 @@ export interface LoadoutModel {
   slots: LoadoutSlotView[];
   /** The flat installed loadout — exactly what a `unit.build` carries. */
   modules: string[];
-  /** Modules to choose from, each flagged installable for the current draft. */
+  /** Modules to choose from, each flagged installable for the current draft.
+   *  Narrowed to `ownedModules` when the caller passed one (ARS-5) — an unowned
+   *  module isn't offered at all, not merely greyed out. */
   palette: LoadoutOption[];
+  /** ARS-5: the ownership filter this model was built with (carried through the
+   *  reducer so `applyLoadoutAction` re-applies the same narrowing). `undefined`
+   *  means no arsenal snapshot was available — the palette stays unrestricted
+   *  (graceful degradation, mirroring the core build gate). */
+  ownedModules?: string[];
   /** Live per-ship stats: base vs with the current modules. */
   preview: LoadoutStatLine[];
   /** Per-order costs (×count): hull, modules, and their sum. */
@@ -124,6 +131,7 @@ function buildModel(
   count: number,
   data: GameData,
   resources: ResourceBag,
+  ownedModules?: ReadonlySet<string>,
 ): LoadoutModel | null {
   const def: UnitDef | undefined = data.units[unit];
   if (!def) return null;
@@ -144,19 +152,21 @@ function buildModel(
     }
   }
 
-  const palette: LoadoutOption[] = Object.entries(data.modules).map(([id, m]) => {
-    const check = canEquip(unit, def, modules, id, data);
-    return {
-      id,
-      name: m.name,
-      slot: m.slot,
-      tag: m.tag,
-      effect: m.effects.stats,
-      cost: m.cost,
-      installable: check.ok,
-      ...(check.ok ? {} : { code: check.code }),
-    };
-  });
+  const palette: LoadoutOption[] = Object.entries(data.modules)
+    .filter(([id]) => !ownedModules || ownedModules.has(id))
+    .map(([id, m]) => {
+      const check = canEquip(unit, def, modules, id, data);
+      return {
+        id,
+        name: m.name,
+        slot: m.slot,
+        tag: m.tag,
+        effect: m.effects.stats,
+        cost: m.cost,
+        installable: check.ok,
+        ...(check.ok ? {} : { code: check.code }),
+      };
+    });
 
   const base = effectiveStats(def, {}, data);
   const eff = effectiveStats(def, { modules }, data);
@@ -185,6 +195,7 @@ function buildModel(
     totalCost,
     count,
     affordable: affordable(totalCost, resources),
+    ...(ownedModules ? { ownedModules: [...ownedModules] } : {}),
   };
 }
 
@@ -194,9 +205,9 @@ export function createLoadoutEditor(
   unit: string,
   data: GameData,
   resources: ResourceBag,
-  opts?: { modules?: string[]; count?: number },
+  opts?: { modules?: string[]; count?: number; ownedModules?: ReadonlySet<string> },
 ): LoadoutEditorResult {
-  const model = buildModel(unit, opts?.modules ?? [], opts?.count ?? 1, data, resources);
+  const model = buildModel(unit, opts?.modules ?? [], opts?.count ?? 1, data, resources, opts?.ownedModules);
   if (!model) return { ok: false, code: 'E_UNKNOWN_UNIT' };
   return { ok: true, ...model };
 }
@@ -223,6 +234,9 @@ export function applyLoadoutAction(
   let count = model.count;
   switch (action.kind) {
     case 'equip': {
+      if (model.ownedModules && !model.ownedModules.includes(action.moduleId)) {
+        return { ok: false, code: 'E_NOT_OWNED' };
+      }
       const check = canEquip(model.unit, def, model.modules, action.moduleId, data);
       if (!check.ok) return { ok: false, code: check.code };
       modules = [...model.modules, action.moduleId];
@@ -241,7 +255,14 @@ export function applyLoadoutAction(
       break;
     }
   }
-  const next = buildModel(model.unit, modules, count, data, resources);
+  const next = buildModel(
+    model.unit,
+    modules,
+    count,
+    data,
+    resources,
+    model.ownedModules ? new Set(model.ownedModules) : undefined,
+  );
   if (!next) return { ok: false, code: 'E_UNKNOWN_UNIT' };
   return { ok: true, ...next };
 }

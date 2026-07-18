@@ -989,6 +989,23 @@ export const en: Record<string, string> = {
   Командование: 'Command',
   Экономика: 'Economy',
   Наука: 'Science',
+  // --- arsenal witryna («Арсенал», hub tab, ARS-5) --------------------------------
+  'Арсенал пуст': 'Arsenal empty',
+  'войдите под аккаунтом на сервере с накоплением, чтобы увидеть коллекцию':
+    'sign in with an account on a server with persistence to see your collection',
+  Всё: 'All',
+  Корпуса: 'Hulls',
+  Фитинги: 'Fittings',
+  стартовый: 'starter',
+  дроп: 'drop',
+  крафт: 'craft',
+  аукцион: 'auction',
+  лутбокс: 'lootbox',
+  аренда: 'rent',
+  Слот: 'Slot',
+  модуль: 'module',
+  фитинг: 'fitting',
+  'В арсенале нет корпусов этого класса.': 'The arsenal has no hulls of this class.',
   'Ходовые школы': 'Helm Schools',
   '+5% к скорости всех флотов с первой секунды матча.':
     '+5% fleet speed from the first second of a match.',

@@ -145,6 +145,8 @@ import {
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
 import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
+// ARS-5 — arsenal witryna (pure filter/group/parse; see prototype/src/arsenal.ts).
+import { filterArsenal, gradesOf, ownedDefIds, parseArsenalItems, type ArsenalFilter } from './arsenal';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 // (The player build already does: the only uses sit under `!__PLAYER_BUILD__`, so
@@ -185,6 +187,7 @@ import type {
   DiplomaticStance,
   DomainEvent,
   IntelGrant,
+  ArsenalItem,
 } from '../../packages/shared-core/src/index';
 
 // --- constants ---------------------------------------------------------------
@@ -5473,6 +5476,28 @@ function codexHtml(kind: string, id: string): string {
       `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
     );
   }
+  // ARS-5: module/hero-fitting cards deep-link here too — the arsenal witryna is the
+  // first caller for kinds the codex never covered (only units/buildings had pages).
+  if (kind === 'md') {
+    const def = data.modules[id];
+    if (!def) return '';
+    const rows = [cxRow(t('Слот'), tData(def.slot)), cxRow(t('Стоимость'), cost(def.cost))];
+    for (const [k, v] of Object.entries(def.effects?.stats ?? {})) rows.push(cxRow(tData(k), String(v)));
+    return (
+      `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('модуль')}</span></div>` +
+      `<div class="cx-stats">${rows.join('')}</div>`
+    );
+  }
+  if (kind === 'hf') {
+    const def = data.heroFittings[id];
+    if (!def) return '';
+    const rows = [cxRow(t('Стоимость'), cost(def.cost))];
+    for (const [k, v] of Object.entries(def.statMods ?? {})) rows.push(cxRow(tData(k), (v > 0 ? '+' : '') + String(v)));
+    return (
+      `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('фитинг')}</span></div>` +
+      `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${esc(tData(def.description ?? ''))}</div>`
+    );
+  }
   const def = data.units[id];
   if (!def) return '';
   const st = def.stats;
@@ -8201,17 +8226,26 @@ function conBar(line: { label: string; base: number; effective: number; delta: n
  *  `loadoutEditor` view-model, just a different hull list. Resets the draft when the
  *  selected hull isn't in this family (a tab switch). */
 function conLoadoutPane(hullList: string[]): string {
-  if (!hullList.includes(conHull)) {
-    conHull = hullList[0]!;
+  // ARS-5: the constructor offers only what the match's arsenal snapshot (ARS-3)
+  // says the player owns — the same `Player.arsenal` the core build gate reads, so
+  // the palette can never promise a build the server would then reject. No snapshot
+  // (regular/dev match, bots) ⇒ unrestricted, mirroring the core's own degradation.
+  const snap = s.players[ME]?.arsenal;
+  const ownedHulls = snap ? hullList.filter((h) => snap.hulls.includes(h)) : hullList;
+  const ownedModules = snap ? new Set(snap.modules) : undefined;
+  if (!ownedHulls.length) return `<div class="cn-soon">${t('В арсенале нет корпусов этого класса.')}</div>`;
+  if (!ownedHulls.includes(conHull)) {
+    conHull = ownedHulls[0]!;
     conModules = [];
   }
   const ed: LoadoutEditorResult = createLoadoutEditor(conHull, data, myRes(), {
     modules: conModules,
     count: conCount,
+    ownedModules,
   });
   if (!ed.ok) return `<div class="cn-soon">${t('Корпус недоступен.')}</div>`;
   const m: LoadoutModel = ed;
-  const hulls = hullList.map(
+  const hulls = ownedHulls.map(
     (h) =>
       `<button class="cn-hbtn${h === conHull ? ' on' : ''}" data-cnhull="${h}">${UNIT_ICON[h] ?? '▲'} ${esc(displayUnit(h))}</button>`,
   ).join('');
@@ -8346,7 +8380,12 @@ function renderConstructor(): void {
 }
 /** Equip / unequip a module through the core-validated reducer, then re-render. */
 function conFit(moduleId: string, remove: boolean): void {
-  const ed = createLoadoutEditor(conHull, data, myRes(), { modules: conModules, count: conCount });
+  const snap = s.players[ME]?.arsenal;
+  const ed = createLoadoutEditor(conHull, data, myRes(), {
+    modules: conModules,
+    count: conCount,
+    ownedModules: snap ? new Set(snap.modules) : undefined,
+  });
   if (!ed.ok) return;
   const r = applyLoadoutAction({ kind: remove ? 'unequip' : 'equip', moduleId }, ed, data, myRes());
   if (r.ok) conModules = r.modules;
@@ -8564,7 +8603,7 @@ const hubNote = $('hub-note');
 function showHub(show: boolean): void {
   hubEl.style.display = show ? 'flex' : 'none';
 }
-const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', ally: 'hp-ally', more: 'hp-more' };
+const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', arsenal: 'hp-arsenal', ally: 'hp-ally', more: 'hp-more' };
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -8574,6 +8613,7 @@ function hubTab(tab: string): void {
     return;
   }
   if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
+  if (tab === 'arsenal') void refreshArsenal(); // cache paints now, server refresh trails
   for (const [k, pid] of Object.entries(HUB_PANELS)) $(pid).style.display = k === tab ? 'flex' : 'none';
   for (const b of Array.from(document.querySelectorAll('.hub-tab')))
     b.classList.toggle('active', (b as HTMLElement).dataset.hub === tab);
@@ -8618,6 +8658,114 @@ $('hp-meta').addEventListener('click', (ev) => {
     renderMetaPanel();
   }
 });
+
+// --- «Арсенал» — the account's persistent collection (hub tab, ARS-5) --------
+// ARS-1..4 built the server-side store; nothing client-facing read it before this.
+// Cache-first (localStorage per callsign, like meta): the tab always paints instantly
+// from the last known collection, then a background GET /arsenal/me (session-gated,
+// only when a session token from a prior join is already on hand — never prompts for
+// a password just to LOOK at the hub) refreshes it. No server/no account yet ⇒ the
+// empty state, same "no restriction without a snapshot" spirit as the core build gate.
+const ARSENAL_KIND_ICON: Record<ArsenalItem['kind'], string> = { hull: '◈', module: '◆', hero_fitting: '◇' };
+const ARSENAL_CODEX_KIND: Record<ArsenalItem['kind'], string> = { hull: 'u', module: 'md', hero_fitting: 'hf' };
+const ARSENAL_KIND_RU: Record<ArsenalItem['kind'], string> = { hull: 'Корпуса', module: 'Модули', hero_fitting: 'Фитинги' };
+const ARSENAL_ORIGIN_RU: Record<ArsenalItem['origin'], string> = {
+  starter: 'стартовый',
+  drop: 'дроп',
+  craft: 'крафт',
+  auction: 'аукцион',
+  lootbox: 'лутбокс',
+  rent: 'аренда',
+};
+function arsenalKey(): string {
+  return 'vd.arsenal.' + (nickInput.value.trim() || 'guest');
+}
+function loadArsenalCache(): ArsenalItem[] {
+  try {
+    return parseArsenalItems(JSON.parse(localStorage.getItem(arsenalKey()) ?? 'null'));
+  } catch {
+    return [];
+  }
+}
+function saveArsenalCache(items: ArsenalItem[]): void {
+  localStorage.setItem(arsenalKey(), JSON.stringify(items));
+}
+let arsenalItems: ArsenalItem[] = [];
+let arsenalFilter: ArsenalFilter = {};
+function arsenalItemName(item: ArsenalItem): string {
+  if (item.kind === 'hull') return unitDossier(item.defId)?.name ?? displayUnit(item.defId);
+  if (item.kind === 'module') return tData(data.modules[item.defId]?.name ?? item.defId);
+  return tData(data.heroFittings[item.defId]?.name ?? item.defId);
+}
+function arsenalCardHtml(item: ArsenalItem): string {
+  const badges = [item.grade ? `+${item.grade}` : '', typeof item.durability === 'number' ? `⛭${item.durability}` : '']
+    .filter(Boolean)
+    .join(' ');
+  const origin = t(ARSENAL_ORIGIN_RU[item.origin]);
+  return (
+    `<button class="hub-tile ar-card" data-codex="${ARSENAL_CODEX_KIND[item.kind]}:${esc(item.defId)}">` +
+    `<span class="ht-ic">${ARSENAL_KIND_ICON[item.kind]}</span><span>${esc(arsenalItemName(item))}</span>` +
+    `<span class="ar-meta">${badges ? badges + ' · ' : ''}${origin}</span></button>`
+  );
+}
+function renderArsenalPanel(): void {
+  const el = $('hp-arsenal');
+  if (arsenalItems.length === 0) {
+    el.innerHTML = `<div class="hub-empty"><span class="he-ic">⚔</span>${t('Арсенал пуст')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('войдите под аккаунтом на сервере с накоплением, чтобы увидеть коллекцию')}</span></div>`;
+    return;
+  }
+  const kinds: Array<ArsenalItem['kind']> = ['hull', 'module', 'hero_fitting'];
+  let chips = `<button class="ar-fchip${arsenalFilter.kind ? '' : ' on'}" data-ar-kind="">${t('Всё')}</button>`;
+  for (const k of kinds) chips += `<button class="ar-fchip${arsenalFilter.kind === k ? ' on' : ''}" data-ar-kind="${k}">${t(ARSENAL_KIND_RU[k])}</button>`;
+  const grades = gradesOf(arsenalItems);
+  if (grades.length) {
+    chips += `<span class="ar-fsep"></span>`;
+    for (const g of grades) chips += `<button class="ar-fchip${arsenalFilter.grade === g ? ' on' : ''}" data-ar-grade="${g}">+${g}</button>`;
+  }
+  const cards = filterArsenal(arsenalItems, arsenalFilter).map(arsenalCardHtml).join('');
+  el.innerHTML = `<div class="ar-filters">${chips}</div><div class="hub-grid ar-grid">${cards}</div>`;
+}
+$('hp-arsenal').addEventListener('click', (ev) => {
+  const tg = ev.target as HTMLElement;
+  const kindBtn = tg.closest('[data-ar-kind]') as HTMLElement | null;
+  if (kindBtn) {
+    const k = kindBtn.dataset.arKind as ArsenalItem['kind'] | '';
+    arsenalFilter = { ...arsenalFilter, kind: k || undefined };
+    renderArsenalPanel();
+    return;
+  }
+  const gradeBtn = tg.closest('[data-ar-grade]') as HTMLElement | null;
+  if (gradeBtn) {
+    const g = Number(gradeBtn.dataset.arGrade);
+    arsenalFilter = { ...arsenalFilter, grade: arsenalFilter.grade === g ? undefined : g };
+    renderArsenalPanel();
+    return;
+  }
+  const card = tg.closest('[data-codex]') as HTMLElement | null;
+  if (card?.dataset.codex) openCodex(card.dataset.codex);
+});
+/** Cache-first paint, then a best-effort session-gated refresh (never prompts for
+ *  a password — only reuses a session token a prior join already stashed). */
+async function refreshArsenal(): Promise<void> {
+  arsenalItems = loadArsenalCache();
+  renderArsenalPanel();
+  const srv = resolveServer();
+  if (!srv) return;
+  await probeAuthMode(srv.base);
+  if (!authMode) return;
+  const session = localStorage.getItem(sessionKey(srv.base));
+  if (!session) return;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, { headers: { authorization: `Bearer ${session}` } });
+    if (!res.ok) return;
+    const body = (await res.json().catch(() => null)) as { items?: unknown } | null;
+    arsenalItems = parseArsenalItems(body?.items);
+    saveArsenalCache(arsenalItems);
+    renderArsenalPanel();
+  } catch {
+    // offline/unreachable — the cache painted above stays the source of truth
+  }
+}
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
   const nick = nickInput.value.trim();

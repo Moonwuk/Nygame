@@ -21,6 +21,7 @@ import { registerAvaApi, registerAvaFeed } from './avaApi';
 import { AvaService } from './avaService';
 import { registerMedalApi } from './medalApi';
 import { MedalService } from './medalService';
+import { registerArsenalApi } from './arsenalApi';
 import { loadMedalCatalog } from './medalCatalog';
 import { AvaOrchestrator, warDeclarationsFor } from './avaOrchestrator';
 import { MatchKeeper } from './matchFactory';
@@ -69,6 +70,10 @@ const loadMatch = createMatchLoader({
   stores,
   data,
   gateFactory,
+  // LARS-1: a unit.build the boot-time snapshot would reject gets one fresh live
+  // read before that — a module bought mid-match becomes buildable without a new
+  // match/snapshot (LARS-0.2: only the build catalog goes live).
+  arsenalStore: stores.arsenalStore,
   onStall: (matchId) =>
     process.stderr.write(
       `match ${matchId}: world clock stalled (a same-instant scheduling loop) — ` +
@@ -350,6 +355,8 @@ const server = createMultiplayerServer({
           registerAvaApi(scope, { service: avaService, identify });
           // Medals (MED-1) — head/officer grant + read, session-gated like the corp API.
           registerMedalApi(scope, { service: medalService, identify });
+          // Arsenal witryna (ARS-5) — read-only, session-gated: my own items only.
+          registerArsenalApi(scope, { store: stores.arsenalStore, identify });
         }
       });
     }

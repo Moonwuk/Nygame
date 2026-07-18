@@ -117,3 +117,31 @@ describe('constructor — «Армия» pane edits a division template', () => 
     expect(after.count).toBe(before.count - 1);
   });
 });
+
+// ARS-5: the «Корабли» pane narrows CON_HULLS/the module palette to `Player.arsenal`
+// (the ARS-3 match snapshot) exactly the way `conLoadoutPane` in main.ts does — this
+// pins that the prototype's own hull ids (CON_HULLS) and module ids line up with a
+// real `PlayerArsenal` shape, not just the editor's own filter mechanics (already
+// covered in @void/client's loadoutEditor.test.ts).
+describe('constructor («Верфь») — narrowed by the arsenal snapshot (ARS-5)', () => {
+  const CON_HULLS = ['cruiser', 'siege', 'scout', 'dropship'];
+
+  it('no snapshot ⇒ every hull + the full palette (graceful degradation)', () => {
+    const snap: { hulls: string[]; modules: string[] } | undefined = undefined;
+    const ownedHulls = snap ? CON_HULLS.filter((h) => snap.hulls.includes(h)) : CON_HULLS;
+    expect(ownedHulls).toEqual(CON_HULLS);
+    const ed = createLoadoutEditor('cruiser', data, { metal: 999 }, {
+      ownedModules: snap ? new Set(snap.modules) : undefined,
+    });
+    expect(ed.ok && ed.palette.length).toBe(Object.keys(data.modules).length);
+  });
+
+  it('a snapshot narrows both the hull list and the palette to owned defIds', () => {
+    const snap = { hulls: ['cruiser'], modules: ['targeting_array', 'cargo_bay'] };
+    const ownedHulls = CON_HULLS.filter((h) => snap.hulls.includes(h));
+    expect(ownedHulls).toEqual(['cruiser']);
+    const ed = createLoadoutEditor('cruiser', data, { metal: 999 }, { ownedModules: new Set(snap.modules) });
+    if (!ed.ok) throw new Error('editor');
+    expect(ed.palette.map((o) => o.id).sort()).toEqual(['cargo_bay', 'targeting_array']);
+  });
+});

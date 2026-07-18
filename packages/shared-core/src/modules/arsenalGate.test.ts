@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createKernel } from '../kernel/kernel';
 import { constructionModule } from './construction';
 import { heroModule } from './hero';
+import { arsenalSyncModule } from './arsenalSync';
 import {
   createInitialState,
   type GameState,
@@ -123,6 +124,44 @@ describe('hero.fit × arsenal snapshot (ARS-3)', () => {
     expect(okApply(kernel.applyAction(withHero(OWNED), fit('visor'), ctx())).ok).toBe(true);
     expect(errCode(kernel.applyAction(withHero(OWNED), fit('crest'), ctx()))).toBe('E_NOT_OWNED');
     expect(okApply(kernel.applyAction(withHero(), fit('crest'), ctx())).ok).toBe(true);
+  });
+});
+
+describe('arsenal.sync × live build-catalog ownership (LARS-1)', () => {
+  const kernel = createKernel([constructionModule, arsenalSyncModule]);
+  const sync = (payload: Partial<PlayerArsenal> | undefined): Action => ({
+    id: 's:p1:3',
+    type: 'arsenal.sync',
+    playerId: 'p1',
+    payload,
+    issuedAt: 0,
+  });
+
+  it('a module bought mid-match becomes buildable right after the sync — no new snapshot/match needed', () => {
+    const st = stateWith([player('p1', OWNED)]);
+    // coilgun isn't in the boot-time snapshot yet.
+    expect(errCode(kernel.applyAction(st, build('cruiser', ['coilgun']), ctx()))).toBe('E_NOT_OWNED');
+    const grown: PlayerArsenal = { hulls: ['cruiser'], modules: ['railgun', 'coilgun'], fittings: ['visor'] };
+    const synced = okApply(kernel.applyAction(st, sync(grown), ctx())).state;
+    expect(okApply(kernel.applyAction(synced, build('cruiser', ['coilgun']), ctx())).ok).toBe(true);
+  });
+
+  it('a seat with NO snapshot at all refuses to sync one in (E_NO_SNAPSHOT) — never turns an open match restrictive', () => {
+    const st = stateWith([player('p1')]);
+    expect(errCode(kernel.applyAction(st, sync(OWNED), ctx()))).toBe('E_NO_SNAPSHOT');
+  });
+
+  it('rejects a malformed payload (fail-secure)', () => {
+    const st = stateWith([player('p1', OWNED)]);
+    expect(errCode(kernel.applyAction(st, sync(undefined), ctx()))).toBe('E_BAD_PAYLOAD');
+    expect(errCode(kernel.applyAction(st, sync({ hulls: ['cruiser'] }), ctx()))).toBe('E_BAD_PAYLOAD');
+  });
+
+  it('a sold-off item disappears from the live catalog too (full replace, not a union)', () => {
+    const st = stateWith([player('p1', OWNED)]);
+    const shrunk: PlayerArsenal = { hulls: [], modules: ['railgun'], fittings: ['visor'] };
+    const synced = okApply(kernel.applyAction(st, sync(shrunk), ctx())).state;
+    expect(errCode(kernel.applyAction(synced, build('cruiser'), ctx()))).toBe('E_NOT_OWNED');
   });
 });
 

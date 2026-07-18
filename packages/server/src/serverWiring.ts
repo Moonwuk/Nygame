@@ -5,7 +5,7 @@ import { startClockDriver, type ClockDriverHandle } from './clockDriver';
 import { snapshotOf, type Stores } from './persistence';
 import type { LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import type { ArsenalStore, MatchSnapshot, StoredReceipt } from './store';
 
 /**
  * The match-loading wiring `main.ts` hands to the LazyRoomRegistry, extracted
@@ -27,6 +27,9 @@ export interface MatchLoaderDeps {
    *  refused at the wire (the orchestrator owns the stances) and the match end
    *  is handed to the settlement. `null` ⇒ an ordinary match, no extras. */
   matchExtras?: (matchId: string) => Promise<MatchExtras | null>;
+  /** LARS-1 live ownership read (see `MatchRoom.arsenalStore`) — shared by every
+   *  loaded room (a live re-read is keyed per-account, not per-room). */
+  arsenalStore?: ArsenalStore;
 }
 
 /** Per-match wiring extras (see {@link MatchLoaderDeps.matchExtras}). */
@@ -83,6 +86,7 @@ export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => P
       initialSeq: snap.seq,
       gate: deps.gateFactory?.(),
       ...(extras?.denyPlayerActions ? { denyPlayerActions: extras.denyPlayerActions } : {}),
+      ...(deps.arsenalStore ? { arsenalStore: deps.arsenalStore } : {}),
     });
 
     // The 24/7 heartbeat while this match is live: fire due scheduled events with no

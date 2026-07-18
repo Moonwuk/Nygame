@@ -5,6 +5,7 @@ import type {
   GameData,
   GameState,
   Kernel,
+  PlayerArsenal,
   PlayerId,
   PlayerReward,
   SignatureContact,
@@ -23,7 +24,8 @@ import {
   type ServerMessage,
   type ServerRejectionMessage,
 } from './protocol';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import type { ArsenalStore, MatchSnapshot, StoredReceipt } from './store';
+import { arsenalSnapshotOf } from './arsenal';
 import { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 import { PerKeyWindow } from './rateLimit';
 
@@ -139,6 +141,17 @@ export interface MatchRoomOptions {
    *  (`initiallyStarted`, SES-2.1). Inert for a plain free-running room, which reads
    *  raw wall time. */
   timeScale?: number;
+  /** LARS-1 — live build-catalog ownership. When set, a `unit.build` whose hull/
+   *  modules aren't (yet) in the seat's boot-time arsenal snapshot (ARS-3) gets one
+   *  fresh `ArsenalStore.listOf(accountId)` read before the gate gets to reject it;
+   *  if the account now owns more, an internal `arsenal.sync` action (bypassing the
+   *  ActionGate, like the AI/patrol drivers) refreshes `Player.arsenal` first, so a
+   *  module bought mid-match is buildable without a new match. Needs the peer's
+   *  `accountId` (passed to `addPeer`) and only runs on the durable (`persist`)
+   *  paths — the sync itself must be a real, broadcast, hash-consistent action, not
+   *  a silent state patch. No `arsenalStore`, no `accountId`, or no snapshot on the
+   *  seat ⇒ unchanged ARS-3 behaviour (graceful degradation). */
+  arsenalStore?: ArsenalStore;
 }
 
 export interface ActionReceipt {
@@ -248,6 +261,15 @@ function envelopeActionId(envelope: unknown): string {
   return '';
 }
 
+/** LARS-1: is a freshly-read live snapshot the same as what's already on the
+ *  player? Both sides come out of `arsenalSnapshotOf` (sorted, deduped), so a
+ *  plain per-array compare is exact — used to skip a no-op `arsenal.sync`. */
+function sameArsenal(a: PlayerArsenal, b: PlayerArsenal): boolean {
+  const eq = (x: string[], y: string[]): boolean =>
+    x.length === y.length && x.every((v, i) => v === y[i]);
+  return eq(a.hulls, b.hulls) && eq(a.modules, b.modules) && eq(a.fittings, b.fittings);
+}
+
 /** Ally-ping tuning (ephemeral, server-side; never part of the deterministic core). */
 const PING_DEFAULT_TTL_MS = 5 * 60_000;
 const PING_MAX_PER_PLAYER = 8;
@@ -303,6 +325,12 @@ export class MatchRoom {
   private readonly gate?: ActionGate;
   /** Player-action deny-list (see options.denyPlayerActions). */
   private readonly denyPlayerActions?: (type: string) => string | null | undefined;
+  /** LARS-1 live ownership read (see options.arsenalStore). */
+  private readonly arsenalStore?: ArsenalStore;
+  /** playerId → accountId for the room's life (see `addPeer`'s `accountId` param).
+   *  Only ever set, never cleared on disconnect — the same seat is always the same
+   *  account for a given match. */
+  private readonly playerAccountId = new Map<PlayerId, string>();
   /** The actor mailbox (SV-0.2): serializes state-touching operations whose critical
    *  section spans an `await` — a committed submit (its persist) and a lobby `start`
    *  — so one runs fully before the next, and neither interleaves with the other's
@@ -381,6 +409,7 @@ export class MatchRoom {
     this.persist = options.persist;
     this.gate = options.gate;
     if (options.denyPlayerActions) this.denyPlayerActions = options.denyPlayerActions;
+    this.arsenalStore = options.arsenalStore;
     if (options.initialSeq && options.initialSeq > 0) this.seq = options.initialSeq;
     this.maxReceipts = options.maxReceipts ?? RECEIPTS_MAX_DEFAULT;
     this.actionRateMax = options.actionRateMax ?? ACTION_RATE_MAX_DEFAULT;
@@ -510,12 +539,17 @@ export class MatchRoom {
     peer: RoomPeer,
     sessionId?: string,
     welcomeExtras?: { seatTicket?: string },
+    accountId?: string,
   ): boolean {
     if (!this.hasPlayer(playerId)) {
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_UNKNOWN_PLAYER' });
       peer.close?.(1008, 'unknown player');
       return false;
     }
+    // LARS-1: remember which account this seat is, for the live arsenal-ownership
+    // read at unit.build admission (options.arsenalStore). Never trust a later,
+    // different value for the same seat within one room's life.
+    if (accountId && !this.playerAccountId.has(playerId)) this.playerAccountId.set(playerId, accountId);
     if (this.singlePeerPerPlayer && (this.peers.get(playerId)?.size ?? 0) > 0) {
       // That side is already controlled by a live connection.
       this.send(peer, { type: 'error', matchId: this.id, code: 'E_SLOT_TAKEN' });
@@ -768,6 +802,7 @@ export class MatchRoom {
   ): Promise<void> {
     const accepted = this.admitDecision(playerId, peer, envelope, sessionId);
     if (!accepted) return;
+    await this.maybeSyncArsenal(playerId, accepted.action);
     const verdict = await this.commitApply(playerId, accepted.action, peer);
     if (verdict.ok) {
       this.gate!.commit(accepted.envelope, { ok: true });
@@ -1173,7 +1208,42 @@ export class MatchRoom {
       if (peer) this.sendReject(peer, action.id, 'E_RATE_LIMIT');
       return;
     }
+    await this.maybeSyncArsenal(playerId, action);
     await this.commitApply(playerId, action, peer);
+  }
+
+  /** LARS-1 — refresh a seat's live build-catalog ownership right before a
+   *  `unit.build` that the BOOT-TIME snapshot (ARS-3) would reject. A no-op unless
+   *  every precondition holds: `arsenalStore` configured, the seat's `accountId`
+   *  known (from `addPeer`), a snapshot present on the player (no snapshot = already
+   *  unrestricted — nothing to refresh), and the requested hull/modules actually miss
+   *  from it. On a hit, submits an internal `arsenal.sync` (own id namespace, own
+   *  `commitApply` — a REAL, persisted, broadcast, hash-consistent action, never a
+   *  silent state patch) BEFORE the caller's `commitApply` for the original action,
+   *  so the unchanged ARS-3 check in `construction.ts` sees current ownership. */
+  private async maybeSyncArsenal(playerId: PlayerId, action: Action): Promise<void> {
+    if (!this.arsenalStore || action.type !== 'unit.build') return;
+    const accountId = this.playerAccountId.get(playerId);
+    if (!accountId) return;
+    const player = this.stateValue.players[playerId];
+    if (!player?.arsenal) return;
+    const payload = action.payload as { unit?: unknown; modules?: unknown } | null;
+    const unit = typeof payload?.unit === 'string' ? payload.unit : undefined;
+    const modules = Array.isArray(payload?.modules)
+      ? payload.modules.filter((m): m is string => typeof m === 'string')
+      : [];
+    const alreadyOwned =
+      (!unit || player.arsenal.hulls.includes(unit)) &&
+      modules.every((m) => player.arsenal!.modules.includes(m));
+    if (alreadyOwned) return; // covered by the boot snapshot — no live read needed
+    const fresh = arsenalSnapshotOf(await this.arsenalStore.listOf(accountId));
+    if (sameArsenal(player.arsenal, fresh)) return; // still doesn't own it — the
+    // unchanged core check below will reject with E_NOT_OWNED as before
+    await this.commitApply(
+      playerId,
+      { id: `srv:arsenal-sync:${playerId}:${this.seq}`, type: 'arsenal.sync', playerId, payload: fresh, issuedAt: this.clock() },
+      undefined,
+    );
   }
 
   /**

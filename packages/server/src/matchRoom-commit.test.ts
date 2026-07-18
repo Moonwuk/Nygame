@@ -9,7 +9,7 @@ import {
 } from '@void/shared-core';
 import { createDevMatch, loadShippedData } from './scenario';
 import { MatchRoom, type RoomPeer } from './matchRoom';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import { MemoryArsenalStore, type ArsenalStore, type MatchSnapshot, type StoredReceipt } from './store';
 import type { ServerMessage } from './protocol';
 
 // Strict commit-before-broadcast (docs/engineering-risks.md risk14). When a `persist`
@@ -334,5 +334,132 @@ describe('MatchRoom · mailbox serializes lobby start', () => {
     resolvePersist!();
     await Promise.all([actP, startP]);
     expect(room.isStarted).toBe(true); // ran in mailbox order, after the action committed
+  });
+});
+
+// LARS-1 — live build-catalog ownership. A unit.build the boot-time ARS-3 snapshot
+// would reject gets one fresh ArsenalStore read at admission; if the account now
+// owns it, an internal arsenal.sync commits first (a real, broadcast action), then
+// the original build proceeds against the refreshed snapshot.
+describe('MatchRoom · LARS-1 live arsenal sync', () => {
+  function build(unit: string, modules: string[] = [], n = 1): Action {
+    return {
+      id: `t:green:${n}`,
+      type: 'unit.build',
+      playerId: 'green',
+      payload: { planetId: 'home_green', unit, modules },
+      issuedAt: 0,
+    };
+  }
+
+  async function roomWithSnapshot(arsenalStore: ArsenalStore): Promise<MatchRoom> {
+    // Grab the auto-seeded dev state, then stamp a boot-time snapshot (ARS-3) on
+    // `green` that owns the hull but NOT the module the tests will ask to build.
+    const seed = createDevMatch(data, { now: () => 1000, time: 1000 });
+    const green = seed.state.players.green!;
+    const initialState = {
+      ...seed.state,
+      players: {
+        ...seed.state.players,
+        green: { ...green, arsenal: { hulls: ['cruiser'], modules: [], fittings: [] } },
+      },
+    };
+    return createDevMatch(data, {
+      now: () => 1000,
+      time: 1000,
+      initialState,
+      persist: () => Promise.resolve(),
+      arsenalStore,
+    });
+  }
+
+  /** Wraps a real store so a test can observe whether `listOf` was actually called,
+   *  without reimplementing the interface by hand. */
+  function tracking(inner: ArsenalStore): { store: ArsenalStore; wasRead: () => boolean } {
+    let read = false;
+    return {
+      wasRead: () => read,
+      store: {
+        grant: (item) => inner.grant(item),
+        get: (itemId) => inner.get(itemId),
+        listOf: (accountId) => {
+          read = true;
+          return inner.listOf(accountId);
+        },
+        transfer: (itemId, from, to) => inner.transfer(itemId, from, to),
+        consume: (itemId, accountId) => inner.consume(itemId, accountId),
+      },
+    };
+  }
+
+  it('a module the account owns live (but not in the boot snapshot) becomes buildable — no new match needed', async () => {
+    const store = new MemoryArsenalStore();
+    // A live sync REPLACES the whole snapshot from the store (the store is the
+    // single source of truth) — so the store must carry everything the boot
+    // snapshot did (the hull) PLUS the newly-bought module, or the hull would
+    // vanish from ownership too.
+    await store.grant({
+      itemId: 'x0',
+      accountId: 'acc-1',
+      kind: 'hull',
+      form: 'blueprint',
+      defId: 'cruiser',
+      soulbound: true,
+      origin: 'starter',
+      acquiredAt: 0,
+    });
+    await store.grant({
+      itemId: 'x1',
+      accountId: 'acc-1',
+      kind: 'module',
+      form: 'blueprint',
+      defId: 'targeting_array',
+      soulbound: false,
+      origin: 'craft',
+      acquiredAt: 0,
+    });
+    const room = await roomWithSnapshot(store);
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer, undefined, undefined, 'acc-1'); // accountId from the JWT claim
+
+    await room.receive('green', peer, raw(build('cruiser', ['targeting_array'])));
+    expect(peer.rejections()).toHaveLength(0); // NOT E_NOT_OWNED — the live sync landed first
+    expect(room.state.players.green?.arsenal?.modules).toEqual(['targeting_array']); // synced in
+  });
+
+  it('an account that still does not own it is rejected exactly as before (E_NOT_OWNED)', async () => {
+    const store = new MemoryArsenalStore(); // empty — nothing to sync in
+    const room = await roomWithSnapshot(store);
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer, undefined, undefined, 'acc-1');
+
+    await room.receive('green', peer, raw(build('cruiser', ['targeting_array'])));
+
+    expect(peer.rejections().some((r) => r.code === 'E_NOT_OWNED')).toBe(true);
+    expect(room.state.players.green?.arsenal?.modules).toEqual([]); // no no-op sync landed
+  });
+
+  it('no accountId on the seat (dev/nick mode) ⇒ unchanged ARS-3 behaviour, no live read attempted', async () => {
+    const { store, wasRead } = tracking(new MemoryArsenalStore());
+    const room = await roomWithSnapshot(store);
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer); // no accountId
+
+    await room.receive('green', peer, raw(build('cruiser', ['targeting_array'])));
+
+    expect(wasRead()).toBe(false);
+    expect(peer.rejections().some((r) => r.code === 'E_NOT_OWNED')).toBe(true);
+  });
+
+  it('a hull already covered by the boot snapshot never triggers a live read', async () => {
+    const { store, wasRead } = tracking(new MemoryArsenalStore());
+    const room = await roomWithSnapshot(store);
+    const peer = new MemoryPeer();
+    room.addPeer('green', peer, undefined, undefined, 'acc-1');
+
+    await room.receive('green', peer, raw(build('cruiser'))); // no modules — hull is already owned
+
+    expect(wasRead()).toBe(false);
+    expect(peer.rejections()).toHaveLength(0);
   });
 });

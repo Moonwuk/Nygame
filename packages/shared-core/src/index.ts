@@ -277,6 +277,7 @@ export { captureOnArrivalModule } from './modules/captureOnArrival';
 export { sectorModule } from './modules/sector';
 export { planetTypeModule } from './modules/planetType';
 export { constructionModule } from './modules/construction';
+export { arsenalSyncModule } from './modules/arsenalSync';
 export { stationModule } from './modules/station';
 export { technologyModule, technologyLock } from './modules/technology';
 export { scientistModule } from './modules/scientist';
