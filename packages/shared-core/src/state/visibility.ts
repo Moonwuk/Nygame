@@ -309,6 +309,7 @@ function project(
     delete player.technologies;
     delete player.scientist;
     delete player.arrears; // unpaid bills read as treasury intel — owner-private
+    delete player.arsenal; // what an enemy CAN build is strategic intel (ARS-3)
   }
   // Scoreboard: each player's live planet/fleet/unit totals aggregate territory
   // the viewer can't see, so an enemy's `scores` line is fog-sensitive intel

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import rateLimit from '@fastify/rate-limit';
 import { createDevMatch, loadAvaMaps, loadShippedData, loadStarterArsenal } from './scenario';
-import { grantStarterArsenal } from './arsenal';
+import { arsenalSnapshotOf, grantStarterArsenal } from './arsenal';
 import { createMultiplayerServer } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
@@ -142,6 +142,9 @@ const avaOrchestrator = new AvaOrchestrator({
   // AVA-8 (S7): settle the ended war — archive the matchup, record the outcome,
   // award influence to the winning corp (exactly-once by the locked→ended gate).
   settle: (matchupId, winnerSide) => avaService.settleMatch(matchupId, winnerSide),
+  // ARS-3: snapshot each rostered account's arsenal at launch — the seat builds
+  // only what it owned at the lock (GDD §2); later purchases wait for LARS-1.
+  arsenalOf: async (accountId) => arsenalSnapshotOf(await stores.arsenalStore.listOf(accountId)),
 });
 
 // Identity gate (SE-1.x): resolve the caller from the session token. Shared by the

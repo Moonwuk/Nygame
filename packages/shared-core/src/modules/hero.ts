@@ -776,6 +776,12 @@ export const heroModule: GameModule = {
       if (!hero) return h.reject('E_NO_HERO');
       if (hero.owner !== action.playerId) return h.reject('E_FORBIDDEN');
       if (hero.alive === false) return h.reject('E_HERO_DEAD');
+      // ARS-3 ownership gate: a seat with an arsenal snapshot installs only the
+      // fittings it owns; no snapshot ⇒ unrestricted (regular matches unchanged).
+      const arsenal = h.state.players[action.playerId]?.arsenal;
+      if (arsenal && !arsenal.fittings.includes(fitting)) {
+        return h.reject('E_NOT_OWNED');
+      }
       const fitted = hero.fittings ?? [];
       const slots =
         hero.archetype !== undefined ? (h.ctx.data.heroes[hero.archetype]?.slots ?? 0) : 0;

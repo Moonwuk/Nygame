@@ -39,6 +39,7 @@ export {
 export { MatchKeeper, type MatchKeeperOptions } from './matchFactory';
 export { pickAvaMap } from './avaMapPool';
 export {
+  arsenalSnapshotOf,
   grantStarterArsenal,
   validateStarterArsenal,
   type StarterArsenalTemplate,

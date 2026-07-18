@@ -9,6 +9,7 @@ import {
   type Hero,
   type Planet,
   type Player,
+  type PlayerArsenal,
 } from './gameState';
 import { pairKey } from './diplomacy';
 import { distance } from './route';
@@ -150,6 +151,11 @@ export interface SlotAssignment {
    *  archetype's `startAbilities`/`startPassives`; the player raises ships with
    *  `hero.spawn` (HERO-3). Unknown / duplicate / more-than-three fail the boot. */
   heroes?: string[];
+  /** Arsenal snapshot (ARS-3): what this seat OWNS and may build with, taken from
+   *  the account's `ArsenalStore` when the session is assembled (AvA: at roster
+   *  lock). Seated onto `Player.arsenal`; while present, `unit.build`/`hero.fit`
+   *  enforce ownership (`E_NOT_OWNED`). Absent = unrestricted (dev matches, bots). */
+  arsenal?: PlayerArsenal;
   /** Seat an AI-driven player (bot) into this slot. Default: human. */
   ai?: boolean;
 }
@@ -325,6 +331,17 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
       ...(a.ai ? { ai: true } : {}),
       ...(scientists.length ? { scientists } : {}),
       ...(a.technologies?.length ? { technologies: { completed: [...new Set(a.technologies)] } } : {}),
+      // ARS-3: the ownership snapshot rides onto the seat — copied (unique+sorted)
+      // so later mutations of the caller's object can't reach the frozen match.
+      ...(a.arsenal
+        ? {
+            arsenal: {
+              hulls: [...new Set(a.arsenal.hulls)].sort(),
+              modules: [...new Set(a.arsenal.modules)].sort(),
+              fittings: [...new Set(a.arsenal.fittings)].sort(),
+            },
+          }
+        : {}),
     };
     // HERO-9: seed the roster as UNDEPLOYED hero instances anchored at the slot's
     // first owned world; hero.spawn (HERO-3) raises their ships in-match.
