@@ -11,6 +11,7 @@ import {
   MemoryAvaRosterStore,
   MemoryAvaSessionStore,
   MemoryCorpStore,
+  MemoryDropStore,
   MemoryMatchStore,
   MemoryMedalStore,
   MemoryReceiptStore,
@@ -25,6 +26,7 @@ import {
   PostgresAvaRosterStore,
   PostgresAvaSessionStore,
   PostgresCorpStore,
+  PostgresDropStore,
   PostgresMatchStore,
   PostgresMedalStore,
   PostgresReceiptStore,
@@ -33,6 +35,7 @@ import {
 import type {
   AccountStore,
   ArsenalStore,
+  DropStore,
   OwnedArsenalItem,
   UserStore,
   AvaChallenge,
@@ -529,6 +532,37 @@ function medalStoreContract(name: string, make: () => MedalStore, uniq: (p: stri
   });
 }
 
+/** ARS-4 — the drop-loop contract: the (match, account) claim is exactly-once, pity
+ *  reads/writes round-trip, shard credits accumulate atomically. Both adapters. */
+function dropStoreContract(name: string, make: () => DropStore, uniq: (p: string) => string): void {
+  describe(`DropStore — ${name}`, () => {
+    it('claim is exactly-once per (match, account); other pairs are independent', async () => {
+      const store = make();
+      const m = uniq('drop-m1');
+      const acc = uniq('drop-acc');
+      expect(await store.claim(m, acc)).toBe(true);
+      expect(await store.claim(m, acc)).toBe(false); // a replayed match end rolls nothing
+      expect(await store.claim(m, uniq('drop-other'))).toBe(true);
+      expect(await store.claim(uniq('drop-m2'), acc)).toBe(true);
+    });
+
+    it('pity round-trips and defaults to 0; shard credits accumulate', async () => {
+      const store = make();
+      const acc = uniq('drop-pity');
+      expect(await store.pityOf(acc)).toBe(0);
+      await store.setPity(acc, 3);
+      expect(await store.pityOf(acc)).toBe(3);
+      await store.setPity(acc, 0);
+      expect(await store.pityOf(acc)).toBe(0);
+      expect(await store.shardsOf(acc)).toBe(0);
+      await store.addShards(acc, 2);
+      await store.addShards(acc, 5);
+      expect(await store.shardsOf(acc)).toBe(7);
+      expect(await store.shardsOf(uniq('drop-nobody'))).toBe(0);
+    });
+  });
+}
+
 // AVA-7 — the session store: one per matchup/instance, read by match or by matchup.
 /** ARS-2 — the arsenal contract: idempotent grant, owner-guarded transfer/consume,
  *  soulbound never moves. Run against BOTH adapters. */
@@ -813,6 +847,7 @@ rosterStoreContract(
 resultStoreContract('memory', () => new MemoryAvaResultStore(), (p) => p);
 sessionStoreContract('memory', () => new MemoryAvaSessionStore(), (p) => p);
 arsenalStoreContract('memory', () => new MemoryArsenalStore(), (p) => p);
+dropStoreContract('memory', () => new MemoryDropStore(), (p) => p);
 medalStoreContract('memory', () => new MemoryMedalStore(), (p) => p);
 
 // Postgres adapters — only when a DATABASE_URL is provided (skipped in CI without a
@@ -854,6 +889,7 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   resultStoreContract('postgres', () => new PostgresAvaResultStore(pool), (p) => `${p}_${stamp}`);
   sessionStoreContract('postgres', () => new PostgresAvaSessionStore(pool), (p) => `${p}_${stamp}`);
   arsenalStoreContract('postgres', () => new PostgresArsenalStore(pool), (p) => `${p}_${stamp}`);
+  dropStoreContract('postgres', () => new PostgresDropStore(pool), (p) => `${p}_${stamp}`);
   medalStoreContract('postgres', () => new PostgresMedalStore(pool), (p) => `${p}_${stamp}`);
 
   // The SAME contracts the memory adapter runs — no weakened hand copies.

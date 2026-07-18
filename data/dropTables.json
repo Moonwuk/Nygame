@@ -1,0 +1,26 @@
+{
+  "pityAfter": 4,
+  "byPlace": [
+    { "maxPlace": 1, "chance": 0.6 },
+    { "maxPlace": 3, "chance": 0.35 },
+    { "maxPlace": 999, "chance": 0.2 }
+  ],
+  "pool": [
+    { "kind": "hull", "defId": "siege_lance", "weight": 2 },
+    { "kind": "hull", "defId": "fighter_squadron", "weight": 2 },
+    { "kind": "hull", "defId": "strike_carrier", "weight": 1 },
+    { "kind": "module", "defId": "targeting_array", "weight": 3 },
+    { "kind": "module", "defId": "shield_booster", "weight": 3 },
+    { "kind": "module", "defId": "ablative_plating", "weight": 3 }
+  ],
+  "salvage": {
+    "default": 1,
+    "perUnit": {
+      "cruiser": 2,
+      "siege_lance": 3,
+      "dropship": 2,
+      "tank": 2,
+      "strike_carrier": 4
+    }
+  }
+}

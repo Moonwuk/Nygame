@@ -479,3 +479,23 @@ export interface ArsenalStore {
   consume(itemId: string, accountId: string): Promise<boolean>;
   close?(): Promise<void>;
 }
+
+/** Persistence for the F2P drop loop (ARS-4): the per-account pity counter (drop
+ *  guaranteed within K dry matches — no black streaks) and the salvage-shard balance
+ *  (the EC-2.2 craft input). Like the other stores, policy (roll chances, tables)
+ *  lives above; the store guards the invariants that need storage-level atomicity:
+ *   - `claim` is the exactly-once gate per (match, account) — a replayed match end
+ *     can never roll (or bump pity for) the same account twice;
+ *   - `addShards` is an atomic increment (concurrent battle credits both land). */
+export interface DropStore {
+  /** First-writer-wins marker for one account's roll in one match: true = this call
+   *  claimed it (proceed to roll), false = already claimed (a replay — do nothing). */
+  claim(matchId: string, accountId: string): Promise<boolean>;
+  /** The account's current dry streak (matches since the last drop). 0 when unknown. */
+  pityOf(accountId: string): Promise<number>;
+  setPity(accountId: string, value: number): Promise<void>;
+  /** Credit salvage shards — `delta` must be positive (earning only). */
+  addShards(accountId: string, delta: number): Promise<void>;
+  shardsOf(accountId: string): Promise<number>;
+  close?(): Promise<void>;
+}

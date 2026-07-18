@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import rateLimit from '@fastify/rate-limit';
-import { createDevMatch, loadAvaMaps, loadShippedData, loadStarterArsenal } from './scenario';
+import {
+  createDevMatch,
+  loadAvaMaps,
+  loadDropTables,
+  loadShippedData,
+  loadStarterArsenal,
+} from './scenario';
 import { arsenalSnapshotOf, grantStarterArsenal } from './arsenal';
+import { awardMatchDrops, salvageFromEvents } from './dropRoller';
 import { createMultiplayerServer } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
@@ -52,6 +59,8 @@ const data = loadShippedData();
 // ARS-2: the starter blueprint set, validated against the shipped catalogs at boot
 // (a template naming content that does not ship refuses to start — fail-secure).
 const starterArsenal = loadStarterArsenal(data);
+// ARS-4: the F2P drop loop — chances/pool/pity/salvage are data, validated at boot.
+const dropTables = loadDropTables(data);
 const stores = await createStores();
 
 // The registry's match loader — the persist/observe/driver wiring lives in
@@ -73,15 +82,57 @@ const loadMatch = createMatchLoader({
   matchExtras: async (matchId) => {
     const avaSession = await stores.sessionStore.byMatch(matchId);
     if (!avaSession) return null;
+    // ARS-4: seat (slotId) → account, for the drop roll and the salvage credit.
+    const seatAccount: Record<string, string> = {};
+    for (const [accountId, slotId] of Object.entries(avaSession.seats)) {
+      seatAccount[slotId] = accountId;
+    }
     return {
       denyPlayerActions: (type: string) =>
         type === 'diplomacy.declare' ? 'E_AVA_DIPLOMACY' : null,
-      onEnd: (winner: string | null) => {
+      // ARS-4 salvage: shards to each battle's winner, priced by the fallen enemy
+      // composition — credited durably per observed batch (server-side, outside the
+      // reducer; bots have no account and earn nothing).
+      onEvents: (events) => {
+        for (const [winner, shards] of salvageFromEvents(events, dropTables)) {
+          const accountId = seatAccount[winner];
+          if (!accountId) continue;
+          void stores.dropStore.addShards(accountId, shards).catch((err: unknown) => {
+            process.stderr.write(
+              `salvage credit failed for ${accountId} — ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          });
+        }
+      },
+      onEnd: (winner: string | null, rewards) => {
         void avaOrchestrator.onMatchEnded(matchId, winner).catch((err) => {
           process.stderr.write(
             `ava settlement failed for ${matchId} — ${err instanceof Error ? err.message : String(err)}\n`,
           );
         });
+        // ARS-4 drop roll: place-weighted, pity-guarded, exactly-once per
+        // (match, account); one telemetry JSONL line per rolled account.
+        if (rewards) {
+          const entries = Object.entries(rewards).flatMap(([playerId, reward]) => {
+            const accountId = seatAccount[playerId];
+            return accountId ? [{ accountId, reward }] : [];
+          });
+          void awardMatchDrops(
+            {
+              drops: stores.dropStore,
+              arsenal: stores.arsenalStore,
+              tables: dropTables,
+              now: Date.now(),
+              log: (record) => process.stdout.write(`${JSON.stringify({ t: 'drop', ...record })}\n`),
+            },
+            matchId,
+            entries,
+          ).catch((err) => {
+            process.stderr.write(
+              `drop roll failed for ${matchId} — ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          });
+        }
       },
     };
   },

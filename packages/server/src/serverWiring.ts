@@ -1,5 +1,5 @@
 import type { ActionGate } from '@void/action-layer';
-import type { GameData } from '@void/shared-core';
+import type { DomainEvent, GameData, PlayerReward } from '@void/shared-core';
 import { createDevMatch } from './scenario';
 import { startClockDriver, type ClockDriverHandle } from './clockDriver';
 import { snapshotOf, type Stores } from './persistence';
@@ -33,8 +33,13 @@ export interface MatchLoaderDeps {
 export interface MatchExtras {
   /** Wire-level deny rule for player-submitted action types (server drivers pass). */
   denyPlayerActions?: (type: string) => string | null;
-  /** Called once per observed room `end` (the room fires it on the terminal commit). */
-  onEnd?: (winner: string | null) => void;
+  /** Called once per observed room `end` (the room fires it on the terminal commit).
+   *  `rewards` is the core's session-end table (SES-2: place/xp per seated player) —
+   *  the ARS-4 drop roller keys its per-place roll off it. */
+  onEnd?: (winner: string | null, rewards?: Record<string, PlayerReward>) => void;
+  /** Called per observed domain-event batch (the raw pre-fog server-side stream, M1)
+   *  — the ARS-4 salvage counter reads `battle.resolved`/`unit.died` from it. */
+  onEvents?: (events: DomainEvent[]) => void;
 }
 
 /**
@@ -64,7 +69,8 @@ export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => P
     // hands a terminal `end` to the extras hook (the AvA settlement path).
     const observe = (event: RoomObservation): void => {
       if (event.kind === 'action') driver?.reschedule();
-      if (event.kind === 'end') extras?.onEnd?.(event.winner);
+      if (event.kind === 'end') extras?.onEnd?.(event.winner, event.rewards);
+      if (event.kind === 'events') extras?.onEvents?.(event.events);
     };
 
     const room = createDevMatch(data, {

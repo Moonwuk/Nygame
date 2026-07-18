@@ -38,6 +38,7 @@ import type { ActionGate } from '@void/action-layer';
 import { MatchRoom, type ActionReceipt, type RoomObservation } from './matchRoom';
 import type { MatchSnapshot, StoredReceipt } from './store';
 import { validateStarterArsenal, type StarterArsenalTemplate } from './arsenal';
+import { validateDropTables, type DropTables } from './dropRoller';
 
 /**
  * A runnable dev match on the *real* simulation core — the smallest faithful
@@ -64,6 +65,18 @@ export function loadStarterArsenal(data: GameData): StarterArsenalTemplate[] {
   const issues = validateStarterArsenal(templates, data);
   if (issues.length > 0) throw new Error(`E_INVALID_STARTER_ARSENAL: ${issues.join('; ')}`);
   return templates;
+}
+
+/** The shipped drop tables (ARS-4), validated against the shipped catalogs at boot —
+ *  a pool line naming content that does not ship, or a malformed chance/weight,
+ *  refuses to start (fail-secure; balancing the loop is a JSON edit). */
+export function loadDropTables(data: GameData): DropTables {
+  const tables = JSON.parse(
+    readFileSync(new URL('../../../data/dropTables.json', import.meta.url), 'utf8'),
+  ) as DropTables;
+  const issues = validateDropTables(tables, data);
+  if (issues.length > 0) throw new Error(`E_INVALID_DROP_TABLES: ${issues.join('; ')}`);
+  return tables;
 }
 
 /** The AvA-eligible map pool (AVA-5/7): every validated map in `data/maps` tagged

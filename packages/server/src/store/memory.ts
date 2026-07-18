@@ -20,6 +20,7 @@ import type {
   CorpRole,
   CorpStore,
   CorpSummary,
+  DropStore,
   MatchSnapshot,
   MatchStore,
   Medal,
@@ -652,6 +653,39 @@ export class MemoryArsenalStore implements ArsenalStore {
     if (!row || row.accountId !== accountId) return Promise.resolve(false);
     this.items.delete(itemId);
     return Promise.resolve(true);
+  }
+}
+
+/** In-memory drop-loop store (ARS-4): exactly-once per-(match, account) roll claims,
+ *  the pity counter and the salvage-shard balance. */
+export class MemoryDropStore implements DropStore {
+  private readonly claims = new Set<string>();
+  private readonly pity = new Map<string, number>();
+  private readonly shards = new Map<string, number>();
+
+  claim(matchId: string, accountId: string): Promise<boolean> {
+    const key = `${matchId} ${accountId}`;
+    if (this.claims.has(key)) return Promise.resolve(false);
+    this.claims.add(key);
+    return Promise.resolve(true);
+  }
+
+  pityOf(accountId: string): Promise<number> {
+    return Promise.resolve(this.pity.get(accountId) ?? 0);
+  }
+
+  setPity(accountId: string, value: number): Promise<void> {
+    this.pity.set(accountId, value);
+    return Promise.resolve();
+  }
+
+  addShards(accountId: string, delta: number): Promise<void> {
+    this.shards.set(accountId, (this.shards.get(accountId) ?? 0) + delta);
+    return Promise.resolve();
+  }
+
+  shardsOf(accountId: string): Promise<number> {
+    return Promise.resolve(this.shards.get(accountId) ?? 0);
   }
 }
 

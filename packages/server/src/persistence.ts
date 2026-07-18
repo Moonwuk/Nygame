@@ -8,6 +8,7 @@ import {
   MemoryAvaRosterStore,
   MemoryAvaSessionStore,
   MemoryCorpStore,
+  MemoryDropStore,
   MemoryMatchStore,
   MemoryMedalStore,
   MemoryReceiptStore,
@@ -20,6 +21,7 @@ import {
   PostgresAvaRosterStore,
   PostgresAvaSessionStore,
   PostgresCorpStore,
+  PostgresDropStore,
   PostgresMatchStore,
   PostgresMedalStore,
   PostgresReceiptStore,
@@ -33,6 +35,7 @@ import {
   type AvaRosterStore,
   type AvaSessionStore,
   type CorpStore,
+  type DropStore,
   type MatchSnapshot,
   type MatchStore,
   type MedalStore,
@@ -74,6 +77,8 @@ export interface Stores {
   /** Personal arsenal (ARS-2) — hulls/modules/fittings an account owns between
    *  sessions; snapshots (ARS-3) and the live build gate (LARS-1) read it. */
   arsenalStore: ArsenalStore;
+  /** Drop loop (ARS-4) — per-account pity + salvage shards + exactly-once roll claims. */
+  dropStore: DropStore;
   /** Which backend is active — for the boot log ('memory' loses state on restart). */
   kind: 'memory' | 'postgres';
   close(): Promise<void>;
@@ -95,6 +100,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
       sessionStore: new MemoryAvaSessionStore(),
       medalStore: new MemoryMedalStore(),
       arsenalStore: new MemoryArsenalStore(),
+      dropStore: new MemoryDropStore(),
       kind: 'memory',
       close: () => Promise.resolve(),
     };
@@ -117,6 +123,7 @@ export async function createStores(env: NodeJS.ProcessEnv = process.env): Promis
     sessionStore: new PostgresAvaSessionStore(pool),
     medalStore: new PostgresMedalStore(pool),
     arsenalStore: new PostgresArsenalStore(pool),
+    dropStore: new PostgresDropStore(pool),
     kind: 'postgres',
     close: () => pool.end(),
   };

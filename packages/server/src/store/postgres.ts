@@ -22,6 +22,7 @@ import type {
   CorpRole,
   CorpStore,
   CorpSummary,
+  DropStore,
   MatchSnapshot,
   MatchStore,
   Medal,
@@ -242,6 +243,20 @@ export async function migrate(pool: Pool): Promise<void> {
       acquired_at bigint NOT NULL
     );
     CREATE INDEX IF NOT EXISTS arsenal_account_idx ON arsenal (account_id);
+
+    -- Drop loop (ARS-4): the (match, account) claim PK is the exactly-once roll gate
+    -- (a replayed match end inserts nothing → no second roll, no double pity bump);
+    -- drop_meta holds the pity counter and the salvage-shard balance per account.
+    CREATE TABLE IF NOT EXISTS drop_claims (
+      match_id    text NOT NULL,
+      account_id  text NOT NULL,
+      PRIMARY KEY (match_id, account_id)
+    );
+    CREATE TABLE IF NOT EXISTS drop_meta (
+      account_id  text PRIMARY KEY,
+      pity        integer NOT NULL DEFAULT 0,
+      shards      integer NOT NULL DEFAULT 0
+    );
   `);
 }
 
@@ -1403,5 +1418,53 @@ export class PostgresArsenalStore implements ArsenalStore {
       [itemId, accountId],
     );
     return (r.rowCount ?? 0) > 0;
+  }
+}
+
+export class PostgresDropStore implements DropStore {
+  constructor(private readonly pool: Pool) {}
+
+  async claim(matchId: string, accountId: string): Promise<boolean> {
+    // ON CONFLICT DO NOTHING + rowCount IS the exactly-once gate: only the first
+    // inserter of the (match, account) pair proceeds to roll.
+    const r = await this.pool.query(
+      `INSERT INTO drop_claims (match_id, account_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [matchId, accountId],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async pityOf(accountId: string): Promise<number> {
+    const r = await this.pool.query<{ pity: number }>(
+      `SELECT pity FROM drop_meta WHERE account_id = $1`,
+      [accountId],
+    );
+    return r.rows[0]?.pity ?? 0;
+  }
+
+  async setPity(accountId: string, value: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO drop_meta (account_id, pity) VALUES ($1, $2)
+       ON CONFLICT (account_id) DO UPDATE SET pity = $2`,
+      [accountId, value],
+    );
+  }
+
+  async addShards(accountId: string, delta: number): Promise<void> {
+    // Atomic increment — two concurrent battle credits both land.
+    await this.pool.query(
+      `INSERT INTO drop_meta (account_id, shards) VALUES ($1, $2)
+       ON CONFLICT (account_id) DO UPDATE SET shards = drop_meta.shards + $2`,
+      [accountId, delta],
+    );
+  }
+
+  async shardsOf(accountId: string): Promise<number> {
+    const r = await this.pool.query<{ shards: number }>(
+      `SELECT shards FROM drop_meta WHERE account_id = $1`,
+      [accountId],
+    );
+    return r.rows[0]?.shards ?? 0;
   }
 }
