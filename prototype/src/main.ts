@@ -147,6 +147,29 @@ import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './
 import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
 // ARS-5 — arsenal witryna (pure filter/group/parse; see prototype/src/arsenal.ts).
 import { filterArsenal, gradesOf, originOf, ownedDefIds, parseArsenalItems, type ArsenalFilter } from './arsenal';
+// AVA-C1/C2 — corporation cabinet (pure types/parsers; see prototype/src/corp.ts).
+import {
+  parseCorpRecord,
+  parseCorpSummaries,
+  parseMembership,
+  parseMemberships,
+  parseAudit,
+  parseChallenges,
+  parseReadyPool,
+  parseRosterView,
+  parseFeed,
+  sortMembers,
+  canManage,
+  type CorpRole,
+  type CorpRecord,
+  type CorpMembership,
+  type CorpSummary,
+  type CorpAuditEntry,
+  type AvaChallenge,
+  type AvaChallengeStatus,
+  type AvaRosterView,
+  type AvaFeedEntry,
+} from './corp';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 // (The player build already does: the only uses sit under `!__PLAYER_BUILD__`, so
@@ -11450,129 +11473,50 @@ requestAnimationFrame(frame);
   }
 }
 
-// --- corporation cabinet (mock meta-shell screen) ---------------------------
-// A UI prototype of the cross-session alliance ("corporation") management
-// screen designed in docs/corporation-ui.md. Everything here is LOCAL MOCK
-// data — there is no server, accounts, or meta-layer yet (metagame.md Контур 2).
-// The real screen would read server projections and send intents; this exists
-// to visualise the layout and interactions ahead of that work.
-type CorpRole = 'leader' | 'officer' | 'member';
-type CorpPresence = 'online' | 'match' | 'offline';
-interface CorpMember {
-  name: string;
-  role: CorpRole;
-  presence: CorpPresence;
-  influence: number; // lifetime influence contributed
-  joined: string;
-  me?: boolean;
-}
-interface CorpHolding {
-  sector: string;
-  bonus: string;
-  since: string;
-  threat: 'low' | 'med' | 'high';
-}
-interface CorpWar {
-  foe: string;
-  sector: string;
-  when: string;
-  status: 'scheduled' | 'incoming' | 'active';
-  signed: number;
-}
-interface CorpLedger {
-  kind: 'gain' | 'spend';
-  text: string;
-  amount: string;
-  when: string;
-}
-interface CorpMsg {
-  who: string;
-  text: string;
-  when: string;
-  pinned?: boolean;
-  audit?: boolean;
-}
-interface CorpData {
-  name: string;
-  tag: string;
-  motto: string;
-  influence: number;
-  supply: number;
-  cap: number;
-  rank: number;
-  myRole: CorpRole;
-  bonuses: string[];
-  members: CorpMember[];
-  holdings: CorpHolding[];
-  wars: CorpWar[];
-  ledger: CorpLedger[];
-  chat: CorpMsg[];
-}
-
-const MOCK_CORP: CorpData = {
-  name: 'Obsidian Vanguard',
-  tag: 'OBSV',
-  motto: 'Hold the void, take the dawn.',
-  influence: 48250,
-  supply: 1240,
-  rank: 7,
-  cap: 50,
-  myRole: 'officer',
-  bonuses: ['+5% добыча металла (сектор HELIOS-3)', '+3% скорость постройки (сектор AEGIS)'],
-  members: [
-    { name: 'Nyx', role: 'leader', presence: 'online', influence: 12400, joined: 'Day 12' },
-    { name: 'Max', role: 'officer', presence: 'online', influence: 9100, joined: 'Day 14', me: true },
-    { name: 'Corvus', role: 'officer', presence: 'match', influence: 8600, joined: 'Day 15' },
-    { name: 'Vega', role: 'member', presence: 'offline', influence: 6200, joined: 'Day 21' },
-    { name: 'Rhea', role: 'member', presence: 'online', influence: 5400, joined: 'Day 28' },
-    { name: 'Drax', role: 'member', presence: 'offline', influence: 3300, joined: 'Day 33' },
-    { name: 'Io', role: 'member', presence: 'match', influence: 3250, joined: 'Day 40' },
-  ],
-  holdings: [
-    { sector: 'HELIOS-3', bonus: '+5% добыча металла', since: 'Day 22', threat: 'med' },
-    { sector: 'AEGIS', bonus: '+3% скорость постройки', since: 'Day 31', threat: 'low' },
-    { sector: 'NULLPORT', bonus: '+2% доход кредитов', since: 'Day 44', threat: 'high' },
-  ],
-  wars: [
-    { foe: 'Crimson Syndicate', sector: 'VEIL-9', when: 'через 6ч', status: 'scheduled', signed: 8 },
-    { foe: 'Ashen Concord', sector: 'NULLPORT', when: 'через 2д', status: 'incoming', signed: 3 },
-    { foe: 'Pale Horizon', sector: 'HARBOR', when: 'идёт бой', status: 'active', signed: 11 },
-  ],
-  ledger: [
-    { kind: 'gain', text: 'Nyx — итог сессии skirmish-7', amount: '+1 850 ⟡', when: '1ч назад' },
-    { kind: 'spend', text: 'Объявлена AvA за VEIL-9', amount: '−12 000 ⟡', when: '3ч назад' },
-    { kind: 'gain', text: 'Corvus — итог сессии skirmish-6', amount: '+1 200 ⟡', when: '5ч назад' },
-    { kind: 'spend', text: 'Аренда флагмана «Nyx-класса» (Io)', amount: '−240 ◈', when: '8ч назад' },
-    { kind: 'gain', text: 'Rhea — итог сессии skirmish-5', amount: '+980 ⟡', when: '1д назад' },
-  ],
-  chat: [
-    { who: 'система', text: 'AvA за VEIL-9 назначена на через 6ч — заявляйтесь во вкладке «Войны».', when: '3ч', audit: true, pinned: true },
-    { who: 'Nyx', text: 'Собираем состав на VEIL-9. Нужны 2 генерала и адмирал.', when: '2ч' },
-    { who: 'Corvus', text: 'Беру адмирала. Арендую флагман из казны.', when: '2ч' },
-    { who: 'система', text: 'Corvus получил роль «офицер».', when: '2ч', audit: true },
-    { who: 'Rhea', text: 'Могу генералом, качаю десант.', when: '1ч' },
-  ],
-};
-
+// --- corporation cabinet (AVA-C1/C2) -----------------------------------------
+// The cross-session alliance ("corporation") management screen designed in
+// docs/corporation-ui.md — the REAL screen now, over the live CORP-0/AVA-2..9/
+// MED-1 HTTP API (packages/server/src/corpApi.ts/avaApi.ts/medalApi.ts). Scope
+// follows the doc's own §7 degradation order: Обзор/Участники/Войны/Казна are
+// real; Владения (sector ownership) and Чат (persistent corp chat) have no
+// server counterpart at all (no meta-layer Контур 2 yet) and stay honest "скоро"
+// stubs rather than simulated data.
 const CORP_TABS: { id: string; label: string }[] = [
   { id: 'overview', label: 'Обзор' },
   { id: 'members', label: 'Участники' },
+  { id: 'wars', label: 'Войны' },
   { id: 'treasury', label: 'Казна' },
   { id: 'holdings', label: 'Владения' },
-  { id: 'wars', label: 'Войны' },
-  { id: 'comms', label: 'Чат / Лог' },
+  { id: 'comms', label: 'Чат' },
 ];
 const CORP_ROLE_LABEL: Record<CorpRole, string> = {
-  leader: 'Глава',
+  head: 'Глава',
   officer: 'Офицер',
   member: 'Участник',
-};
-const CORP_PRESENCE: Record<CorpPresence, { c: string; t: string }> = {
-  online: { c: 'var(--grn)', t: 'онлайн' },
-  match: { c: 'var(--amber)', t: 'в матче' },
-  offline: { c: 'var(--dim)', t: 'оффлайн' },
+  recruit: 'Заявка',
 };
 const corpRoleLabel = (r: CorpRole): string => t(CORP_ROLE_LABEL[r]);
+const CORP_ROLE_DOT: Record<CorpRole, string> = {
+  head: 'var(--cyan)',
+  officer: 'var(--amber)',
+  member: 'var(--dim)',
+  recruit: 'var(--red)',
+};
+const CORP_AUDIT_RU: Record<string, string> = {
+  create: 'создала корпорацию',
+  accept: 'приняла заявку',
+  decline: 'отклонила заявку',
+  kick: 'исключила',
+  role: 'сменила роль',
+  transfer: 'передала главенство',
+  leave: 'покинула корпорацию',
+  disband: 'расформировала корпорацию',
+  influence: 'движение влияния',
+  ready: 'флаг готовности',
+  medal: 'выдала медаль',
+  rent: 'выдала предмет в аренду',
+  rent_return: 'вернула арендованный предмет',
+};
 
 const corpEl = $('corp');
 const corpHdEl = $('corphd');
@@ -11581,145 +11525,365 @@ const corpBodyEl = $('corpbody');
 let corpTab = 'overview';
 const nfmt = (n: number): string => n.toLocaleString('ru-RU');
 
-function corpOverviewHtml(c: CorpData): string {
-  const bonuses = c.bonuses.map((b) => `<li>${esc(b)}</li>`).join('');
-  const feed = c.ledger
-    .slice(0, 4)
-    .map((l) => `<div class="cline"><span>${esc(l.text)}</span><em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`)
+// --- live state (fetched via corpFetch — see refreshCorp) --------------------
+let corpMine: { corp: CorpRecord | null; membership: CorpMembership | null } = {
+  corp: null,
+  membership: null,
+};
+let corpDetail: { corp: CorpRecord; members: CorpMembership[] } | null = null;
+let corpAudit: CorpAuditEntry[] = [];
+let corpBrowseList: CorpSummary[] = [];
+let avaChallenges: AvaChallenge[] = [];
+let avaPool: Array<CorpSummary & { readySince: number }> = [];
+let avaFeed: AvaFeedEntry[] = [];
+let avaRoster: AvaRosterView | null = null;
+// Optimistic — no GET exists for "am I flagged ready" (server has no such read
+// model yet); reflects only what THIS session successfully posted.
+let corpReadyOptimistic: boolean | null = null;
+let playerReadyOptimistic: boolean | null = null;
+let corpFetchBusy = false;
+
+/** Shared authenticated call for the corp/AvA/medals APIs — same session
+ *  resolution as ARS-5's /arsenal/me (resolveServer/probeAuthMode/sessionKey),
+ *  but no local cache: this data is too volatile (roster windows, challenges)
+ *  to show stale. Returns the parsed JSON body, or null on ANY failure (no
+ *  server configured, not logged in, network error, non-2xx) — surfaces a
+ *  server-given error code via `note()` when there is one, never throws. */
+async function corpFetch(path: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
+  const srv = resolveServer();
+  if (!srv) return null;
+  await probeAuthMode(srv.base);
+  if (!authMode) return null;
+  const session = localStorage.getItem(sessionKey(srv.base));
+  if (!session) return null;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}${path}`, {
+      method: init?.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${session}`,
+        ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
+    const body = (await res.json().catch(() => null)) as unknown;
+    if (!res.ok) {
+      const code = (body as { error?: unknown } | null)?.error;
+      if (typeof code === 'string') note('✖ ' + errText(code));
+      return null;
+    }
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+/** Full refresh of the cabinet's live state, then re-render. Cheap enough to
+ *  call after every intent (create/apply/accept/kick/…) — the server is the
+ *  only source of truth, no local optimistic membership mutation. */
+async function refreshCorp(): Promise<void> {
+  if (corpFetchBusy) return;
+  corpFetchBusy = true;
+  try {
+    const mineRaw = (await corpFetch('/corps/me')) as { corp?: unknown; membership?: unknown } | null;
+    corpMine = mineRaw
+      ? { corp: parseCorpRecord(mineRaw.corp), membership: parseMembership(mineRaw.membership) }
+      : { corp: null, membership: null };
+
+    if (corpMine.membership) {
+      const corpId = corpMine.membership.corpId;
+      const detailRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}`)) as
+        | { corp?: unknown; members?: unknown }
+        | null;
+      const corp = detailRaw ? parseCorpRecord(detailRaw.corp) : null;
+      corpDetail = corp ? { corp, members: parseMemberships(detailRaw?.members) } : null;
+      if (canManage(corpMine.membership.role)) {
+        const auditRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}/audit`)) as
+          | { audit?: unknown }
+          | null;
+        corpAudit = parseAudit(auditRaw?.audit);
+      } else {
+        corpAudit = [];
+      }
+      corpBrowseList = [];
+    } else {
+      corpDetail = null;
+      corpAudit = [];
+      const listRaw = (await corpFetch('/corps')) as { corps?: unknown } | null;
+      corpBrowseList = parseCorpSummaries(listRaw?.corps);
+    }
+
+    const challengesRaw = (await corpFetch('/ava/challenges')) as { challenges?: unknown } | null;
+    avaChallenges = parseChallenges(challengesRaw?.challenges);
+    const poolRaw = (await corpFetch('/ava/pool')) as { pool?: unknown } | null;
+    avaPool = parseReadyPool(poolRaw?.pool);
+    const feedRaw = (await corpFetch('/ava/feed?limit=8')) as { feed?: unknown } | null;
+    avaFeed = parseFeed(feedRaw?.feed);
+
+    // A locked-or-accepted matchup my corp is party to: show its roster window.
+    const myCorpId = corpMine.membership?.corpId;
+    const activeMatchup = avaChallenges.find(
+      (c) =>
+        (c.status === 'accepted' || c.status === 'locked') &&
+        (c.challengerCorp === myCorpId || c.targetCorp === myCorpId),
+    );
+    avaRoster = activeMatchup
+      ? parseRosterView(await corpFetch(`/ava/matchup/${encodeURIComponent(activeMatchup.id)}`))
+      : null;
+  } finally {
+    corpFetchBusy = false;
+  }
+  renderCorp();
+}
+
+/** Fire an intent, then always refresh (the server is authoritative — no local
+ *  guess at the new state). */
+async function corpIntent(path: string, body?: unknown): Promise<void> {
+  const result = await corpFetch(path, { method: 'POST', body: body ?? {} });
+  if (result) await refreshCorp();
+}
+
+function corpNameOf(corpId: string): string {
+  if (corpId === corpMine.membership?.corpId && corpMine.corp) return corpMine.corp.name;
+  return corpBrowseList.find((c) => c.corpId === corpId)?.name ?? avaPool.find((c) => c.corpId === corpId)?.name ?? corpId;
+}
+
+function corpNoneHtml(): string {
+  const rows = corpBrowseList
+    .map(
+      (c) =>
+        `<div class="crow2"><span class="cnm">${esc(c.name)}</span>` +
+        `<span class="cinf">${nfmt(c.influence)} ⟡</span>` +
+        `<span class="cpres">${t('{n} участников', { n: String(c.members) })}</span>` +
+        `<span class="cman"><button class="cbtn2" data-corpact="apply" data-corparg="${esc(c.corpId)}">${t('Заявиться')}</button></span></div>`,
+    )
     .join('');
-  const nextWar = c.wars.find((w) => w.status !== 'active');
-  const nextWarHtml = nextWar
-    ? `<div class="cwarn">⚔ AvA за ${esc(nextWar.sector)} vs ${esc(nextWar.foe)} — ${esc(nextWar.when)}</div>`
-    : '';
   return (
-    `${nextWarHtml}` +
     `<div class="ccols">` +
-    `<section class="ccard"><h4>${t('Пассивные бонусы')}</h4><ul class="clist">${bonuses}</ul>` +
-    `<p class="chint">${t('Применяются снапшотом при старте матча (gdd §5.2), не «на лету».')}</p></section>` +
-    `<section class="ccard"><h4>${t('Лента')}</h4>${feed}</section>` +
+    `<section class="ccard"><h4>${t('Создать корпорацию')}</h4>` +
+    `<div class="cinput"><input id="corpnewname" placeholder="${t('Название (3–24 символа)')}" maxlength="24">` +
+    `<button class="cbtn2" data-corpact="create">${t('Создать')}</button></div></section>` +
+    `<section class="ccard"><h4>${t('Найти и подать заявку')}</h4>` +
+    `<div class="ctable">${rows || `<p class="chint">${t('Пока нет других корпораций.')}</p>`}</div></section>` +
     `</div>`
   );
 }
 
-function corpMembersHtml(c: CorpData): string {
-  const canManage = c.myRole === 'leader' || c.myRole === 'officer';
-  const rows = c.members
+function corpOverviewHtml(): string {
+  if (!corpMine.corp || !corpMine.membership) return corpNoneHtml();
+  const c = corpMine.corp;
+  const feed = corpAudit
+    .slice(0, 6)
+    .map(
+      (a) =>
+        `<div class="cline"><span>${esc(a.actor)} ${t(CORP_AUDIT_RU[a.action] ?? a.action)}${a.target ? ` → ${esc(a.target)}` : ''}</span>` +
+        `<em class="cwhen">${new Date(a.at).toLocaleString('ru-RU')}</em></div>`,
+    )
+    .join('');
+  const feedHtml = canManage(corpMine.membership.role)
+    ? feed || `<p class="chint">${t('Пока пусто.')}</p>`
+    : `<p class="chint">${t('Журнал виден главе и офицерам.')}</p>`;
+  const nextWar = avaChallenges.find((w) => w.status === 'accepted' || w.status === 'pending');
+  const nextWarHtml = nextWar
+    ? `<div class="cwarn">⚔ ${t('AvA')} vs ${esc(corpNameOf(nextWar.challengerCorp === corpMine.membership.corpId ? nextWar.targetCorp : nextWar.challengerCorp))} — ${t(nextWar.status === 'accepted' ? 'идёт набор ростера' : 'ждёт ответа')}</div>`
+    : '';
+  return (
+    `${nextWarHtml}` +
+    `<div class="ccols">` +
+    `<section class="ccard"><h4>${t('Корпорация')}</h4>` +
+    `<div class="cline"><span>${t('Влияние')}</span><em>${nfmt(c.influence)} ⟡</em></div>` +
+    `<div class="cline"><span>${t('Моя роль')}</span><em>${corpRoleLabel(corpMine.membership.role)}</em></div>` +
+    `<p class="chint">${t('Пассивные бонусы владений придут вместе с мета-слоем секторов — пока их нет.')}</p></section>` +
+    `<section class="ccard"><h4>${t('Журнал')}</h4>${feedHtml}</section>` +
+    `</div>`
+  );
+}
+
+function corpMembersHtml(): string {
+  if (!corpDetail || !corpMine.membership) return corpNoneHtml();
+  const myRole = corpMine.membership.role;
+  const myId = corpMine.membership.accountId;
+  const rows = sortMembers(corpDetail.members)
     .map((m) => {
-      const p = CORP_PRESENCE[m.presence];
-      const manage =
-        canManage && m.role === 'member'
-          ? `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.name)}">↑ ${t('роль')}</button>` +
-            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.name)}">✖</button>`
-          : '';
+      const isMe = m.accountId === myId;
+      let manage = '';
+      if (m.role === 'recruit' && canManage(myRole)) {
+        manage =
+          `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(m.accountId)}">✓ ${t('принять')}</button>` +
+          `<button class="cbtn2 danger" data-corpact="decline" data-corparg="${esc(m.accountId)}">✖ ${t('отклонить')}</button>`;
+      } else if (!isMe && m.role !== 'head') {
+        const bits: string[] = [];
+        if (myRole === 'head') {
+          const toRole = m.role === 'officer' ? 'member' : 'officer';
+          bits.push(
+            `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.accountId)}" data-corprole="${toRole}">↑ ${corpRoleLabel(toRole)}</button>`,
+          );
+          bits.push(`<button class="cbtn2" data-corpact="transfer" data-corparg="${esc(m.accountId)}">⬆ ${t('передать главенство')}</button>`);
+        }
+        if (canManage(myRole) && !(myRole === 'officer' && m.role === 'officer')) {
+          bits.push(`<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.accountId)}">✖</button>`);
+        }
+        manage = bits.join('');
+      }
       return (
-        `<div class="crow2${m.me ? ' me' : ''}">` +
-        `<span class="cdot" style="color:${p.c}"></span>` +
-        `<span class="cnm">${esc(m.name)}${m.me ? ` <i>(${t('вы')})</i>` : ''}</span>` +
+        `<div class="crow2${isMe ? ' me' : ''}">` +
+        `<span class="cdot" style="color:${CORP_ROLE_DOT[m.role]}"></span>` +
+        `<span class="cnm">${esc(m.login)}${isMe ? ` <i>(${t('вы')})</i>` : ''}</span>` +
         `<span class="crole">${corpRoleLabel(m.role)}</span>` +
-        `<span class="cinf">${nfmt(m.influence)} ⟡</span>` +
-        `<span class="cpres">${t(p.t)}</span>` +
         `<span class="cman">${manage}</span>` +
         `</div>`
       );
     })
     .join('');
-  const invite = canManage
-    ? `<button class="cbtn2 wide" data-corpact="invite">+ ${t('Пригласить участника')}</button>`
-    : '';
-  return `<div class="ctable">${rows}</div>${invite}`;
+  const mine = corpMine.membership;
+  const leave =
+    mine.role === 'head'
+      ? `<button class="cbtn2 danger wide" data-corpact="disband">${t('Расформировать корпорацию')}</button>`
+      : `<button class="cbtn2 wide" data-corpact="leave">${t('Покинуть корпорацию')}</button>`;
+  return `<div class="ctable">${rows}</div>${leave}`;
 }
 
-function corpTreasuryHtml(c: CorpData): string {
-  const rows = c.ledger
-    .map(
-      (l) =>
-        `<div class="cline"><span>${esc(l.text)} <b class="cwhen">· ${esc(l.when)}</b></span>` +
-        `<em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`,
-    )
-    .join('');
-  const canSpend = c.myRole === 'leader';
-  const spend = canSpend
-    ? `<button class="cbtn2 wide" data-corpact="declare">⚔ ${t('Объявить AvA (−12 000 ⟡)')}</button>`
-    : `<p class="chint">${t('Трата влияния (объявление AvA) — только глава.')}</p>`;
-  return (
-    `<div class="cbig"><div><span>${t('Влияние')}</span><b>${nfmt(c.influence)} ⟡</b></div>` +
-    `<div><span>${t('Снабжение')}</span><b>${nfmt(c.supply)} ◈</b></div></div>` +
-    `<h4>${t('История')}</h4><div class="cledger">${rows}</div>${spend}`
-  );
-}
+function corpWarsHtml(): string {
+  const myCorpId = corpMine.membership?.corpId;
+  const iAmHead = corpMine.membership?.role === 'head';
+  const iCanFlag = corpMine.membership && corpMine.membership.role !== 'recruit';
+  const corpReady = corpReadyOptimistic ?? avaPool.some((p) => p.corpId === myCorpId);
+  const flags =
+    `<div class="cbig">` +
+    `<div><span>${t('Готовность корпорации')}</span><b>${corpReady ? t('да ✓') : t('нет')}</b>` +
+    (iAmHead
+      ? `<button class="cbtn2" data-corpact="${corpReady ? 'ready-corp-clear' : 'ready-corp'}">${corpReady ? t('снять') : t('в пул')}</button>`
+      : `<span class="chint">${t('только глава')}</span>`) +
+    `</div>` +
+    `<div><span>${t('Моя готовность')}</span><b>${playerReadyOptimistic ? t('да ✓') : t('—')}</b>` +
+    (iCanFlag
+      ? `<button class="cbtn2" data-corpact="${playerReadyOptimistic ? 'ready-player-clear' : 'ready-player'}">${playerReadyOptimistic ? t('снять') : t('готов')}</button>`
+      : '') +
+    `</div></div>`;
 
-function corpHoldingsHtml(c: CorpData): string {
-  const rows = c.holdings
-    .map(
-      (h) =>
-        `<div class="crow2"><span class="cnm">▦ ${esc(h.sector)}</span>` +
-        `<span class="cbonus">${esc(h.bonus)}</span>` +
-        `<span class="cwhen">${esc(h.since)}</span>` +
-        `<span class="cthreat t-${h.threat}">${h.threat === 'low' ? t('спокойно') : h.threat === 'med' ? t('угроза') : t('под ударом')}</span></div>`,
-    )
-    .join('');
-  return `<div class="ctable">${rows}</div><p class="chint">${t('Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.')}</p>`;
-}
-
-function corpWarsHtml(c: CorpData): string {
-  const rows = c.wars
+  const wars = avaChallenges
     .map((w) => {
-      const st = w.status === 'active' ? t('идёт') : w.status === 'incoming' ? t('входящий вызов') : t('назначено');
-      const act =
-        w.status === 'incoming' && c.myRole === 'leader'
-          ? `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(w.foe)}">${t('Принять')}</button>`
-          : `<button class="cbtn2" data-corpact="signup" data-corparg="${esc(w.sector)}">${t('Заявиться')}</button>`;
+      const iAmChallenger = w.challengerCorp === myCorpId;
+      const foe = corpNameOf(iAmChallenger ? w.targetCorp : w.challengerCorp);
+      const st: Record<AvaChallengeStatus, string> = {
+        pending: iAmChallenger ? t('ждёт ответа') : t('входящий вызов'),
+        accepted: t('набор ростера'),
+        declined: t('отклонён'),
+        expired: t('истёк'),
+        locked: t('заперт — скоро бой'),
+        cancelled: t('отменён'),
+        ended: t('завершён'),
+      };
+      const canRespond = w.status === 'pending' && !iAmChallenger && iAmHead;
+      const act = canRespond
+        ? `<button class="cbtn2" data-corpact="ava-accept" data-corparg="${esc(w.id)}">${t('Принять')}</button>` +
+          `<button class="cbtn2 danger" data-corpact="ava-decline" data-corparg="${esc(w.id)}">${t('Отклонить')}</button>`
+        : w.status === 'accepted' &&
+            corpMine.membership &&
+            corpMine.membership.role !== 'recruit' &&
+            !avaRoster?.mine.some((r) => r.accountId === corpMine.membership!.accountId)
+          ? `<button class="cbtn2" data-corpact="ava-join" data-corparg="${esc(w.id)}">${t('Заявиться в состав')}</button>`
+          : '';
+      const rosterLine =
+        w.status === 'accepted' && avaRoster && avaRoster.matchupId === w.id
+          ? `<div class="cwmid">${t('состав')}: ${avaRoster.counts.challenger}/${avaRoster.counts.target}</div>`
+          : '';
       return (
-        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(w.sector)}</b><span class="cst st-${w.status}">${st}</span></div>` +
-        `<div class="cwmid">vs ${esc(w.foe)} · ${esc(w.when)} · состав ${w.signed}</div>` +
-        `<div class="cwact">${act}</div></div>`
+        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(foe)}</b><span class="cst st-${w.status}">${st[w.status]}</span></div>` +
+        `<div class="cwmid">${iAmChallenger ? t('вызов от нас') : t('вызов нам')} · ${nfmt(w.cost)} ⟡</div>${rosterLine}` +
+        (act ? `<div class="cwact">${act}</div>` : '') +
+        `</div>`
       );
     })
     .join('');
-  return `<div class="cwars">${rows}</div>`;
+
+  const pool = avaPool
+    .filter((p) => p.corpId !== myCorpId)
+    .map(
+      (p) =>
+        `<div class="crow2"><span class="cnm">${esc(p.name)}</span><span class="cinf">${nfmt(p.influence)} ⟡</span>` +
+        (iAmHead
+          ? `<span class="cman"><button class="cbtn2" data-corpact="ava-challenge" data-corparg="${esc(p.corpId)}">⚔ ${t('Вызвать')}</button></span>`
+          : '') +
+        `</div>`,
+    )
+    .join('');
+
+  const feed = avaFeed
+    .slice(0, 5)
+    .map(
+      (f) =>
+        `<div class="cline"><span>${esc(f.challengerName)} vs ${esc(f.targetName)}</span>` +
+        `<em class="cwhen">${f.kind === 'result' ? (f.winnerCorp ? t('победа') : t('ничья')) : t('назначен')}</em></div>`,
+    )
+    .join('');
+
+  return (
+    flags +
+    `<h4>${t('Мои вызовы')}</h4><div class="cwars">${wars || `<p class="chint">${t('Пока нет вызовов.')}</p>`}</div>` +
+    `<h4>${t('Готовые к войне')}</h4><div class="ctable">${pool || `<p class="chint">${t('Пул пуст.')}</p>`}</div>` +
+    `<h4>${t('Публичная лента AvA')}</h4><div class="cledger">${feed || `<p class="chint">${t('Пока пусто.')}</p>`}</div>`
+  );
 }
 
-function corpCommsHtml(c: CorpData): string {
-  const msgs = c.chat
-    .map((m) => {
-      const cls = m.audit ? 'cmsg audit' : 'cmsg';
-      const pin = m.pinned ? '<span class="cpin">📌</span>' : '';
-      return `<div class="${cls}">${pin}<b>${esc(m.who)}</b> <span class="cwhen">${esc(m.when)}</span><p>${esc(m.text)}</p></div>`;
-    })
+function corpTreasuryHtml(): string {
+  if (!corpMine.corp || !corpMine.membership) return corpNoneHtml();
+  const rows = corpAudit
+    .filter((a) => a.action === 'influence' || a.action === 'rent' || a.action === 'rent_return')
+    .map(
+      (a) =>
+        `<div class="cline"><span>${esc(a.detail ?? t(CORP_AUDIT_RU[a.action] ?? a.action))} <b class="cwhen">· ${new Date(a.at).toLocaleString('ru-RU')}</b></span></div>`,
+    )
     .join('');
-  return `<div class="cchat">${msgs}</div><div class="cinput"><input id="corpmsg" placeholder="${t('Сообщение в корп-чат…')}" maxlength="240"><button class="cbtn2" data-corpact="send">${t('Отправить')}</button></div>`;
+  const ledgerHtml = canManage(corpMine.membership.role)
+    ? rows || `<p class="chint">${t('Пока пусто.')}</p>`
+    : `<p class="chint">${t('История видна главе и офицерам.')}</p>`;
+  return (
+    `<div class="cbig"><div><span>${t('Влияние')}</span><b>${nfmt(corpMine.corp.influence)} ⟡</b></div></div>` +
+    `<h4>${t('История')}</h4><div class="cledger">${ledgerHtml}</div>` +
+    `<p class="chint">${t('Тратится на вызов AvA (100 ⟡ по умолчанию) — кнопка «Вызвать» во вкладке «Войны».')}</p>`
+  );
+}
+
+function corpHoldingsHtml(): string {
+  return `<div class="hub-empty"><span class="he-ic">▦</span>${t('Владения — скоро')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('мета-карта секторов появится вместе со вторым контуром метагейма')}</span></div>`;
+}
+
+function corpCommsHtml(): string {
+  return `<div class="hub-empty"><span class="he-ic">▭</span>${t('Чат — скоро')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('постоянный корп-чат ждёт мета-слой; журнал действий — во вкладке «Обзор»')}</span></div>`;
 }
 
 function renderCorp(): void {
-  const c = MOCK_CORP;
-  corpHdEl.innerHTML =
-    `<div class="chrow"><span class="cemblem">⬢</span>` +
-    `<div class="cident"><b>${esc(c.name)}</b> <span class="ctag">[${esc(c.tag)}]</span><div class="cmotto">${esc(c.motto)}</div></div>` +
-    `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>` +
-    `<div class="cmetrics">` +
-    `<span>${t('влияние')} <b>${nfmt(c.influence)} ⟡</b></span>` +
-    `<span>${t('снабжение')} <b>${nfmt(c.supply)} ◈</b></span>` +
-    `<span>${t('секторов')} <b>${c.holdings.length} ▦</b></span>` +
-    `<span>${t('участников')} <b>${c.members.length}/${c.cap} ♟</b></span>` +
-    `<span>${t('ранг')} <b>#${c.rank}</b></span>` +
-    `<span>${t('роль')} <b>${corpRoleLabel(c.myRole)}</b></span>` +
-    `</div>`;
+  const c = corpMine.corp;
+  const mem = corpMine.membership;
+  corpHdEl.innerHTML = c
+    ? `<div class="chrow"><span class="cemblem">⬢</span>` +
+      `<div class="cident"><b>${esc(c.name)}</b></div>` +
+      `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>` +
+      `<div class="cmetrics">` +
+      `<span>${t('влияние')} <b>${nfmt(c.influence)} ⟡</b></span>` +
+      `<span>${t('участников')} <b>${corpDetail?.members.filter((m) => m.role !== 'recruit').length ?? '—'}</b></span>` +
+      `<span>${t('роль')} <b>${mem ? corpRoleLabel(mem.role) : '—'}</b></span>` +
+      `</div>`
+    : `<div class="chrow"><span class="cemblem">⬢</span>` +
+      `<div class="cident"><b>${t('Без корпорации')}</b></div>` +
+      `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>`;
   corpTabsEl.innerHTML = CORP_TABS.map(
     (ct) => `<button class="ctab${ct.id === corpTab ? ' on' : ''}" data-corptab="${ct.id}">${t(ct.label)}</button>`,
   ).join('');
   let body = '';
-  if (corpTab === 'overview') body = corpOverviewHtml(c);
-  else if (corpTab === 'members') body = corpMembersHtml(c);
-  else if (corpTab === 'treasury') body = corpTreasuryHtml(c);
-  else if (corpTab === 'holdings') body = corpHoldingsHtml(c);
-  else if (corpTab === 'wars') body = corpWarsHtml(c);
-  else if (corpTab === 'comms') body = corpCommsHtml(c);
+  if (corpTab === 'overview') body = corpOverviewHtml();
+  else if (corpTab === 'members') body = corpMembersHtml();
+  else if (corpTab === 'wars') body = corpWarsHtml();
+  else if (corpTab === 'treasury') body = corpTreasuryHtml();
+  else if (corpTab === 'holdings') body = corpHoldingsHtml();
+  else if (corpTab === 'comms') body = corpCommsHtml();
   corpBodyEl.innerHTML = body;
 }
 
 function openCorp(): void {
-  renderCorp();
+  renderCorp(); // paint instantly from whatever's cached in memory…
   corpEl.style.display = 'flex';
+  void refreshCorp(); // …then refresh from the server
 }
 function closeCorp(): void {
   corpEl.style.display = 'none';
@@ -11732,18 +11896,92 @@ corpTabsEl.addEventListener('click', (e) => {
   renderCorp();
 });
 corpEl.addEventListener('click', (e) => {
-  const t = e.target as HTMLElement | null;
-  if (!t) return;
-  if (t.id === 'corpclose' || t.id === 'corp') {
+  const tg = e.target as HTMLElement | null;
+  if (!tg) return;
+  if (tg.id === 'corpclose' || tg.id === 'corp') {
     closeCorp();
     return;
   }
-  const act = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corpact;
-  if (act) {
-    // Mock: no server yet — surface the intent as an in-game dispatch note so the
-    // interaction is visible. The real screen would send an authoritative intent.
-    const arg = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corparg ?? '';
-    note(`[corp mock] intent: ${act}${arg ? ' → ' + arg : ''}`);
+  const btn = tg.closest('[data-corpact]') as HTMLElement | null;
+  const act = btn?.dataset.corpact;
+  if (!act) return;
+  const arg = btn?.dataset.corparg ?? '';
+  const corpId = corpMine.membership?.corpId ?? '';
+  switch (act) {
+    case 'create': {
+      const input = document.getElementById('corpnewname') as HTMLInputElement | null;
+      const name = input?.value.trim() ?? '';
+      if (name) void corpIntent('/corps', { name });
+      break;
+    }
+    case 'apply':
+      void corpIntent(`/corps/${encodeURIComponent(arg)}/apply`);
+      break;
+    case 'accept':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/accept`, { target: arg });
+      break;
+    case 'decline':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/decline`, { target: arg });
+      break;
+    case 'kick':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/kick`, { target: arg });
+      break;
+    case 'role':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/role`, { target: arg, role: btn?.dataset.corprole });
+      break;
+    case 'transfer':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/transfer`, { target: arg });
+      break;
+    case 'leave':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/leave`);
+      break;
+    case 'disband':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/disband`);
+      break;
+    case 'ready-corp':
+      void corpFetch('/ava/ready/corp', { method: 'POST' }).then((r) => {
+        if (r) {
+          corpReadyOptimistic = true;
+          void refreshCorp();
+        }
+      });
+      break;
+    case 'ready-corp-clear':
+      void corpFetch('/ava/ready/corp/clear', { method: 'POST' }).then((r) => {
+        if (r) {
+          corpReadyOptimistic = false;
+          void refreshCorp();
+        }
+      });
+      break;
+    case 'ready-player':
+      void corpFetch('/ava/ready/player', { method: 'POST' }).then((r) => {
+        if (r) {
+          playerReadyOptimistic = true;
+          renderCorp();
+        }
+      });
+      break;
+    case 'ready-player-clear':
+      void corpFetch('/ava/ready/player/clear', { method: 'POST' }).then((r) => {
+        if (r) {
+          playerReadyOptimistic = false;
+          renderCorp();
+        }
+      });
+      break;
+    case 'ava-challenge':
+      void corpIntent('/ava/challenge', { target: arg });
+      break;
+    case 'ava-accept':
+      void corpIntent(`/ava/challenge/${encodeURIComponent(arg)}/accept`);
+      break;
+    case 'ava-decline':
+      void corpIntent(`/ava/challenge/${encodeURIComponent(arg)}/decline`);
+      break;
+    case 'ava-join':
+      void corpIntent(`/ava/matchup/${encodeURIComponent(arg)}/join`);
+      break;
   }
 });
 const corpEntry = $('ccorp');
