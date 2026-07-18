@@ -58,7 +58,7 @@
 просядешь по энергии — встанут заводы. Биржа с живым стаканом заявок.
 
 🔬 **Совет учёных** — выбери исследователей перед боем, и они откроют твои ветки
-технологий. Двенадцать открытий, меняющих ход войны.
+технологий. Девятнадцать открытий, меняющих ход войны.
 
 🦸 **Герои** — четыре легендарных командира со способностями и деревьями навыков.
 Герой ведёт флот, даёт ауры — и погибает, если ты ошибся.
@@ -142,7 +142,7 @@ capture: orbit first, then the landing.
 starve your grid and the factories stall. A live order-book market.
 
 🔬 **The Science Council** — pick your researchers before battle; they unlock your
-tech branches. Twelve discoveries that turn the tide.
+tech branches. Nineteen discoveries that turn the tide.
 
 🦸 **Heroes** — four legendary commanders with abilities and skill trees. A hero
 leads your fleet, projects auras — and dies for your mistakes.

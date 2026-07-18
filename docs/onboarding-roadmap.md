@@ -103,7 +103,7 @@
 > **Сделано (proto).** Чистая per-nick модель `prototype/src/onboarding.ts`
 > (`OnboardState {started, stepReached, completed, skipped}`, fail-secure
 > `parseOnboardState`, идемпотентные `markStarted/reachStep/markCompleted/markSkipped`,
-> `isOnboarded`, `welcomeMode` new/returning) + 13 юнит-тестов. Хранится в `localStorage`
+> `isOnboarded`, `welcomeMode` new/returning) + 17 юнит-тестов. Хранится в `localStorage`
 > `vd.onboard.<ник>` (отдельно от `void.nick` — вернувшееся устройство всё ещё ново для
 > гайда). main.ts: новичку — одноразовое предложение в хабе (`#onboard-nudge`), «Ещё →
 > Обучение» — реплей; «Начать» ставит `pendingTour` и запускает ONB-1-тур над живым HUD
@@ -219,7 +219,7 @@ skipped; шаг «захват» не проходит, пока мир реал
 
 ## ONB-3 · Just-in-time интро механик (прогрессивное раскрытие) `[proto]` ✅
 
-> **Сделано.** Чистый `prototype/src/intros.ts`: `INTROS` — 5 карточек первого контакта
+> **Сделано.** Чистый `prototype/src/intros.ts`: `INTROS` — 6 карточек первого контакта
 > `{id, title, body, trigger}` (технологии, рынок, Хранитель, верфь, дипломатия) из готовой
 > обучающей копии; fail-secure `parseSeenIntros`, идемпотентные `markIntroSeen`/`hasSeenIntro`,
 > `resolveIntro(seen, id, {veteran}) → {card, seen}` — показывает ровно раз, ветерану suppress

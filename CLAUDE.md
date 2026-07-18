@@ -28,7 +28,7 @@ Monorepo (pnpm workspaces):
   `@void/action-layer` gate — auth/gate switched by env (`AUTH_JWT_SECRET`, `GATE=1`,
   `ALLOWED_ORIGINS`). Hosted by `packages/server/src/main.ts`; the prototype host
   (`prototype/netserver.ts`) carries the same slice for playtests. Not yet: OIDC identity,
-  an envelope-sending client (`action.v1`), multi-process scale (pg-boss).
+  multi-process scale (pg-boss). (`MultiplayerClient` already sends `action.v1` envelopes.)
 - `packages/client` — client (Stage 4). Direction is a **PWA-first web client** (TWA Android +
   Capacitor iOS), not React Native — see `docs/cross-platform-roadmap.md` (decision record). Holds
   the `MultiplayerClient` transport adapter plus framework-agnostic view-models + theme tokens

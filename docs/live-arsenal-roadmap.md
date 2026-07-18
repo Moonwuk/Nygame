@@ -27,7 +27,7 @@
 | **Гейт постройки (легальность)** ✅(код) | `validateLoadout(unit, def, modules, data)` — слоты/`allowed`/дубли; статы модуля из `data.modules[id]` (общие данные → детерминизм). Владения НЕ проверяет | `shared-core/util/loadout.ts` |
 | **Постройка — залогированное действие** ✅(код) | `unit.build{modules}` идёт через журнал; ядро доверяет допущенному действию (инвариант #5), лоадаут замораживается на построенный стек (**no-refit**) | `shared-core`, `loadout.ts:12-14` |
 | **Гейт владения (план)** ◔(ARS-3) | ARS-3 добавляет проверку «модуль в снапшоте арсенала» поверх `validateLoadout` → `E_NOT_OWNED`; снапшот снят **на старте** матча, изменения после не влияют | `arsenal-roadmap.md` ARS-3 |
-| **Стор владения (план)** ◔(ARS-2) | `ArsenalStore` (Memory+Postgres, атомарный grant/consume, `listOf(accountId)`) — durable источник «чем владеет аккаунт СЕЙЧАС» | `arsenal-roadmap.md` ARS-2 |
+| **Стор владения** ✅(ARS-2) | `ArsenalStore` (Memory+Postgres, идемпотентный grant, owner-guarded consume/transfer, `listOf(accountId)`) — durable источник «чем владеет аккаунт СЕЙЧАС» | `arsenal-roadmap.md` ARS-2 |
 
 **Вывод:** цепочка «донат → Суверены → Варранты → приобрёл/заточил модуль → лёг в
 `ArsenalStore`» — уже в дорожной карте (EC-* + ARS-2). Не хватает **одного звена**:
