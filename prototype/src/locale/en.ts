@@ -77,6 +77,12 @@ export const en: Record<string, string> = {
     'Here you assemble ships, squadrons, divisions and heroes from modules. The loadout is locked at build time — choose slots up front, a finished unit cannot be re-fitted. The «Heroes» tab is your commander HQ.',
   'Объявляй войну и мир, заключай пакты и союзы. Коалиция ограничена порогом силы — всех против одного не собрать. Следи за стойками сторон: союзник сегодня может стать соперником завтра.':
     'Declare war and peace, sign pacts and alliances. A coalition is capped by combined strength — you cannot gang everyone up on one player. Watch the stances: an ally today can be a rival tomorrow.',
+  // --- ONB-8 social/meta-layer intros (corp cabinet + AvA wars tab) ------------
+  'Корпорация — это твой отряд в общей сессии: общий склад, роли участников и совместные войны альянсов (AvA). Вступи в существующую или создай свою — вкладка «Войны» открывает доступ к вызовам между корпорациями.':
+    'A corporation is your squad within the session: a shared warehouse, member roles, and joint alliance-vs-alliance wars (AvA). Join one or found your own — the «Wars» tab opens challenges between corporations.',
+  'Войны альянсов (AvA)': 'Alliance wars (AvA)',
+  'Здесь корпорации бросают друг другу вызов на организованную войну. Отметь готовность корпорации и свою личную — когда обе стороны готовы, можно принять вызов. Дальше — набор состава и сама война по расписанию.':
+    'Here corporations challenge each other to an organised war. Mark your corporation ready and yourself ready — once both sides are ready, a challenge can be accepted. Next comes roster sign-up and the scheduled war itself.',
   // --- ONB-4 codex/help hub (chrome + glossary) --------------------------------
   Справочник: 'Codex',
   Справка: 'Help',

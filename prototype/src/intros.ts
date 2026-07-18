@@ -54,6 +54,20 @@ export const INTROS: IntroCard[] = [
     body: 'Объявляй войну и мир, заключай пакты и союзы. Коалиция ограничена порогом силы — всех против одного не собрать. Следи за стойками сторон: союзник сегодня может стать соперником завтра.',
   },
   {
+    // ONB-8: fired on first open of the corporation cabinet.
+    id: 'corp',
+    trigger: 'panelOpen',
+    title: 'Кабинет корпорации',
+    body: 'Корпорация — это твой отряд в общей сессии: общий склад, роли участников и совместные войны альянсов (AvA). Вступи в существующую или создай свою — вкладка «Войны» открывает доступ к вызовам между корпорациями.',
+  },
+  {
+    // ONB-8: fired on first open of the "Войны" (AvA) tab inside the corp cabinet.
+    id: 'ava',
+    trigger: 'panelOpen',
+    title: 'Войны альянсов (AvA)',
+    body: 'Здесь корпорации бросают друг другу вызов на организованную войну. Отметь готовность корпорации и свою личную — когда обе стороны готовы, можно принять вызов. Дальше — набор состава и сама война по расписанию.',
+  },
+  {
     // ONB-5: fired on the FIRST order that takes real time (a fleet leaving on a
     // course) — the moment the async model becomes tangible.
     id: 'asyncDelay',

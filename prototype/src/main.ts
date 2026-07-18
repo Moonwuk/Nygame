@@ -11884,6 +11884,7 @@ function openCorp(): void {
   renderCorp(); // paint instantly from whatever's cached in memory…
   corpEl.style.display = 'flex';
   void refreshCorp(); // …then refresh from the server
+  maybeIntro('corp');
 }
 function closeCorp(): void {
   corpEl.style.display = 'none';
@@ -11894,6 +11895,7 @@ corpTabsEl.addEventListener('click', (e) => {
   if (!b) return;
   corpTab = b.dataset.corptab ?? 'overview';
   renderCorp();
+  if (corpTab === 'wars') maybeIntro('ava');
 });
 corpEl.addEventListener('click', (e) => {
   const tg = e.target as HTMLElement | null;
