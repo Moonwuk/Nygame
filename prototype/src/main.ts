@@ -4288,9 +4288,9 @@ function render(now: number) {
       cx.strokeStyle = 'rgba(4,10,12,.8)';
       cx.lineWidth = 1;
       cx.beginPath();
-      cx.moveTo(0, -5);
-      cx.lineTo(4, 3.5);
-      cx.lineTo(-4, 3.5);
+      cx.moveTo(0, -7);
+      cx.lineTo(5.5, 5);
+      cx.lineTo(-5.5, 5);
       cx.closePath();
       cx.fill();
       cx.stroke();
@@ -4298,7 +4298,7 @@ function render(now: number) {
     }
     if (detail === 0) {
       // selection still reads on the schematic view; the rest of the kit is gone
-      if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 10, now);
+      if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 12, now);
       continue;
     }
     cx.globalAlpha = detail; // full detail fades back in toward 1.45
@@ -4307,8 +4307,8 @@ function render(now: number) {
     // pyramid — "каждые 3 корабля = один треугольник". Cargo glues to the TAIL
     // (behind the base): carried divisions and hold squadrons as diamonds, then
     // ground troops as squares (loaded = filled, loading ~1h = a pip filling up).
-    const BW = 6,
-      TH = 5; // triangle base width / height; rows stack TH apart
+    const BW = 8,
+      TH = 6.5; // triangle base width / height; rows stack TH apart (плейтест: крупнее)
     const nTri = Math.max(1, Math.ceil(ships / 3));
     // pack the triangles into a bottom-heavy pyramid: full rows 1..R, then shave the
     // apex rows of any empty slots so the BASE is always widest (1→[1], 2→[2],
@@ -4378,10 +4378,10 @@ function render(now: number) {
       x: A.x + lx * Math.cos(th) - ly * Math.sin(th),
       y: A.y + lx * Math.sin(th) + ly * Math.cos(th),
     });
-    const CELL = 6.5,
-      SQ = 4,
-      DR = 3,
-      DS = 2.5, // squadron pip: a diamond with the footprint of the square
+    const CELL = 8,
+      SQ = 5,
+      DR = 3.75,
+      DS = 3.1, // squadron pip: a diamond with the footprint of the square
       MAX = 8; // per-row cap; rare overflow gets a "+N" tail
     const diamond = (cxr: number, cyr: number, r: number, fill: boolean): void => {
       cx.beginPath();
@@ -4454,11 +4454,11 @@ function render(now: number) {
         cx.fillText(`+${over}`, o.x, o.y + SQ / 2);
       }
     };
-    drawCargoRow(diaRow, 4); // ромбы — ближний к базе ряд
-    drawCargoRow(sqRow, diaRow.length ? 4 + CELL : 4); // квадраты — своим рядом ниже
+    drawCargoRow(diaRow, 5); // ромбы — ближний к базе ряд
+    drawCargoRow(sqRow, diaRow.length ? 5 + CELL : 5); // квадраты — своим рядом ниже
 
     if (selFleet === f.id || selFleets.has(f.id)) {
-      targetBrackets(A.x, A.y, 12, now);
+      targetBrackets(A.x, A.y, 15, now);
       // Artillery: show the standoff firing radius (and a focus line to a chosen
       // target) so the player can read the reach — "радиус не очень большой".
       const aRange = artilleryRangeOf(f);
@@ -4486,9 +4486,9 @@ function render(now: number) {
 
     // ship count (hulls in the pyramid), small, past the cargo tail — placed along
     // the heading like the pips, glyph upright; drops lower when both rows are out.
-    const cnt = tailAt(0, diaRow.length && sqRow.length ? 18 + CELL : 18);
+    const cnt = tailAt(0, diaRow.length && sqRow.length ? 21 + CELL : 21);
     cx.fillStyle = rgba(col, 0.95);
-    cx.font = '700 9px ui-monospace,Menlo,monospace';
+    cx.font = '700 10px ui-monospace,Menlo,monospace';
     cx.fillText(String(ships), cnt.x, cnt.y);
 
     cx.globalAlpha = 1; // end of the per-fleet LOD cross-fade
@@ -10900,7 +10900,7 @@ function drawPings(now: number): void {
     const c = world(pl.position);
     if (!visible(c, 40)) continue;
     const x = c.x;
-    const y = c.y - 18; // pin head floats above the node
+    const y = c.y - 22; // pin head floats above the node (плейтест: пинги крупнее)
     const col = ownerColor(m.from);
     const phase = x * 0.05; // de-syncs neighbouring pins so they don't blink in unison
     const pulse = 0.7 + 0.3 * Math.sin(now / 360 + phase);
@@ -10913,7 +10913,7 @@ function drawPings(now: number): void {
       // negative (a pin near the screen's left edge has x < 0 → JS % keeps sign,
       // and a negative k would feed cx.arc a negative radius = a thrown frame)
       const k = (((now / 2200 + off + phase) % 1) + 1) % 1;
-      const rr = 5 + k * 30;
+      const rr = 6 + k * 40;
       if (k < 0.18) {
         cx.fillStyle = rgba(col, (1 - k / 0.18) * 0.28); // the drop-in flash
         cx.beginPath();
@@ -10922,7 +10922,7 @@ function drawPings(now: number): void {
       }
       cx.shadowBlur = 6 * (1 - k);
       cx.strokeStyle = rgba(col, (1 - k) * 0.8);
-      cx.lineWidth = 2.6 - k * 1.8;
+      cx.lineWidth = 3.2 - k * 2.2;
       cx.beginPath();
       cx.arc(c.x, c.y, rr, 0, TAU);
       cx.stroke();
@@ -10934,20 +10934,20 @@ function drawPings(now: number): void {
     cx.strokeStyle = 'rgba(4,10,12,.85)';
     cx.lineWidth = 1.4;
     cx.beginPath(); // teardrop pin: head + tip toward the node
-    cx.moveTo(x, y + 11);
-    cx.lineTo(x - 5, y);
-    cx.arc(x, y - 1, 5.5, Math.PI, 0);
-    cx.lineTo(x, y + 11);
+    cx.moveTo(x, y + 14);
+    cx.lineTo(x - 6.5, y);
+    cx.arc(x, y - 1, 7, Math.PI, 0);
+    cx.lineTo(x, y + 14);
     cx.fill();
     cx.stroke();
     cx.shadowBlur = 0;
     cx.fillStyle = 'rgba(6,18,22,.95)';
     cx.beginPath();
-    cx.arc(x, y - 1, 2.1, 0, TAU);
+    cx.arc(x, y - 1, 2.7, 0, TAU);
     cx.fill();
     cx.fillStyle = rgba(col, pulse); // a blinking ember in the pin's eye
     cx.beginPath();
-    cx.arc(x, y - 1, 1.1, 0, TAU);
+    cx.arc(x, y - 1, 1.4, 0, TAU);
     cx.fill();
     cx.restore();
     pingHits.push({ loc: m.ping!, x, y: y - 1 });

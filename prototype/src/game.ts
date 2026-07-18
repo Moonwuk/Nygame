@@ -404,7 +404,7 @@ export const data: GameData = parseGameData({
       faction: 'blue',
       stats: { attack: 5, defense: 4, speed: 64, hp: 12, cargoCapacity: 1 },
       signature: 1, // quiet recon hull
-      radarRange: 210, // projects fleet radar — read by both the core fog and the prototype view
+      radarRange: 105, // projects fleet radar — read by both the core fog and the prototype view (плейтест 2026-07-18: −50%)
       cost: { metal: 20 },
       buildTimeHours: 1,
       upkeep: { credits: 1 },
