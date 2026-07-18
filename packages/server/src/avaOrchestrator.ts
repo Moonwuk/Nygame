@@ -7,6 +7,7 @@ import {
   type GameData,
   type GameState,
   type MatchMap,
+  type PlayerArsenal,
   type SlotAssignment,
 } from '@void/shared-core';
 import { pickAvaMap } from './avaMapPool';
@@ -66,6 +67,12 @@ export interface AvaOrchestratorDeps {
    *  award influence, exactly-once by the matchup's locked→ended transition).
    *  Absent ⇒ `onMatchEnded` observes nothing. */
   settle?: (matchupId: string, winnerSide: AvaSide | null) => Promise<unknown>;
+  /** ARS-3: the account's ownership snapshot at launch (GDD §2 «консервация деки» —
+   *  the roster lock/launch IS the snapshot instant). Attached to each HUMAN seat's
+   *  `SlotAssignment.arsenal`, so `unit.build`/`hero.fit` enforce `E_NOT_OWNED`
+   *  in-match; bot seats stay unrestricted (the server AI builds the slot's start
+   *  roster). Absent ⇒ no snapshots (seats build unrestricted, as before). */
+  arsenalOf?: (accountId: string) => Promise<PlayerArsenal>;
 }
 
 /** MVP peace period (`corporation-wars.md` §10: 1 timeScale-день). */
@@ -131,6 +138,7 @@ export class AvaOrchestrator {
   private readonly peaceMs: number;
   private readonly escalateWar?: (matchId: string) => Promise<boolean>;
   private readonly settle?: (matchupId: string, winnerSide: AvaSide | null) => Promise<unknown>;
+  private readonly arsenalOf?: (accountId: string) => Promise<PlayerArsenal>;
 
   constructor(deps: AvaOrchestratorDeps) {
     this.challenges = deps.challengeStore;
@@ -143,6 +151,7 @@ export class AvaOrchestrator {
     this.peaceMs = deps.peaceMs ?? DEFAULT_PEACE_MS;
     if (deps.escalateWar) this.escalateWar = deps.escalateWar;
     if (deps.settle) this.settle = deps.settle;
+    if (deps.arsenalOf) this.arsenalOf = deps.arsenalOf;
   }
 
   /** Raise the live session for a LOCKED matchup (idempotent — an already-raised matchup
@@ -174,6 +183,16 @@ export class AvaOrchestrator {
     if (!map) return { ok: false, code: 'E_NO_MAP' };
 
     const { slots, seats } = seatAvaRoster(map, bySide);
+    // ARS-3: the launch IS the snapshot instant (GDD §2 «консервация деки») — each
+    // HUMAN seat's assignment carries what its account owns RIGHT NOW; later meta
+    // acquisitions do not reach this session (LARS-1 will add the live build path).
+    // Bot seats stay unrestricted (the server AI plays the slot's start roster).
+    if (this.arsenalOf) {
+      for (const [accountId, slotId] of Object.entries(seats)) {
+        const assignment = slots[slotId];
+        if (assignment) assignment.arsenal = await this.arsenalOf(accountId);
+      }
+    }
     // S5 peaceful start — cross-team stances seed at `peace` (combat-lock is free from the
     // seed; the orchestrator escalates to war on a timer in AVA-8).
     const state = buildStateFromMap(map, this.data, { slots, crossTeamStart: 'peace' });

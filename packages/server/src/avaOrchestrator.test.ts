@@ -197,6 +197,46 @@ describe('AvaOrchestrator.resolveAvaSeat (AVA-7) — fixed AvA seating', () => {
   });
 });
 
+describe('AvaOrchestrator × arsenal snapshot (ARS-3)', () => {
+  it('attaches each rostered account’s arsenal at launch; bots stay unrestricted', async () => {
+    const challenges = new MemoryAvaChallengeStore();
+    const roster = new MemoryAvaRosterStore();
+    const sessions = new MemoryAvaSessionStore();
+    const built: AvaSessionSpec[] = [];
+    const arsenals: Record<string, { hulls: string[]; modules: string[]; fittings: string[] }> = {
+      'acc-a1': { hulls: ['cruiser'], modules: ['cargo_bay'], fittings: [] },
+      'acc-a2': { hulls: ['scout_drone'], modules: [], fittings: [] },
+      'acc-b': { hulls: ['dropship'], modules: [], fittings: [] },
+    };
+    const orch = new AvaOrchestrator({
+      challengeStore: challenges,
+      rosterStore: roster,
+      sessionStore: sessions,
+      data,
+      maps,
+      createRoom: (spec) => {
+        built.push(spec);
+        return Promise.resolve();
+      },
+      now: () => 42,
+      arsenalOf: (accountId) => Promise.resolve(arsenals[accountId]!),
+    });
+    const h = { orch, challenges, roster, sessions, built } as unknown as Harness;
+    await lockedMatchup(h, 'mu-ars', ['acc-a1', 'acc-a2'], ['acc-b']); // 2v1 → the 2v2 map
+    await orch.orchestrate('mu-ars');
+
+    const state = built[0]!.state;
+    const seats = built[0]!.seats;
+    // each HUMAN seat carries ITS account's snapshot in the built state…
+    expect(state.players[seats['acc-a1']!]?.arsenal).toEqual(arsenals['acc-a1']);
+    expect(state.players[seats['acc-a2']!]?.arsenal).toEqual(arsenals['acc-a2']);
+    expect(state.players[seats['acc-b']!]?.arsenal).toEqual(arsenals['acc-b']);
+    // …while the AI-filled empty slot builds unrestricted (no snapshot)
+    const bot = Object.keys(state.players).find((id) => id.startsWith('bot:'))!;
+    expect(state.players[bot]?.arsenal).toBeUndefined();
+  });
+});
+
 describe('AvaOrchestrator.sweep (AVA-7) — no client needed', () => {
   it('raises a session for every locked matchup that has none, idempotently', async () => {
     const h = harness();

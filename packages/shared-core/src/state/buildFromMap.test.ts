@@ -120,6 +120,26 @@ describe('slot-based maps — team-aware start slots (corporation-wars.md §4)',
     );
   });
 
+  it('seats the arsenal snapshot onto the slot player, deduped + sorted (ARS-3)', () => {
+    const arsenal = {
+      hulls: ['cruiser', 'cruiser', 'scout_drone'],
+      modules: ['radar_module', 'cargo_bay'],
+      fittings: [],
+    };
+    const state = buildStateFromMap(avaMap(), data, {
+      slots: { slot_a: { playerId: 'p1', arsenal }, slot_b: { playerId: 'p2' } },
+    });
+    expect(state.players.p1!.arsenal).toEqual({
+      hulls: ['cruiser', 'scout_drone'], // deduped + sorted — canonical in state
+      modules: ['cargo_bay', 'radar_module'],
+      fittings: [],
+    });
+    expect(state.players.p2!.arsenal).toBeUndefined(); // no snapshot → unrestricted
+    // the seated copy is detached: mutating the caller's object never reaches the match
+    arsenal.hulls.push('siege_lance');
+    expect(state.players.p1!.arsenal!.hulls).toEqual(['cruiser', 'scout_drone']);
+  });
+
   it('seats a chosen scientist onto the slot player, snapshotting id + level', () => {
     const state = buildStateFromMap(avaMap(), data, {
       slots: {

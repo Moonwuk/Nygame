@@ -120,6 +120,25 @@ export interface Player {
    *  `MAX_STEWARD_HOLD_POINTS`). Owner-private — a rival reading your anchors is
    *  targeting intel. Absent = no points. */
   stewardHoldPoints?: PlanetId[];
+  /** Arsenal snapshot (ARS-3): the catalog ids this seat OWNS and may build with —
+   *  taken from the account's `ArsenalStore` when the session is assembled (AvA:
+   *  at roster lock, GDD §2 «консервация»). While present, `unit.build` requires
+   *  the hull and every module to be listed (`E_NOT_OWNED`) and `hero.fit` the
+   *  fitting; ABSENT = no restriction (regular/dev matches — graceful degradation).
+   *  Owner-private like the treasury (stripped from other players' views). LARS-1
+   *  will complement this with the live server-side ownership read (LARS-0.2). */
+  arsenal?: PlayerArsenal;
+}
+
+/** The build-permission snapshot of a seat (see `Player.arsenal`): unique, sorted
+ *  catalog ids per kind — the shape both the core gate and the UI filter read. */
+export interface PlayerArsenal {
+  /** Buildable hulls → `data.units` ids. */
+  hulls: string[];
+  /** Installable ship modules → `data.modules` ids. */
+  modules: string[];
+  /** Installable hero fittings → `data.heroFittings` ids. */
+  fittings: string[];
 }
 
 /** A live Steward delegation on a player (see `Player.steward`). */

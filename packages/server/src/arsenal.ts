@@ -3,6 +3,7 @@ import {
   validateArsenalItem,
   type ArsenalItem,
   type GameData,
+  type PlayerArsenal,
 } from '@void/shared-core';
 import type { ArsenalStore } from './store';
 
@@ -39,6 +40,16 @@ export function validateStarterArsenal(
     issues.push(...validateArsenalItem(item, data));
   }
   return issues;
+}
+
+/** Project an account's owned items into the `Player.arsenal` snapshot shape
+ *  (ARS-3): unique, sorted catalog ids per kind — blueprints and instances alike
+ *  grant buildability (the hybrid ARS-0 model; instance-specific state like grade
+ *  stays meta-side until per-item install lands with EC-2). Pure. */
+export function arsenalSnapshotOf(items: readonly ArsenalItem[]): PlayerArsenal {
+  const pick = (kind: ArsenalItem['kind']): string[] =>
+    [...new Set(items.filter((i) => i.kind === kind).map((i) => i.defId))].sort();
+  return { hulls: pick('hull'), modules: pick('module'), fittings: pick('hero_fitting') };
 }
 
 /** Grant the starter set to an account — idempotent end to end (deterministic item

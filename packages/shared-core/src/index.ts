@@ -50,6 +50,7 @@ export {
   type MatchEndReason,
   type MatchScore,
   type MatchState,
+  type PlayerArsenal,
   type PlayerReward,
   type DiplomaticStance,
   type IntelGrant,
