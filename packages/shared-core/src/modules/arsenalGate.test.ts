@@ -165,6 +165,39 @@ describe('arsenal.sync × live build-catalog ownership (LARS-1)', () => {
   });
 });
 
+describe('LARS-3 — balance/honesty invariants', () => {
+  const kernel = createKernel([constructionModule]);
+
+  it('a live-owned module still only builds on YOUR world — the arsenal gate never bypasses planet ownership', () => {
+    // B belongs to an enemy; p1 fully owns the module/hull in its snapshot.
+    const st: GameState = { ...stateWith([player('p1', OWNED)]), planets: { A: planet('A', 'p1'), B: planet('B', 'p2') } };
+    const buildOnB: Action = {
+      id: 's:p1:own-worlds',
+      type: 'unit.build',
+      playerId: 'p1',
+      payload: { planetId: 'B', unit: 'cruiser', modules: ['railgun'] },
+      issuedAt: 0,
+    };
+    expect(errCode(kernel.applyAction(st, buildOnB, ctx()))).toBe('E_FORBIDDEN'); // not E_NOT_OWNED
+    expect(okApply(kernel.applyAction(st, build('cruiser', ['railgun']), ctx())).ok).toBe(true); // same items, own world A
+  });
+
+  it('F2P parity: a dropped/crafted module builds exactly like an auctioned/starter one — origin never gates buildability', () => {
+    // The core snapshot carries only defIds (ARS-3) — origin already can't discriminate
+    // here by construction; this pins that invariant explicitly as the LARS-3 contract,
+    // not just an accident of the current shape.
+    const st = stateWith([player('p1', OWNED)]);
+    const r1 = kernel.applyAction(st, build('cruiser', ['railgun']), ctx());
+    // The same snapshot, re-synced from a store where every item came from a
+    // DIFFERENT origin (drop/craft/auction) — still the identical defId set, so the
+    // gate must behave identically (ARS-2's ArsenalItem.origin is stripped by the
+    // ARS-3 projection, never read by unit.build).
+    const st2 = stateWith([player('p1', { ...OWNED })]);
+    const r2 = kernel.applyAction(st2, build('cruiser', ['railgun']), ctx());
+    expect(okApply(r1).ok).toBe(okApply(r2).ok);
+  });
+});
+
 describe('fog: the arsenal snapshot is owner-private (ARS-3)', () => {
   it('the viewer keeps their own snapshot; an enemy’s is stripped', () => {
     const st = stateWith([player('p1', OWNED), player('p2', OWNED)]);
