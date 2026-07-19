@@ -318,6 +318,8 @@ export const en: Record<string, string> = {
     '⚔ warning: no landing force aboard — a defended world cannot be stormed',
   'мир защищён — для штурма нужен десант на борту': 'the world is defended — an assault needs troops aboard',
   'Ждёт ресурсы: {c}': 'Waiting for resources: {c}',
+  'уже построено': 'already built',
+  'уже в очереди': 'already queued',
   '⚔ штурмовать можно только чужой мир': "⚔ only someone else's world can be stormed",
   'Корабли: {s} · Десант: {tr}': 'Ships: {s} · Landing: {tr}',
   'Авто-штурм': 'Auto-storm',

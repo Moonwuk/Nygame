@@ -165,6 +165,10 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   padding:6px 7px;cursor:pointer;background:rgba(53,214,230,.05);border:1px solid var(--line-hi);border-radius:5px;color:var(--cyan);}
 .ptile:hover{border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 8px rgba(53,214,230,.25);}
 .ptile:active{background:rgba(53,214,230,.24);}
+/* committed one-per-planet building — dimmed, non-ordering (still hover-describes) */
+.ptile.locked{opacity:.4;cursor:not-allowed;background:rgba(120,140,150,.05);border-color:var(--line);color:var(--dim);}
+.ptile.locked:hover{border-color:var(--line);background:rgba(120,140,150,.08);box-shadow:none;}
+.ptile.locked .pt-ic{color:var(--dim);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
 /* mini tile (ground garrison): a nameless icon·count chip — hover/tap dossier names it */

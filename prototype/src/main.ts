@@ -4542,7 +4542,18 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
 function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit'): string {
   const k = kind === 'unit' ? 'u' : 'b';
   const tiles = ids
-    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost), true))
+    .map((id) =>
+      codexTile(
+        k,
+        id,
+        cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost),
+        true,
+        // Buildings are one-per-planet — grey out a committed (queued/building/paused)
+        // one so a second order can't be placed. PC only (the mobile build UI is frozen
+        // in this chat); units stack freely so they're never locked.
+        kind === 'building' && pcUi() && !NET ? (buildingLocked(_planetId, id) ?? undefined) : undefined,
+      ),
+    )
     .join('');
   return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
@@ -5895,10 +5906,30 @@ function scrollFeedToEnd(): void {
  *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
  *  panel — not in a global HUD strip. The LOCALIZED name rides both the desktop
  *  `title` (hover tooltip) and `data-name` — the mobile long-press bubble reads it. */
-function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false): string {
+/** A building is one-per-planet (the reducer grows it via upgrade, never a 2nd copy).
+ *  Returns why a fresh build order would be refused — so the build tile can grey out
+ *  the moment it's committed (built / building / queued / paused), instead of taking
+ *  the order and only rejecting it when the queue reaches it. `null` = orderable. */
+function buildingLocked(planetId: string, id: string): 'built' | 'queued' | null {
+  const p = s.planets[planetId];
+  if (!p) return null;
+  if (p.buildings.some((b) => b.type === id)) return 'built';
+  if (queueOf(planetId).buildings.some((q) => q.kind === 'building' && q.id === id)) return 'queued';
+  const act = activeConstruction(planetId, 'buildings');
+  if (act && act.payload.kind === 'building' && act.payload.building === id) return 'queued';
+  if (p.pausedConstruction?.some((s) => s.kind === 'building' && s.building === id)) return 'queued';
+  return null;
+}
+function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false, lockedFor?: string): string {
   if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
   const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
   const name = kind === 'b' ? buildingName(id) : unitDossier(id)?.name ?? displayUnit(id);
+  if (lockedFor) {
+    // Committed already — a dim, non-ordering tile. Keeps data-desc (hover dossier),
+    // drops data-codex/data-buildorder so neither left- nor right-click builds again.
+    const mark = lockedFor === 'built' ? '✓' : '⏳';
+    return `<button class="ptile locked" data-desc="${kind}:${id}" data-name="${esc(name)}" title="${esc(name)} — ${esc(lockedFor === 'built' ? t('уже построено') : t('уже в очереди'))}"><span class="pt-ic">${icon}</span><span class="pt-c">${mark} ${esc(label)}</span></button>`;
+  }
   // Build-menu tiles carry the enqueue order (PC right-click = build w/o the codex
   // confirmation); composition/garrison tiles don't — right-click is inert there.
   const order = orderable ? ` data-buildorder="${kind === 'u' ? 'unit' : 'building'}:${id}"` : '';
@@ -6591,9 +6622,11 @@ side.addEventListener('contextmenu', (ev) => {
   const p = s.planets[selPlanet];
   if (!p || p.owner !== ME) return;
   if (kind === 'building') {
-    // mirror codexBuildBtn's gates: the sector must allow it, one copy per world
+    // mirror codexBuildBtn's gates: the sector must allow it, one copy per world —
+    // AND already-committed (built/building/queued/paused), to stop a fast double
+    // right-click from queueing a second copy before the tile re-renders locked.
     const buildable = (SECTOR_TYPES[SECTOR_OF[p.id]]?.allowedBuildings ?? BUILDABLE).includes(id);
-    if (!buildable || p.buildings.some((b) => b.type === id)) return;
+    if (!buildable || buildingLocked(p.id, id)) return;
   }
   enqueueBuild(selPlanet, { kind: kind as BuildKind, id, count: 1 });
   lastPanelHtml = '';
