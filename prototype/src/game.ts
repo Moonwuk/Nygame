@@ -2178,9 +2178,17 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
   const out: Record<string, number> = {};
   const arrears = state.players[playerId]?.arrears ?? [];
   const inhabited = inhabitedWorldCount(state, playerId); // for the diminishing civic tax
+  // BF-35: mirror the faction + tech `economy.production` hooks (factionModule /
+  // technologyModule) — the HUD `+/h` used to apply only the planetType bonus, so a
+  // production-boosted player (e.g. a +12% faction) saw a low readout from minute one.
+  const me = state.players[playerId];
+  const factionBonus = me?.faction ? (data.factions[me.faction]?.passives?.productionBonus ?? 0) : 0;
+  let techBonus = 0;
+  for (const id of me?.technologies?.completed ?? []) techBonus += data.technologies[id]?.effects?.productionBonus ?? 0;
+  const bonusMult = (1 + factionBonus) * (1 + techBonus);
   for (const p of Object.values(state.planets)) {
     if (p.owner !== playerId || isBombarded(state, p.id)) continue;
-    const mult = 1 + (p.planetType ? (data.planetTypes[p.planetType]?.productionBonus ?? 0) : 0);
+    const mult = (1 + (p.planetType ? (data.planetTypes[p.planetType]?.productionBonus ?? 0) : 0)) * bonusMult;
     // Credits are settled per-planet so the civic tax + Tax Office boost mirror the
     // core's economy.production pipeline (taxModule); metal accrues straight to `out`.
     let credits = 0;
@@ -2272,7 +2280,7 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
       }
     }
     if (isInhabited(p)) {
-      credits += civicTax(inhabited);
+      credits += civicTax(inhabited) * bonusMult; // civic tax is post-tax income → also boosted (BF-35)
       if (p.buildings.some((b) => b.type === 'tax_office')) credits *= 1 + TAX_OFFICE_BONUS;
     }
     if (credits !== 0) out.credits = (out.credits ?? 0) + credits;

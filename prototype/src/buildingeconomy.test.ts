@@ -26,6 +26,7 @@ describe('building economy — the prototype resource loop', () => {
 
   it('netIncome mirrors the brownout: an energy arrears halves the refinery line', () => {
     const s = newGame();
+    s.players.p1!.faction = 'red'; // isolate brownout from the faction production bonus (BF-35)
     const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
     home.buildings.push({ type: 'refinery', level: 1, hp: 20 });
     const full = netIncome(s, 'p1').credits ?? 0;
@@ -37,6 +38,7 @@ describe('building economy — the prototype resource loop', () => {
 
   it('netIncome (the HUD flow readout) reflects a ramping reactor past the 50% mark', () => {
     const s = newGame();
+    s.players.p1!.faction = 'red'; // isolate the ramp from the faction production bonus (BF-35)
     const home = Object.values(s.planets).find((p) => p.owner === 'p1')!;
     const totalMs = data.buildings.power_plant!.buildTimeHours * HOUR;
     const withScheduled = (at: number): GameState => ({
@@ -66,5 +68,23 @@ describe('building economy — the prototype resource loop', () => {
     // Ten days of radar+AA watch power on a 90-energy stock with no plant → in arrears.
     expect(s.players.p1?.resources.energy).toBe(0);
     expect(s.players.p1?.arrears).toContain('energy');
+  });
+
+  it('netIncome applies the faction production bonus to the HUD flow (BF-35)', () => {
+    const s = newGame();
+    const p = s.players.p1!;
+    const creditsWith = (faction: string): number => {
+      p.faction = faction;
+      return netIncome(s, 'p1').credits ?? 0;
+    };
+    const plain = creditsWith('red'); // Crimson Hegemony — no production passive
+    const five = creditsWith('violet'); // Violet Ascendancy — +5% production
+    const twelve = creditsWith('blue'); // Azure Compact — +12% production
+    // Before BF-35 the HUD `+/h` ignored the faction passive → all three read identically.
+    expect(twelve).toBeGreaterThan(plain);
+    expect(five).toBeGreaterThan(plain);
+    // Upkeep is unchanged between runs, so the boost over `plain` scales linearly with the
+    // passive strength: the 12%-delta over the 5%-delta is exactly 0.12/0.05.
+    expect((twelve - plain) / (five - plain)).toBeCloseTo(0.12 / 0.05, 6);
   });
 });
