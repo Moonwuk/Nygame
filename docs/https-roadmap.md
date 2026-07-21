@@ -129,7 +129,7 @@ Cloudflare Tunnel/mTLS край→origin (SE-1.3), чтобы origin не све
 **Факт:** на `https`-странице оверлей авто-апгрейдит `ws://`→`wss://` (`multiplayer.md:193`).
 **Подзадачи:** закрепить тестом; явно блокировать `ws://` к не-`localhost` хосту с понятной ошибкой
 (вместо тихого mixed-content-блока браузера); CSP `connect-src 'self' wss://<домен>` (часть SE-7.1);
-плейсхолдер в `prototype/build.mjs:354` — `wss://…` первым.
+плейсхолдер в `prototype/build.mjs` (инпут `#csrv`, ~1946) — `wss://…` первым.
 **Готово, когда:** на https-странице нельзя случайно подключиться по `ws://`; CSP разрешает только нужный `wss`.
 
 ### HTTPS-4.2 · Сообщения о URL: печатать `https`/`wss` `[cli][docs]` ⏳ — S
@@ -206,8 +206,8 @@ PWA/secure-context на LAN — опциональный рецепт `mkcert` (
 - `deploy/serve.sh` — бинд `0.0.0.0` напрямую → `127.0.0.1` + прокси (HTTPS-2.1); + новый `deploy/Caddyfile`.
 - `render.yaml` — добавить комментарий про edge-TLS, health по https (HTTPS-3.1).
 - `mobile/capacitor.config.json:6-7` — `androidScheme:"http"`+`cleartext:true` → release без cleartext (HTTPS-5.1).
-- `prototype/netserver.ts:125,146`, `prototype/doctor.mjs:102-113` — печать https/wss (HTTPS-4.2).
-- `prototype/build.mjs:354` — плейсхолдер `wss://` первым (HTTPS-4.1).
+- `prototype/netserver.ts` (печать share-URL ~615 / raw ws ~666), `prototype/doctor.mjs:102-113` — печать https/wss (HTTPS-4.2).
+- `prototype/build.mjs` (инпут адреса `#csrv`, ~1946) — плейсхолдер `wss://` первым (HTTPS-4.1).
 
 ## Последовательность
 
