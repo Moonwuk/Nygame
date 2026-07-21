@@ -1033,18 +1033,31 @@ botDiplomacy, market, division, capital, standingOrders, effects])` (27 моду
   и по гарнизону, и по зданиям (`aaStrengthAt`). Топливо/перезарядка (`SortieState`), евклидов `strikeRange`,
   детерминированное решение патруля (`patrolTarget`) — чистые тестируемые хелперы `game.ts`.
 - **Цепочки приказов (command-chains) — УДАЛЕНЫ к релизу (REL-1, «пока убери»).**
-  Очередь приказов (CC-1/CC-5/CC-6/CC-server: `orderQueueModule`, `state.orders`,
-  клиентский план `fleetQueues`+`driveQueues`, серверный драйвер `runServerQueues`,
-  весь UI «Очередь приказов»/«➕ строить»/план на карте) и `subscriptionModule`
-  (лимит-апселл) вырезаны из кернела, UI и netserver — команды панели (штурм/
-  обстрел/погрузка/выгрузка) теперь прямые действия. История дизайна — в git
-  (ветка до REL-1) и `docs/backlog.md` (блок CC). **Стоячие приказы ОСТАЛИСЬ**
-  (CC-2/CC-4, `standingOrdersModule`): `order.auto`→`state.autoAssault` (авто-штурм),
-  `order.scramble`→`state.patrols` (дежурный вылет, сервер сам считает центр/радиус/
-  запас вылетов), `patrol.stamp`; чистые драйверы `serverAutoAssaultActions`/
-  `serverPatrolActions` + хост-цикл `netserver.runServerStanding`; `autoAssault`/
-  `patrols` фильтруются в fog; кнопки «⚔ авто-штурм» и «🛩 дежурный вылет» работают
-  в соло и NET.
+  Старая очередь приказов (CC-5/CC-6: `orderQueueModule`, клиентский план
+  `fleetQueues`+`driveQueues`, UI «Очередь приказов»/«➕ строить») и
+  `subscriptionModule` (лимит-апселл) были вырезаны перед REL-1 (история — в git
+  и `docs/backlog.md`, блок CC); **очередь вернулась в новом виде** — см. цепочки
+  ниже. **Стоячие приказы** (CC-2/CC-4, `standingOrdersModule`):
+  `order.auto`→`state.autoAssault` (авто-штурм), `order.scramble`→`state.patrols`
+  (дежурный вылет, сервер сам считает центр/радиус/запас вылетов), `patrol.stamp`;
+  чистые драйверы `serverAutoAssaultActions`/`serverPatrolActions` + хост-цикл
+  `netserver.runServerStanding`; кнопки «⚔ авто-штурм» и «🛩 дежурный вылет»
+  работают в соло и NET. **Цепочки приказов (CC-1, 2026-07-21, PR #294–#299):**
+  авторитетный план флота `state.orders[fleetId]={steps,waitUntil?}` — шаги
+  `move`/`wait` (Задержка, кап 14 суток)/`assault`/`barrage`/`strike` (огневое
+  окно N часов: фокус-огонь → cease по дедлайну); клиент ставит план атомарно
+  (`order.chain`, в гейт-схемах; `chain.stamp` — штамп драйвера, с провода
+  отрезан), чистый драйвер `serverChainActions` (двухфазные wait/strike,
+  consume-on-issue, sorted ids) + `runServerStanding` в NET и `driveChains` в
+  соло-кадре — план исполняется офлайн. UI (TGT-1): кнопка «◎ Цель» → конструктор
+  плана прямо у цели (чипы шагов, ⏱/✈/⚔/🎯-степпер/⌂, кламп во вьюпорт),
+  стоячий маркер-прицел с бейджем ◎ (тап = редактирование), армия с планом дышит
+  штрих-кольцом. Плюс ☰-ряд командной панели: «⊕ Выбрать+» (SEL-1: тач-мультивыбор,
+  панель схлопывается, тапы тумблерят свои флоты, общий приказ выходит из режима)
+  и «⚡ Ускорить» (BOOST-1, `forcedMarchModule`: `fleet.forcemarch`, ×1.5 в хук
+  `fleet.speed`, износ 5% max-HP/час только в полёте, пол — последний корпус жив,
+  флаг слетает по прибытии). `orders`/`autoAssault`/`patrols`/`forcedMarch`
+  фильтруются в fog (`visibleState`) — чужие планы не текут в снапшоты.
 - **Цели первой сессии / чек-лист (ONB-7)** — лёгкий «правильно ли я играю?»-сигнал только в
   онбординг-матче: чистый `src/firstGoals.ts` (`FIRST_GOALS` — шахта/флот/захват/100 очков;
   `metGoals(signals)`→Set, `mergeDone` монотонно, `goalsComplete`) — 10 тестов. main.ts:
