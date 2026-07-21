@@ -202,8 +202,14 @@ BF-22 coarse/fine-шаги) — точечными фиксами, без сис
   brownout-ножа); модуль-бомба → каждый due-бомб в `failures` (E_INTERNAL, без
   утечки деталей, A10), часы не клинят, будущие бомбы нетронуты; чистота
   (frozen vs thawed) и `E_TIME_BACKWARDS` на отмотку.
-- **FUZZ-4 · Property applyDelta∘diffState = id** `[core]` — S · 🔒(FUZZ-1).
-  Под рандомными парами состояний по `hashState` — третий пункт SD-7.3.
+- **FUZZ-4 · Property applyDelta∘diffState = id** `[core]` — S · ✅ (2026-07-21).
+  `state/delta.property.test.ts`, 5 свойств по `hashState` — третий пункт SD-7.3:
+  реконструкция на sim-достижимых парах (живой скирмиш: бой/удалённые флоты →
+  `removed`, начисление → `changed`/meta) и на синтетических кросс-seed парах
+  (add/remove/rewrite сущностей, meta, host-extension ключи → `meta`-carry и
+  `removedMeta`); дельта переживает JSON-провод и повторную доставку
+  (идемпотентность); дифф состояния с самим собой — строго пустая дельта; все
+  входы deep-frozen (скрытая мутация в diff/apply бросила бы, а не прошла тихо).
 - **FUZZ-5 · Доки** `[docs]` — S · 🔒(FUZZ-2..4). SD-7.3 → ✅, SD-7.2 → частично ✅.
 
 Бюджет: numRuns 50–200, короткие последовательности — `pnpm run check` не должен
