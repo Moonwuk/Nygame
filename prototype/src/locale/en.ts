@@ -189,6 +189,9 @@ export const en: Record<string, string> = {
   '⏱{n}ч': '⏱{n}h',
   '⏱ +1ч': '⏱ +1h',
   '🎯{n}ч': '🎯{n}h',
+  'Выбрать+': 'Select+',
+  '⊕ тапайте свои флоты — соберите группу и отдайте общий приказ':
+    '⊕ tap your fleets — build the group, then give a common order',
   Сюда: 'Go here',
   Огонь: 'Fire',
   'снять приказ': 'clear the order',

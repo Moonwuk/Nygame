@@ -529,6 +529,11 @@ let warPrompt: {
 let targetAim = false;
 let tgtEditor: { fleetIds: string[]; target: string; steps: ChainStep[] } | null = null;
 let tgtHits: Array<{ target: string; fleetIds: string[]; x: number; y: number }> = [];
+// SEL-1 «Выбрать+»: touch multi-select. While ON the bottom sheet collapses, map
+// taps only toggle OWN fleets in/out of the group, and the group takes any common
+// order (Курс/Штурм/Цель…) — issuing one drops back out of the mode.
+let pickMode = false;
+let cmdMore = false; // ☰ — the second row of the command bar (extras live there)
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
@@ -6793,7 +6798,9 @@ let sheetWasOpen = false;
 function renderPanel() {
   // While arming a merge target, collapse the panel so the map (and the fleet to
   // merge with) is fully tappable — important on phones where the sheet covers it.
-  const open = !merging && (selFleet !== null || selPlanet !== null || selFleets.size > 0);
+  // «Выбрать+» collapses the sheet the same way merging does — picking needs the map.
+  const open =
+    !merging && !pickMode && (selFleet !== null || selPlanet !== null || selFleets.size > 0);
   side.style.display = open ? 'flex' : 'none';
   document.body.classList.toggle('sheet-open', open); // mobile: hide log/comms under the sheet
   // Phone: the bottom sheet covers ~50vh — when it OPENS, pan the camera so the
@@ -6869,7 +6876,9 @@ function cmdBtn(cmd: string, icon: string, label: string, cls: string, disabled:
  *  acting on the current fleet selection, buttons enabled by context. */
 function renderCmdBar() {
   const ids = selectedFleetIds();
-  if (ids.length === 0) {
+  if (ids.length === 0 && !pickMode) {
+    // (pickMode keeps the bar alive at zero selection — the ⊕ toggle must stay
+    // reachable, or an emptied group would strand the player in the mode.)
     if (aiming) aiming = false;
     if (assaultAim) assaultAim = false;
     if (targetAim) targetAim = false;
@@ -6915,7 +6924,11 @@ function renderCmdBar() {
       merging ? 'on' : '',
       !canMerge,
     ) +
-    cmdBtn('split', '⊟', t('Разделить'), splitState ? 'on' : '', !canSplit);
+    cmdBtn('split', '⊟', t('Разделить'), splitState ? 'on' : '', !canSplit) +
+    // ☰ — the extras row (hamburger, NOT «...» — референс не копируем дословно):
+    // «Выбрать+» и будущие Ускорить/Задержка живут здесь, базовый ряд не пухнет.
+    cmdBtn('more', '☰', t('Ещё'), cmdMore ? 'on' : '', false) +
+    (cmdMore || pickMode ? cmdBtn('pick', '⊕', t('Выбрать+'), pickMode ? 'on' : '', false) : '');
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
     lastCmdHtml = html;
@@ -7341,6 +7354,9 @@ cmdbar.addEventListener('click', (ev) => {
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
   if (cmd !== 'attack') assaultAim = false; // any other command disarms assault-targeting
   if (cmd !== 'target') targetAim = false; // any other command disarms order-targeting
+  // A real order leaves «Выбрать+» (the group stays selected and takes it);
+  // ☰ and the ⊕ toggle itself keep the picking session alive.
+  if (cmd !== 'pick' && cmd !== 'more') pickMode = false;
   heroAim = null; // any command disarms a pending hero cast / deploy
   heroSpawnAim = null;
   if (cmd === 'move') {
@@ -7385,6 +7401,13 @@ cmdbar.addEventListener('click', (ev) => {
     targetAim = !targetAim;
     aiming = false;
     if (targetAim) note(t('◎ тапните цель на карте — соберём приказ'));
+  } else if (cmd === 'more') {
+    cmdMore = !cmdMore; // ☰ — show/hide the extras row
+  } else if (cmd === 'pick') {
+    // SEL-1: touch multi-select — the sheet collapses, taps toggle own fleets.
+    pickMode = !pickMode;
+    aiming = false;
+    if (pickMode) note(t('⊕ тапайте свои флоты — соберите группу и отдайте общий приказ'));
   }
   lastCmdHtml = '';
   lastPanelHtml = '';
@@ -7498,6 +7521,20 @@ function selectAt(mx: number, my: number) {
     tryAssaultGroup(selectedFleetIds(), n.id);
     assaultAim = false;
     lastPanelHtml = '';
+    return;
+  }
+  // SEL-1 «Выбрать+»: while picking, taps only toggle OWN fleets in/out of the
+  // group — nothing deselects, worlds don't grab the tap, the map is a picking
+  // surface until the mode is left (⊕ again, or any common order).
+  if (pickMode && !aiming) {
+    const mine = nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner === ME),
+      fleetAnchor,
+      mx,
+      my,
+      rFleet,
+    );
+    if (mine) toggleFleetInSelection(mine.id);
     return;
   }
   // TGT-1: «Цель» armed → the next world tap opens the order composer beside it.
