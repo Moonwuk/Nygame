@@ -1146,6 +1146,17 @@ requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psion
   - бинарная вставка), route-кэш в `movement`, оптимизации `combat`/`orbit`/`economy`.
     **Детерминизм сохранён** (golden-RNG + 587 тестов зелёные).
 
+## Блок HARD · Закалка плейтест-контура (заказ владельца 2026-07-18) `[ops]` `[core]` `[srv]` `[proto]` `[sec]`
+
+> Четыре направления: TLS+домен, автодеплой, реплей-детерминизм в CI, fuzz/property-тесты
+> ядра. Детальный план с фактами из кода, рисками и порядком — `playtest-hardening-roadmap.md`
+> (операционализирует HTTPS-2.1, CR-0.2, SD-7.2/7.3; PE-1.1 отложен явно). Кирпичи бери оттуда:
+> **TLS-1…5** (домен→Caddy в compose→wss-приёмка), **ADEP-0…4** (починка update-пути →
+> GHCR-push из CI → pull-таймер), **RPL-1…4** (формат+раннер → рекордер MatchRoom →
+> CI-тест record→replay→hash), **FUZZ-1…5** (fast-check testkit → свойства
+> applyAction/advanceTo/delta). Первым — ADEP-0 (сломанный `moongame update`); блоки C/D
+> не пересекаются с deploy-файлами — можно параллельной сессией.
+
 ## Блок SEC · AppSec / DevSecOps `[sec]`
 
 > Трек безопасности — живёт рядом с продуктовым и раздаётся как задачи. База —
