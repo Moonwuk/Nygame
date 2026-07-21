@@ -6,7 +6,8 @@
 export const en: Record<string, string> = {
   // --- TT-3.1 technology tree screen --------------------------------------------
   'Ветку курирует': 'Branch curated by',
-  'Без лидера ветки — узлы с условием «учёный» закрыты': 'No branch leader — “scientist”-gated nodes stay locked',
+  'Без лидера ветки — узлы с условием «учёный» закрыты':
+    'No branch leader — “scientist”-gated nodes stay locked',
   'слоты {a}/{b}': 'slots {a}/{b}',
   ДЕНЬ: 'DAY',
   старт: 'start',
@@ -50,7 +51,8 @@ export const en: Record<string, string> = {
   'Попытка: {c}¤ · шанс ~60% · окно интела 24ч · провал сжигает плату. Разведка мира — кнопка 🕵 на карточке вражеской планеты.':
     'Attempt: {c}¤ · ~60% chance · 24h intel window · a failure burns the fee. World recon — the 🕵 button on an enemy planet card.',
   'АКТИВНЫЕ ОКНА ИНТЕЛА': 'ACTIVE INTEL WINDOWS',
-  'нет активных окон — добудьте интел операцией ниже': 'no active windows — steal intel with an operation below',
+  'нет активных окон — добудьте интел операцией ниже':
+    'no active windows — steal intel with an operation below',
   ОПЕРАЦИИ: 'OPERATIONS',
   'противников нет': 'no opponents',
   ЖУРНАЛ: 'JOURNAL',
@@ -177,6 +179,20 @@ export const en: Record<string, string> = {
   '{n} {r}/день': '{n} {r}/day',
   '{n} {r}/ч': '{n} {r}/h',
   '{n} ФЛОТОВ': '{n} FLEETS',
+  // TGT-1: target-order composer
+  Цель: 'Target',
+  '◎ тапните цель на карте — соберём приказ': '◎ tap a target on the map — compose the order',
+  '◎ цель не выбрана': '◎ no target picked',
+  ПРИКАЗ: 'ORDER',
+  'убрать шаг': 'remove step',
+  'план пуст — добавь шаги': 'plan is empty — add steps',
+  '⏱{n}ч': '⏱{n}h',
+  '⏱ +1ч': '⏱ +1h',
+  Сюда: 'Go here',
+  Огонь: 'Fire',
+  'снять приказ': 'clear the order',
+  '{n} флотов': '{n} fleets',
+  '◎ приказ поставлен — флот исполнит план сам': '◎ order set — the fleet will run the plan itself',
   'Осталось: {r}': 'Remaining: {r}',
   'В очереди — ещё не начато.': 'Queued — not started yet.',
   'По готовности пополнит гарнизон/флот планеты.':
@@ -376,7 +392,8 @@ export const en: Record<string, string> = {
   'Нет лотов на продажу': 'No sell orders',
   'Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».':
     'A carrier (◈) holds squadrons (△). Launch the wing from the selected fleet\'s panel with "🛩 Launch squadron".',
-  'Новый командир на борту — обучение скоро появится здесь.': 'New commander aboard — the tutorial is coming soon.',
+  'Новый командир на борту — обучение скоро появится здесь.':
+    'New commander aboard — the tutorial is coming soon.',
   'ОБЪЯВИТЬ ВОЙНУ': 'DECLARE WAR',
   'ОБЪЯВИТЬ ВОЙНУ?': 'DECLARE WAR?',
   'Это мир дружественной фракции. Вы хотите объявить войну <b>{names}</b>?':
@@ -889,7 +906,8 @@ export const en: Record<string, string> = {
   'десант возьмёт мир': 'the landing takes the world',
   'гарнизон устоит': 'the garrison holds',
   'затяжной пат': 'a drawn-out stalemate',
-  '⚠ Враг идёт к {node}: прибытие через {dur}': '⚠ An enemy is heading for {node}: arrival in {dur}',
+  '⚠ Враг идёт к {node}: прибытие через {dur}':
+    '⚠ An enemy is heading for {node}: arrival in {dur}',
   '⚠ Враг у {node}!': '⚠ An enemy at {node}!',
   'Прогноз штурма: {v} · ~{r} р. · потери {a} дес. ({pa}%) / {d} гарн. ({pd}%)':
     'Assault forecast: {v} · ~{r} rounds · losses {a} landing ({pa}%) / {d} garrison ({pd}%)',
@@ -1085,7 +1103,7 @@ export const en: Record<string, string> = {
   фитинг: 'fitting',
   'В арсенале нет корпусов этого класса.': 'The arsenal has no hulls of this class.',
   '⚡ Арсенал живой: докупленное в матче видно здесь сразу, но начинает работать только когда ты это ПОСТРОИШЬ — постройка и логистика, не мгновенно.':
-    "⚡ Live arsenal: anything bought during the match shows up here right away, but it only starts working once you BUILD it — construction and logistics, not instant.",
+    '⚡ Live arsenal: anything bought during the match shows up here right away, but it only starts working once you BUILD it — construction and logistics, not instant.',
   'Ходовые школы': 'Helm Schools',
   '+5% к скорости всех флотов с первой секунды матча.':
     '+5% fleet speed from the first second of a match.',
@@ -1153,7 +1171,8 @@ export const en: Record<string, string> = {
   Гарнизон: 'Garrison',
   'Численность наземных войск, обороняющих мир.': 'The ground troops defending the world.',
   'Пехота и техника на поверхности мира.': "Infantry and armour on the world's surface.",
-  'Корабли, стоящие в гарнизоне мира (не на орбите).': "Ships parked in the world's garrison (not in orbit).",
+  'Корабли, стоящие в гарнизоне мира (не на орбите).':
+    "Ships parked in the world's garrison (not in orbit).",
   'Число построек на мире.': 'The number of buildings on the world.',
   'Тап по слоту меняет род войск: ополчение → тяжёлая пехота → спецназ → танк. Танки бьют любую пехоту; спецназ — единственная пехота, опасная танкам; тяжёлая пехота держит оборону.':
     'Tap a slot to cycle the unit type: militia → heavy infantry → special forces → tank. Tanks shred any infantry; special forces are the one infantry that threatens armour; heavy infantry holds the line.',
