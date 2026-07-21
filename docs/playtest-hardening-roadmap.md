@@ -165,7 +165,7 @@ BF-22 coarse/fine-шаги) — точечными фиксами, без сис
   (live vs его же реплей) — баланс-правки его не инвалидируют; попал в `pnpm test`
   → ci.yml без правок workflow. (Тест «другое членение ≈ float-пыль» — в shared-core
   `replay.test.ts`, RPL-1.)
-- **RPL-4 · Доки** `[docs]` — S · 🔒(RPL-3). `core-roadmap.md` CR-0.2 → частично ✅,
+- **RPL-4 · Доки** `[docs]` — S · ✅ (2026-07-21). `core-roadmap.md` CR-0.2 → частично ✅,
   `metrics-roadmap.md` KPI «хеш прогона» → green, `state.md`.
 - **RPL-5 · Durable action-log** `[srv]` — L · 🔒(RPL-3) · **отдельный кирпич, не в
   этом заходе** = PE-1.1: append-only лог в Postgres, реплей читает из стора —
