@@ -182,12 +182,12 @@ match with no players active and only hourly economy ticks costs one DB read + o
 
 ## 14. Server restart and match persistence
 
-**Risk:** the dev server currently holds all match state in memory. A restart (crash,
-deploy, OOM kill) loses every active match. In production this is a critical reliability
-failure — players lose hours of real-time progress.
+**Status (✅ RESOLVED):** durable persistence is implemented. With `DATABASE_URL` set the
+netserver snapshots `GameState` + idempotency receipts to Postgres (commit-before-broadcast)
+and matches resume across a restart (`store/postgres.ts`, `persistence.ts`,
+`f8-persistence.test.ts`). Without a DB it falls back to in-memory (restart loses the match).
 
-**Decision:** persist `GameState` as JSONB after every mutation; recover by reload +
-catch-up on restart.
+**Decision (done):** persist `GameState` as JSONB; recover by reload + catch-up on restart.
 
 **Write path (per action):**
 1. Load state from DB (or warm room cache).

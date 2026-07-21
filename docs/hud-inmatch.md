@@ -41,8 +41,8 @@
 | 3D-модели бригады | Рендер выбранного флота на узле | выбранный `fleet.units` (корабли) / `fleet.landing` (десант) |
 | Оранжевый юнит | Вражеский флот (лишь если засечён) | `visibleState.fleets` (туман: `radarRange × signature`) |
 | Ящик снабжения | Планета/узел с доходом · end-match дроп | планета-yield · дроп (economy) |
-| **SPLIT** | Разделить флот | ⏳ новое действие `fleet.split` (нет в коде) |
-| **ADD ARMY** | Слить флоты · загрузить десант | ⏳ `fleet.merge` (новое) · ✅ `army.load` (есть) |
+| **SPLIT** | Разделить флот | ✅ `fleet.split` (в `payloadSchemas`) |
+| **ADD ARMY** | Слить флоты · загрузить десант | ✅ `fleet.merge` · ✅ `army.load` |
 | **ATTACK** | Штурм/бой | ✅ `fleet.assault` (двухфазный захват) · авто-бой на контакте |
 | **MOVE** | Приказ по лейнам | ✅ `fleet.move` (movement-модуль, маршрут по `route.ts`) |
 | «1ST INFANTRY BRIGADE» + нация | Имя флота + владелец | `fleet.id`/имя + `owner` |
@@ -188,11 +188,11 @@ export function resolveHudAction(action: HudTap, model: HudModel): HudIntent | {
   открывается по тапу на бой (`state.battles[id]`): две стороны (состав + корпус/щит), фаза,
   раунд, таймер `nextRoundAt`; единственное действие **«Отступить»** (`fleet.retreat`) — доступно, если
   игрок владеет орбитальным флотом-стороной (`retreatFleetId`). Ядро: действие `fleet.retreat`
-  (−40% макс корпуса/щита + баф скорости), см. `state.md`.
+  (−40% ТЕКУЩЕГО корпуса/щита + баф скорости), см. `state.md`.
 - ⏳ **Нужен код (кирпичи):**
   - `HUD-1b` объединённый `createHudModel`/`resolveHudAction` + зоны B (карта) / C (действия-намерения).
   - `HUD-2` производные для панели: `fleetPower` / `damageReduction` (сборка из статов+бонусов).
-  - `HUD-3` действия `fleet.split` / `fleet.merge` (новые core-действия — референсные SPLIT/ADD).
+  - `HUD-3` — `fleet.split`/`fleet.merge` уже в ядре (`payloadSchemas`); остаётся HUD-обвязка (референсные SPLIT/ADD).
   - `HUD-4` две HP-полоски (корпус/щит) — по мере `shields-roadmap`; иконки модулей — `ship-modules`.
 - 🔒 **Мета/блокировано:** ранг/место — из scoreboard (есть) ИЛИ account-level (docs-only);
   кошелёк Суверены/Варранты и магазин «+» — мета-экономика (`economy-roadmap`), поверх матча;
