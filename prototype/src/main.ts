@@ -96,6 +96,9 @@ import {
   buildShip,
   serverChainActions,
   chainStamp,
+  orderChain,
+  MAX_CHAIN_STEPS,
+  type ChainStep,
   type Patrol,
 } from './game';
 import { OFFICERS, GROUND_ROSTER } from './groundcombat';
@@ -126,15 +129,29 @@ import {
   thresholdRamp,
   type PausedConstructionSite,
 } from '../../packages/shared-core/src/index';
-import { MultiplayerClient, type MultiplayerPing, type MultiplayerChatMessage, createBattleModel, type BattleSideView } from '../../packages/client/src/index';
+import {
+  MultiplayerClient,
+  type MultiplayerPing,
+  type MultiplayerChatMessage,
+  createBattleModel,
+  type BattleSideView,
+} from '../../packages/client/src/index';
 import {
   worldToScreen as camWorldToScreen,
   zoomAt as camZoomAt,
   clampCam as camClampCam,
   centerOn as camCenterOn,
 } from '../../packages/client/src/camera';
-import { rgba, blitGlow as hdBlitGlow, blitSphere as hdBlitSphere } from '../../packages/client/src/holoDraw';
-import { drawTerritory, computePowerCell, type TerritorySeed } from '../../packages/client/src/territory';
+import {
+  rgba,
+  blitGlow as hdBlitGlow,
+  blitSphere as hdBlitSphere,
+} from '../../packages/client/src/holoDraw';
+import {
+  drawTerritory,
+  computePowerCell,
+  type TerritorySeed,
+} from '../../packages/client/src/territory';
 import {
   buildLabel,
   checkForUpdateDetailed,
@@ -146,9 +163,29 @@ import {
 // Russian source string; `t()` wraps every user-visible literal, `tData()` maps
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
-import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
+import {
+  META_TREE,
+  META_BRANCH_RU,
+  metaLevel,
+  metaLevelProgress,
+  metaPoints,
+  canUnlock,
+  unlockNode,
+  matchXp,
+  metaGrant,
+  parseMetaState,
+  type MetaState,
+  type MetaBranch,
+} from './meta';
 // ARS-5 — arsenal witryna (pure filter/group/parse; see prototype/src/arsenal.ts).
-import { filterArsenal, gradesOf, originOf, ownedDefIds, parseArsenalItems, type ArsenalFilter } from './arsenal';
+import {
+  filterArsenal,
+  gradesOf,
+  originOf,
+  ownedDefIds,
+  parseArsenalItems,
+  type ArsenalFilter,
+} from './arsenal';
 // AVA-C1/C2 — corporation cabinet (pure types/parsers; see prototype/src/corp.ts).
 import {
   parseCorpRecord,
@@ -187,7 +224,13 @@ import { HUD_ORIENTATION_TOUR } from './onboardingTour';
 // ONB-2 — the guided first match (a data chain over this same engine).
 import { buildFirstMatchTour } from './firstMatchTour';
 // ONB-4 — searchable codex/help index (pure) over the existing article corpus.
-import { buildCodexIndex, searchCodex, GLOSSARY, type CodexEntry, type CodexCategory } from './codexIndex';
+import {
+  buildCodexIndex,
+  searchCodex,
+  GLOSSARY,
+  type CodexEntry,
+  type CodexCategory,
+} from './codexIndex';
 // ONB-3 — just-in-time mechanic intros (per-nick seen-set, shown once on first contact).
 import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
 // ONB-5 — return digest ("пока тебя не было"): aggregate the away-window event log.
@@ -275,7 +318,8 @@ declare const __PLAYER_BUILD__: boolean;
 // on a player build only re-reveals diagnostics (FPS), never the compiled-out tools.
 const DEV_UI = ((): boolean => {
   try {
-    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('dev')) return true;
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('dev'))
+      return true;
     return typeof localStorage !== 'undefined' && localStorage.getItem('vd.dev') === '1';
   } catch {
     return false;
@@ -300,7 +344,18 @@ const LOCK = '#7df0d0'; // selection / targeting reticle accent
 const TAU = Math.PI * 2;
 const TOP = 50; // top-bar height
 const RAIL = 50; // left-rail width
-const BUILDABLE = ['mine', 'refinery', 'farm', 'power_plant', 'fabricator', 'tax_office', 'barracks', 'radar', 'fort', 'orbital_aa'];
+const BUILDABLE = [
+  'mine',
+  'refinery',
+  'farm',
+  'power_plant',
+  'fabricator',
+  'tax_office',
+  'barracks',
+  'radar',
+  'fort',
+  'orbital_aa',
+];
 // `orbital_aa` (orbital ПВО — anti-ship near-orbit emplacement) is a defensive BUILDING:
 // the player builds it like a fort. It fires on hostile fleets over the world (core
 // `aaStrengthAt` sums building AA) but does NOT block ground capture — only ground troops
@@ -426,7 +481,14 @@ let banner: string | null = null;
 // once by checkEnd from the authoritative `match` state. `dismissed` lets the player
 // hide it to look at the final board (the match stays frozen). Reset on a fresh match
 // / reconnect so a new game never opens straight into the old result.
-let endScreen: { won: boolean; draw: boolean; why: string; xp: number; levelUp: number | null; dismissed: boolean } | null = null;
+let endScreen: {
+  won: boolean;
+  draw: boolean;
+  why: string;
+  xp: number;
+  levelUp: number | null;
+  dismissed: boolean;
+} | null = null;
 let selFleet: string | null = null;
 let selPlanet: string | null = null;
 let selFleets = new Set<string>();
@@ -461,6 +523,12 @@ let warPrompt: {
    *  prompt reads as "this is a friendly faction's world — declare war?". */
   assault?: boolean;
 } | null = null;
+// TGT-1: target-order composer over CC-1 chains. «Цель» arms targeting; the next
+// world tap opens a small composer BESIDE the target; a standing marker stays on the
+// target while a plan referencing it lives, and tapping it re-opens the composer.
+let targetAim = false;
+let tgtEditor: { fleetIds: string[]; target: string; steps: ChainStep[] } | null = null;
+let tgtHits: Array<{ target: string; fleetIds: string[]; x: number; y: number }> = [];
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
@@ -616,7 +684,16 @@ let setupSlots: Array<'human' | 'ai' | 'off'> = freshSetupSlots();
 // Off ⇒ classic free-for-all. See newGame's team-aware diplomacy seeding.
 let setupTeams = false;
 const DEFAULT_TEAM_SIDES: ReadonlyArray<'A' | 'B'> = [
-  'A', 'A', 'B', 'B', 'A', 'A', 'B', 'B', 'A', 'B',
+  'A',
+  'A',
+  'B',
+  'B',
+  'A',
+  'A',
+  'B',
+  'B',
+  'A',
+  'B',
 ];
 let setupSeatTeam: Array<'A' | 'B'> = [...DEFAULT_TEAM_SIDES];
 let setupStart: string = START_CANDIDATES[0] ?? MAP[0]!.id;
@@ -765,7 +842,8 @@ let sweepPrevAng = -1; // previous frame's arm angle, for "did the arm cross X" 
 // (contact snapshots + blip afterglow) is computed before the visual gate, so it is
 // unaffected at every setting. Absent key ⇒ full (1); a stored 0 must NOT be read as absent.
 let sweepOpacity = ((): number => {
-  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('void.sweepOpacity') : null;
+  const raw =
+    typeof localStorage !== 'undefined' ? localStorage.getItem('void.sweepOpacity') : null;
   if (raw === null) return 1;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1;
@@ -781,7 +859,8 @@ function setSweepOpacity(v: number): void {
 // Player display preference (client-only, localStorage): show YOUR OWN ping markers
 // on the map. Purely visual — the ping itself (chat line, allies' view, the server
 // relay) is untouched; allies' pins are always drawn. Default on.
-let showOwnPings = typeof localStorage === 'undefined' || localStorage.getItem('void.showOwnPings') !== '0';
+let showOwnPings =
+  typeof localStorage === 'undefined' || localStorage.getItem('void.showOwnPings') !== '0';
 function setShowOwnPings(v: boolean): void {
   showOwnPings = v;
   try {
@@ -808,7 +887,8 @@ function setGlowFx(v: boolean): void {
 // Deep-space backdrop: the drifting nebulae + faint star ticks baked into the
 // static layer. Off leaves the flat fill + plotting grid. Toggling rebuilds the
 // bake (starfield flag rides the static-layer cache signature in buildStaticLayer).
-let starfield = typeof localStorage === 'undefined' || localStorage.getItem('void.starfield') !== '0';
+let starfield =
+  typeof localStorage === 'undefined' || localStorage.getItem('void.starfield') !== '0';
 function setStarfield(v: boolean): void {
   starfield = v;
   try {
@@ -820,7 +900,8 @@ function setStarfield(v: boolean): void {
 // «Компактный режим меню» (PC): a denser sector panel — tighter paddings, smaller
 // type/chips/tiles. Rides a body class so pure CSS restyles the panel live; the
 // panel markup and behaviour are untouched. Default off.
-let compactPanel = typeof localStorage !== 'undefined' && localStorage.getItem('void.compactPanel') === '1';
+let compactPanel =
+  typeof localStorage !== 'undefined' && localStorage.getItem('void.compactPanel') === '1';
 function applyCompactPanel(): void {
   document.body.classList.toggle('compact-panel', compactPanel);
 }
@@ -837,7 +918,10 @@ function setCompactPanel(v: boolean): void {
 // The compact-mode CSS is gated on the PC media query — JS-side string shortening
 // (ping button, conveyor idle line, upgrade buttons) must follow the same gate, or
 // a phone with the pref on would get PC-compact wording under phone styling.
-const PC_FINE = typeof matchMedia !== 'undefined' ? matchMedia('(min-width:900px) and (hover:hover) and (pointer:fine)') : null;
+const PC_FINE =
+  typeof matchMedia !== 'undefined'
+    ? matchMedia('(min-width:900px) and (hover:hover) and (pointer:fine)')
+    : null;
 /** True only in the PC layout mode (the same media query that gates the PC CSS).
  *  Every JS-side PC-only tweak MUST ride this gate — the mobile build is frozen. */
 function pcUi(): boolean {
@@ -969,7 +1053,10 @@ function updateThreatAlerts(): void {
       threatMemory.add(key);
       note(
         th.kind === 'inbound' && th.eta > s.time
-          ? t('⚠ Враг идёт к {node}: прибытие через {dur}', { node: p.id, dur: stewFmtDur(th.eta - s.time) })
+          ? t('⚠ Враг идёт к {node}: прибытие через {dur}', {
+              node: p.id,
+              dur: stewFmtDur(th.eta - s.time),
+            })
           : t('⚠ Враг у {node}!', { node: p.id }),
         p.id,
       );
@@ -984,7 +1071,7 @@ function sweptThisFrame(target: number): boolean {
   if (sweepPrevAng < 0) return false;
   const d = (sweepAng - sweepPrevAng + TAU) % TAU; // arc the arm swept this frame
   if (d <= 0) return false;
-  const t = (((target % TAU) + TAU) % TAU - sweepPrevAng + TAU) % TAU;
+  const t = ((((target % TAU) + TAU) % TAU) - sweepPrevAng + TAU) % TAU;
   return t > 0 && t <= d;
 }
 
@@ -999,7 +1086,8 @@ function updateRadarContacts(now: number): void {
     const contacts: Array<{ key: string; node: string; size: 'S' | 'M' | 'L' }> = [];
     if (NET) {
       netSignatures.forEach((c, i) => {
-        if (!known(c.location)) contacts.push({ key: `sig:${c.location}:${i}`, node: c.location, size: c.size });
+        if (!known(c.location))
+          contacts.push({ key: `sig:${c.location}:${i}`, node: c.location, size: c.size });
       });
     } else {
       for (const f of Object.values(s.fleets)) {
@@ -1020,7 +1108,8 @@ function updateRadarContacts(now: number): void {
         return dx * dx + dy * dy <= a.r * a.r && sweptThisFrame(Math.atan2(dy, dx));
       });
       if (painted) {
-        if (!radarMemory.has(c.key)) note(t('◆ новый радарный контакт ({size}) у {at}', { size: c.size, at: c.node }), c.node);
+        if (!radarMemory.has(c.key))
+          note(t('◆ новый радарный контакт ({size}) у {at}', { size: c.size, at: c.node }), c.node);
         radarMemory.set(c.key, { node: c.node, size: c.size, at: now });
       }
     }
@@ -1272,7 +1361,9 @@ function timeLeft(at: number): string {
 }
 /** Format a travel-time-remaining in hours as `1.4ч` / `35м` (localized suffixes). */
 function fmtEta(totalH: number): string {
-  return totalH >= 1 ? t('{n}ч', { n: totalH.toFixed(1) }) : t('{n}м', { n: Math.ceil(totalH * 60) });
+  return totalH >= 1
+    ? t('{n}ч', { n: totalH.toFixed(1) })
+    : t('{n}м', { n: Math.ceil(totalH * 60) });
 }
 function progressPct(active: ActiveBuild): number {
   const duration = buildDurationHours(active.payload) * HOUR;
@@ -1289,7 +1380,9 @@ function queuedLabel(q: QueuedBuild): string {
     return `${q.count}× ${unitIcon(q.id)} ${displayUnit(q.id)}`;
   }
   if (q.kind === 'upgrade') {
-    return t('{b} — улучшение', { b: `${BUILD_ICON[q.id] ?? '▣'} ${tData(data.buildings[q.id]?.name ?? q.id)}` });
+    return t('{b} — улучшение', {
+      b: `${BUILD_ICON[q.id] ?? '▣'} ${tData(data.buildings[q.id]?.name ?? q.id)}`,
+    });
   }
   return `${BUILD_ICON[q.id] ?? '▣'} ${tData(data.buildings[q.id]?.name ?? q.id)}`;
 }
@@ -1398,13 +1491,19 @@ function selectedFleetIds(): string[] {
 /** Does this fleet carry artillery (units that fire at range — the `fleet.barrage`
  *  / standoff-fire mechanic applies)? */
 function fleetHasArtillery(f: Fleet | undefined): boolean {
-  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('artillery') ?? false));
+  return (
+    !!f &&
+    f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('artillery') ?? false))
+  );
 }
 
 /** Does this fleet carry a launchable strike wing (squadron-trait ships)? The carrier
  *  can split them off as a fast, short-range fleet (squadrons-roadmap SQ-1.1). */
 function fleetHasSquadron(f: Fleet | undefined): boolean {
-  return !!f && f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('squadron') ?? false));
+  return (
+    !!f &&
+    f.units.some((u) => u.count > 0 && (data.units[u.unit]?.traits.includes('squadron') ?? false))
+  );
 }
 
 /** Can the fleet launch its squadrons right now? `fleet.split` refuses to take the whole
@@ -1434,7 +1533,9 @@ function artilleryRangeOf(f: Fleet | undefined): number {
 /** The "Дивизии" block for an owned planet: garrisoned divisions + a mobilise row for
  *  the player's 3 locked templates (cost + affordability). */
 function divisionsHtml(planetId: string): string {
-  const here = Object.values(divisionsOf(s)).filter((d) => d.owner === ME && d.location === planetId);
+  const here = Object.values(divisionsOf(s)).filter(
+    (d) => d.owner === ME && d.location === planetId,
+  );
   let h = `<div class="sec">${t('Дивизии')}</div>`;
   if (here.length) {
     for (const d of here) {
@@ -1473,13 +1574,19 @@ function divisionsHtml(planetId: string): string {
   if (pcUi()) {
     // PC: every icon self-describes on hover — composition glyphs → unit dossiers,
     // ⚔/🛡/❤ → the stat's name, cost glyphs → the resource's name.
-    const comp = slots.map((u) => `<span data-desc="u:${esc(u)}">${formIcon(u)}</span>`).join('') || '—';
+    const comp =
+      slots.map((u) => `<span data-desc="u:${esc(u)}">${formIcon(u)}</span>`).join('') || '—';
     const cost =
-      Object.entries(f.cost).map(([r, a]) => `<span data-desc="res:${esc(r)}">${a}${TECH_CUR[r] ?? r[0]}</span>`).join(' ') || '—';
+      Object.entries(f.cost)
+        .map(([r, a]) => `<span data-desc="res:${esc(r)}">${a}${TECH_CUR[r] ?? r[0]}</span>`)
+        .join(' ') || '—';
     h += `<div class="row dim">${comp} · <span data-desc="stat:datk">⚔${f.attack}</span> <span data-desc="stat:ddef">🛡${f.defense}</span> <span data-desc="stat:dhp">❤${f.hp}</span>${offLine} · ${cost}</div>`;
   } else {
     const comp = slots.map((u) => formIcon(u)).join('') || '—';
-    const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
+    const cost =
+      Object.entries(f.cost)
+        .map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`)
+        .join(' ') || '—';
     h += `<div class="row dim">${comp} · ⚔${f.attack} 🛡${f.defense} ❤${f.hp}${offLine} · ${cost}</div>`;
   }
   h += `<div class="row">`;
@@ -1505,7 +1612,9 @@ function divisionsHtml(planetId: string): string {
 function fleetDivisionsHtml(f: Fleet, here: Planet): string {
   const all = Object.values(divisionsOf(s));
   const carried = all.filter((d) => d.carriedBy === f.id);
-  const loadable = all.filter((d) => d.owner === ME && d.carriedBy == null && d.location === here.id);
+  const loadable = all.filter(
+    (d) => d.owner === ME && d.carriedBy == null && d.location === here.id,
+  );
   if (!carried.length && !loadable.length) return '';
   // Clamp the readout: a carrier that lost ships while loaded can hold more footprint
   // than its remaining capacity (carried footprint is reserved at load time, not
@@ -1565,7 +1674,8 @@ function orbitRingRadius(pl: { position: { x: number; y: number }; links?: strin
   }
   // cap the ring at ~40% of the gap to the nearest neighbour, then scale by zoom (so two
   // adjacent rings keep a gap and the ring never covers a neighbouring node).
-  const scale = nearest === Infinity ? orbitZoom() : Math.min(orbitZoom(), (nearest * 0.4) / ORBIT_R);
+  const scale =
+    nearest === Infinity ? orbitZoom() : Math.min(orbitZoom(), (nearest * 0.4) / ORBIT_R);
   return ORBIT_R * scale;
 }
 /** Angular position (radians) of a stationed fleet's orbit slot at index `idx` of
@@ -1941,7 +2051,12 @@ function drawFogMarker(c: { x: number; y: number }, id: string, mem: Snapshot | 
 /** Draw a coarse amber signature blip (size bucket S/M/L) at a screen point, no
  *  identity. `fade` (0..1) dims it — radar contacts are painted by the sweep and
  *  fade between passes (see drawRadarContacts). */
-function drawSignatureAt(pos: { x: number; y: number }, cls: 'S' | 'M' | 'L', fade: number, now: number): void {
+function drawSignatureAt(
+  pos: { x: number; y: number },
+  cls: 'S' | 'M' | 'L',
+  fade: number,
+  now: number,
+): void {
   const r = cls === 'L' ? 9 : cls === 'M' ? 7 : 5;
   const pulse = 0.5 + 0.5 * Math.sin(now / 200 + pos.x * 0.05);
   cx.save();
@@ -2082,7 +2197,11 @@ function launchTour(steps = ORIENTATION_TOUR, onEnd?: (r: TourResult) => void): 
   });
 }
 interface TourWindow {
-  __vdTour?: { start: (steps?: typeof HUD_ORIENTATION_TOUR) => void; stop: () => void; readonly active: boolean };
+  __vdTour?: {
+    start: (steps?: typeof HUD_ORIENTATION_TOUR) => void;
+    stop: () => void;
+    readonly active: boolean;
+  };
 }
 (window as unknown as TourWindow).__vdTour = {
   start: (steps) => launchTour(steps),
@@ -2200,7 +2319,11 @@ function updateGoals(): void {
     const cur = loadMeta();
     const bonus = 40;
     saveMeta({ ...cur, xp: cur.xp + bonus });
-    note(t('🏅 Все цели первой сессии выполнены! +{n} XP — ты готов к настоящему матчу.', { n: bonus }));
+    note(
+      t('🏅 Все цели первой сессии выполнены! +{n} XP — ты готов к настоящему матчу.', {
+        n: bonus,
+      }),
+    );
   }
 }
 function renderGoals(): void {
@@ -2336,7 +2459,8 @@ function tryAssaultGroup(fleetIds: string[], destId: string): void {
   const movers = fleetIds.filter((id) => s.fleets[id]);
   if (!movers.length) return;
   const blockers = new Set<string>();
-  for (const id of movers) for (const b of peaceBlockers(fleetNode(s.fleets[id]!), destId)) blockers.add(b);
+  for (const id of movers)
+    for (const b of peaceBlockers(fleetNode(s.fleets[id]!), destId)) blockers.add(b);
   const owner = s.planets[destId]?.owner;
   if (owner != null && owner !== ME && !canTraverse(s, ME, owner)) blockers.add(owner);
   if (blockers.size) {
@@ -2395,7 +2519,8 @@ function tryMoveEdgeGroup(fleetIds: string[], edge: { from: string; to: string; 
   const blockers = new Set<string>();
   for (const id of fleetIds) {
     const node = fleetNode(s.fleets[id]!);
-    for (const end of [edge.from, edge.to]) for (const b of peaceBlockers(node, end)) blockers.add(b);
+    for (const end of [edge.from, edge.to])
+      for (const b of peaceBlockers(node, end)) blockers.add(b);
   }
   if (blockers.size) {
     warPrompt = { fleetIds: [...fleetIds], destId: edge.to, edge, blockers: [...blockers] };
@@ -2433,7 +2558,10 @@ function renderWarPrompt(): void {
   const names = warPrompt.blockers.map((b) => esc(blockerName(b))).join(', ');
   const body = warPrompt.assault
     ? t('Это мир дружественной фракции. Вы хотите объявить войну <b>{names}</b>?', { names })
-    : t('Маршрут проходит через миры <b>{names}</b>, с кем у вас <b>мир</b>. Мирного прохода нет — движение сюда объявит <b>войну</b>.', { names });
+    : t(
+        'Маршрут проходит через миры <b>{names}</b>, с кем у вас <b>мир</b>. Мирного прохода нет — движение сюда объявит <b>войну</b>.',
+        { names },
+      );
   el.innerHTML =
     `<div class="wpbox">` +
     `<div class="wp-head">⚔ ${t('ОБЪЯВИТЬ ВОЙНУ?')}</div>` +
@@ -2563,7 +2691,9 @@ function handleEvents(events: DomainEvent[]) {
           note(
             t('⚔ бой у {at} завершён — {res}', {
               at: loc,
-              res: p.winner ? t('победа: {who}', { who: NAME[p.winner as string] ?? (p.winner as string) }) : t('ничья'),
+              res: p.winner
+                ? t('победа: {who}', { who: NAME[p.winner as string] ?? (p.winner as string) })
+                : t('ничья'),
             }) + (tally ? t(' · потери: {tally}', { tally }) : ''),
             loc,
           );
@@ -2574,7 +2704,13 @@ function handleEvents(events: DomainEvent[]) {
       }
       case 'technology.researched':
         if (p.playerId === ME)
-          note(t('⚛ изучено: {tech}', { tech: tData(data.technologies[p.technology as string]?.name ?? (p.technology as string)) }));
+          note(
+            t('⚛ изучено: {tech}', {
+              tech: tData(
+                data.technologies[p.technology as string]?.name ?? (p.technology as string),
+              ),
+            }),
+          );
         if (techWin.classList.contains('show')) renderTech();
         break;
       // «Хранитель» lifecycle: snapshot at delegation, diff on expiry (the morning report).
@@ -2583,7 +2719,9 @@ function handleEvents(events: DomainEvent[]) {
           stewSnapshot = stewMetrics();
           note(
             (p as { posture?: string }).posture === 'active_defend'
-              ? t('😴 Хранитель принял командование (Активная оборона) — держит рубежи и контратакует у своих миров.')
+              ? t(
+                  '😴 Хранитель принял командование (Активная оборона) — держит рубежи и контратакует у своих миров.',
+                )
               : t('😴 Хранитель принял командование (Оборона) — держит рубежи, пока вы спите.'),
           );
           if (stewWin.classList.contains('show')) renderSteward();
@@ -2607,11 +2745,15 @@ function handleEvents(events: DomainEvent[]) {
             : '';
           const logged = s.players[ME]?.stewardLog?.length ?? 0;
           const sitrep =
-            logged > 0 ? ' ' + t('Решений за вахту: {n} — журнал в окне Хранителя.', { n: String(logged) }) : '';
+            logged > 0
+              ? ' ' + t('Решений за вахту: {n} — журнал в окне Хранителя.', { n: String(logged) })
+              : '';
           note(
             ((p as { posture?: string }).posture === 'active_defend'
               ? t('🌅 Хранитель вернул вам управление (была «Активная оборона»).')
-              : t('🌅 Хранитель вернул вам управление (была «Оборона»).')) + diff + sitrep,
+              : t('🌅 Хранитель вернул вам управление (была «Оборона»).')) +
+              diff +
+              sitrep,
           );
           if (stewWin.classList.contains('show')) renderSteward();
         }
@@ -2646,10 +2788,17 @@ function handleEvents(events: DomainEvent[]) {
         if (diploOpen && diploTab === 'diplo') renderDiplo();
         if (p.owner !== ME) break;
         const what =
-          p.kind === 'treasury' ? t('казна') : p.kind === 'fleets' ? t('данные о флотах') : t('данные мира');
+          p.kind === 'treasury'
+            ? t('казна')
+            : p.kind === 'fleets'
+              ? t('данные о флотах')
+              : t('данные мира');
         {
           const line = p.spy
-            ? t('🛡 Контрразведка: агент {who} пойман при попытке кражи ({what})!', { who: NAME[p.spy as string] ?? (p.spy as string), what })
+            ? t('🛡 Контрразведка: агент {who} пойман при попытке кражи ({what})!', {
+                who: NAME[p.spy as string] ?? (p.spy as string),
+                what,
+              })
             : t('🛡 Контрразведка: утечка разведданных ({what}) — вор не установлен', { what });
           note(line);
           pushSpyLog(line);
@@ -2658,10 +2807,19 @@ function handleEvents(events: DomainEvent[]) {
       }
       case 'planet.captured':
         if (p.owner === ME || known(p.planetId as string)) {
-          note(t('🚩 {who} захватил {at}', { who: NAME[p.owner as string] ?? (p.owner as string), at: p.planetId as string }), p.planetId as string);
+          note(
+            t('🚩 {who} захватил {at}', {
+              who: NAME[p.owner as string] ?? (p.owner as string),
+              at: p.planetId as string,
+            }),
+            p.planetId as string,
+          );
           // light the flipped province up in its new owner's colour (fog-gated: only
           // a capture we may see flashes) — re-capture restarts the wave.
-          captureFlashes.set(p.planetId as string, { owner: p.owner as string, at: performance.now() });
+          captureFlashes.set(p.planetId as string, {
+            owner: p.owner as string,
+            at: performance.now(),
+          });
         }
         if (diploOpen && diploTab === 'diplo') renderDiplo(); // province counts shifted
         break;
@@ -2692,13 +2850,23 @@ function handleEvents(events: DomainEvent[]) {
         const to = p.to as string;
         const st = p.stance as DiplomaticStance;
         if (to === ME) {
-          note(t('🕊 {who} предлагает: {stance} — ответьте тем же в Дипломатии', { who: NAME[from] ?? from, stance: stanceRu(st) }));
+          note(
+            t('🕊 {who} предлагает: {stance} — ответьте тем же в Дипломатии', {
+              who: NAME[from] ?? from,
+              stance: stanceRu(st),
+            }),
+          );
           pushMsg(from, t('Предложение: {stance}', { stance: stanceRu(st) }), true, from);
           unreadMsgs++;
         } else if (from === ME && !isAiSeat(to)) {
           // A bot answers inside the same order (accept/decline follows in this very
           // batch) — the "sent" line is only worth showing when a human must reply.
-          note(t('⏳ {who}: предложение отправлено — {stance}', { who: NAME[to] ?? to, stance: stanceRu(st) }));
+          note(
+            t('⏳ {who}: предложение отправлено — {stance}', {
+              who: NAME[to] ?? to,
+              stance: stanceRu(st),
+            }),
+          );
         }
         if (diploOpen && diploTab === 'diplo') renderDiplo();
         break;
@@ -2708,27 +2876,57 @@ function handleEvents(events: DomainEvent[]) {
         const to = p.to as string;
         const st = p.stance as DiplomaticStance;
         if (from === ME) {
-          pushMsg(to, t('{who} отклонил предложение: {stance}', { who: NAME[to] ?? to, stance: stanceRu(st) }), true, to);
+          pushMsg(
+            to,
+            t('{who} отклонил предложение: {stance}', {
+              who: NAME[to] ?? to,
+              stance: stanceRu(st),
+            }),
+            true,
+            to,
+          );
           note(t('✖ {who} отклонил: {stance}', { who: NAME[to] ?? to, stance: stanceRu(st) }));
         }
         if (diploOpen && diploTab === 'diplo') renderDiplo();
         break;
       }
       case 'building.constructed':
-        note(t('🏗️ {b}: построено на {at}', { b: buildingName(p.building as string), at: p.planetId as string }));
+        note(
+          t('🏗️ {b}: построено на {at}', {
+            b: buildingName(p.building as string),
+            at: p.planetId as string,
+          }),
+        );
         if (p.building === 'starfort') installFortressAA(p.planetId as string);
         break;
       case 'building.upgraded':
-        note(t('⬆️ {b} → L{lvl} на {at}', { b: buildingName(p.building as string), lvl: String(p.level), at: p.planetId as string }));
+        note(
+          t('⬆️ {b} → L{lvl} на {at}', {
+            b: buildingName(p.building as string),
+            lvl: String(p.level),
+            at: p.planetId as string,
+          }),
+        );
         break;
       case 'building.destroyed':
-        note(t('💥 {b}: разрушено на {at}', { b: buildingName(p.building as string), at: p.planetId as string }), p.planetId as string);
+        note(
+          t('💥 {b}: разрушено на {at}', {
+            b: buildingName(p.building as string),
+            at: p.planetId as string,
+          }),
+          p.planetId as string,
+        );
         break;
       case 'unit.built':
         note(`🛠️ ${p.count}× ${displayUnit(p.unit as string)} · ${p.planetId}`);
         break;
       case 'fleet.launched':
-        note(t('🚀 {who} поднял флот с {at}', { who: NAME[p.owner as string] ?? (p.owner as string), at: p.planetId as string }));
+        note(
+          t('🚀 {who} поднял флот с {at}', {
+            who: NAME[p.owner as string] ?? (p.owner as string),
+            at: p.planetId as string,
+          }),
+        );
         break;
       case 'aa.fired': {
         const planet = s.planets[p.planetId as string];
@@ -2738,7 +2936,12 @@ function handleEvents(events: DomainEvent[]) {
           x: planet.position.x + 6,
           y: planet.position.y - 14, // the victim died this volley — burst over the orbit
         };
-        aaShots.push({ from: { ...planet.position }, to, at: performance.now(), close: p.tier === 'close' });
+        aaShots.push({
+          from: { ...planet.position },
+          to,
+          at: performance.now(),
+          close: p.tier === 'close',
+        });
         while (aaShots.length > 40) aaShots.shift();
         break;
       }
@@ -2758,7 +2961,12 @@ function handleEvents(events: DomainEvent[]) {
         const shooterNode = shooter.location ?? shooter.edge?.from;
         const nearNode = (p.near as string) ?? '';
         if (!(shooterNode && known(shooterNode)) && !known(nearNode)) break;
-        siegeShots.push({ from: { ...from }, to: { x: to.x, y: to.y }, at: performance.now(), seed: siegeSeed++ });
+        siegeShots.push({
+          from: { ...from },
+          to: { x: to.x, y: to.y },
+          at: performance.now(),
+          seed: siegeSeed++,
+        });
         while (siegeShots.length > 24) siegeShots.shift();
         break;
       }
@@ -2873,11 +3081,15 @@ function checkFleetClashes() {
 
 /** The CC-2 auto-storm stance of a fleet — authoritative state in NET, local Set solo. */
 function isAutoAssault(fleetId: string): boolean {
-  return NET ? ((s as { autoAssault?: Record<string, true> }).autoAssault?.[fleetId] ?? false) : autoAssault.has(fleetId);
+  return NET
+    ? ((s as { autoAssault?: Record<string, true> }).autoAssault?.[fleetId] ?? false)
+    : autoAssault.has(fleetId);
 }
 /** The CC-4 standing patrol of a fleet — authoritative state in NET, local Map solo. */
 function patrolOf(fleetId: string): Patrol | undefined {
-  return NET ? (s as { patrols?: Record<string, Patrol> }).patrols?.[fleetId] : patrols.get(fleetId);
+  return NET
+    ? (s as { patrols?: Record<string, Patrol> }).patrols?.[fleetId]
+    : patrols.get(fleetId);
 }
 /** «≈14ч» / «≈2д 3ч» — plan durations are game-hours, like every duration in the UI. */
 function fmtHrs(h: number): string {
@@ -2913,12 +3125,14 @@ function drivePatrols(): void {
       continue;
     }
     const spec = sortieSpec(f);
-    for (let i = 0; i < rounds && p.sortie.rearming > 0; i++) p.sortie = tickRearm(p.sortie, spec.maxFuel);
+    for (let i = 0; i < rounds && p.sortie.rearming > 0; i++)
+      p.sortie = tickRearm(p.sortie, spec.maxFuel);
     if (!fleetIdle(f)) continue; // busy (transit / battle) — let it resolve first
     // Hostile, identified contacts parked on a node — the wing's legal targets.
     const targets: Array<{ id: string; location: string; pos: { x: number; y: number } }> = [];
     for (const g of Object.values(s.fleets)) {
-      if (g.owner === ME || !g.location || g.movement || !g.units.some((u) => u.count > 0)) continue;
+      if (g.owner === ME || !g.location || g.movement || !g.units.some((u) => u.count > 0))
+        continue;
       if (g.battleId) continue; // in a battle — engage would reject, yet the sortie fuel is spent (BF-30)
       if (getStance(s, ME, g.owner) !== 'war') continue; // only declared enemies — never auto-war
       if (!known(g.location)) continue; // identified only — "опознанная цель в зоне видимости"
@@ -3053,9 +3267,12 @@ function targetBrackets(x: number, y: number, r: number, t: number) {
   cx.restore();
 }
 
-
-
-function drawBattlePulse(x: number, y: number, pulse: number, phase: 'orbital' | 'ground' = 'orbital') {
+function drawBattlePulse(
+  x: number,
+  y: number,
+  pulse: number,
+  phase: 'orbital' | 'ground' = 'orbital',
+) {
   // Two DIFFERENT pictures for the two battle phases (the audit found them
   // indistinguishable): orbital = the familiar red expanding rings (a dogfight in
   // space); ground = an amber pulse hugging the surface + a flat "front line" bar.
@@ -3774,7 +3991,13 @@ function render(now: number) {
           const ang = ((shot.seed * 7 + sh * 5 + spk) % 12) * (TAU / 12) + 0.35;
           const r = (4 + k * 14) * sk;
           cx.beginPath();
-          cx.arc(b.x + Math.cos(ang) * r, b.y + Math.sin(ang) * r * 0.8, Math.max(0.8, 1.3 * sk), 0, TAU);
+          cx.arc(
+            b.x + Math.cos(ang) * r,
+            b.y + Math.sin(ang) * r * 0.8,
+            Math.max(0.8, 1.3 * sk),
+            0,
+            TAU,
+          );
           cx.fill();
         }
       }
@@ -4214,7 +4437,11 @@ function render(now: number) {
       cx.fillStyle = kn ? (p.owner ? col : '#9fc9c4') : 'rgba(120,140,150,0.55)';
       cx.font = '700 12px ui-monospace,Menlo,monospace';
     } else {
-      cx.fillStyle = kn ? (p.owner ? rgba(col, 0.72) : 'rgba(150,190,196,0.5)') : 'rgba(120,140,150,0.4)';
+      cx.fillStyle = kn
+        ? p.owner
+          ? rgba(col, 0.72)
+          : 'rgba(150,190,196,0.5)'
+        : 'rgba(120,140,150,0.4)';
       cx.font = '600 10px ui-monospace,Menlo,monospace';
     }
     cx.fillText(n.id, c.x + R + 12, c.y - 1);
@@ -4226,7 +4453,9 @@ function render(now: number) {
       // worlds always show telemetry; a quiet sector only when it holds something
       if (isWorld || g > 0 || p.buildings.length) {
         cx.fillStyle = rgba('#96d2cd', isWorld ? 0.6 : 0.42);
-        cx.font = isWorld ? '10px ui-monospace,Menlo,monospace' : '9px ui-monospace,Menlo,monospace';
+        cx.font = isWorld
+          ? '10px ui-monospace,Menlo,monospace'
+          : '9px ui-monospace,Menlo,monospace';
         cx.fillText(`G:${g}  B:${icons || '—'}`, c.x + R + 12, c.y + (isWorld ? 12 : 11));
       }
     } else if (!kn && detail > 0) {
@@ -4251,7 +4480,8 @@ function render(now: number) {
     if (!pl) continue;
     // orbit only on types that have one (cities); a fortress gives a junction one too
     const fortified =
-      pl.buildings.some((b) => b.type === 'starfort') || (pl.garrison ?? []).some((u) => u.count > 0);
+      pl.buildings.some((b) => b.type === 'starfort') ||
+      (pl.garrison ?? []).some((u) => u.count > 0);
     if (!SECTOR_TYPES[SECTOR_OF[pid]]?.orbit && !fortified) continue;
     const pc = world(pl.position);
     if (!visible(pc, 80)) continue;
@@ -4512,6 +4742,19 @@ function render(now: number) {
     drawCargoRow(diaRow, 5); // ромбы — ближний к базе ряд
     drawCargoRow(sqRow, diaRow.length ? 5 + CELL : 5); // квадраты — своим рядом ниже
 
+    if (f.owner === ME && chainStepsOf(f.id)) {
+      // TGT-1: an army carrying a standing plan breathes a dashed accent ring —
+      // one glance tells which fleets are already "spoken for".
+      const pu = 0.5 + 0.5 * Math.sin(now / 300);
+      cx.save();
+      cx.strokeStyle = rgba(ownerColor(ME), 0.3 + 0.4 * pu);
+      cx.lineWidth = 1.3;
+      cx.setLineDash([4, 4]);
+      cx.beginPath();
+      cx.arc(A.x, A.y, 12.5, 0, TAU);
+      cx.stroke();
+      cx.restore();
+    }
     if (selFleet === f.id || selFleets.has(f.id)) {
       targetBrackets(A.x, A.y, 15, now);
       // Artillery: show the standoff firing radius (and a focus line to a chosen
@@ -4566,9 +4809,9 @@ function render(now: number) {
     cx.restore();
   }
   drawPings(now); // ally ping markers (coalition), with screen hit-boxes for taps
+  drawTargetMarkers(now); // TGT-1: standing order reticles (tap = edit the plan)
   drawAssaultTargets();
   drawAimPreview();
-
 }
 
 // --- side panel --------------------------------------------------------------
@@ -4621,7 +4864,9 @@ function pausedLabel(site: PausedConstructionSite): string {
 function conveyorHtml(planetId: string, lane: BuildLane): string {
   const active = activeConstruction(planetId, lane);
   const queued = queueOf(planetId)[lane];
-  const paused = (s.planets[planetId]?.pausedConstruction ?? []).filter((p) => laneOf(p.kind) === lane);
+  const paused = (s.planets[planetId]?.pausedConstruction ?? []).filter(
+    (p) => laneOf(p.kind) === lane,
+  );
   let html = `<div class="conveyor">`;
   if (active) {
     // The live % / remaining-time are patched in each frame by updatePanelLive() and
@@ -4665,7 +4910,14 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
 function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit'): string {
   const k = kind === 'unit' ? 'u' : 'b';
   const tiles = ids
-    .map((id) => codexTile(k, id, cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost), true))
+    .map((id) =>
+      codexTile(
+        k,
+        id,
+        cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost),
+        true,
+      ),
+    )
     .join('');
   return tiles ? `<div class="ptiles">${tiles}</div>` : '';
 }
@@ -4713,11 +4965,14 @@ function fleetPanelHtml(f: Fleet): string {
     curHull += st.hp ?? m;
   }
   const hullPct = maxHull > 0 ? Math.round((curHull / maxHull) * 100) : 100;
-  const hullTag = hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}${t('корпус {p}%', { p: hullPct })}` : '';
+  const hullTag =
+    hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}${t('корпус {p}%', { p: hullPct })}` : '';
   let h = cardHeader(
     ownerColor(f.owner),
     t('ФЛОТ'),
-    (pcUi() ? t('Корабли: {s} · Десант: {tr}', { s: nShips, tr: nTr }) : t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr })) +
+    (pcUi()
+      ? t('Корабли: {s} · Десант: {tr}', { s: nShips, tr: nTr })
+      : t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr })) +
       hullTag +
       (inOrbit ? ' · ' + t('на орбите') : '') +
       (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
@@ -4738,20 +4993,29 @@ function fleetPanelHtml(f: Fleet): string {
   }
   const spdTxt = spd === Infinity ? '—' : String(spd);
   const flavor: string[] = [];
-  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero'))) flavor.push(t('с героем-флагманом'));
-  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery'))) flavor.push(t('с осадной артиллерией'));
-  if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0)) flavor.push(t('со своим радарным дозором'));
+  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero')))
+    flavor.push(t('с героем-флагманом'));
+  if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('artillery')))
+    flavor.push(t('с осадной артиллерией'));
+  if (f.units.some((u) => u.count > 0 && (data.units[u.unit]?.radarRange ?? 0) > 0))
+    flavor.push(t('со своим радарным дозором'));
   // PC drops the intro blurb (the header + stat chips already say it); phones keep it.
   if (!pcUi()) {
     const blurb =
       nShips === 0
         ? t('Пустая группа корпусов — кораблей на борту нет.')
-        : t('Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.', { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' });
+        : t(
+            'Эскадра из {n} корабл.{fl} Суммарный вес ниже; идёт со скоростью самого медленного корпуса.',
+            { n: nShips, fl: flavor.length ? ' — ' + flavor.join(', ') + '.' : '.' },
+          );
     h += `<div class="row dim">${blurb}</div>`;
   }
   h += `<div class="pstats"><span data-desc="stat:atk">⚔ ${t('АТК')} ${atk}</span><span data-desc="stat:def">🛡 ${t('ЗАЩ')} ${def}</span><span data-desc="stat:hp">❤ ${t('ОЗ')} ${hpTot}</span><span data-desc="stat:spd">⚡ ${t('СКР')} ${spdTxt}</span></div>`;
-  h += nShips ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units) : '';
-  if (nTr > 0) h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
+  h += nShips
+    ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units)
+    : '';
+  if (nTr > 0)
+    h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
 
   // Artillery rules of engagement — passive / return / standard / aggressive.
   if (f.owner === ME && fleetHasArtillery(f)) {
@@ -4759,7 +5023,11 @@ function fleetPanelHtml(f: Fleet): string {
     const mbtn = (m: string, lbl: string) =>
       btn('barragemode', m, (mode === m ? '● ' : '') + lbl, mode !== m);
     h += `<div class="sec">${t('Артиллерия — режим огня')}</div><div class="row">`;
-    h += mbtn('passive', t('Пассив')) + mbtn('return', t('Ответ')) + mbtn('standard', t('Станд')) + mbtn('aggressive', t('Агрес'));
+    h +=
+      mbtn('passive', t('Пассив')) +
+      mbtn('return', t('Ответ')) +
+      mbtn('standard', t('Станд')) +
+      mbtn('aggressive', t('Агрес'));
     h += `</div>`;
     h += `<div class="hint">${t('Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.')}</div>`;
   }
@@ -4770,7 +5038,12 @@ function fleetPanelHtml(f: Fleet): string {
   if (f.owner === ME && fleetHasSquadron(f)) {
     const wing = squadronTake(f).reduce((n, u) => n + u.count, 0);
     h += `<div class="sec">${t('Авиагруппа')}</div><div class="row">`;
-    h += btn('launchsquad', '', t('🛩 Запустить эскадрилью ({n})', { n: wing }), fleetCanLaunchSquadron(f));
+    h += btn(
+      'launchsquad',
+      '',
+      t('🛩 Запустить эскадрилью ({n})', { n: wing }),
+      fleetCanLaunchSquadron(f),
+    );
     h += `</div>`;
     h += `<div class="hint">${t('Отделяет эскадрильи в отдельный быстрый флот — уводите его на удар, а носитель остаётся в строю. Нужен хотя бы один не-эскадрильный корабль. Контрится орбитальным ПВО.')}</div>`;
 
@@ -4781,7 +5054,10 @@ function fleetPanelHtml(f: Fleet): string {
     h += btn('qscramble', '', pt ? t('🛩 дежурный вылет: ВКЛ') : t('🛩 дежурный вылет: выкл'), true);
     h += `</div>`;
     if (pt) {
-      const status = pt.sortie.rearming > 0 ? t('перезарядка {n}', { n: pt.sortie.rearming }) : t('топливо {n}', { n: pt.sortie.fuel });
+      const status =
+        pt.sortie.rearming > 0
+          ? t('перезарядка {n}', { n: pt.sortie.rearming })
+          : t('топливо {n}', { n: pt.sortie.fuel });
       h += `<div class="row dim">${t('радиус {r}', { r: Math.round(pt.radius) })} · ${status}</div>`;
     }
     h += `<div class="hint">${t('Во «включено» эскадрилья сама вылетает на удар по опознанному врагу (с кем война), вошедшему в радиус удара — тратит топливо за вылет, затем перезарядка. Так дежурит, пока вы вышли.')}</div>`;
@@ -4799,7 +5075,13 @@ function fleetPanelHtml(f: Fleet): string {
   if (f.owner === ME) {
     const auto = isAutoAssault(f.id);
     h += `<div class="sec">${t('Дежурный режим')}</div><div class="row">`;
-    h += btn('qauto', '', auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'), true, pcUi() ? 'act:qauto' : undefined);
+    h += btn(
+      'qauto',
+      '',
+      auto ? t('⚔ авто-штурм: ВКЛ') : t('⚔ авто-штурм: выкл'),
+      true,
+      pcUi() ? 'act:qauto' : undefined,
+    );
     h += `</div>`;
     // PC: the explanation lives in the button's hover dossier ('act:qauto')
     if (!pcUi()) {
@@ -4813,7 +5095,8 @@ function fleetPanelHtml(f: Fleet): string {
     // every frame, so it's a placeholder here (stable signature → no rebuild) and
     // patched in place by updatePanelLive() — keeps the panel's buttons put.
     const dest = f.movement.destination ?? f.movement.to;
-    const restH = dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
+    const restH =
+      dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
     h += `<div class="row">${t('↗ идёт к {dest} · прибытие через', { dest: `<b>${esc(dest)}</b>` })} <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b></div>`;
   } else if (f.edge) {
     const pct = Math.round(f.edge.t * 100);
@@ -4852,7 +5135,8 @@ function fleetPanelHtml(f: Fleet): string {
       }</div>`;
   } else {
     // enemy/neutral world you can act on — empty space is pass-through only
-    const hostile = here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
+    const hostile =
+      here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
     const cols: string[] = [];
     if (hostile) {
       let at = `<div class="sec">${t('Удар')}</div><div class="row">`;
@@ -4880,14 +5164,17 @@ function fleetPanelHtml(f: Fleet): string {
             : pv.outcome === 'defender'
               ? t('гарнизон устоит')
               : t('затяжной пат');
-        at += `<div class="row dim">${t('Прогноз штурма: {v} · ~{r} р. · потери {a} дес. ({pa}%) / {d} гарн. ({pd}%)', {
-          v: `<b>${verdict}</b>`,
-          r: pv.roundsEst,
-          a: previewLossCount(pv.attacker),
-          pa: Math.round(pv.attacker.damageFraction * 100),
-          d: previewLossCount(pv.defender),
-          pd: Math.round(pv.defender.damageFraction * 100),
-        })}</div>`;
+        at += `<div class="row dim">${t(
+          'Прогноз штурма: {v} · ~{r} р. · потери {a} дес. ({pa}%) / {d} гарн. ({pd}%)',
+          {
+            v: `<b>${verdict}</b>`,
+            r: pv.roundsEst,
+            a: previewLossCount(pv.attacker),
+            pa: Math.round(pv.attacker.damageFraction * 100),
+            d: previewLossCount(pv.defender),
+            pd: Math.round(pv.defender.damageFraction * 100),
+          },
+        )}</div>`;
         at += `<div class="hint">${t('Прогноз по видимым составам, без бонусов местности, укреплений и технологий — реальный бой может отличаться.')}</div>`;
       }
       cols.push(at);
@@ -4903,16 +5190,23 @@ function fleetPanelHtml(f: Fleet): string {
         ga += `<div class="row">`;
         for (const st of groundHere) {
           const sz = data.units[st.unit]?.stats.cargoSize ?? 1;
-          ga += btn('load', st.unit, t('▲ Погрузить {u}', { u: displayUnit(st.unit) }), sz <= freeHold);
+          ga += btn(
+            'load',
+            st.unit,
+            t('▲ Погрузить {u}', { u: displayUnit(st.unit) }),
+            sz <= freeHold,
+          );
         }
         ga += `</div>`;
       }
       if (carried.length) {
         ga += `<div class="row">`;
-        for (const st of carried) ga += btn('unload', st.unit, t('▼ Выгрузить {u}', { u: displayUnit(st.unit) }), true);
+        for (const st of carried)
+          ga += btn('unload', st.unit, t('▼ Выгрузить {u}', { u: displayUnit(st.unit) }), true);
         ga += `</div>`;
       }
-      if (loadingN) ga += `<div class="hint">${t('⏳ погрузка: {n} (≈1ч на единицу)', { n: loadingN })}</div>`;
+      if (loadingN)
+        ga += `<div class="hint">${t('⏳ погрузка: {n} (≈1ч на единицу)', { n: loadingN })}</div>`;
       if (!groundHere.length && !carried.length && !loadingN)
         ga += `<div class="row dim">${t('наземной армии здесь нет')}</div>`;
       cols.push(ga);
@@ -4976,7 +5270,11 @@ function planetPanelHtml(p: Planet): string {
   const gcount = sumUnits(p.garrison);
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
   let h =
-    cardHeader(ownerColor(p.owner), p.id, `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`) +
+    cardHeader(
+      ownerColor(p.owner),
+      p.id,
+      `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
+    ) +
     `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
@@ -5020,7 +5318,12 @@ function planetPanelHtml(p: Planet): string {
     h += `<div class="row">${
       live
         ? `<b style="color:var(--cyan)">${t('🕵 Окно разведки')}</b> <span class="dim">${t('ещё {left}', { left: fmtEta(Math.max(0, live.until - s.time) / HOUR) })}</span>`
-        : btn('spyplanet', p.owner, t('🕵 Разведать мир · {c}¤', { c: SPY_COST }), afford({ credits: SPY_COST }))
+        : btn(
+            'spyplanet',
+            p.owner,
+            t('🕵 Разведать мир · {c}¤', { c: SPY_COST }),
+            afford({ credits: SPY_COST }),
+          )
     }</div>`;
   }
 
@@ -5038,7 +5341,10 @@ function planetPanelHtml(p: Planet): string {
     // PC: one tile row of icon·count chips (the tab's old bottom hint lives in the
     // ЗЕМЛЯ tab's hover dossier, 'tab:ground'). Mobile keeps the original row list
     // and bottom hint untouched.
-    cols.push(`<div class="sec">${t('Наземные части')}</div>` + (pcUi() ? garrisonTilesHtml(ground) : unitRows(ground)));
+    cols.push(
+      `<div class="sec">${t('Наземные части')}</div>` +
+        (pcUi() ? garrisonTilesHtml(ground) : unitRows(ground)),
+    );
     if (mine) {
       cols.push(divisionsHtml(p.id));
       const groundBuilds = BUILD_UNITS.filter((u) => isGround(u));
@@ -5178,62 +5484,97 @@ function buildingDossier(id: string, level: number): Dossier | null {
     case 'mine':
       return {
         name,
-        body: t('Буровая платформа, вгрызающаяся в рудное тело планеты. Добывает {m} металла в час. Каждый новый горизонт вскрывает более плотную жилу — выработка растёт в полтора раза, и из этого металла куётся весь флот.', { m: hl(metal) }),
+        body: t(
+          'Буровая платформа, вгрызающаяся в рудное тело планеты. Добывает {m} металла в час. Каждый новый горизонт вскрывает более плотную жилу — выработка растёт в полтора раза, и из этого металла куётся весь флот.',
+          { m: hl(metal) },
+        ),
       };
     case 'refinery':
       return {
         name,
-        body: t('Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c} в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.', { c: hl(credits) }),
+        body: t(
+          'Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c} в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.',
+          { c: hl(credits) },
+        ),
       };
     case 'barracks':
       return {
         name,
-        body: t('Гарнизонный учебный лагерь. Куёт наземные подразделения и держит планетарную оборону в тонусе. Мир без казарм беззащитен перед первой же десантной волной.'),
+        body: t(
+          'Гарнизонный учебный лагерь. Куёт наземные подразделения и держит планетарную оборону в тонусе. Мир без казарм беззащитен перед первой же десантной волной.',
+        ),
       };
     case 'radar':
       return {
         name,
-        body: t('Сеть глубокого сканирования. Просвечивает пустоту в радиусе {r} и ловит чужие сигнатуры задолго до того, как они выйдут на дистанцию удара. Апгрейд раздвигает горизонт обнаружения.', { r: hl(lv.radarRange ?? 0) }),
+        body: t(
+          'Сеть глубокого сканирования. Просвечивает пустоту в радиусе {r} и ловит чужие сигнатуры задолго до того, как они выйдут на дистанцию удара. Апгрейд раздвигает горизонт обнаружения.',
+          { r: hl(lv.radarRange ?? 0) },
+        ),
       };
     case 'fort':
       return {
         name,
-        body: t('Эшелонированный планетарный бастион. Поднимает оборону гарнизона на {d} и держит {hp} структурной прочности под орбитальным огнём. Последний рубеж осаждённого мира.', { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) }),
+        body: t(
+          'Эшелонированный планетарный бастион. Поднимает оборону гарнизона на {d} и держит {hp} структурной прочности под орбитальным огнём. Последний рубеж осаждённого мира.',
+          { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) },
+        ),
       };
     case 'starfort':
       return {
         name,
-        body: t('Автономная крепость, вмороженная в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.', { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) }),
+        body: t(
+          'Автономная крепость, вмороженная в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.',
+          { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) },
+        ),
       };
     case 'orbital_aa':
       return {
         name,
-        body: t('Стационарная зенитная батарея — неподвижное сооружение, {dmg} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.', { dmg: hl(lv.aaDamage ?? 0) }),
+        body: t(
+          'Стационарная зенитная батарея — неподвижное сооружение, {dmg} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.',
+          { dmg: hl(lv.aaDamage ?? 0) },
+        ),
       };
     case 'metal_station':
       return {
         name,
-        body: t('Добывающая платформа, вгрызающаяся в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m} металла в час, и каждый новый ярус наращивает поток. Единственная причина держать выжженное пепелище под флагом.', { m: hl(metal) }),
+        body: t(
+          'Добывающая платформа, вгрызающаяся в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m} металла в час, и каждый новый ярус наращивает поток. Единственная причина держать выжженное пепелище под флагом.',
+          { m: hl(metal) },
+        ),
       };
     case 'tax_office':
       return {
         name,
-        body: t('Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}. Возводится один раз — бюрократию не масштабируют, её терпят.', { b: hl(pct(TAX_OFFICE_BONUS)) }),
+        body: t(
+          'Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}. Возводится один раз — бюрократию не масштабируют, её терпят.',
+          { b: hl(pct(TAX_OFFICE_BONUS)) },
+        ),
       };
     case 'farm':
       return {
         name,
-        body: t('Ярусы гидропонных оранжерей под спектральными лампами: {f} пищи в час. Пехота, танкисты и рабочие фабрик едят каждый день — армия без ферм тратит запасы, а не пополняет их.', { f: hl(lv.produces.food ?? 0) }),
+        body: t(
+          'Ярусы гидропонных оранжерей под спектральными лампами: {f} пищи в час. Пехота, танкисты и рабочие фабрик едят каждый день — армия без ферм тратит запасы, а не пополняет их.',
+          { f: hl(lv.produces.food ?? 0) },
+        ),
       };
     case 'power_plant':
       return {
         name,
-        body: t('Термоядерный реактор планетарной сети: {e} энергии в час. Энергия — кровь застройки: перерабатывающие комплексы, радары, ПКО и фабрики тянут ток каждый день, а при дефиците проседают до половины мощности.', { e: hl(lv.produces.energy ?? 0) }),
+        body: t(
+          'Термоядерный реактор планетарной сети: {e} энергии в час. Энергия — кровь застройки: перерабатывающие комплексы, радары, ПКО и фабрики тянут ток каждый день, а при дефиците проседают до половины мощности.',
+          { e: hl(lv.produces.energy ?? 0) },
+        ),
       };
     case 'fabricator':
       return {
         name,
-        body: t('Чистые цеха литографии: {m} микроэлектроники в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.', { m: hl(lv.produces.microelectronics ?? 0) }),
+        body: t(
+          'Чистые цеха литографии: {m} микроэлектроники в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.',
+          { m: hl(lv.produces.microelectronics ?? 0) },
+        ),
       };
     default:
       return { name, body: t('Планетарное сооружение.') };
@@ -5248,32 +5589,50 @@ function unitDossier(id: string): Dossier | null {
     case 'scout':
       return {
         name: t('Разведчик'),
-        body: t('Лёгкий разведывательный корпус. Быстрый (ход {sp}) и почти неслышный (сигнатура {sig}) — чертит карту пустоты там, куда боится соваться линейный флот.', { sp: hl(st.speed), sig: hl(def.signature ?? 1) }),
+        body: t(
+          'Лёгкий разведывательный корпус. Быстрый (ход {sp}) и почти неслышный (сигнатура {sig}) — чертит карту пустоты там, куда боится соваться линейный флот.',
+          { sp: hl(st.speed), sig: hl(def.signature ?? 1) },
+        ),
       };
     case 'cruiser':
       return {
         name: t('Крейсер'),
-        body: t('Рабочая лошадь линейного флота: {a} атаки, {hp} корпуса и трюм на {c}. Универсальный боевой корабль, одинаково уверенный в обороне и в наступлении.', { a: hl(st.attack), hp: hl(st.hp), c: hl(st.cargoCapacity ?? 0) }),
+        body: t(
+          'Рабочая лошадь линейного флота: {a} атаки, {hp} корпуса и трюм на {c}. Универсальный боевой корабль, одинаково уверенный в обороне и в наступлении.',
+          { a: hl(st.attack), hp: hl(st.hp), c: hl(st.cargoCapacity ?? 0) },
+        ),
       };
     case 'siege':
       return {
         name: t('Осадная платформа'),
-        body: t('Тяжёлая осадная платформа: {a} урона с дистанции {r}, но тонкая броня ({d} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.', { a: hl(st.attack), r: hl(st.range ?? 0), d: hl(st.defense) }),
+        body: t(
+          'Тяжёлая осадная платформа: {a} урона с дистанции {r}, но тонкая броня ({d} защиты). Её место за спинами крейсеров, откуда она крушит укрепления и верфи.',
+          { a: hl(st.attack), r: hl(st.range ?? 0), d: hl(st.defense) },
+        ),
       };
     case 'strike_carrier':
       return {
         name: t('Ударный носитель'),
-        body: t('Медленный бронированный носитель ({hp} корпуса, трюм на {c}) — своих пушек почти нет, вся его сила в эскадрильях, что он несёт. Держите его позади и запускайте авиагруппу по цели кнопкой «🛩 Запустить эскадрилью».', { hp: hl(st.hp), c: hl(st.cargoCapacity ?? 0) }),
+        body: t(
+          'Медленный бронированный носитель ({hp} корпуса, трюм на {c}) — своих пушек почти нет, вся его сила в эскадрильях, что он несёт. Держите его позади и запускайте авиагруппу по цели кнопкой «🛩 Запустить эскадрилью».',
+          { hp: hl(st.hp), c: hl(st.cargoCapacity ?? 0) },
+        ),
       };
     case 'fighter_squadron':
       return {
         name: t('Истребительная эскадрилья'),
-        body: t('Палубная эскадрилья: стремительная (ход {sp}) и больно бьёт ({a} атаки), но брони почти нет ({hp} корпуса). Отделяется от носителя в отдельный быстрый флот и наносит удар с дистанции {r}. Контрится орбитальным ПВО — не гоните её на прикрытую ПВО планету.', { sp: hl(st.speed), a: hl(st.attack), hp: hl(st.hp), r: hl(st.strikeRange ?? 0) }),
+        body: t(
+          'Палубная эскадрилья: стремительная (ход {sp}) и больно бьёт ({a} атаки), но брони почти нет ({hp} корпуса). Отделяется от носителя в отдельный быстрый флот и наносит удар с дистанции {r}. Контрится орбитальным ПВО — не гоните её на прикрытую ПВО планету.',
+          { sp: hl(st.speed), a: hl(st.attack), hp: hl(st.hp), r: hl(st.strikeRange ?? 0) },
+        ),
       };
     case 'hero':
       return {
         name: t('Флагман'),
-        body: t('Боевая проекция самого командующего — флагман во главе родного флота: {a} атаки и {hp} корпуса. Но решает не это: его присутствие держит эскадру в кулаке, давая {b} к атаке и обороне всем кораблям рядом. Падёт — командующий лишается проекции, пока та не отстроится заново на родном мире.', { a: hl(st.attack), hp: hl(st.hp), b: hl('+5%') }),
+        body: t(
+          'Боевая проекция самого командующего — флагман во главе родного флота: {a} атаки и {hp} корпуса. Но решает не это: его присутствие держит эскадру в кулаке, давая {b} к атаке и обороне всем кораблям рядом. Падёт — командующий лишается проекции, пока та не отстроится заново на родном мире.',
+          { a: hl(st.attack), hp: hl(st.hp), b: hl('+5%') },
+        ),
       };
     default:
       // PC hover tooltip: the name alone is enough (an empty body is skipped by the
@@ -5312,7 +5671,10 @@ function taskDossier(
   progress: number,
   remainingH: number | null,
 ): Dossier {
-  const eta = remainingH !== null ? t('Осталось: {r}', { r: hl(fmtEta(remainingH)) }) : t('В очереди — ещё не начато.');
+  const eta =
+    remainingH !== null
+      ? t('Осталось: {r}', { r: hl(fmtEta(remainingH)) })
+      : t('В очереди — ещё не начато.');
   if (kind === 'unit' && unit) {
     return {
       name: `${count ?? 1}× ${unitIcon(unit)} ${displayUnit(unit)}`,
@@ -5343,7 +5705,11 @@ function taskDossier(
     if (b === 0 && f === 0) continue;
     const now = b + (f - b) * ramp;
     lines.push(
-      t('{r}: {now}/ч сейчас → {final}/ч по готовности', { r: tData(res), now: hl(round1(now)), final: hl(round1(f)) }),
+      t('{r}: {now}/ч сейчас → {final}/ч по готовности', {
+        r: tData(res),
+        now: hl(round1(now)),
+        final: hl(round1(f)),
+      }),
     );
   }
   return { name, body: [eta, ...lines].join('<br>') };
@@ -5371,7 +5737,9 @@ function constructionDossier(key: string): Dossier | null {
     const q = queueOf(planetId)[lane as BuildLane][Number(ref)];
     if (!q) return null;
     const level =
-      q.kind === 'upgrade' ? (s.planets[planetId]?.buildings.find((b) => b.type === q.id)?.level ?? 0) + 1 : undefined;
+      q.kind === 'upgrade'
+        ? (s.planets[planetId]?.buildings.find((b) => b.type === q.id)?.level ?? 0) + 1
+        : undefined;
     return taskDossier(
       planetId,
       q.kind,
@@ -5386,7 +5754,16 @@ function constructionDossier(key: string): Dossier | null {
   if (state === 'paused') {
     const site = (s.planets[planetId]?.pausedConstruction ?? []).find((p) => String(p.id) === ref);
     if (!site) return null;
-    return taskDossier(planetId, site.kind, site.building, site.unit, site.count, site.level, site.progress, site.remainingHours);
+    return taskDossier(
+      planetId,
+      site.kind,
+      site.building,
+      site.unit,
+      site.count,
+      site.level,
+      site.progress,
+      site.remainingHours,
+    );
   }
   return null;
 }
@@ -5395,7 +5772,9 @@ function objDossier(key: string): Dossier | null {
   if (key === 'fleet') {
     return {
       name: t('Флот'),
-      body: t('Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.'),
+      body: t(
+        'Мобильное оперативное соединение кораблей. Выберите его, чтобы отдавать приказы на манёвр, орбиту и удар по врагу.',
+      ),
     };
   }
   if (key === 'tab:ground') {
@@ -5414,7 +5793,9 @@ function objDossier(key: string): Dossier | null {
   if (key === 'tab:squadron') {
     return {
       name: t('Крылья'),
-      body: t('Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».'),
+      body: t(
+        'Носитель (◈) несёт эскадрильи (△). Запускайте авиагруппу из панели выбранного флота кнопкой «🛩 Запустить эскадрилью».',
+      ),
     };
   }
   if (key === 'tab:buildings') {
@@ -5426,7 +5807,9 @@ function objDossier(key: string): Dossier | null {
   if (key === 'division') {
     return {
       name: t('Дивизия'),
-      body: t('Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.'),
+      body: t(
+        'Наземное соединение, собранное по шаблону. Обороняет мир; грузится на флот из панели флота.',
+      ),
     };
   }
   if (key.startsWith('stat:')) {
@@ -5434,7 +5817,10 @@ function objDossier(key: string): Dossier | null {
       atk: [t('Атака'), t('Суммарная атака кораблей флота.')],
       def: [t('Защита'), t('Суммарная защита кораблей флота.')],
       hp: [t('Очки здоровья'), t('Суммарная прочность кораблей флота.')],
-      spd: [t('Скорость'), t('Скорость перелёта — флот движется со скоростью самого медленного корабля.')],
+      spd: [
+        t('Скорость'),
+        t('Скорость перелёта — флот движется со скоростью самого медленного корабля.'),
+      ],
       garrison: [t('Гарнизон'), t('Численность наземных войск, обороняющих мир.')],
       ground: [t('Наземные части'), t('Пехота и техника на поверхности мира.')],
       gships: [t('Корабли в гарнизоне'), t('Корабли, стоящие в гарнизоне мира (не на орбите).')],
@@ -5452,7 +5838,10 @@ function objDossier(key: string): Dossier | null {
     return { name: tData(r), body: '' };
   }
   if (key === 'act:divdesign') {
-    return { name: t('Конструктор дивизий'), body: t('Редактор шаблонов: состав слотов и доктрина дивизий.') };
+    return {
+      name: t('Конструктор дивизий'),
+      body: t('Редактор шаблонов: состав слотов и доктрина дивизий.'),
+    };
   }
   if (key === 'act:qauto') {
     return {
@@ -5503,10 +5892,12 @@ function codexHtml(kind: string, id: string): string {
       .map(([r, n]) => t('{n} {r}/день', { n: n ?? 0, r: tData(r) }))
       .join(', ');
     if (keep) rows.push(cxRow(t('Содержание'), keep));
-    if ((lv.defenseBonus ?? 0) > 0.01) rows.push(cxRow(t('Оборона гарнизона'), `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
+    if ((lv.defenseBonus ?? 0) > 0.01)
+      rows.push(cxRow(t('Оборона гарнизона'), `+${Math.round((lv.defenseBonus ?? 0) * 100)}%`));
     if ((lv.aaDamage ?? 0) > 0) rows.push(cxRow(t('ПВО'), String(lv.aaDamage)));
     if ((lv.radarRange ?? 0) > 0) rows.push(cxRow(t('Радиус радара'), String(lv.radarRange)));
-    if ((def.scoreValue ?? 0) > 0) rows.push(cxRow(t('Очки победы'), t('{n} / уровень', { n: def.scoreValue ?? 0 })));
+    if ((def.scoreValue ?? 0) > 0)
+      rows.push(cxRow(t('Очки победы'), t('{n} / уровень', { n: def.scoreValue ?? 0 })));
     rows.push(cxRow(t('Уровней'), maxLvl > 1 ? t('{n} (улучшаемо)', { n: maxLvl }) : '1'));
     const dos = buildingDossier(id, 1);
     return (
@@ -5520,7 +5911,8 @@ function codexHtml(kind: string, id: string): string {
     const def = data.modules[id];
     if (!def) return '';
     const rows = [cxRow(t('Слот'), tData(def.slot)), cxRow(t('Стоимость'), cost(def.cost))];
-    for (const [k, v] of Object.entries(def.effects?.stats ?? {})) rows.push(cxRow(tData(k), String(v)));
+    for (const [k, v] of Object.entries(def.effects?.stats ?? {}))
+      rows.push(cxRow(tData(k), String(v)));
     return (
       `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('модуль')}</span></div>` +
       `<div class="cx-stats">${rows.join('')}</div>`
@@ -5530,7 +5922,8 @@ function codexHtml(kind: string, id: string): string {
     const def = data.heroFittings[id];
     if (!def) return '';
     const rows = [cxRow(t('Стоимость'), cost(def.cost))];
-    for (const [k, v] of Object.entries(def.statMods ?? {})) rows.push(cxRow(tData(k), (v > 0 ? '+' : '') + String(v)));
+    for (const [k, v] of Object.entries(def.statMods ?? {}))
+      rows.push(cxRow(tData(k), (v > 0 ? '+' : '') + String(v)));
     return (
       `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('фитинг')}</span></div>` +
       `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${esc(tData(def.description ?? ''))}</div>`
@@ -5547,7 +5940,8 @@ function codexHtml(kind: string, id: string): string {
   ];
   if ((st.speed ?? 0) > 0) rows.push(cxRow(t('Скорость'), String(st.speed)));
   if ((st.range ?? 0) > 0) rows.push(cxRow(t('Дальность'), String(st.range)));
-  if ((st.cargoCapacity ?? 0) > 0) rows.push(cxRow(t('Вместимость трюма'), String(st.cargoCapacity)));
+  if ((st.cargoCapacity ?? 0) > 0)
+    rows.push(cxRow(t('Вместимость трюма'), String(st.cargoCapacity)));
   if ((st.aaDamage ?? 0) > 0) rows.push(cxRow(t('ПВО'), String(st.aaDamage)));
   rows.push(cxRow(t('Радарная сигнатура'), String(def.signature ?? 1)));
   if ((def.radarRange ?? 0) > 0) rows.push(cxRow(t('Радиус радара'), String(def.radarRange)));
@@ -5576,7 +5970,7 @@ function playerCardHtml(): string {
   const fid = pl?.faction ?? SEAT_META.find((m) => m.id === ME)?.faction ?? '';
   const fdef = data.factions[fid];
   const bonus = factionBonusLine(fid);
-  const faction = fdef ? `${tData(fdef.name)}${bonus ? ` · ${bonus}` : ''}` : (fid || '—');
+  const faction = fdef ? `${tData(fdef.name)}${bonus ? ` · ${bonus}` : ''}` : fid || '—';
   const worlds = Object.values(s.planets).filter((p) => p.owner === ME).length;
   // Total units you command: ships + carried troops across your fleets, plus every
   // garrison on your worlds.
@@ -5587,7 +5981,8 @@ function playerCardHtml(): string {
   const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
   const need = Math.max(0, SCORE_LIMIT - score);
   const col = ownerColor(ME);
-  const row = (k: string, v: string) => `<div class="pc-row"><span class="pc-k">${k}</span><span class="pc-v">${v}</span></div>`;
+  const row = (k: string, v: string) =>
+    `<div class="pc-row"><span class="pc-k">${k}</span><span class="pc-v">${v}</span></div>`;
   return (
     `<div class="pc-head"><span class="pc-dia" style="background:${col};box-shadow:0 0 10px ${col}"></span>` +
     `<b>${esc(name)}</b><span class="pc-tag">${t('командующий')}</span></div>` +
@@ -5679,7 +6074,10 @@ let unreadMsgs = 0;
  *  it assigns the new state (rendering here would paint from the old `s`). */
 function diffNetDiplomacy(prev: GameState, next: GameState): boolean {
   let shifted = false;
-  const keys = new Set([...Object.keys(prev.diplomacy ?? {}), ...Object.keys(next.diplomacy ?? {})]);
+  const keys = new Set([
+    ...Object.keys(prev.diplomacy ?? {}),
+    ...Object.keys(next.diplomacy ?? {}),
+  ]);
   for (const key of keys) {
     if (!pairHas(key, ME)) continue;
     const before = prev.diplomacy?.[key] ?? 'war';
@@ -5705,12 +6103,22 @@ function diffNetDiplomacy(prev: GameState, next: GameState): boolean {
     const [from, to] = key.split('>');
     if (to === ME) {
       const who = NAME[from!] ?? from!;
-      note(t('🕊 {who} предлагает: {stance} — ответьте тем же в Дипломатии', { who, stance: stanceRu(after) }));
+      note(
+        t('🕊 {who} предлагает: {stance} — ответьте тем же в Дипломатии', {
+          who,
+          stance: stanceRu(after),
+        }),
+      );
       pushMsg(from!, t('Предложение: {stance}', { stance: stanceRu(after) }), true, from!);
       unreadMsgs++;
       shifted = true;
     } else if (from === ME) {
-      note(t('⏳ {who}: предложение отправлено — {stance}', { who: NAME[to!] ?? to!, stance: stanceRu(after) }));
+      note(
+        t('⏳ {who}: предложение отправлено — {stance}', {
+          who: NAME[to!] ?? to!,
+          stance: stanceRu(after),
+        }),
+      );
       shifted = true;
     }
   }
@@ -5796,14 +6204,18 @@ function favourBarHtml(bot: string): string {
   const embPct = (FAVOUR_EMBARGO / FAVOUR_BASE) * 100;
   const warPct = (FAVOUR_WAR / FAVOUR_BASE) * 100;
   const tier = f < FAVOUR_WAR ? 'war' : f < FAVOUR_EMBARGO ? 'embargo' : 'ok';
-  const label = tier === 'war' ? t('на грани войны') : tier === 'embargo' ? t('эмбарго') : t('дружелюбно');
-  const title = t('Одобрение бота: {f}/{base} — {label}. Ниже {emb} бот вводит эмбарго на рынке, ниже {war} — объявляет войну.', {
-    f: Math.round(f),
-    base: FAVOUR_BASE,
-    label,
-    emb: FAVOUR_EMBARGO,
-    war: FAVOUR_WAR,
-  });
+  const label =
+    tier === 'war' ? t('на грани войны') : tier === 'embargo' ? t('эмбарго') : t('дружелюбно');
+  const title = t(
+    'Одобрение бота: {f}/{base} — {label}. Ниже {emb} бот вводит эмбарго на рынке, ниже {war} — объявляет войну.',
+    {
+      f: Math.round(f),
+      base: FAVOUR_BASE,
+      label,
+      emb: FAVOUR_EMBARGO,
+      war: FAVOUR_WAR,
+    },
+  );
   return (
     `<div class="dp-fav ${tier}" title="${esc(title)}">` +
     `<span class="dp-fav-cap">☺</span>` +
@@ -5912,7 +6324,8 @@ function convoMessages(key: string): SessionMsg[] {
   if (GROUP_CHANNELS.has(key)) return sessionMessages.filter((m) => m.to === key);
   return sessionMessages.filter(
     (m) =>
-      !GROUP_CHANNELS.has(m.to) && ((m.from === ME && m.to === key) || (m.from === key && m.to === ME)),
+      !GROUP_CHANNELS.has(m.to) &&
+      ((m.from === ME && m.to === key) || (m.from === key && m.to === ME)),
   );
 }
 function convoLast(key: string): SessionMsg | undefined {
@@ -5920,7 +6333,7 @@ function convoLast(key: string): SessionMsg | undefined {
   return ms[ms.length - 1];
 }
 function fromName(id: string): string {
-  return id === ME ? t('Вы') : NAME[id] ?? id;
+  return id === ME ? t('Вы') : (NAME[id] ?? id);
 }
 /** One message line. A ping renders as a clickable marker that flies the camera.
  *  `stamp` overrides which time fields show (the chat passes its cached toggles);
@@ -5933,7 +6346,8 @@ function convoLineHtml(m: SessionMsg, stamp?: StampOpts): string {
       `📍 <b>${esc(fromName(m.from))}</b> ${esc(m.ping)}: ${esc(m.text)}<span class="dp-jump">${t('↪ камера')}</span></div>`
     );
   }
-  if (m.sys) return `<div class="dp-line sys"><span class="dp-when">${stampTxt}</span>${esc(m.text)}</div>`;
+  if (m.sys)
+    return `<div class="dp-line sys"><span class="dp-when">${stampTxt}</span>${esc(m.text)}</div>`;
   return `<div class="dp-line${m.from === ME ? ' me' : ''}"><span class="dp-when">${stampTxt}</span><b>${esc(fromName(m.from))}:</b> ${esc(m.text)}</div>`;
 }
 function convoFeedInnerHtml(key: string): string {
@@ -5974,7 +6388,11 @@ function convoListHtml(): string {
   const items = dms
     .map((id) => {
       const last = convoLast(id);
-      const prev = last ? esc((last.from === ME ? t('Вы') + ': ' : '') + (last.ping ? '📍 ' + last.ping : last.text)) : '—';
+      const prev = last
+        ? esc(
+            (last.from === ME ? t('Вы') + ': ' : '') + (last.ping ? '📍 ' + last.ping : last.text),
+          )
+        : '—';
       return (
         `<button class="dp-cv${convoOpen === id ? ' on' : ''}" data-convo="${id}">` +
         `<span class="dp-cv-ic" style="color:${ownerColor(id)}">${seatBadge(id).icon}</span>` +
@@ -6052,7 +6470,8 @@ function intelTabHtml(): string {
     `<div class="dp-list in-list">` +
     `<div class="in-hint">${t('Попытка: {c}¤ · шанс ~60% · окно интела 24ч · провал сжигает плату. Разведка мира — кнопка 🕵 на карточке вражеской планеты.', { c: SPY_COST })}</div>` +
     `<div class="in-sec">${t('АКТИВНЫЕ ОКНА ИНТЕЛА')}</div>` +
-    (rows || `<div class="in-empty">${t('нет активных окон — добудьте интел операцией ниже')}</div>`) +
+    (rows ||
+      `<div class="in-empty">${t('нет активных окон — добудьте интел операцией ниже')}</div>`) +
     `<div class="in-sec">${t('ОПЕРАЦИИ')}</div>` +
     (ops || `<div class="in-empty">${t('противников нет')}</div>`) +
     `<div class="in-sec">${t('ЖУРНАЛ')}</div>` +
@@ -6112,8 +6531,8 @@ function scrollFeedToEnd(): void {
  *  `title` (hover tooltip) and `data-name` — the mobile long-press bubble reads it. */
 function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false): string {
   if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
-  const icon = kind === 'b' ? BUILD_ICON[id] ?? '▣' : unitIcon(id);
-  const name = kind === 'b' ? buildingName(id) : unitDossier(id)?.name ?? displayUnit(id);
+  const icon = kind === 'b' ? (BUILD_ICON[id] ?? '▣') : unitIcon(id);
+  const name = kind === 'b' ? buildingName(id) : (unitDossier(id)?.name ?? displayUnit(id));
   // Build-menu tiles carry the enqueue order (PC right-click = build w/o the codex
   // confirmation); composition/garrison tiles don't — right-click is inert there.
   const order = orderable ? ` data-buildorder="${kind === 'u' ? 'unit' : 'building'}:${id}"` : '';
@@ -6201,7 +6620,9 @@ function renderCodexResults(query: string): void {
     // Empty query → browse by category.
     host.innerHTML = CODEX_SECTIONS.map(([cat, label]) => {
       const items = hits.filter((e) => e.category === cat);
-      return items.length ? `<div class="ch-sec">${t(label)}</div><div class="ch-grid">${items.map(codexItemHtml).join('')}</div>` : '';
+      return items.length
+        ? `<div class="ch-sec">${t(label)}</div><div class="ch-grid">${items.map(codexItemHtml).join('')}</div>`
+        : '';
     }).join('');
     return;
   }
@@ -6286,8 +6707,12 @@ function openRecap(since: number): void {
   const hi = r.items.filter((i) => i.high);
   const lo = r.items.filter((i) => !i.high);
   let body = '';
-  if (hi.length) body += `<div class="rc-sec hi">${t('Требуют внимания · {n}', { n: r.attention })}</div>` + hi.map(recapItemHtml).join('');
-  if (lo.length) body += `<div class="rc-sec">${t('Пока тебя не было')}</div>` + lo.map(recapItemHtml).join('');
+  if (hi.length)
+    body +=
+      `<div class="rc-sec hi">${t('Требуют внимания · {n}', { n: r.attention })}</div>` +
+      hi.map(recapItemHtml).join('');
+  if (lo.length)
+    body += `<div class="rc-sec">${t('Пока тебя не было')}</div>` + lo.map(recapItemHtml).join('');
   el.innerHTML =
     `<div class="rcbox"><div class="rc-head"><span class="cx-ic">🛰</span><b>${t('СВОДКА ВОЗВРАЩЕНИЯ')}</b></div>` +
     `<div class="rc-body">${body}</div><button class="cx-close" id="rc-close">${t('ЗАКРЫТЬ')}</button></div>`;
@@ -6427,7 +6852,8 @@ function updatePanelLive(): void {
     el.textContent = timeLeft(Number(el.dataset.at));
   }
   for (const el of Array.from(root.querySelectorAll('.pn-eta')) as HTMLElement[]) {
-    const totalH = Math.max(0, (Number(el.dataset.arrive) - s.time) / HOUR) + Number(el.dataset.rest);
+    const totalH =
+      Math.max(0, (Number(el.dataset.arrive) - s.time) / HOUR) + Number(el.dataset.rest);
     el.textContent = fmtEta(totalH);
   }
   for (const el of Array.from(root.querySelectorAll('.pn-timer')) as HTMLElement[]) {
@@ -6446,6 +6872,7 @@ function renderCmdBar() {
   if (ids.length === 0) {
     if (aiming) aiming = false;
     if (assaultAim) assaultAim = false;
+    if (targetAim) targetAim = false;
     if (merging) merging = false;
     cmdbar.classList.remove('show');
     lastCmdHtml = '';
@@ -6470,7 +6897,8 @@ function renderCmdBar() {
   const canMerge = ids.length >= 2 || (ids.length === 1 && myFleetTotal >= 2);
   // Split: only a single docked fleet with ≥2 ships can shed some into a new fleet.
   const lone = ids.length === 1 && fleets[0] ? fleets[0] : null;
-  const canSplit = !!lone && !!lone.location && !lone.movement && !lone.battleId && sumUnits(lone.units) >= 2;
+  const canSplit =
+    !!lone && !!lone.location && !lone.movement && !lone.battleId && sumUnits(lone.units) >= 2;
   // Artillery in the selection → offer the standoff-fire focus order.
   const anyArtillery = fleets.some(fleetHasArtillery);
   const html =
@@ -6478,8 +6906,15 @@ function renderCmdBar() {
     cmdBtn('move', '⤳', t('Курс'), aiming ? 'on' : '', false) +
     cmdBtn('stop', '■', t('Стоп'), 'danger', !anyMoving) +
     cmdBtn('attack', '⚔', t('Штурм'), assaultAim ? 'on' : '', !canAssault) +
+    cmdBtn('target', '◎', t('Цель'), targetAim ? 'on' : '', false) +
     (anyArtillery ? cmdBtn('barrage', '🎯', t('Обстрел'), barrageAim ? 'on' : '', false) : '') +
-    cmdBtn('merge', '⛬', ids.length > 1 ? t('Слить') : t('Слить…'), merging ? 'on' : '', !canMerge) +
+    cmdBtn(
+      'merge',
+      '⛬',
+      ids.length > 1 ? t('Слить') : t('Слить…'),
+      merging ? 'on' : '',
+      !canMerge,
+    ) +
     cmdBtn('split', '⊟', t('Разделить'), splitState ? 'on' : '', !canSplit);
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
@@ -6607,7 +7042,12 @@ side.addEventListener('click', (ev) => {
       const key = (ev.target as HTMLElement).closest('[data-desc]')?.dataset.desc ?? null;
       // stat:/tab:/division dossiers exist for the PC hover tooltip only — the
       // mobile tap behaviour stays exactly as it was before they were added.
-      if (key !== null && !key.startsWith('stat:') && !key.startsWith('tab:') && key !== 'division') {
+      if (
+        key !== null &&
+        !key.startsWith('stat:') &&
+        !key.startsWith('tab:') &&
+        key !== 'division'
+      ) {
         openDossier(key);
       }
     }
@@ -6651,7 +7091,8 @@ side.addEventListener('click', (ev) => {
     mobTplIdx = Number(arg); // switch which template the assembler shows (local, re-renders)
   } else if (act === 'mobilize') {
     // 'oN' = named officer premade (locked composition, officer attached server-side).
-    if (arg.startsWith('o')) playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg.slice(1)), true));
+    if (arg.startsWith('o'))
+      playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg.slice(1)), true));
     else playerOrder(mobilizeDivision(ME, selPlanet!, Number(arg)));
   } else if (act === 'divdesign') {
     ddIdx = Math.min(mobTplIdx, templatesOf(s, ME).length - 1);
@@ -6761,7 +7202,8 @@ side.addEventListener('pointermove', (ev) => {
       if (d) {
         // A body-less dossier (bare names — resources, plain units) shows just the title.
         objTipEl.innerHTML =
-          `<div class="pd-title">${dossierTitleHtml(key!, d)}</div>` + (d.body ? `<div class="pd-body">${d.body}</div>` : '');
+          `<div class="pd-title">${dossierTitleHtml(key!, d)}</div>` +
+          (d.body ? `<div class="pd-body">${d.body}</div>` : '');
         objTipEl.style.display = 'block';
       } else {
         objTipEl.style.display = 'none';
@@ -6898,6 +7340,7 @@ cmdbar.addEventListener('click', (ev) => {
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
   if (cmd !== 'attack') assaultAim = false; // any other command disarms assault-targeting
+  if (cmd !== 'target') targetAim = false; // any other command disarms order-targeting
   heroAim = null; // any command disarms a pending hero cast / deploy
   heroSpawnAim = null;
   if (cmd === 'move') {
@@ -6936,6 +7379,12 @@ cmdbar.addEventListener('click', (ev) => {
     barrageAim = !barrageAim;
     aiming = false;
     if (barrageAim) note(t('🎯 тапните вражеский флот для сосредоточенного огня · пустота = авто'));
+  } else if (cmd === 'target') {
+    // TGT-1: arm order-targeting — the next world tap opens the plan composer
+    // beside the target (CC-1 chain: wait/move/assault/barrage, editable later).
+    targetAim = !targetAim;
+    aiming = false;
+    if (targetAim) note(t('◎ тапните цель на карте — соберём приказ'));
   }
   lastCmdHtml = '';
   lastPanelHtml = '';
@@ -6948,6 +7397,7 @@ cmdbar.addEventListener('click', (ev) => {
 // Tap/click selection at a screen point (drag-aware — see the pointer handlers).
 function selectAt(mx: number, my: number) {
   closePingPop(); // any map tap dismisses an open ping popup (a marker tap reopens below)
+  closeTgtEditor(); // same for the order composer — its own marker tap reopens it
   // Hit radii: widened for a finger (44px-target rule); nearest-in-radius wins, so
   // clustered objects resolve to what the player aimed at, not iteration order.
   const rFleet = tapByTouch ? 24 : 16;
@@ -7050,6 +7500,23 @@ function selectAt(mx: number, my: number) {
     lastPanelHtml = '';
     return;
   }
+  // TGT-1: «Цель» armed → the next world tap opens the order composer beside it.
+  if (targetAim) {
+    const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
+    targetAim = false;
+    lastCmdHtml = '';
+    if (n) openTgtEditor(n.id, selectedFleetIds());
+    else note(t('◎ цель не выбрана'));
+    return;
+  }
+  // A standing order marker: tap re-opens the composer with the live plan.
+  if (!aiming) {
+    const tm = nearestHit(tgtHits, (h) => h, mx, my, rPing);
+    if (tm) {
+      openTgtEditor(tm.target, tm.fleetIds);
+      return;
+    }
+  }
   // Plain tap = selection. Movement happens only when "Move" is armed (aiming), so a
   // fleet selection never blocks picking a planet (and vice versa).
   // A tap on an ally ping marker opens its description popup (takes priority over
@@ -7070,7 +7537,8 @@ function selectAt(mx: number, my: number) {
       rFleet,
     );
     if (mine) {
-      if (additive) toggleFleetInSelection(mine.id); // Ctrl/⌘ → extend the group
+      if (additive)
+        toggleFleetInSelection(mine.id); // Ctrl/⌘ → extend the group
       else setFleetSelection([mine.id]); // (clears any selected planet)
       return;
     }
@@ -7380,11 +7848,14 @@ function renderEndScreen(): void {
     : endScreen.draw
       ? t('⚖️ НИЧЬЯ')
       : t('💀 ПОРАЖЕНИЕ');
-  const cell = (k: string, v: string) => `<div class="es-cell"><span class="es-k">${k}</span><span class="es-v">${v}</span></div>`;
+  const cell = (k: string, v: string) =>
+    `<div class="es-cell"><span class="es-k">${k}</span><span class="es-v">${v}</span></div>`;
   const xpLine =
     endScreen.xp > 0
       ? `<div class="es-xp">${t('★ Опыт командующего: +{n}', { n: endScreen.xp })}` +
-        (endScreen.levelUp !== null ? `<span class="lvl">${t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: endScreen.levelUp })}</span>` : '') +
+        (endScreen.levelUp !== null
+          ? `<span class="lvl">${t('★ Новый уровень {lvl} — очко прокачки ждёт в меню «Прокачка»', { lvl: endScreen.levelUp })}</span>`
+          : '') +
         `</div>`
       : '';
   // Rematch wording is honest per mode: solo restarts a skirmish; a NET match can't
@@ -7496,7 +7967,11 @@ function renderDivDesign(): void {
   h += `</div>`;
   if (locked) {
     const off = OFFICERS[pick.officer!];
-    const bonus = [off?.atk ? `+${Math.round(off.atk * 100)}% ${t('атака')}` : '', off?.def ? `+${Math.round(off.def * 100)}% ${t('оборона')}` : '', off?.hp ? `+${Math.round(off.hp * 100)}% ${t('живучесть')}` : '']
+    const bonus = [
+      off?.atk ? `+${Math.round(off.atk * 100)}% ${t('атака')}` : '',
+      off?.def ? `+${Math.round(off.def * 100)}% ${t('оборона')}` : '',
+      off?.hp ? `+${Math.round(off.hp * 100)}% ${t('живучесть')}` : '',
+    ]
       .filter(Boolean)
       .join(' · ');
     h += `<div class="dd-lock">★ ${esc(t(off?.name ?? ''))} — ${bonus}</div>`;
@@ -7514,14 +7989,20 @@ function renderDivDesign(): void {
   // Per-target damage preview: the counter matrix made visible — Σ atk of the
   // composition against each of the four unit types.
   const vs = (target: string): number =>
-    pick.tpl.slots.reduce((n, u) => n + (u ? (GROUND_ROSTER[u]?.atk[target as FormationUnit] ?? 0) : 0), 0);
+    pick.tpl.slots.reduce(
+      (n, u) => n + (u ? (GROUND_ROSTER[u]?.atk[target as FormationUnit] ?? 0) : 0),
+      0,
+    );
   h += `<div class="dd-vs">`;
   for (const tgt of FORMATION_UNITS) {
     const v = vs(tgt);
     h += `<div class="vrow"><span class="vnm">${t('Урон по:')} ${formIcon(tgt)} ${esc(t(FORM_RU[tgt] ?? tgt))}</span><div class="vtrack"><div class="vbar" style="width:${Math.min(100, Math.round((v / 90) * 100))}%"></div></div><span>${v}</span></div>`;
   }
   h += `</div>`;
-  const cost = Object.entries(f.cost).map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`).join(' ') || '—';
+  const cost =
+    Object.entries(f.cost)
+      .map(([r, a]) => `${a}${TECH_CUR[r] ?? r[0]}`)
+      .join(' ') || '—';
   const syn = f.synergies.map((x) => `${esc(t(x.name))} — ${esc(t(x.desc))}`).join('<br>');
   h += `<div class="row dim">⚔${f.attack} 🛡${f.defense} ❤${f.hp} · ${t('состав {n}/{s} · {rest}', { n: f.count, s: FORMATION_SLOTS, rest: cost })}</div>`;
   if (syn) h += `<div class="hint2">${syn}</div>`;
@@ -7560,7 +8041,11 @@ divDesignWin.addEventListener('click', (e) => {
   }
 });
 const TECH_CUR: Record<string, string> = {
-  credits: '¤', food: '❖', metal: '⬢', energy: '↯', microelectronics: '▦',
+  credits: '¤',
+  food: '❖',
+  metal: '⬢',
+  energy: '↯',
+  microelectronics: '▦',
 };
 const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'space', label: 'Космос' },
@@ -7569,9 +8054,12 @@ const TECH_BRANCHES: Array<{ key: string; label: string }> = [
   { key: 'missile', label: 'Ракеты' },
   { key: 'command', label: 'Командование' }, // automation / C2 — «Хранитель» lives here
 ];
-const branchLabel = (key: string): string => t(TECH_BRANCHES.find((b) => b.key === key)?.label ?? key);
+const branchLabel = (key: string): string =>
+  t(TECH_BRANCHES.find((b) => b.key === key)?.label ?? key);
 const techCost = (c: Record<string, number>): string =>
-  Object.entries(c).map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`).join(' · ');
+  Object.entries(c)
+    .map(([k, v]) => `${TECH_CUR[k] ?? k} ${v}`)
+    .join(' · ');
 // --- TT-3.1: экран-дерево (макет v4) — вкладки-ветки, рельса дней, досье по тапу ----
 // Presentation-only layout: named sub-columns per branch, ids in day order. The
 // canonical data stays layout-free; a tech missing from this map falls into an
@@ -7587,19 +8075,34 @@ const TECH_COLS: Record<string, Array<{ label: string; ids: string[] }>> = {
     { label: 'Укрепления', ids: ['fortified_infrastructure', 'planetary_bastions'] },
   ],
   squadron: [{ label: 'Авиакрыло', ids: ['flight_decks', 'strike_vectors', 'ace_programs'] }],
-  missile: [{ label: 'Арсенал', ids: ['guidance_arrays', 'warhead_miniaturization', 'saturation_barrage'] }],
+  missile: [
+    { label: 'Арсенал', ids: ['guidance_arrays', 'warhead_miniaturization', 'saturation_barrage'] },
+  ],
   command: [
     { label: 'Связь', ids: ['signal_corps', 'logistics_command'] },
     { label: 'Автоматизация', ids: ['ai_stewardship'] },
   ],
 };
 const TECH_ICONS: Record<string, string> = {
-  industrial_automation: '⚙', microelectronics_fabrication: '▦', deep_survey: '📡',
-  orbital_logistics: '⛽', siege_doctrine: '☄', void_armadas: '🛸',
-  combined_arms: '⚔', garrison_networks: '⛺', fortified_infrastructure: '🏰', planetary_bastions: '🛡',
-  flight_decks: '🛫', strike_vectors: '🎯', ace_programs: '🎖',
-  guidance_arrays: '🧭', warhead_miniaturization: '🧨', saturation_barrage: '🚀',
-  signal_corps: '📶', logistics_command: '🧠', ai_stewardship: '😴',
+  industrial_automation: '⚙',
+  microelectronics_fabrication: '▦',
+  deep_survey: '📡',
+  orbital_logistics: '⛽',
+  siege_doctrine: '☄',
+  void_armadas: '🛸',
+  combined_arms: '⚔',
+  garrison_networks: '⛺',
+  fortified_infrastructure: '🏰',
+  planetary_bastions: '🛡',
+  flight_decks: '🛫',
+  strike_vectors: '🎯',
+  ace_programs: '🎖',
+  guidance_arrays: '🧭',
+  warhead_miniaturization: '🧨',
+  saturation_barrage: '🚀',
+  signal_corps: '📶',
+  logistics_command: '🧠',
+  ai_stewardship: '😴',
 };
 const TECH_FX_LABEL: Record<string, string> = {
   productionBonus: 'производство',
@@ -7618,7 +8121,10 @@ function techCondText(c: TechCond): string {
     case 'own_sectors':
       return t('своих секторов: {n}', { n: c.min });
     case 'has_building':
-      return t('здание: {b} ×{n}', { b: tData(data.buildings[c.building]?.name ?? c.building), n: c.min });
+      return t('здание: {b} ×{n}', {
+        b: tData(data.buildings[c.building]?.name ?? c.building),
+        n: c.min,
+      });
     case 'controls_planet_type':
       return t('мир типа {p} ×{n}', { p: tData(c.planetType), n: c.min });
     case 'has_unit':
@@ -7636,7 +8142,9 @@ function techCondOk(c: TechCond): boolean {
     case 'has_scientist':
       return (me?.scientists ?? []).some((sc) => {
         const def = data.scientists[sc.id];
-        return !!def && (!c.branch || def.branch === c.branch) && (sc.level ?? 1) >= (c.minLevel ?? 1);
+        return (
+          !!def && (!c.branch || def.branch === c.branch) && (sc.level ?? 1) >= (c.minLevel ?? 1)
+        );
       });
     case 'own_sectors':
       return Object.values(s.planets).filter((p) => p.owner === ME).length >= c.min;
@@ -7649,9 +8157,12 @@ function techFx(td: TechDefLike): string {
   const fx = Object.entries(td.effects ?? {})
     .filter(([, v]) => (v as number) !== 0)
     .map(([k, v]) => `+${Math.round((v as number) * 100)}% ${t(TECH_FX_LABEL[k] ?? k)}`);
-  for (const u of td.unlocks?.units ?? []) fx.push(t('открывает: {x}', { x: esc(tData(data.units[u]?.name ?? u)) }));
-  for (const b of td.unlocks?.buildings ?? []) fx.push(t('открывает: {x}', { x: esc(tData(data.buildings[b]?.name ?? b)) }));
-  for (const a of td.unlocks?.abilities ?? []) fx.push(t('способность: {x}', { x: a === 'steward' ? t('Хранитель') : esc(a) }));
+  for (const u of td.unlocks?.units ?? [])
+    fx.push(t('открывает: {x}', { x: esc(tData(data.units[u]?.name ?? u)) }));
+  for (const b of td.unlocks?.buildings ?? [])
+    fx.push(t('открывает: {x}', { x: esc(tData(data.buildings[b]?.name ?? b)) }));
+  for (const a of td.unlocks?.abilities ?? [])
+    fx.push(t('способность: {x}', { x: a === 'steward' ? t('Хранитель') : esc(a) }));
   return fx.join(' · ');
 }
 function renderTech(): void {
@@ -7659,7 +8170,9 @@ function renderTech(): void {
   const me = s.players[ME];
   // Meta-progression grants (meta_*) are account perks, not researchable session
   // techs — the tree shows only the real nodes.
-  const techs = Object.fromEntries(Object.entries(data.technologies).filter(([id]) => !id.startsWith('meta_')));
+  const techs = Object.fromEntries(
+    Object.entries(data.technologies).filter(([id]) => !id.startsWith('meta_')),
+  );
   const done = new Set(me?.technologies?.completed ?? []);
   // Research runs in CONCURRENT slots (core: technologies.active is a list).
   const activeRaw = me?.technologies?.active;
@@ -7670,10 +8183,19 @@ function renderTech(): void {
   // Рельса дней: объединение day-гейтов ВСЕХ веток (+ старт) — календарь общий,
   // при смене вкладки строки не прыгают (правило макета). Подпись = dayGate+1,
   // тот же счёт, что у часов в статус-баре.
-  const gates = [...new Set(Object.values(techs).map((td) => td.dayGate ?? 0).concat(0))].sort((a, b) => a - b);
+  const gates = [
+    ...new Set(
+      Object.values(techs)
+        .map((td) => td.dayGate ?? 0)
+        .concat(0),
+    ),
+  ].sort((a, b) => a - b);
   const nowGate = gates.filter((g) => g + 1 <= hudDay).pop() ?? 0;
   // Пилюля слотов зеркалит кламп ядра: 2 базовых, +1 от учёного, максимум 3.
-  const slotBonus = (me?.scientists ?? []).reduce((n, c) => n + (data.scientists[c.id]?.slotBonus ?? 0), 0);
+  const slotBonus = (me?.scientists ?? []).reduce(
+    (n, c) => n + (data.scientists[c.id]?.slotBonus ?? 0),
+    0,
+  );
   const slots = Math.min(3, Math.max(2, 2 + slotBonus));
   // Состояние узла в порядке проверок ядра (technologyLock): prereq → день → условия.
   const nodeState = (id: string): { st: string; prog: number; eta: number } => {
@@ -7689,15 +8211,19 @@ function renderTech(): void {
       };
     }
     if ((td.prerequisites ?? []).some((p) => !done.has(p))) return { st: 'chain', prog: 0, eta: 0 };
-    if ((td.dayGate ?? 0) > 0 && s.time - started < (td.dayGate ?? 0) * DAY) return { st: 'gate', prog: 0, eta: 0 };
+    if ((td.dayGate ?? 0) > 0 && s.time - started < (td.dayGate ?? 0) * DAY)
+      return { st: 'gate', prog: 0, eta: 0 };
     if ((td.conditions ?? []).some((c) => !techCondOk(c))) return { st: 'cond', prog: 0, eta: 0 };
     return { st: 'avail', prog: 0, eta: 0 };
   };
   const tabs = TECH_BRANCHES.map(
-    (b) => `<button class="tt-tab${b.key === techTab ? ' on' : ''}" data-ttab="${b.key}">${t(b.label)}</button>`,
+    (b) =>
+      `<button class="tt-tab${b.key === techTab ? ' on' : ''}" data-ttab="${b.key}">${t(b.label)}</button>`,
   ).join('');
   // Кто из совета курирует эту ветку — и честное предупреждение, если никто.
-  const lead = (me?.scientists ?? []).map((c) => data.scientists[c.id]).find((d) => d?.branch === techTab);
+  const lead = (me?.scientists ?? [])
+    .map((c) => data.scientists[c.id])
+    .find((d) => d?.branch === techTab);
   const leadHtml = lead
     ? `🧪 ${t('Ветку курирует')} <b>${esc(tData(lead.name))}</b>`
     : `🔭 ${t('Без лидера ветки — узлы с условием «учёный» закрыты')}`;
@@ -7729,11 +8255,17 @@ function renderTech(): void {
           const td = techs[id]!;
           const st = nodeState(id);
           const badge =
-            st.st === 'done' ? `<span class="tt-tick">✓</span>`
-            : st.st === 'gate' ? `<span class="tt-lock">🔒</span>`
-            : st.st === 'cond' ? `<span class="tt-cnd">⚗</span>`
-            : '';
-          const prog = st.st === 'res' ? `<span class="tt-prog"><i style="width:${Math.round(st.prog * 100)}%"></i></span>` : '';
+            st.st === 'done'
+              ? `<span class="tt-tick">✓</span>`
+              : st.st === 'gate'
+                ? `<span class="tt-lock">🔒</span>`
+                : st.st === 'cond'
+                  ? `<span class="tt-cnd">⚗</span>`
+                  : '';
+          const prog =
+            st.st === 'res'
+              ? `<span class="tt-prog"><i style="width:${Math.round(st.prog * 100)}%"></i></span>`
+              : '';
           return (
             `<div class="tt-node st-${st.st}" data-tech="${id}">` +
             `<div class="tt-box">${TECH_ICONS[id] ?? '🔬'}${prog}${badge}</div>` +
@@ -7754,24 +8286,33 @@ function renderTech(): void {
     const td = techs[id]!;
     const st = nodeState(id);
     const gate = td.dayGate ?? 0;
-    const prereqNames = (td.prerequisites ?? []).map((p) => esc(tData(techs[p]?.name ?? p))).join(', ');
+    const prereqNames = (td.prerequisites ?? [])
+      .map((p) => esc(tData(techs[p]?.name ?? p)))
+      .join(', ');
     const condRows = (td.conditions ?? [])
       .map((c) => `<span>${techCondOk(c) ? '☑' : '⚗'} <b>${esc(techCondText(c))}</b></span>`)
       .join('');
     const affordable = Object.entries(td.cost).every(([k, v]) => (res[k] ?? 0) >= (v as number));
     const tag =
-      st.st === 'done' ? `<span class="tt-tag">${t('ИЗУЧЕНО')}</span>`
-      : st.st === 'res' ? `<span class="tt-tag amb">${t('ИССЛЕДУЕТСЯ')}</span>`
-      : st.st === 'avail' ? `<span class="tt-tag">${t('ДОСТУПНО')}</span>`
-      : `<span class="tt-tag dim">${t('ЗАКРЫТО')}</span>`;
+      st.st === 'done'
+        ? `<span class="tt-tag">${t('ИЗУЧЕНО')}</span>`
+        : st.st === 'res'
+          ? `<span class="tt-tag amb">${t('ИССЛЕДУЕТСЯ')}</span>`
+          : st.st === 'avail'
+            ? `<span class="tt-tag">${t('ДОСТУПНО')}</span>`
+            : `<span class="tt-tag dim">${t('ЗАКРЫТО')}</span>`;
     const btn =
       st.st === 'avail'
         ? `<button class="tt-mbtn" data-go="${id}"${affordable ? '' : ' disabled'}>🔬 ${affordable ? t('Исследовать') : t('Не хватает ресурсов')}</button>`
-        : st.st === 'done' ? `<button class="tt-mbtn wait" disabled>✓ ${t('Изучено')}</button>`
-        : st.st === 'res' ? `<button class="tt-mbtn wait" disabled>⏳ ${t('Идёт — ≈ {n} ч', { n: st.eta })}</button>`
-        : st.st === 'gate' ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Откроется в День {n}', { n: gate + 1 })}</button>`
-        : st.st === 'chain' ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Сначала изучите узел выше')}</button>`
-        : `<button class="tt-mbtn wait" disabled>⚗ ${t('Условие не выполнено')}</button>`;
+        : st.st === 'done'
+          ? `<button class="tt-mbtn wait" disabled>✓ ${t('Изучено')}</button>`
+          : st.st === 'res'
+            ? `<button class="tt-mbtn wait" disabled>⏳ ${t('Идёт — ≈ {n} ч', { n: st.eta })}</button>`
+            : st.st === 'gate'
+              ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Откроется в День {n}', { n: gate + 1 })}</button>`
+              : st.st === 'chain'
+                ? `<button class="tt-mbtn wait" disabled>🔒 ${t('Сначала изучите узел выше')}</button>`
+                : `<button class="tt-mbtn wait" disabled>⚗ ${t('Условие не выполнено')}</button>`;
     modal =
       `<div class="tt-modal"><div class="tt-mback" data-mclose="1"></div><div class="tt-mwin">` +
       `<button class="tt-mx" data-mclose="1">✕</button>` +
@@ -7873,7 +8414,14 @@ function stewardTechDone(): boolean {
   return s.players[ME]?.technologies?.completed.includes('ai_stewardship') ?? false;
 }
 /** One localized line of the Steward's decision journal (SITREP, ST-2.4). */
-function stewLogLine(e: { kind: string; node?: string; fleetId?: string; to?: string; count?: number; fraction?: number }): string {
+function stewLogLine(e: {
+  kind: string;
+  node?: string;
+  fleetId?: string;
+  to?: string;
+  count?: number;
+  fraction?: number;
+}): string {
   const pct = e.fraction !== undefined ? String(Math.round(e.fraction * 100)) : '?';
   const node = e.node ?? '?';
   switch (e.kind) {
@@ -7887,7 +8435,10 @@ function stewLogLine(e: { kind: string; node?: string; fleetId?: string; to?: st
     case 'ferry':
       return t('🚚 Паром выслан к {node} за гарнизоном', { node });
     case 'stranded':
-      return t('⚠ Гарнизон {node} не эвакуировать: транспорт не успевает (прогноз потерь {pct}%)', { node, pct });
+      return t('⚠ Гарнизон {node} не эвакуировать: транспорт не успевает (прогноз потерь {pct}%)', {
+        node,
+        pct,
+      });
     case 'strike':
       return t('⚔ Контрудар у {node}: прогноз потерь {pct}%', { node, pct });
     case 'watch':
@@ -7933,7 +8484,10 @@ function renderSteward(): void {
     const day = Math.floor((s.time - (s.startedAt ?? 0)) / DAY) + 1; // счёт статус-бара: день 1 — первый
     html +=
       `<div class="st-status locked">🔒 <b>${t('«Протокол Хранитель» ещё не изучен.')}</b><br>` +
-      t('Ветка <b>Командование</b>, открывается в <b>День 16</b> учёному <b>Куратор</b> (сейчас день {day}).', { day: String(day) }) +
+      t(
+        'Ветка <b>Командование</b>, открывается в <b>День 16</b> учёному <b>Куратор</b> (сейчас день {day}).',
+        { day: String(day) },
+      ) +
       `<br>` +
       `${t('Изучите его в окне технологий — затем сможете передать место ИИ на время сна.')}</div>` +
       `<div class="st-row"><button class="st-btn" data-stew="tech">${t('Открыть технологии')}</button></div>`;
@@ -7951,13 +8505,18 @@ function renderSteward(): void {
       `</div>` +
       `<div class="st-h">${t('Передать на')}</div><div class="st-row">` +
       STEW_DURATIONS.map(
-        (h) => `<button class="st-btn" data-stew="go" data-h="${h}">${t('{h} ч', { h: String(h) })}</button>`,
+        (h) =>
+          `<button class="st-btn" data-stew="go" data-h="${h}">${t('{h} ч', { h: String(h) })}</button>`,
       ).join('') +
       `</div>` +
       `<div class="st-note">${
         stewPosture === 'active_defend'
-          ? t('Активная оборона: всё то же, плюс контрудар по врагу у своих миров при приемлемом прогнозе потерь (до 35%) и дежурные вылеты эскадрилий. Свою территорию не покидает.')
-          : t('Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.')
+          ? t(
+              'Активная оборона: всё то же, плюс контрудар по врагу у своих миров при приемлемом прогнозе потерь (до 35%) и дежурные вылеты эскадрилий. Свою территорию не покидает.',
+            )
+          : t(
+              'Поза «Оборона»: держит и отбивает, застраивает очередь, торгует — без наступлений и дипломатии. Управление вернётся автоматически, с утренней сводкой.',
+            )
       }</div>`;
   }
   html += stewLogHtml();
@@ -8110,8 +8669,12 @@ function renderMarket(): void {
   const glyph = TECH_CUR[good] ?? '';
   const nameOf = (id: string): string => esc(s.players[id]?.name ?? id);
   const lots = marketLots(s);
-  const asks = lots.filter((l) => l.side === 'sell' && l.resource === good).sort((a, b) => a.price - b.price);
-  const bids = lots.filter((l) => l.side === 'buy' && l.resource === good).sort((a, b) => b.price - a.price);
+  const asks = lots
+    .filter((l) => l.side === 'sell' && l.resource === good)
+    .sort((a, b) => a.price - b.price);
+  const bids = lots
+    .filter((l) => l.side === 'buy' && l.resource === good)
+    .sort((a, b) => b.price - a.price);
   const lotRow = (l: (typeof lots)[number], bid: boolean): string => {
     const mine = l.owner === ME;
     const qp = `<span class="mk-qp"><b>${l.amount}</b> ${TECH_CUR[l.resource] ?? ''} @ ${l.price} ¤</span>`;
@@ -8137,8 +8700,12 @@ function renderMarket(): void {
     `<span class="mk-lbl">${t('кол-во')}</span><input class="mk-in" id="mk-amt" type="number" min="1" value="10">` +
     `<span class="mk-lbl">${t('цена')}</span><input class="mk-in" id="mk-price" type="number" min="0" value="3">` +
     `<button class="mk-go" data-mkgo>${t('Выставить')}</button></div>`;
-  const askList = asks.length ? asks.map((l) => lotRow(l, false)).join('') : `<div class="mk-empty">${t('Нет лотов на продажу')}</div>`;
-  const bidList = bids.length ? bids.map((l) => lotRow(l, true)).join('') : `<div class="mk-empty">${t('Нет лотов на покупку')}</div>`;
+  const askList = asks.length
+    ? asks.map((l) => lotRow(l, false)).join('')
+    : `<div class="mk-empty">${t('Нет лотов на продажу')}</div>`;
+  const bidList = bids.length
+    ? bids.map((l) => lotRow(l, true)).join('')
+    : `<div class="mk-empty">${t('Нет лотов на покупку')}</div>`;
   marketWin.innerHTML =
     `<div class="mkbox"><div class="lw-head"><b>${t('РЫНОК')}</b><button class="mk-close" style="margin-left:auto">✕</button></div>` +
     `<div class="mk-tabs">${MARKET_RES.map((r) => tabBtn(r.key, t(r.label))).join('')}</div>` +
@@ -8248,7 +8815,10 @@ function myRes(): Record<string, number> {
   return (s.players[ME]?.resources ?? {}) as Record<string, number>;
 }
 /** One live stat row: label · base → effective (+delta) · track bar (base cyan, delta green). */
-function conBar(line: { label: string; base: number; effective: number; delta: number }, max: number): string {
+function conBar(
+  line: { label: string; base: number; effective: number; delta: number },
+  max: number,
+): string {
   const basePct = max > 0 ? Math.min(100, (line.base / max) * 100) : 0;
   const deltaPct = max > 0 ? Math.min(100 - basePct, (Math.max(0, line.delta) / max) * 100) : 0;
   const val =
@@ -8280,7 +8850,8 @@ function conLoadoutPane(hullList: string[]): string {
   const snap = s.players[ME]?.arsenal;
   const ownedHulls = snap ? hullList.filter((h) => snap.hulls.includes(h)) : hullList;
   const ownedModules = snap ? new Set(snap.modules) : undefined;
-  if (!ownedHulls.length) return `<div class="cn-soon">${t('В арсенале нет корпусов этого класса.')}</div>`;
+  if (!ownedHulls.length)
+    return `<div class="cn-soon">${t('В арсенале нет корпусов этого класса.')}</div>`;
   if (!ownedHulls.includes(conHull)) {
     conHull = ownedHulls[0]!;
     conModules = [];
@@ -8292,10 +8863,12 @@ function conLoadoutPane(hullList: string[]): string {
   });
   if (!ed.ok) return `<div class="cn-soon">${t('Корпус недоступен.')}</div>`;
   const m: LoadoutModel = ed;
-  const hulls = ownedHulls.map(
-    (h) =>
-      `<button class="cn-hbtn${h === conHull ? ' on' : ''}" data-cnhull="${h}">${UNIT_ICON[h] ?? '▲'} ${esc(displayUnit(h))}</button>`,
-  ).join('');
+  const hulls = ownedHulls
+    .map(
+      (h) =>
+        `<button class="cn-hbtn${h === conHull ? ' on' : ''}" data-cnhull="${h}">${UNIT_ICON[h] ?? '▲'} ${esc(displayUnit(h))}</button>`,
+    )
+    .join('');
   const freeTypes = [...new Set(m.slots.filter((sl) => !sl.moduleId).map((sl) => sl.type))];
   const hullCard =
     `<div class="cn-hull"><div class="cn-hic">${UNIT_ICON[conHull] ?? '▲'}</div><div><div class="cn-hn">${esc(displayUnit(conHull))}</div>` +
@@ -8304,7 +8877,11 @@ function conLoadoutPane(hullList: string[]): string {
     .map((sl) => {
       if (sl.moduleId) {
         const md = data.modules[sl.moduleId];
-        const eff = md ? Object.entries(md.effects.stats).map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`).join(' ') : '';
+        const eff = md
+          ? Object.entries(md.effects.stats)
+              .map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`)
+              .join(' ')
+          : '';
         return (
           `<div class="cn-bay filled" data-cnun="${sl.moduleId}" title="${t('снять модуль')}"><div class="cn-bic">${MODULE_ICON[sl.moduleId] ?? '▪'}</div>` +
           `<div><div class="cn-bt">${t(SLOT_RU[sl.type])}</div><div class="cn-bn">${esc(tData(sl.moduleName ?? sl.moduleId))}${conOriginTag(sl.moduleId)}</div></div><div class="cn-bd">${eff}</div></div>`
@@ -8318,7 +8895,9 @@ function conLoadoutPane(hullList: string[]): string {
     .join('');
   const palette = m.palette
     .map((o) => {
-      const eff = Object.entries(o.effect).map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`).join(' ');
+      const eff = Object.entries(o.effect)
+        .map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`)
+        .join(' ');
       if (o.installable) {
         return (
           `<button class="cn-mod" data-cnmod="${o.id}"><span class="cn-mic">${MODULE_ICON[o.id] ?? '▪'}</span>` +
@@ -8332,7 +8911,9 @@ function conLoadoutPane(hullList: string[]): string {
     })
     .join('');
   const palHead = freeTypes.length
-    ? t('Доступные модули — для слота «{s}»', { s: freeTypes.map((ty) => t(SLOT_RU[ty])).join(' / ') })
+    ? t('Доступные модули — для слота «{s}»', {
+        s: freeTypes.map((ty) => t(SLOT_RU[ty])).join(' / '),
+      })
     : t('Доступные модули — все слоты заняты');
   // LARS-4: the palette above already reads the LIVE arsenal snapshot (a module
   // bought mid-match shows up here without a new match) — this note is the only
@@ -8347,9 +8928,16 @@ function conLoadoutPane(hullList: string[]): string {
   // right: live preview + cost + build
   const maxStat = Math.max(1, ...m.preview.map((p) => p.effective));
   const bars = m.preview.map((p) => conBar(p, maxStat)).join('');
-  const owned = Object.values(s.planets).filter((p) => p.owner === ME && SECTOR_TYPES[p.kind ?? '']?.buildable);
+  const owned = Object.values(s.planets).filter(
+    (p) => p.owner === ME && SECTOR_TYPES[p.kind ?? '']?.buildable,
+  );
   if (!conPlanet || !owned.some((p) => p.id === conPlanet)) conPlanet = owned[0]?.id ?? '';
-  const planOpts = owned.map((p) => `<option value="${p.id}"${p.id === conPlanet ? ' selected' : ''}>${esc(p.id)}</option>`).join('');
+  const planOpts = owned
+    .map(
+      (p) =>
+        `<option value="${p.id}"${p.id === conPlanet ? ' selected' : ''}>${esc(p.id)}</option>`,
+    )
+    .join('');
   const cost =
     `<div class="cn-cost">` +
     `<div class="cn-crow"><span class="cn-cl">${t('Корпус ×{n}', { n: String(m.count) })}</span><span class="cn-cv">${bagRu(m.hullCost)}</span></div>` +
@@ -8377,7 +8965,10 @@ function conArmyPane(): string {
   const idx = Math.max(0, Math.min(conTplIdx, tpls.length - 1));
   const tpl = tpls[idx]!;
   const tabs = tpls
-    .map((tp, i) => `<button class="cn-hbtn${i === idx ? ' on' : ''}" data-contpl="${i}">⚔ ${esc(tp.name)}</button>`)
+    .map(
+      (tp, i) =>
+        `<button class="cn-hbtn${i === idx ? ' on' : ''}" data-contpl="${i}">⚔ ${esc(tp.name)}</button>`,
+    )
     .join('');
   const f = formationStats(tpl);
   const slots = tpl.slots
@@ -8522,7 +9113,9 @@ constructorWin.addEventListener('click', (e) => {
     heroSpawnAim = spawnBtn.dataset.hspawn!;
     constructorWin.classList.remove('show');
     const hero = s.heroes?.[heroSpawnAim];
-    const perks = (hero?.abilities ?? []).map((a) => (a !== null ? data.heroAbilities[a]?.type : undefined));
+    const perks = (hero?.abilities ?? []).map((a) =>
+      a !== null ? data.heroAbilities[a]?.type : undefined,
+    );
     note(
       t('⚓ выберите свой мир{fl}{al} — там поднимется корабль героя', {
         fl: perks.includes('spawn_fleet') ? t(' / свой флот') : '',
@@ -8656,7 +9249,14 @@ const hubNote = $('hub-note');
 function showHub(show: boolean): void {
   hubEl.style.display = show ? 'flex' : 'none';
 }
-const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', arsenal: 'hp-arsenal', ally: 'hp-ally', more: 'hp-more' };
+const HUB_PANELS: Record<string, string> = {
+  home: 'hp-home',
+  rank: 'hp-rank',
+  meta: 'hp-meta',
+  arsenal: 'hp-arsenal',
+  ally: 'hp-ally',
+  more: 'hp-more',
+};
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -8667,7 +9267,8 @@ function hubTab(tab: string): void {
   }
   if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
   if (tab === 'arsenal') void refreshArsenal(); // cache paints now, server refresh trails
-  for (const [k, pid] of Object.entries(HUB_PANELS)) $(pid).style.display = k === tab ? 'flex' : 'none';
+  for (const [k, pid] of Object.entries(HUB_PANELS))
+    $(pid).style.display = k === tab ? 'flex' : 'none';
   for (const b of Array.from(document.querySelectorAll('.hub-tab')))
     b.classList.toggle('active', (b as HTMLElement).dataset.hub === tab);
 }
@@ -8682,7 +9283,8 @@ function renderMetaPanel(): void {
   const lvl = metaLevel(st.xp);
   const [got, need] = metaLevelProgress(st.xp);
   const pts = metaPoints(st);
-  let h = `<div class="mp-head"><b>${t('Уровень {n}', { n: lvl })}</b>` +
+  let h =
+    `<div class="mp-head"><b>${t('Уровень {n}', { n: lvl })}</b>` +
     `<span class="mp-xp">${t('{got}/{need} XP', { got, need })}</span>` +
     `<span class="mp-pts">${t('Очков: {n}', { n: pts })}</span></div>`;
   h += `<div class="mp-track"><div class="mp-fill" style="width:${Math.round((got / need) * 100)}%"></div></div>`;
@@ -8691,10 +9293,13 @@ function renderMetaPanel(): void {
     for (const node of META_TREE.filter((x) => x.branch === branch)) {
       const owned = st.spent.includes(node.id);
       const can = canUnlock(st, node.id);
-      h += `<div class="mp-node ${owned ? 'own' : can ? 'can' : 'lock'}">` +
+      h +=
+        `<div class="mp-node ${owned ? 'own' : can ? 'can' : 'lock'}">` +
         `<div class="mp-nm">${owned ? '✓ ' : ''}${esc(t(node.name))} <em>· ${t('{n} очк.', { n: node.tier })}</em></div>` +
         `<div class="mp-ds">${esc(t(node.desc))}</div>` +
-        (owned ? '' : `<button class="mp-buy" data-meta="${node.id}" ${can ? '' : 'disabled'}>${can ? t('Изучить') : t('Закрыто')}</button>`) +
+        (owned
+          ? ''
+          : `<button class="mp-buy" data-meta="${node.id}" ${can ? '' : 'disabled'}>${can ? t('Изучить') : t('Закрыто')}</button>`) +
         `</div>`;
     }
     h += `</div>`;
@@ -8719,9 +9324,21 @@ $('hp-meta').addEventListener('click', (ev) => {
 // only when a session token from a prior join is already on hand — never prompts for
 // a password just to LOOK at the hub) refreshes it. No server/no account yet ⇒ the
 // empty state, same "no restriction without a snapshot" spirit as the core build gate.
-const ARSENAL_KIND_ICON: Record<ArsenalItem['kind'], string> = { hull: '◈', module: '◆', hero_fitting: '◇' };
-const ARSENAL_CODEX_KIND: Record<ArsenalItem['kind'], string> = { hull: 'u', module: 'md', hero_fitting: 'hf' };
-const ARSENAL_KIND_RU: Record<ArsenalItem['kind'], string> = { hull: 'Корпуса', module: 'Модули', hero_fitting: 'Фитинги' };
+const ARSENAL_KIND_ICON: Record<ArsenalItem['kind'], string> = {
+  hull: '◈',
+  module: '◆',
+  hero_fitting: '◇',
+};
+const ARSENAL_CODEX_KIND: Record<ArsenalItem['kind'], string> = {
+  hull: 'u',
+  module: 'md',
+  hero_fitting: 'hf',
+};
+const ARSENAL_KIND_RU: Record<ArsenalItem['kind'], string> = {
+  hull: 'Корпуса',
+  module: 'Модули',
+  hero_fitting: 'Фитинги',
+};
 const ARSENAL_ORIGIN_RU: Record<ArsenalItem['origin'], string> = {
   starter: 'стартовый',
   drop: 'дроп',
@@ -8751,7 +9368,10 @@ function arsenalItemName(item: ArsenalItem): string {
   return tData(data.heroFittings[item.defId]?.name ?? item.defId);
 }
 function arsenalCardHtml(item: ArsenalItem): string {
-  const badges = [item.grade ? `+${item.grade}` : '', typeof item.durability === 'number' ? `⛭${item.durability}` : '']
+  const badges = [
+    item.grade ? `+${item.grade}` : '',
+    typeof item.durability === 'number' ? `⛭${item.durability}` : '',
+  ]
     .filter(Boolean)
     .join(' ');
   const origin = t(ARSENAL_ORIGIN_RU[item.origin]);
@@ -8769,11 +9389,13 @@ function renderArsenalPanel(): void {
   }
   const kinds: Array<ArsenalItem['kind']> = ['hull', 'module', 'hero_fitting'];
   let chips = `<button class="ar-fchip${arsenalFilter.kind ? '' : ' on'}" data-ar-kind="">${t('Всё')}</button>`;
-  for (const k of kinds) chips += `<button class="ar-fchip${arsenalFilter.kind === k ? ' on' : ''}" data-ar-kind="${k}">${t(ARSENAL_KIND_RU[k])}</button>`;
+  for (const k of kinds)
+    chips += `<button class="ar-fchip${arsenalFilter.kind === k ? ' on' : ''}" data-ar-kind="${k}">${t(ARSENAL_KIND_RU[k])}</button>`;
   const grades = gradesOf(arsenalItems);
   if (grades.length) {
     chips += `<span class="ar-fsep"></span>`;
-    for (const g of grades) chips += `<button class="ar-fchip${arsenalFilter.grade === g ? ' on' : ''}" data-ar-grade="${g}">+${g}</button>`;
+    for (const g of grades)
+      chips += `<button class="ar-fchip${arsenalFilter.grade === g ? ' on' : ''}" data-ar-grade="${g}">+${g}</button>`;
   }
   const cards = filterArsenal(arsenalItems, arsenalFilter).map(arsenalCardHtml).join('');
   el.innerHTML = `<div class="ar-filters">${chips}</div><div class="hub-grid ar-grid">${cards}</div>`;
@@ -8809,7 +9431,9 @@ async function refreshArsenal(): Promise<void> {
   const session = localStorage.getItem(sessionKey(srv.base));
   if (!session) return;
   try {
-    const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, { headers: { authorization: `Bearer ${session}` } });
+    const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, {
+      headers: { authorization: `Bearer ${session}` },
+    });
     if (!res.ok) return;
     const body = (await res.json().catch(() => null)) as { items?: unknown } | null;
     arsenalItems = parseArsenalItems(body?.items);
@@ -8861,8 +9485,12 @@ $('cwgo').addEventListener('click', signInByCallsign);
 wNickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') signInByCallsign();
 });
-$('cgoogle').addEventListener('click', () => openHub(t('Вход через Google — скоро · ты вошёл гостем')));
-$('capple').addEventListener('click', () => openHub(t('Вход через Apple — скоро · ты вошёл гостем')));
+$('cgoogle').addEventListener('click', () =>
+  openHub(t('Вход через Google — скоро · ты вошёл гостем')),
+);
+$('capple').addEventListener('click', () =>
+  openHub(t('Вход через Apple — скоро · ты вошёл гостем')),
+);
 $('cback').addEventListener('click', () => {
   showStage('welcome'); // reset #connect's inner stage for next time
   statusEl.textContent = '';
@@ -8906,7 +9534,8 @@ for (const tile of Array.from(document.querySelectorAll('#hp-more .hub-tile[data
   tile.addEventListener('click', () => {
     // The tile's own label span is already localized (localizeStaticDom ran at boot);
     // read IT, not the Russian-only data-more attribute, so the toast matches the UI language.
-    const label = tile.querySelector('[data-i18n]')?.textContent ?? (tile as HTMLElement).dataset.more ?? '';
+    const label =
+      tile.querySelector('[data-i18n]')?.textContent ?? (tile as HTMLElement).dataset.more ?? '';
     hubNote.textContent = t('{what} — скоро', { what: label });
   });
 }
@@ -8977,7 +9606,9 @@ function renderSettings(): void {
     setStarfield(star.checked);
     if (starVal) starVal.textContent = star.checked ? t('вкл') : t('выкл');
   });
-  document.getElementById('set-close')?.addEventListener('click', () => settingsEl.classList.remove('show'));
+  document
+    .getElementById('set-close')
+    ?.addEventListener('click', () => settingsEl.classList.remove('show'));
 }
 $('hub-settings').addEventListener('click', () => {
   renderSettings();
@@ -9022,13 +9653,32 @@ const setupTemplates: FormationTemplate[] = DEFAULT_TEMPLATES.map((t) => ({
 // Mobile keeps the original emoji (phone fonts render them); PC monospace stacks
 // have no text glyph for 🪖👥🎖 (they rendered as tofu ▯) and use UNIT_ICON-style
 // text glyphs instead. Resolved per render via formIcon() on the pcUi() gate.
-const FORM_ICON_EMOJI: Record<string, string> = { militia: '👥', heavy_infantry: '🪖', special_forces: '🎖', tank: '🛡' };
-const FORM_ICON_TEXT: Record<string, string> = { militia: '▿', heavy_infantry: '◆', special_forces: '✱', tank: '▰' };
+const FORM_ICON_EMOJI: Record<string, string> = {
+  militia: '👥',
+  heavy_infantry: '🪖',
+  special_forces: '🎖',
+  tank: '🛡',
+};
+const FORM_ICON_TEXT: Record<string, string> = {
+  militia: '▿',
+  heavy_infantry: '◆',
+  special_forces: '✱',
+  tank: '▰',
+};
 function formIcon(type: string): string {
   return (pcUi() ? FORM_ICON_TEXT[type] : FORM_ICON_EMOJI[type]) ?? '▪';
 }
-const FORM_RU: Record<string, string> = { militia: 'Ополчение', heavy_infantry: 'Тяжёлая пехота', special_forces: 'Спецназ', tank: 'Танк' };
-const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({ name: h.name, grade: h.grade, abilities: [...h.abilities] }));
+const FORM_RU: Record<string, string> = {
+  militia: 'Ополчение',
+  heavy_infantry: 'Тяжёлая пехота',
+  special_forces: 'Спецназ',
+  tank: 'Танк',
+};
+const setupHeroes: HeroLoadout[] = DEFAULT_HEROES.map((h) => ({
+  name: h.name,
+  grade: h.grade,
+  abilities: [...h.abilities],
+}));
 
 /** The hero's display name — the главный hero shows the player's callsign (nick),
  *  falling back to its localized preset name only while the nick field is empty. */
@@ -9036,7 +9686,10 @@ function heroName(h: HeroLoadout): string {
   return h.grade === 'main' ? nickInput.value.trim() || t(h.name) : h.name;
 }
 
-const setupShips: ShipLoadout[] = DEFAULT_SHIP_LOADOUTS.map((l) => ({ hull: l.hull, modules: [...l.modules] }));
+const setupShips: ShipLoadout[] = DEFAULT_SHIP_LOADOUTS.map((l) => ({
+  hull: l.hull,
+  modules: [...l.modules],
+}));
 
 // Loadout is chosen in-match now (ships at build time under tech-unlocks, heroes in the
 // capital), so the pre-match Верфь / Герои / Дивизии editors and their inventory chrome
@@ -9093,9 +9746,12 @@ function factionBonusLine(fid: string): string {
   const p = data.factions[fid]?.passives;
   if (!p) return '';
   const parts: string[] = [];
-  if (p.productionBonus) parts.push(t('+{n}% экономика', { n: Math.round(p.productionBonus * 100) }));
-  if (p.combatDamageBonus) parts.push(t('+{n}% урон', { n: Math.round(p.combatDamageBonus * 100) }));
-  if (p.fleetSpeedBonus) parts.push(t('+{n}% скорость флотов', { n: Math.round(p.fleetSpeedBonus * 100) }));
+  if (p.productionBonus)
+    parts.push(t('+{n}% экономика', { n: Math.round(p.productionBonus * 100) }));
+  if (p.combatDamageBonus)
+    parts.push(t('+{n}% урон', { n: Math.round(p.combatDamageBonus * 100) }));
+  if (p.fleetSpeedBonus)
+    parts.push(t('+{n}% скорость флотов', { n: Math.round(p.fleetSpeedBonus * 100) }));
   if (p.radarRangeBonus) parts.push(t('+{n}% радар', { n: Math.round(p.radarRangeBonus * 100) }));
   return parts.join(' · ');
 }
@@ -9336,7 +9992,11 @@ function buildSetupConfig(): SetupConfig {
     seats,
     ...(setupScientists.length ? { scientists: [...setupScientists] } : {}),
     templates: setupTemplates.map((t) => ({ name: t.name, slots: [...t.slots] })),
-    heroes: setupHeroes.map((h) => ({ name: heroName(h), grade: h.grade, abilities: [...h.abilities] })),
+    heroes: setupHeroes.map((h) => ({
+      name: heroName(h),
+      grade: h.grade,
+      abilities: [...h.abilities],
+    })),
     ships: setupShips.map((l) => ({ hull: l.hull, modules: [...l.modules] })),
   };
 }
@@ -9373,9 +10033,15 @@ devlineEl.addEventListener('click', (ev) => {
   const worlds = mine.filter((p) => (p.kind ?? 'planet') === 'planet').length;
   const score = Math.round(s.match?.scores?.[ME]?.total ?? 0);
   note(
-    t('✦ {score}/{limit}: мир — 50, прочий сектор — 10, здания добавляют по уровню (у вас {w} миров, {s} секторов). Победа: ✦ {limit}, уничтожение соперников или доминирование.', {
-      score, limit: SCORE_LIMIT, w: worlds, s: mine.length - worlds,
-    }),
+    t(
+      '✦ {score}/{limit}: мир — 50, прочий сектор — 10, здания добавляют по уровню (у вас {w} миров, {s} секторов). Победа: ✦ {limit}, уничтожение соперников или доминирование.',
+      {
+        score,
+        limit: SCORE_LIMIT,
+        w: worlds,
+        s: mine.length - worlds,
+      },
+    ),
   );
 });
 
@@ -9564,9 +10230,8 @@ function connect(): void {
           // every 30s — cheap enough to never matter, useful on every playtest.
           if (perfTimer) clearInterval(perfTimer);
           perfTimer = setInterval(() => {
-            const mem = (
-              performance as unknown as { memory?: { usedJSHeapSize?: number } }
-            ).memory?.usedJSHeapSize;
+            const mem = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory
+              ?.usedJSHeapSize;
             client.sendPerf({
               fps: Math.round(fpsEma),
               ...(rttEma !== null ? { rttMs: Math.round(rttEma) } : {}),
@@ -9822,11 +10487,11 @@ async function ensureSession(base: string, login: string): Promise<string | null
         note('✔ ' + t('Аккаунт создан'));
         return reg.token;
       }
-      statusEl.textContent =
-        reg.status === 409 ? t('Неверный пароль') : t('Регистрация отклонена');
+      statusEl.textContent = reg.status === 409 ? t('Неверный пароль') : t('Регистрация отклонена');
       return null;
     }
-    statusEl.textContent = login1.status === 429 ? t('Слишком часто — подождите') : t('Вход отклонён');
+    statusEl.textContent =
+      login1.status === 429 ? t('Слишком часто — подождите') : t('Вход отклонён');
     return null;
   } catch {
     statusEl.textContent = t('сервер недоступен');
@@ -9904,7 +10569,8 @@ let activeTab: MatchTab = 'available';
 function ruleSummary(r: MatchRow['rules']): string {
   const parts = [`×${r.timeScale ?? 1}`];
   if (r.victory?.scoreLimit) parts.push(t('до {n} очк.', { n: r.victory.scoreLimit }));
-  if (r.victory?.dominationPercent) parts.push(t('{p}% карты', { p: Math.round(r.victory.dominationPercent * 100) }));
+  if (r.victory?.dominationPercent)
+    parts.push(t('{p}% карты', { p: Math.round(r.victory.dominationPercent * 100) }));
   return parts.join(' · ');
 }
 
@@ -10158,6 +10824,28 @@ const fpsEl = $('fps');
 // tests. Compiled out of the player build (dev tooling, not diagnostics).
 if (!__PLAYER_BUILD__ && DEV_UI && typeof window !== 'undefined') {
   (window as unknown as { __vdFx?: object }).__vdFx = {
+    // e2e probe: page-space anchors of own fleets and all worlds — lets a browser
+    // test tap real map objects without guessing coordinates. Dev chrome, read-only.
+    probe(): {
+      fleets: Array<{ id: string; x: number; y: number }>;
+      worlds: Array<{ id: string; x: number; y: number; owner: string | null }>;
+    } {
+      const r = canvas.getBoundingClientRect();
+      const sx = (p: { x: number; y: number }) => ({
+        x: r.left + (p.x / VW) * r.width,
+        y: r.top + (p.y / VH) * r.height,
+      });
+      return {
+        fleets: Object.values(s.fleets)
+          .filter((f) => f.owner === ME)
+          .map((f) => ({ id: f.id, ...sx(fleetAnchor(f)) })),
+        worlds: Object.values(s.planets).map((p) => ({
+          id: p.id,
+          owner: p.owner,
+          ...sx(world(p.position)),
+        })),
+      };
+    },
     // Stock the first own fleet with hold cargo (squadrons in the hold + landing
     // troops + a fake in-progress load) so the emblem's cargo tail can be previewed
     // without building a carrier — dev chrome, mutates local state only.
@@ -10168,7 +10856,12 @@ if (!__PLAYER_BUILD__ && DEV_UI && typeof window !== 'undefined') {
       if (wing) wing.count += 2;
       else f.units.push({ unit: 'fighter_squadron', count: 2 });
       (f.landing ??= []).push({ unit: 'militia', count: 2 });
-      pendingLoads.push({ fleetId: f.id, unit: 'fighter_squadron', startAt: s.time, doneAt: s.time + LOAD_TIME });
+      pendingLoads.push({
+        fleetId: f.id,
+        unit: 'fighter_squadron',
+        startAt: s.time,
+        doneAt: s.time + LOAD_TIME,
+      });
       return f.id;
     },
     pushSiege(fromId: string, toId: string): boolean {
@@ -10196,7 +10889,12 @@ if (!__PLAYER_BUILD__ && DEV_UI && typeof window !== 'undefined') {
       m.winner = outcome === 'draw' ? null : outcome === 'win' ? ME : ME === 'p1' ? 'p2' : 'p1';
       m.scores ??= {};
       for (const id of Object.keys(s.players)) {
-        m.scores[id] ??= { controlledPlanets: worldsOf(id), fleets: 0, units: 0, total: worldsOf(id) * 50 };
+        m.scores[id] ??= {
+          controlledPlanets: worldsOf(id),
+          fleets: 0,
+          units: 0,
+          total: worldsOf(id) * 50,
+        };
       }
       return true;
     },
@@ -10244,23 +10942,23 @@ function inMatch(): boolean {
 function topLayerOpen(): boolean {
   return Boolean(
     aiming ||
-      assaultAim ||
-      merging ||
-      barrageAim ||
-      pingMenuLoc !== null ||
-      pingPopEl?.classList.contains('show') ||
-      splitState !== null ||
-      codexEl?.classList.contains('show') ||
-      logWin?.classList.contains('show') ||
-      techWin.classList.contains('show') ||
-      divDesignWin.classList.contains('show') ||
-      marketWin.classList.contains('show') ||
-      diploOpen ||
-      chatOpen ||
-      setupEl.style.display !== 'none' ||
-      selFleet !== null ||
-      selPlanet !== null ||
-      selFleets.size > 0,
+    assaultAim ||
+    merging ||
+    barrageAim ||
+    pingMenuLoc !== null ||
+    pingPopEl?.classList.contains('show') ||
+    splitState !== null ||
+    codexEl?.classList.contains('show') ||
+    logWin?.classList.contains('show') ||
+    techWin.classList.contains('show') ||
+    divDesignWin.classList.contains('show') ||
+    marketWin.classList.contains('show') ||
+    diploOpen ||
+    chatOpen ||
+    setupEl.style.display !== 'none' ||
+    selFleet !== null ||
+    selPlanet !== null ||
+    selFleets.size > 0,
   );
 }
 
@@ -10596,12 +11294,15 @@ function openEmblemPick(): void {
   if (!emblemPick || !epGrid) return;
   const cur = playerEmblem();
   epGrid.innerHTML = EMBLEMS.map(
-    (g) => `<button type="button" class="ep-cell${g === cur ? ' sel' : ''}" data-emblem="${g}">${g}</button>`,
+    (g) =>
+      `<button type="button" class="ep-cell${g === cur ? ' sel' : ''}" data-emblem="${g}">${g}</button>`,
   ).join('');
   emblemPick.classList.add('show');
 }
 document.getElementById('hubav')?.addEventListener('click', openEmblemPick);
-document.getElementById('ep-close')?.addEventListener('click', () => emblemPick?.classList.remove('show'));
+document
+  .getElementById('ep-close')
+  ?.addEventListener('click', () => emblemPick?.classList.remove('show'));
 emblemPick?.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.id === 'emblempick') {
@@ -10619,7 +11320,8 @@ const playerCardEl = document.getElementById('playercard');
 if (playerCardEl) {
   playerCardEl.addEventListener('click', (e) => {
     const tg = e.target as HTMLElement;
-    if (tg.id === 'playercard' || tg.classList.contains('pc-close')) playerCardEl.classList.remove('show');
+    if (tg.id === 'playercard' || tg.classList.contains('pc-close'))
+      playerCardEl.classList.remove('show');
   });
 }
 
@@ -10666,7 +11368,8 @@ document.getElementById('rail-msgs')?.addEventListener('click', () => {
 const CHAT_BADWORDS = ['идиот', 'дурак', 'тупой', 'damn', 'hell', 'crap'];
 function censorText(text: string): string {
   let out = text;
-  for (const w of CHAT_BADWORDS) out = out.replace(new RegExp(w, 'gi'), (m) => '*'.repeat(m.length));
+  for (const w of CHAT_BADWORDS)
+    out = out.replace(new RegExp(w, 'gi'), (m) => '*'.repeat(m.length));
   return out;
 }
 /** The chat's tabs: the three fixed group rooms, then a tab per DM that exists (plus
@@ -10684,7 +11387,8 @@ function chatChannels(): Array<{ key: string; label: string; icon: string }> {
     else if (m.to === ME) dm.add(m.from);
   }
   if (!GROUP_CHANNELS.has(chatTab)) dm.add(chatTab); // keep a freshly opened DM's tab
-  for (const id of dm) if (s.players[id]) base.push({ key: id, label: NAME[id] ?? id, icon: seatBadge(id).icon });
+  for (const id of dm)
+    if (s.players[id]) base.push({ key: id, label: NAME[id] ?? id, icon: seatBadge(id).icon });
   return base;
 }
 function chatChannelLabel(key: string): string {
@@ -10718,7 +11422,8 @@ function applyChatGeom(): void {
 }
 function chatFeedInnerHtml(key: string): string {
   const msgs = convoMessages(key);
-  if (!msgs.length) return `<div class="cw-empty">${t('Канал «{ch}» пуст.', { ch: esc(chatChannelLabel(key)) })}<br>${t('Напишите первое сообщение.')}</div>`;
+  if (!msgs.length)
+    return `<div class="cw-empty">${t('Канал «{ch}» пуст.', { ch: esc(chatChannelLabel(key)) })}<br>${t('Напишите первое сообщение.')}</div>`;
   const stamp: StampOpts = { day: chatCfg.showDay, time: chatCfg.showTime, real: chatCfg.showReal };
   return msgs
     .map((m) => convoLineHtml(chatCfg.censor ? { ...m, text: censorText(m.text) } : m, stamp))
@@ -10808,7 +11513,11 @@ function loadChat(): void {
     if (typeof localStorage === 'undefined') return;
     const raw = localStorage.getItem(CHAT_STORE_KEY);
     if (!raw) return;
-    const v = JSON.parse(raw) as { cfg?: Partial<typeof chatCfg>; geom?: Partial<typeof chatGeom>; pinned?: boolean };
+    const v = JSON.parse(raw) as {
+      cfg?: Partial<typeof chatCfg>;
+      geom?: Partial<typeof chatGeom>;
+      pinned?: boolean;
+    };
     if (v.cfg) Object.assign(chatCfg, v.cfg);
     if (v.geom) {
       Object.assign(chatGeom, v.geom);
@@ -10881,7 +11590,9 @@ function chatResizeCursor(d: string): string {
   return '';
 }
 loadChat(); // restore cached preferences before the window can be opened
-document.getElementById('rail-chat')?.addEventListener('click', () => (chatOpen ? closeChat() : openChat()));
+document
+  .getElementById('rail-chat')
+  ?.addEventListener('click', () => (chatOpen ? closeChat() : openChat()));
 const chatwinEl = document.getElementById('chatwin');
 if (chatwinEl) {
   // Begin a gesture: a drag near any edge resizes in that direction; a drag on the
@@ -11078,12 +11789,26 @@ function renderPingMenu(): void {
   const el = document.getElementById('pingmenu');
   if (!el || !pingMenuLoc) return;
   const loc = pingMenuLoc;
-  const dstBtn = (dest: string, color: string, ic: string, name: string, tag: string, cls = ''): string =>
+  const dstBtn = (
+    dest: string,
+    color: string,
+    ic: string,
+    name: string,
+    tag: string,
+    cls = '',
+  ): string =>
     `<button class="pm-dst${cls}" data-pmdest="${esc(dest)}">` +
     `<span class="pm-ic" style="color:${color}">${ic}</span>${esc(name)}` +
     (tag ? `<em>${esc(tag)}</em>` : '') +
     `</button>`;
-  const coal = dstBtn(COALITION, 'var(--amber)', '⚡', t('Коалиция'), t('{n} уч.', { n: coalitionMembers().length }), ' coal');
+  const coal = dstBtn(
+    COALITION,
+    'var(--amber)',
+    '⚡',
+    t('Коалиция'),
+    t('{n} уч.', { n: coalitionMembers().length }),
+    ' coal',
+  );
   const dms = diploSeats()
     .filter((id) => id !== ME)
     .map((id) => dstBtn(id, ownerColor(id), seatBadge(id).icon, NAME[id] ?? id, seatBadge(id).tag))
@@ -11134,7 +11859,9 @@ function removePing(loc: string): void {
     closePingPop();
     return;
   }
-  sessionMessages = sessionMessages.filter((m) => !(m.to === COALITION && m.ping === loc && m.from === ME));
+  sessionMessages = sessionMessages.filter(
+    (m) => !(m.to === COALITION && m.ping === loc && m.from === ME),
+  );
   closePingPop();
   if (diploOpen && diploTab === 'msgs') renderDiploFeed();
 }
@@ -11146,7 +11873,7 @@ function openPingPop(loc: string): void {
   if (!m || !pl || !el) return;
   const c = world(pl.position);
   const r = canvas.getBoundingClientRect();
-  const who = m.from === ME ? t('Вы') : NAME[m.from] ?? m.from;
+  const who = m.from === ME ? t('Вы') : (NAME[m.from] ?? m.from);
   const mine = m.from === ME;
   el.innerHTML =
     `<div class="pp-top"><b style="color:${ownerColor(m.from)}">📍 ${esc(who)}</b><span>${esc(loc)}</span></div>` +
@@ -11161,6 +11888,136 @@ function openPingPop(loc: string): void {
 function closePingPop(): void {
   document.getElementById('pingpop')?.classList.remove('show');
 }
+
+// --- TGT-1: target-order composer (CC-1 chains rendered target-side) ---------
+/** CC-1 plan of an OWN fleet — authoritative in both modes (the module runs in MODULES). */
+function chainStepsOf(fid: string): ChainStep[] | null {
+  const ch = (s as { orders?: Record<string, { steps: ChainStep[] }> }).orders?.[fid];
+  return ch ? ch.steps : null;
+}
+/** The closest OWN world to `fromId` — the «Домой» leg of a composed plan. */
+function nearestOwnWorld(fromId: string): string | null {
+  const from = s.planets[fromId]?.position;
+  if (!from) return null;
+  let best: string | null = null;
+  let bd = Infinity;
+  for (const p of Object.values(s.planets)) {
+    if (p.owner !== ME || p.id === fromId) continue;
+    const d = Math.hypot(p.position.x - from.x, p.position.y - from.y);
+    if (d < bd) {
+      bd = d;
+      best = p.id;
+    }
+  }
+  return best;
+}
+function tgStepLabel(st: ChainStep, target: string): string {
+  if (st.kind === 'wait') return t('⏱{n}ч', { n: st.hours });
+  if (st.kind === 'move') return st.to === target ? '✈' : `✈ ${st.to}`;
+  if (st.kind === 'assault') return '⚔';
+  return '🎯';
+}
+/** Open the composer for `target`, editing the FIRST chained fleet's plan (or a
+ *  fresh one). `fleetIds` — who the plan will be sent to (all owned, alive). */
+function openTgtEditor(target: string, fleetIds: string[]): void {
+  const mine = fleetIds.filter((id) => s.fleets[id]?.owner === ME);
+  if (!mine.length || !s.planets[target]) return;
+  tgtEditor = { fleetIds: mine, target, steps: [...(chainStepsOf(mine[0]!) ?? [])] };
+  renderTgtEditor(true);
+}
+function closeTgtEditor(): void {
+  tgtEditor = null;
+  document.getElementById('tgted')?.classList.remove('show');
+}
+function renderTgtEditor(reposition = false): void {
+  const el = document.getElementById('tgted');
+  if (!el) return;
+  if (!tgtEditor) {
+    el.classList.remove('show');
+    return;
+  }
+  const pl = s.planets[tgtEditor.target];
+  const alive = tgtEditor.fleetIds.filter((id) => s.fleets[id]?.owner === ME);
+  if (!pl || !alive.length) {
+    closeTgtEditor();
+    return;
+  }
+  tgtEditor.fleetIds = alive;
+  const st = tgtEditor.steps;
+  const full = st.length >= MAX_CHAIN_STEPS;
+  const plan = st.length
+    ? st
+        .map(
+          (x, i) =>
+            `<button data-step="${i}" title="${t('убрать шаг')}">${esc(tgStepLabel(x, tgtEditor!.target))}</button>`,
+        )
+        .join('<i>→</i>')
+    : `<i>${t('план пуст — добавь шаги')}</i>`;
+  el.innerHTML =
+    `<div class="tg-top"><b>◎ ${t('ПРИКАЗ')}</b><span>${esc(tgtEditor.target)}${
+      alive.length > 1 ? ` · ${t('{n} флотов', { n: alive.length })}` : ''
+    }</span></div>` +
+    `<div class="tg-plan">${plan}</div>` +
+    `<div class="tg-add">` +
+    `<button data-tg="wait" ${full ? 'disabled' : ''}>${t('⏱ +1ч')}</button>` +
+    `<button data-tg="move" ${full ? 'disabled' : ''}>✈ ${t('Сюда')}</button>` +
+    `<button data-tg="assault" ${full ? 'disabled' : ''}>⚔ ${t('Штурм')}</button>` +
+    `<button data-tg="barrage" ${full ? 'disabled' : ''}>🎯 ${t('Огонь')}</button>` +
+    `<button data-tg="home" ${full || !nearestOwnWorld(tgtEditor.target) ? 'disabled' : ''}>⌂ ${t('Домой')}</button>` +
+    `</div>` +
+    `<div class="tg-act">` +
+    `<button data-tg="send" ${st.length ? '' : 'disabled'}>✓ ${t('Отправить')}</button>` +
+    `<button data-tg="drop" class="tg-drop" title="${t('снять приказ')}">✕</button>` +
+    `</div>`;
+  el.classList.add('show');
+  if (reposition) {
+    const c = world(pl.position);
+    const r = canvas.getBoundingClientRect();
+    el.style.left = `${Math.round(r.left + (c.x / VW) * r.width)}px`;
+    el.style.top = `${Math.round(r.top + (c.y / VH) * r.height)}px`;
+    // Clamp into the viewport — a target near a map edge must not clip the composer.
+    const b = el.getBoundingClientRect();
+    const minLeft = b.width / 2 + 6;
+    const maxLeft = window.innerWidth - b.width / 2 - 6;
+    el.style.left = `${Math.round(Math.min(maxLeft, Math.max(minLeft, parseFloat(el.style.left))))}px`;
+    if (b.top < 96) el.style.top = `${Math.round(parseFloat(el.style.top) + (96 - b.top))}px`;
+  }
+}
+document.getElementById('tgted')?.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest('button');
+  if (!btn || btn.disabled || !tgtEditor) return;
+  if (btn.dataset.step !== undefined) {
+    tgtEditor.steps.splice(Number(btn.dataset.step), 1); // tap a chip → drop that step
+    renderTgtEditor();
+    return;
+  }
+  const act = btn.dataset.tg;
+  const st = tgtEditor.steps;
+  if (act === 'wait') {
+    const last = st[st.length - 1];
+    if (last?.kind === 'wait') last.hours = Math.min(24 * 14, last.hours + 1);
+    else st.push({ kind: 'wait', hours: 1 });
+  } else if (act === 'move') {
+    st.push({ kind: 'move', to: tgtEditor.target });
+  } else if (act === 'assault') {
+    st.push({ kind: 'assault' });
+  } else if (act === 'barrage') {
+    st.push({ kind: 'barrage', target: null });
+  } else if (act === 'home') {
+    const home = nearestOwnWorld(tgtEditor.target);
+    if (home) st.push({ kind: 'move', to: home });
+  } else if (act === 'send') {
+    for (const id of tgtEditor.fleetIds) playerOrder(orderChain(ME, id, st));
+    note(t('◎ приказ поставлен — флот исполнит план сам'));
+    closeTgtEditor();
+    return;
+  } else if (act === 'drop') {
+    for (const id of tgtEditor.fleetIds) if (chainStepsOf(id)) playerOrder(orderChain(ME, id, []));
+    closeTgtEditor();
+    return;
+  }
+  renderTgtEditor();
+});
 /** Draw a pin per active coalition ping (owner-coloured), recording screen hit-boxes
  *  for tap detection. Pins float just above the node, tip pointing at it. Two sonar
  *  rings expand from the marked node (half a period apart) and the pin head breathes
@@ -11226,6 +12083,73 @@ function drawPings(now: number): void {
     cx.fill();
     cx.restore();
     pingHits.push({ loc: m.ping!, x, y: y - 1 });
+  }
+}
+
+/** TGT-1: standing order markers — a breathing crosshair on every world an OWN
+ *  chained fleet is planned against (last move leg; a legless plan anchors at the
+ *  fleet's spot). The ◎ badge above the ring is the tap handle (screen hit-boxes,
+ *  like pings) — tapping it re-opens the composer with the live plan. */
+function drawTargetMarkers(now: number): void {
+  tgtHits = [];
+  const orders = (s as { orders?: Record<string, { steps: ChainStep[] }> }).orders;
+  if (!orders) return;
+  const byWorld = new Map<string, string[]>();
+  for (const fid of Object.keys(orders).sort()) {
+    const f = s.fleets[fid];
+    if (!f || f.owner !== ME) continue;
+    let anchor: string | null = null;
+    for (const stp of orders[fid]!.steps) if (stp.kind === 'move') anchor = stp.to;
+    anchor ??= f.location;
+    if (!anchor || !s.planets[anchor]) continue;
+    const arr = byWorld.get(anchor) ?? [];
+    if (!arr.length) byWorld.set(anchor, arr);
+    arr.push(fid);
+  }
+  const col = ownerColor(ME);
+  for (const [wid, fids] of byWorld) {
+    const c = world(s.planets[wid]!.position);
+    const pulse = 0.55 + 0.45 * Math.sin(now / 260);
+    const rr = 15 + 1.6 * Math.sin(now / 260);
+    cx.save();
+    cx.strokeStyle = rgba(col, 0.45 + 0.4 * pulse);
+    cx.lineWidth = 1.6;
+    cx.setLineDash([7, 5]);
+    cx.lineDashOffset = -(now / 60) % 12; // slow spin — a "live" reticle
+    cx.beginPath();
+    cx.arc(c.x, c.y, rr, 0, TAU);
+    cx.stroke();
+    cx.setLineDash([]);
+    for (let q = 0; q < 4; q++) {
+      const a = (q * TAU) / 4 + now / 900;
+      cx.beginPath();
+      cx.moveTo(c.x + Math.cos(a) * (rr + 3), c.y + Math.sin(a) * (rr + 3));
+      cx.lineTo(c.x + Math.cos(a) * (rr + 8), c.y + Math.sin(a) * (rr + 8));
+      cx.stroke();
+    }
+    const bx = c.x;
+    const by = c.y - rr - 14;
+    cx.shadowColor = rgba(col, 0.8);
+    cx.shadowBlur = 3 + 6 * pulse;
+    cx.fillStyle = 'rgba(6,18,22,.92)';
+    cx.strokeStyle = rgba(col, 0.9);
+    cx.lineWidth = 1.4;
+    cx.beginPath();
+    cx.arc(bx, by, 7.5, 0, TAU);
+    cx.fill();
+    cx.stroke();
+    cx.shadowBlur = 0;
+    cx.beginPath();
+    cx.arc(bx, by, 2.6, 0, TAU);
+    cx.stroke();
+    if (fids.length > 1) {
+      cx.fillStyle = rgba(col, 0.95);
+      cx.font = '700 8px ui-monospace,monospace';
+      cx.textAlign = 'center';
+      cx.fillText(String(fids.length), bx + 11, by - 5);
+    }
+    cx.restore();
+    tgtHits.push({ target: wid, fleetIds: fids, x: bx, y: by });
   }
 }
 /** Tap a ping → fly the camera to that province (and select it); close the menu. */
@@ -11546,7 +12470,10 @@ requestAnimationFrame(frame);
     const hubUpd = document.getElementById('hub-upd');
     if (hubUpd) {
       hubUpd.style.display = '';
-      hubUpd.addEventListener('click', () => void runCheck(true, document.getElementById('hub-note')));
+      hubUpd.addEventListener(
+        'click',
+        () => void runCheck(true, document.getElementById('hub-note')),
+      );
     }
     // Silent re-checks: once at launch, whenever the app returns to the FOREGROUND
     // (the phone pattern — launch offline, open later on wifi), and every 4h for a
@@ -11647,7 +12574,10 @@ let corpFetchBusy = false;
  *  to show stale. Returns the parsed JSON body, or null on ANY failure (no
  *  server configured, not logged in, network error, non-2xx) — surfaces a
  *  server-given error code via `note()` when there is one, never throws. */
-async function corpFetch(path: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
+async function corpFetch(
+  path: string,
+  init?: { method?: string; body?: unknown },
+): Promise<unknown> {
   const srv = resolveServer();
   if (!srv) return null;
   await probeAuthMode(srv.base);
@@ -11682,22 +12612,26 @@ async function refreshCorp(): Promise<void> {
   if (corpFetchBusy) return;
   corpFetchBusy = true;
   try {
-    const mineRaw = (await corpFetch('/corps/me')) as { corp?: unknown; membership?: unknown } | null;
+    const mineRaw = (await corpFetch('/corps/me')) as {
+      corp?: unknown;
+      membership?: unknown;
+    } | null;
     corpMine = mineRaw
       ? { corp: parseCorpRecord(mineRaw.corp), membership: parseMembership(mineRaw.membership) }
       : { corp: null, membership: null };
 
     if (corpMine.membership) {
       const corpId = corpMine.membership.corpId;
-      const detailRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}`)) as
-        | { corp?: unknown; members?: unknown }
-        | null;
+      const detailRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}`)) as {
+        corp?: unknown;
+        members?: unknown;
+      } | null;
       const corp = detailRaw ? parseCorpRecord(detailRaw.corp) : null;
       corpDetail = corp ? { corp, members: parseMemberships(detailRaw?.members) } : null;
       if (canManage(corpMine.membership.role)) {
-        const auditRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}/audit`)) as
-          | { audit?: unknown }
-          | null;
+        const auditRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}/audit`)) as {
+          audit?: unknown;
+        } | null;
         corpAudit = parseAudit(auditRaw?.audit);
       } else {
         corpAudit = [];
@@ -11730,11 +12664,16 @@ async function refreshCorp(): Promise<void> {
 
     // The setRoster eligibility set (AVA-6) — head/officer only, only while curating.
     avaReadyPlayers =
-      avaRoster?.status === 'accepted' && myCorpId && corpMine.membership && canManage(corpMine.membership.role)
+      avaRoster?.status === 'accepted' &&
+      myCorpId &&
+      corpMine.membership &&
+      canManage(corpMine.membership.role)
         ? parseAccountIds(
-            ((await corpFetch(`/corps/${encodeURIComponent(myCorpId)}/ready-players`)) as {
-              accountIds?: unknown;
-            } | null)?.accountIds,
+            (
+              (await corpFetch(`/corps/${encodeURIComponent(myCorpId)}/ready-players`)) as {
+                accountIds?: unknown;
+              } | null
+            )?.accountIds,
           )
         : [];
   } finally {
@@ -11752,7 +12691,11 @@ async function corpIntent(path: string, body?: unknown): Promise<void> {
 
 function corpNameOf(corpId: string): string {
   if (corpId === corpMine.membership?.corpId && corpMine.corp) return corpMine.corp.name;
-  return corpBrowseList.find((c) => c.corpId === corpId)?.name ?? avaPool.find((c) => c.corpId === corpId)?.name ?? corpId;
+  return (
+    corpBrowseList.find((c) => c.corpId === corpId)?.name ??
+    avaPool.find((c) => c.corpId === corpId)?.name ??
+    corpId
+  );
 }
 
 function corpNoneHtml(): string {
@@ -11825,10 +12768,14 @@ function corpMembersHtml(): string {
           bits.push(
             `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.accountId)}" data-corprole="${toRole}">↑ ${corpRoleLabel(toRole)}</button>`,
           );
-          bits.push(`<button class="cbtn2" data-corpact="transfer" data-corparg="${esc(m.accountId)}">⬆ ${t('передать главенство')}</button>`);
+          bits.push(
+            `<button class="cbtn2" data-corpact="transfer" data-corparg="${esc(m.accountId)}">⬆ ${t('передать главенство')}</button>`,
+          );
         }
         if (canManage(myRole) && !(myRole === 'officer' && m.role === 'officer')) {
-          bits.push(`<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.accountId)}">✖</button>`);
+          bits.push(
+            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.accountId)}">✖</button>`,
+          );
         }
         manage = bits.join('');
       }
@@ -11898,10 +12845,13 @@ function corpWarsHtml(): string {
       // AVA-6 setRoster — head/officer curates from the flagged pool wholesale;
       // everyone else still only has self-enroll `join` (rendered in `act` above).
       const curate =
-        rosterOpen && canManage(corpMine.membership?.role ?? 'recruit') && avaReadyPlayers.length > 0
+        rosterOpen &&
+        canManage(corpMine.membership?.role ?? 'recruit') &&
+        avaReadyPlayers.length > 0
           ? `<div class="cwroster">${avaReadyPlayers
               .map((accountId) => {
-                const login = corpDetail?.members.find((m) => m.accountId === accountId)?.login ?? accountId;
+                const login =
+                  corpDetail?.members.find((m) => m.accountId === accountId)?.login ?? accountId;
                 const on = avaRoster!.mine.some((r) => r.accountId === accountId);
                 return (
                   `<button class="cbtn2 ctoggle${on ? ' on' : ''}" data-corpact="ava-roster-toggle" ` +
@@ -11991,7 +12941,8 @@ function renderCorp(): void {
       `<div class="cident"><b>${t('Без корпорации')}</b></div>` +
       `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>`;
   corpTabsEl.innerHTML = CORP_TABS.map(
-    (ct) => `<button class="ctab${ct.id === corpTab ? ' on' : ''}" data-corptab="${ct.id}">${t(ct.label)}</button>`,
+    (ct) =>
+      `<button class="ctab${ct.id === corpTab ? ' on' : ''}" data-corptab="${ct.id}">${t(ct.label)}</button>`,
   ).join('');
   let body = '';
   if (corpTab === 'overview') body = corpOverviewHtml();
@@ -12053,7 +13004,10 @@ corpEl.addEventListener('click', (e) => {
       void corpIntent(`/corps/${encodeURIComponent(corpId)}/kick`, { target: arg });
       break;
     case 'role':
-      void corpIntent(`/corps/${encodeURIComponent(corpId)}/role`, { target: arg, role: btn?.dataset.corprole });
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/role`, {
+        target: arg,
+        role: btn?.dataset.corprole,
+      });
       break;
     case 'transfer':
       void corpIntent(`/corps/${encodeURIComponent(corpId)}/transfer`, { target: arg });

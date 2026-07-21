@@ -488,6 +488,27 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   width:172px;background:var(--glass);border:1px solid var(--amber);border-radius:8px;padding:8px 10px;
   box-shadow:0 0 22px rgba(0,0,0,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
 #pingpop.show{display:block;}
+/* TGT-1: target-order composer — opens beside the marked world (CC-1 chains) */
+#tgted{position:fixed;z-index:46;display:none;transform:translate(-50%,calc(-100% - 16px));
+  width:208px;background:var(--glass);border:1px solid var(--cyan);border-radius:8px;padding:8px 10px;
+  box-shadow:0 0 22px rgba(0,0,0,.6);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+#tgted.show{display:block;}
+.tg-top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:5px;}
+.tg-top b{font-size:11px;letter-spacing:.5px;color:var(--cyan);font-variant-emoji:text;}
+.tg-top span{font-size:9px;color:var(--cyan-dim);}
+.tg-plan{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;min-height:22px;}
+.tg-plan button{padding:3px 6px;border-radius:5px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.08);color:var(--cyan);font:600 10px ui-monospace,monospace;cursor:pointer;}
+.tg-plan i{font-size:10px;color:var(--dim);align-self:center;}
+.tg-add{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px;}
+.tg-add button{padding:4px 6px;border-radius:5px;border:1px solid rgba(255,255,255,.22);
+  background:rgba(255,255,255,.05);color:#dfe9ec;font:600 10px ui-monospace,monospace;cursor:pointer;}
+.tg-add button:disabled{opacity:.35;cursor:default;}
+.tg-act{display:flex;gap:5px;}
+.tg-act button{flex:1;padding:5px 6px;border-radius:5px;border:1px solid var(--cyan-dim);
+  background:rgba(53,214,230,.1);color:var(--cyan);font:700 10px ui-monospace,monospace;cursor:pointer;}
+.tg-act button:disabled{opacity:.35;cursor:default;}
+.tg-act .tg-drop{border-color:#7a221c;background:rgba(255,90,77,.12);color:var(--red);flex:0 0 auto;}
 .pp-top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:5px;}
 .pp-top b{font-size:11px;letter-spacing:.5px;font-variant-emoji:text;}
 .pp-top span{font-size:9px;color:var(--cyan-dim);font-variant-numeric:tabular-nums;}
@@ -1942,6 +1963,7 @@ const page = (js) => `<!doctype html>
 <div id="warprompt"></div>
 <div id="diplo"></div>
 <div id="pingpop"></div>
+<div id="tgted"></div>
 <div id="objtip"></div>
 <div id="splitdlg"></div>
 <div id="pingmenu"></div>
@@ -2152,5 +2174,11 @@ const devHtml = page(await bundle(false));
 const playerHtml = stripDevMarkup(page(await bundle(true)));
 writeFileSync('prototype/dist/void-dominion.html', devHtml);
 writeFileSync('prototype/dist/void-dominion-player.html', playerHtml);
-console.log('wrote prototype/dist/void-dominion.html (' + (devHtml.length / 1024).toFixed(0) + ' KB)');
-console.log('wrote prototype/dist/void-dominion-player.html (' + (playerHtml.length / 1024).toFixed(0) + ' KB)');
+console.log(
+  'wrote prototype/dist/void-dominion.html (' + (devHtml.length / 1024).toFixed(0) + ' KB)',
+);
+console.log(
+  'wrote prototype/dist/void-dominion-player.html (' +
+    (playerHtml.length / 1024).toFixed(0) +
+    ' KB)',
+);
