@@ -2,7 +2,7 @@
   "name": "void-dominion-mobile",
   "private": true,
   "version": "0.0.0",
-  "description": "Capacitor Android wrapper that packages the Void Dominion prototype (a self-contained HTML game) into an installable APK. Standalone — not part of the pnpm workspace.",
+  "description": "Capacitor Android wrapper that packages the Void Dominion prototype (a self-contained HTML game) into an installable APK. Standalone \u2014 not part of the pnpm workspace.",
   "scripts": {
     "postinstall": "node patch-capacitor-tar.mjs",
     "www": "node sync-www.mjs",
@@ -23,7 +23,7 @@
     "@capacitor/cli": "^8.4.1"
   },
   "comments": {
-    "overrides": "Pin the transitive node-tar to a patched line (>=7.5.16) to clear the GHSA path-traversal / symlink / file-smuggling advisories (tar <=7.5.15). We keep Capacitor 6 (the v6/JDK17 APK pipeline) instead of the breaking @capacitor/cli@8 bump. replace@1.2.2 pins minimatch 3.0.5 exactly (ReDoS: GHSA-23c5-xmqv-rm74 / GHSA-3ppc-4f35-3m26 / GHSA-7r86-cg39-jmmj; patched in 3.1.4), and xcode@3.0.1 wants uuid ^7.0.3 with no patched 7.x for GHSA-w5hq-g745-h8pq (patched in 11.1.1) — both overrides are scoped to those parents so the rest of the tree (e.g. glob's minimatch@8) is untouched.",
+    "overrides": "Pin the transitive node-tar to a patched line (>=7.5.16) to clear the GHSA path-traversal / symlink / file-smuggling advisories (tar <=7.5.15). We keep Capacitor 6 (the v6/JDK17 APK pipeline) instead of the breaking @capacitor/cli@8 bump. replace@1.2.2 pins minimatch 3.0.5 exactly (ReDoS: GHSA-23c5-xmqv-rm74 / GHSA-3ppc-4f35-3m26 / GHSA-7r86-cg39-jmmj; patched in 3.1.4), and xcode@3.0.1 wants uuid ^7.0.3 with no patched 7.x for GHSA-w5hq-g745-h8pq (patched in 11.1.1) \u2014 both overrides are scoped to those parents so the rest of the tree (e.g. glob's minimatch@8) is untouched.",
     "postinstall": "tar 7's CJS interop leaves `tar_1.default` undefined, so @capacitor/cli@6's `tar_1.default.extract` crashes `cap add/sync`. patch-capacitor-tar.mjs rewrites it to `(tar_1.default||tar_1).extract` (works under tar 6 and 7) after install, so the override doesn't break the build."
   },
   "overrides": {
@@ -33,6 +33,7 @@
     },
     "xcode": {
       "uuid": "^11.1.1"
-    }
+    },
+    "brace-expansion": "^2.1.2"
   }
 }
