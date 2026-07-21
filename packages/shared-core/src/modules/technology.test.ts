@@ -33,6 +33,7 @@ const data: GameData = parseGameData({
   buildings: {
     mine: { name: 'Mine', produces: { metal: 10 } },
     refinery: { name: 'Refinery', cost: { metal: 20 }, buildTimeHours: 1 },
+    shipyard: { name: 'Shipyard', hp: 20, enablesShipConstruction: true },
   },
   events: {},
   technologies: {
@@ -534,7 +535,7 @@ describe('technology module — session research tree', () => {
     const openKernel = createKernel([constructionModule]);
     const st = stateWith({
       players: [player('p1', { metal: 100, credits: 20 })],
-      planets: [planet('A', 'p1')],
+      planets: [{ ...planet('A', 'p1'), buildings: [{ type: 'shipyard', level: 1, hp: 20 }] }],
     });
 
     expect(errCode(lockedKernel.applyAction(st, buildUnit('dropship'), ctx(0)))).toBe(

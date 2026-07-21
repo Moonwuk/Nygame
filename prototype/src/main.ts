@@ -145,6 +145,32 @@ import {
 // English data/*.json names, the static HTML is localized by a boot pass.
 import { t, tData, LOCALE, LOCALE_LABEL, setLocale, localizeStaticDom } from './i18n';
 import { META_TREE, META_BRANCH_RU, metaLevel, metaLevelProgress, metaPoints, canUnlock, unlockNode, matchXp, metaGrant, parseMetaState, type MetaState, type MetaBranch } from './meta';
+// ARS-5 — arsenal witryna (pure filter/group/parse; see prototype/src/arsenal.ts).
+import { filterArsenal, gradesOf, originOf, ownedDefIds, parseArsenalItems, type ArsenalFilter } from './arsenal';
+// AVA-C1/C2 — corporation cabinet (pure types/parsers; see prototype/src/corp.ts).
+import {
+  parseCorpRecord,
+  parseCorpSummaries,
+  parseMembership,
+  parseMemberships,
+  parseAudit,
+  parseChallenges,
+  parseReadyPool,
+  parseRosterView,
+  parseAccountIds,
+  parseFeed,
+  sortMembers,
+  canManage,
+  type CorpRole,
+  type CorpRecord,
+  type CorpMembership,
+  type CorpSummary,
+  type CorpAuditEntry,
+  type AvaChallenge,
+  type AvaChallengeStatus,
+  type AvaRosterView,
+  type AvaFeedEntry,
+} from './corp';
 // DEV TEST MODE — self-contained dev-only scenarios; remove this import + the
 // initTestMode(...) call below + the #testmode HTML/CSS to cut it cleanly.
 // (The player build already does: the only uses sit under `!__PLAYER_BUILD__`, so
@@ -185,6 +211,7 @@ import type {
   DiplomaticStance,
   DomainEvent,
   IntelGrant,
+  ArsenalItem,
 } from '../../packages/shared-core/src/index';
 
 // --- constants ---------------------------------------------------------------
@@ -497,7 +524,7 @@ let chatDrag: {
   gh: number;
 } | null = null;
 let diploOpen = false;
-let diploTab: 'diplo' | 'msgs' = 'diplo';
+let diploTab: 'diplo' | 'msgs' | 'intel' = 'diplo';
 let diploSort: 'name' | 'worlds' | 'stance' = 'stance';
 let diploExpanded: string | null = null; // participant row showing its action buttons
 // Roster filters (alongside sort): show only seats matching the picked stance(s) and
@@ -1787,6 +1814,14 @@ function intelTargets(kind: IntelGrant['kind']): Set<string> {
 // Owners whose fleets are revealed this frame by a live `fleets` grant — rebuilt
 // alongside `vision` each frame so the render path checks a Set, not the grant list.
 let intelFleetOwners = new Set<string>();
+// SPY-UX: bounded session journal of espionage outcomes (mine + counter-intel hits
+// on me) — feeds the «Шпионаж» tab in diplomacy. Stores the final localized line.
+const spyLog: { at: number; text: string }[] = [];
+function pushSpyLog(text: string): void {
+  spyLog.push({ at: s.time, text });
+  while (spyLog.length > 30) spyLog.shift();
+  if (diploOpen && diploTab === 'intel') renderDiplo();
+}
 
 /** Variant-B visibility: an identify range (full detail, feeds memory) plus a
  *  wider radar range (enemy fleets seen only as coarse signatures). The radar
@@ -1962,6 +1997,7 @@ const ERR_RU: Record<string, string> = {
   E_LIMIT: 'достигнут предел',
   E_CONDITIONS_UNMET: 'условия не выполнены',
   E_BOMBARDED: 'стройка под бомбардировкой',
+  E_NO_SHIPYARD: 'нужна верфь/космопорт',
   E_WRONG_SECTOR: 'не тот тип сектора',
   E_WRONG_ORBIT: 'не та орбита',
   E_SAME_LOCATION: 'флот уже здесь',
@@ -2590,12 +2626,16 @@ function handleEvents(events: DomainEvent[]) {
               ? t('флоты {who}', { who: whoT })
               : t('мир {at}', { at: String(p.intelPlanet ?? p.target) });
         note(t('🕵 Агент добыл разведданные: {what} — окно 24ч', { what }));
+        pushSpyLog(t('🗝 Успех: {what}', { what }));
         if (diploOpen && diploTab === 'diplo') renderDiplo(); // the intel row appeared
         break;
       }
       case 'espionage.failed':
-        if (p.owner === ME)
-          note(t('🕵 Агент провалился ({who}) — плата сгорела', { who: NAME[p.target as string] ?? (p.target as string) }));
+        if (p.owner === ME) {
+          const whoF = NAME[p.target as string] ?? (p.target as string);
+          note(t('🕵 Агент провалился ({who}) — плата сгорела', { who: whoF }));
+          pushSpyLog(t('✖ Провал против {who} — плата сгорела', { who: whoF }));
+        }
         break;
       // Counter-intel (SPY-2): addressed to the VICTIM. A failed attempt names the
       // spy (caught red-handed); a noticed clean theft only says WHAT leaked.
@@ -2605,11 +2645,13 @@ function handleEvents(events: DomainEvent[]) {
         if (p.owner !== ME) break;
         const what =
           p.kind === 'treasury' ? t('казна') : p.kind === 'fleets' ? t('данные о флотах') : t('данные мира');
-        note(
-          p.spy
+        {
+          const line = p.spy
             ? t('🛡 Контрразведка: агент {who} пойман при попытке кражи ({what})!', { who: NAME[p.spy as string] ?? (p.spy as string), what })
-            : t('🛡 Контрразведка: утечка разведданных ({what}) — вор не установлен', { what }),
-        );
+            : t('🛡 Контрразведка: утечка разведданных ({what}) — вор не установлен', { what });
+          note(line);
+          pushSpyLog(line);
+        }
         break;
       }
       case 'planet.captured':
@@ -4288,9 +4330,9 @@ function render(now: number) {
       cx.strokeStyle = 'rgba(4,10,12,.8)';
       cx.lineWidth = 1;
       cx.beginPath();
-      cx.moveTo(0, -5);
-      cx.lineTo(4, 3.5);
-      cx.lineTo(-4, 3.5);
+      cx.moveTo(0, -7);
+      cx.lineTo(5.5, 5);
+      cx.lineTo(-5.5, 5);
       cx.closePath();
       cx.fill();
       cx.stroke();
@@ -4298,7 +4340,7 @@ function render(now: number) {
     }
     if (detail === 0) {
       // selection still reads on the schematic view; the rest of the kit is gone
-      if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 10, now);
+      if (selFleet === f.id || selFleets.has(f.id)) targetBrackets(A.x, A.y, 12, now);
       continue;
     }
     cx.globalAlpha = detail; // full detail fades back in toward 1.45
@@ -4307,8 +4349,8 @@ function render(now: number) {
     // pyramid — "каждые 3 корабля = один треугольник". Cargo glues to the TAIL
     // (behind the base): carried divisions and hold squadrons as diamonds, then
     // ground troops as squares (loaded = filled, loading ~1h = a pip filling up).
-    const BW = 6,
-      TH = 5; // triangle base width / height; rows stack TH apart
+    const BW = 8,
+      TH = 6.5; // triangle base width / height; rows stack TH apart (плейтест: крупнее)
     const nTri = Math.max(1, Math.ceil(ships / 3));
     // pack the triangles into a bottom-heavy pyramid: full rows 1..R, then shave the
     // apex rows of any empty slots so the BASE is always widest (1→[1], 2→[2],
@@ -4378,10 +4420,10 @@ function render(now: number) {
       x: A.x + lx * Math.cos(th) - ly * Math.sin(th),
       y: A.y + lx * Math.sin(th) + ly * Math.cos(th),
     });
-    const CELL = 6.5,
-      SQ = 4,
-      DR = 3,
-      DS = 2.5, // squadron pip: a diamond with the footprint of the square
+    const CELL = 8,
+      SQ = 5,
+      DR = 3.75,
+      DS = 3.1, // squadron pip: a diamond with the footprint of the square
       MAX = 8; // per-row cap; rare overflow gets a "+N" tail
     const diamond = (cxr: number, cyr: number, r: number, fill: boolean): void => {
       cx.beginPath();
@@ -4454,11 +4496,11 @@ function render(now: number) {
         cx.fillText(`+${over}`, o.x, o.y + SQ / 2);
       }
     };
-    drawCargoRow(diaRow, 4); // ромбы — ближний к базе ряд
-    drawCargoRow(sqRow, diaRow.length ? 4 + CELL : 4); // квадраты — своим рядом ниже
+    drawCargoRow(diaRow, 5); // ромбы — ближний к базе ряд
+    drawCargoRow(sqRow, diaRow.length ? 5 + CELL : 5); // квадраты — своим рядом ниже
 
     if (selFleet === f.id || selFleets.has(f.id)) {
-      targetBrackets(A.x, A.y, 12, now);
+      targetBrackets(A.x, A.y, 15, now);
       // Artillery: show the standoff firing radius (and a focus line to a chosen
       // target) so the player can read the reach — "радиус не очень большой".
       const aRange = artilleryRangeOf(f);
@@ -4486,9 +4528,9 @@ function render(now: number) {
 
     // ship count (hulls in the pyramid), small, past the cargo tail — placed along
     // the heading like the pips, glyph upright; drops lower when both rows are out.
-    const cnt = tailAt(0, diaRow.length && sqRow.length ? 18 + CELL : 18);
+    const cnt = tailAt(0, diaRow.length && sqRow.length ? 21 + CELL : 21);
     cx.fillStyle = rgba(col, 0.95);
-    cx.font = '700 9px ui-monospace,Menlo,monospace';
+    cx.font = '700 10px ui-monospace,Menlo,monospace';
     cx.fillText(String(ships), cnt.x, cnt.y);
 
     cx.globalAlpha = 1; // end of the per-fleet LOD cross-fade
@@ -5459,6 +5501,28 @@ function codexHtml(kind: string, id: string): string {
       `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${dos?.body ?? ''}</div>`
     );
   }
+  // ARS-5: module/hero-fitting cards deep-link here too — the arsenal witryna is the
+  // first caller for kinds the codex never covered (only units/buildings had pages).
+  if (kind === 'md') {
+    const def = data.modules[id];
+    if (!def) return '';
+    const rows = [cxRow(t('Слот'), tData(def.slot)), cxRow(t('Стоимость'), cost(def.cost))];
+    for (const [k, v] of Object.entries(def.effects?.stats ?? {})) rows.push(cxRow(tData(k), String(v)));
+    return (
+      `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('модуль')}</span></div>` +
+      `<div class="cx-stats">${rows.join('')}</div>`
+    );
+  }
+  if (kind === 'hf') {
+    const def = data.heroFittings[id];
+    if (!def) return '';
+    const rows = [cxRow(t('Стоимость'), cost(def.cost))];
+    for (const [k, v] of Object.entries(def.statMods ?? {})) rows.push(cxRow(tData(k), (v > 0 ? '+' : '') + String(v)));
+    return (
+      `<div class="cx-head"><span class="cx-ic">◆</span><b>${esc(tData(def.name))}</b><span class="cx-tag">${t('фитинг')}</span></div>` +
+      `<div class="cx-stats">${rows.join('')}</div><div class="cx-desc">${esc(tData(def.description ?? ''))}</div>`
+    );
+  }
   const def = data.units[id];
   if (!def) return '';
   const st = def.stats;
@@ -5682,7 +5746,7 @@ function proposeStance(target: string, to: DiplomaticStance): void {
   playerOrder(declareWar(ME, target, to));
 }
 
-function openDiplo(tab: 'diplo' | 'msgs'): void {
+function openDiplo(tab: 'diplo' | 'msgs' | 'intel'): void {
   diploOpen = true;
   diploTab = tab;
   renderDiplo();
@@ -5932,10 +5996,61 @@ function convoThreadHtml(): string {
   );
 }
 
+/** SPY-UX (плейтест, вариант 1): весь шпионаж в одном месте — активные окна интела
+ *  с таймерами, операции по каждому противнику (те же .dp-spy обработчики, что и в
+ *  ростере) и сессионный журнал попыток. Разведка мира остаётся на карточке планеты
+ *  (нужна цель) — вкладка ведёт к ней подсказкой. */
+function intelTabHtml(): string {
+  const grantLabel = (g: IntelGrant): string =>
+    g.kind === 'treasury'
+      ? t('казна {who}', { who: NAME[g.target] ?? g.target })
+      : g.kind === 'fleets'
+        ? t('флоты {who}', { who: NAME[g.target] ?? g.target })
+        : t('мир {at}', { at: g.target });
+  const rows = myIntel()
+    .sort((a, b) => a.until - b.until)
+    .map((g) => {
+      const left = Math.max(0, Math.ceil((g.until - s.time) / HOUR));
+      const jump = g.kind === 'planet' ? ` data-iw="${esc(g.target)}"` : '';
+      return (
+        `<div class="in-row"${jump}><span class="in-k">🗝</span><b>${esc(grantLabel(g))}</b>` +
+        `<span class="in-t">⏳ ${t('{n}ч', { n: left })}</span>${g.kind === 'planet' ? '<span class="in-go">↪</span>' : ''}</div>`
+      );
+    })
+    .join('');
+  const ops = Object.keys(s.players)
+    .filter((id) => id !== ME)
+    .map(
+      (id) =>
+        `<div class="in-row"><b>${esc(NAME[id] ?? id)}</b>` +
+        `<button class="dp-spy" data-spy="treasury" data-seat="${id}">🕵 ${t('казна')}</button>` +
+        `<button class="dp-spy" data-spy="fleets" data-seat="${id}">🕵 ${t('флоты')}</button></div>`,
+    )
+    .join('');
+  const log = [...spyLog]
+    .reverse()
+    .map((e) => {
+      const d = floor(e.at / DAY) + 1;
+      const h = floor((e.at % DAY) / HOUR);
+      return `<div class="in-log">D${d} ${String(h).padStart(2, '0')}ч · ${esc(e.text)}</div>`;
+    })
+    .join('');
+  return (
+    `<div class="dp-list in-list">` +
+    `<div class="in-hint">${t('Попытка: {c}¤ · шанс ~60% · окно интела 24ч · провал сжигает плату. Разведка мира — кнопка 🕵 на карточке вражеской планеты.', { c: SPY_COST })}</div>` +
+    `<div class="in-sec">${t('АКТИВНЫЕ ОКНА ИНТЕЛА')}</div>` +
+    (rows || `<div class="in-empty">${t('нет активных окон — добудьте интел операцией ниже')}</div>`) +
+    `<div class="in-sec">${t('ОПЕРАЦИИ')}</div>` +
+    (ops || `<div class="in-empty">${t('противников нет')}</div>`) +
+    `<div class="in-sec">${t('ЖУРНАЛ')}</div>` +
+    (log || `<div class="in-empty">${t('попыток ещё не было')}</div>`) +
+    `</div>`
+  );
+}
 function renderDiplo(): void {
   const el = document.getElementById('diplo');
   if (!el) return;
-  const tabBtn = (k: 'diplo' | 'msgs', label: string) =>
+  const tabBtn = (k: 'diplo' | 'msgs' | 'intel', label: string) =>
     `<button class="dp-tab${diploTab === k ? ' on' : ''}" data-tab="${k}">${label}</button>`;
   const sortBtn = (k: typeof diploSort, label: string) =>
     `<button class="dp-sortb${diploSort === k ? ' on' : ''}" data-sort="${k}">${label}</button>`;
@@ -5955,10 +6070,12 @@ function renderDiplo(): void {
       ? `<div class="dp-sorts"><span>${t('Сорт.')}:</span>${sortBtn('name', t('Имя'))}${sortBtn('worlds', t('Провинции'))}${sortBtn('stance', t('Отношение'))}</div>` +
         filterRow +
         `<div class="dp-list">${diploRowsHtml()}</div>`
-      : `<div class="dp-convo">${convoListHtml()}${convoThreadHtml()}</div>`;
+      : diploTab === 'intel'
+        ? intelTabHtml()
+        : `<div class="dp-convo">${convoListHtml()}${convoThreadHtml()}</div>`;
   el.innerHTML =
     `<div class="dpbox">` +
-    `<div class="dp-head"><b>${t('ДИПЛОМАТИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}<button class="dp-close">✕</button></div>` +
+    `<div class="dp-head"><b>${t('ДИПЛОМАТИЯ')}</b>${tabBtn('diplo', t('Дипломатия'))}${tabBtn('msgs', t('Сообщения'))}${tabBtn('intel', t('Шпионаж'))}<button class="dp-close">✕</button></div>` +
     body +
     `</div>`;
   if (diploTab === 'msgs') scrollFeedToEnd();
@@ -7721,6 +7838,7 @@ techWin.addEventListener('click', (e) => {
 // «Командование» branch, day 15, scientist Куратор). A "morning report" note fires on expiry.
 const stewWin = $('steward');
 let lastStewAt = 0;
+let lastIntelAt = 0; // throttle for the live intel-window timers (диплом. вкладка «Шпионаж»)
 const STEW_DURATIONS = [4, 8, 12]; // game-hours a single delegation can run
 // Snapshot of my standing at delegation time, diffed on expiry for the morning report.
 let stewSnapshot: { planets: number; metal: number; credits: number } | null = null;
@@ -8132,18 +8250,36 @@ function conBar(line: { label: string; base: number; effective: number; delta: n
 /** The loadout constructor pane for a family of hulls (ships or squadrons) — same
  *  `loadoutEditor` view-model, just a different hull list. Resets the draft when the
  *  selected hull isn't in this family (a tab switch). */
+/** LARS-4 — a small "откуда" tag for a Верфь card, from whatever the hub Arsenal
+ *  witryna has cached (best-effort: blank if the player never opened that tab this
+ *  session, never a guess). Only flags a NON-starter origin — a starter blueprint
+ *  sitting in every match isn't news; a fresh drop/craft/auction pickup is. */
+function conOriginTag(defId: string): string {
+  const origin = originOf(arsenalItems, defId);
+  if (!origin || origin === 'starter') return '';
+  return `<span class="cn-mo">${t(ARSENAL_ORIGIN_RU[origin])}</span>`;
+}
 function conLoadoutPane(hullList: string[]): string {
-  if (!hullList.includes(conHull)) {
-    conHull = hullList[0]!;
+  // ARS-5: the constructor offers only what the match's arsenal snapshot (ARS-3)
+  // says the player owns — the same `Player.arsenal` the core build gate reads, so
+  // the palette can never promise a build the server would then reject. No snapshot
+  // (regular/dev match, bots) ⇒ unrestricted, mirroring the core's own degradation.
+  const snap = s.players[ME]?.arsenal;
+  const ownedHulls = snap ? hullList.filter((h) => snap.hulls.includes(h)) : hullList;
+  const ownedModules = snap ? new Set(snap.modules) : undefined;
+  if (!ownedHulls.length) return `<div class="cn-soon">${t('В арсенале нет корпусов этого класса.')}</div>`;
+  if (!ownedHulls.includes(conHull)) {
+    conHull = ownedHulls[0]!;
     conModules = [];
   }
   const ed: LoadoutEditorResult = createLoadoutEditor(conHull, data, myRes(), {
     modules: conModules,
     count: conCount,
+    ownedModules,
   });
   if (!ed.ok) return `<div class="cn-soon">${t('Корпус недоступен.')}</div>`;
   const m: LoadoutModel = ed;
-  const hulls = hullList.map(
+  const hulls = ownedHulls.map(
     (h) =>
       `<button class="cn-hbtn${h === conHull ? ' on' : ''}" data-cnhull="${h}">${UNIT_ICON[h] ?? '▲'} ${esc(displayUnit(h))}</button>`,
   ).join('');
@@ -8158,7 +8294,7 @@ function conLoadoutPane(hullList: string[]): string {
         const eff = md ? Object.entries(md.effects.stats).map(([k, v]) => `+${v} ${t(STAT_RU[k] ?? k)}`).join(' ') : '';
         return (
           `<div class="cn-bay filled" data-cnun="${sl.moduleId}" title="${t('снять модуль')}"><div class="cn-bic">${MODULE_ICON[sl.moduleId] ?? '▪'}</div>` +
-          `<div><div class="cn-bt">${t(SLOT_RU[sl.type])}</div><div class="cn-bn">${esc(tData(sl.moduleName ?? sl.moduleId))}</div></div><div class="cn-bd">${eff}</div></div>`
+          `<div><div class="cn-bt">${t(SLOT_RU[sl.type])}</div><div class="cn-bn">${esc(tData(sl.moduleName ?? sl.moduleId))}${conOriginTag(sl.moduleId)}</div></div><div class="cn-bd">${eff}</div></div>`
         );
       }
       return (
@@ -8173,7 +8309,7 @@ function conLoadoutPane(hullList: string[]): string {
       if (o.installable) {
         return (
           `<button class="cn-mod" data-cnmod="${o.id}"><span class="cn-mic">${MODULE_ICON[o.id] ?? '▪'}</span>` +
-          `<span class="cn-mn">${esc(tData(o.name))}</span><span class="cn-me">${eff}</span><span class="cn-mc">${bagRu(o.cost)}</span></button>`
+          `<span class="cn-mn">${esc(tData(o.name))}${conOriginTag(o.id)}</span><span class="cn-me">${eff}</span><span class="cn-mc">${bagRu(o.cost)}</span></button>`
         );
       }
       return (
@@ -8185,10 +8321,16 @@ function conLoadoutPane(hullList: string[]): string {
   const palHead = freeTypes.length
     ? t('Доступные модули — для слота «{s}»', { s: freeTypes.map((ty) => t(SLOT_RU[ty])).join(' / ') })
     : t('Доступные модули — все слоты заняты');
+  // LARS-4: the palette above already reads the LIVE arsenal snapshot (a module
+  // bought mid-match shows up here without a new match) — this note is the only
+  // thing that needed adding: make the timing honest (built, not instant).
+  const liveNote = snap
+    ? `<div class="cn-note">${t('⚡ Арсенал живой: докупленное в матче видно здесь сразу, но начинает работать только когда ты это ПОСТРОИШЬ — постройка и логистика, не мгновенно.')}</div>`
+    : '';
   const left =
     `<div class="cn-fit"><div class="cn-hulls">${hulls}</div>${hullCard}${bays}` +
     `<div class="cn-ph">${palHead}</div><div class="cn-pal">${palette}</div>` +
-    `<div class="cn-note">${t('Типизированные слоты: модуль встаёт только в свой тип. <b>Серые</b> — не для свободного слота или уже стоят.')}</div></div>`;
+    `<div class="cn-note">${t('Типизированные слоты: модуль встаёт только в свой тип. <b>Серые</b> — не для свободного слота или уже стоят.')}</div>${liveNote}</div>`;
   // right: live preview + cost + build
   const maxStat = Math.max(1, ...m.preview.map((p) => p.effective));
   const bars = m.preview.map((p) => conBar(p, maxStat)).join('');
@@ -8278,7 +8420,12 @@ function renderConstructor(): void {
 }
 /** Equip / unequip a module through the core-validated reducer, then re-render. */
 function conFit(moduleId: string, remove: boolean): void {
-  const ed = createLoadoutEditor(conHull, data, myRes(), { modules: conModules, count: conCount });
+  const snap = s.players[ME]?.arsenal;
+  const ed = createLoadoutEditor(conHull, data, myRes(), {
+    modules: conModules,
+    count: conCount,
+    ownedModules: snap ? new Set(snap.modules) : undefined,
+  });
   if (!ed.ok) return;
   const r = applyLoadoutAction({ kind: remove ? 'unequip' : 'equip', moduleId }, ed, data, myRes());
   if (r.ok) conModules = r.modules;
@@ -8496,7 +8643,7 @@ const hubNote = $('hub-note');
 function showHub(show: boolean): void {
   hubEl.style.display = show ? 'flex' : 'none';
 }
-const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', ally: 'hp-ally', more: 'hp-more' };
+const HUB_PANELS: Record<string, string> = { home: 'hp-home', rank: 'hp-rank', meta: 'hp-meta', arsenal: 'hp-arsenal', ally: 'hp-ally', more: 'hp-more' };
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -8506,6 +8653,7 @@ function hubTab(tab: string): void {
     return;
   }
   if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
+  if (tab === 'arsenal') void refreshArsenal(); // cache paints now, server refresh trails
   for (const [k, pid] of Object.entries(HUB_PANELS)) $(pid).style.display = k === tab ? 'flex' : 'none';
   for (const b of Array.from(document.querySelectorAll('.hub-tab')))
     b.classList.toggle('active', (b as HTMLElement).dataset.hub === tab);
@@ -8550,6 +8698,114 @@ $('hp-meta').addEventListener('click', (ev) => {
     renderMetaPanel();
   }
 });
+
+// --- «Арсенал» — the account's persistent collection (hub tab, ARS-5) --------
+// ARS-1..4 built the server-side store; nothing client-facing read it before this.
+// Cache-first (localStorage per callsign, like meta): the tab always paints instantly
+// from the last known collection, then a background GET /arsenal/me (session-gated,
+// only when a session token from a prior join is already on hand — never prompts for
+// a password just to LOOK at the hub) refreshes it. No server/no account yet ⇒ the
+// empty state, same "no restriction without a snapshot" spirit as the core build gate.
+const ARSENAL_KIND_ICON: Record<ArsenalItem['kind'], string> = { hull: '◈', module: '◆', hero_fitting: '◇' };
+const ARSENAL_CODEX_KIND: Record<ArsenalItem['kind'], string> = { hull: 'u', module: 'md', hero_fitting: 'hf' };
+const ARSENAL_KIND_RU: Record<ArsenalItem['kind'], string> = { hull: 'Корпуса', module: 'Модули', hero_fitting: 'Фитинги' };
+const ARSENAL_ORIGIN_RU: Record<ArsenalItem['origin'], string> = {
+  starter: 'стартовый',
+  drop: 'дроп',
+  craft: 'крафт',
+  auction: 'аукцион',
+  lootbox: 'лутбокс',
+  rent: 'аренда',
+};
+function arsenalKey(): string {
+  return 'vd.arsenal.' + (nickInput.value.trim() || 'guest');
+}
+function loadArsenalCache(): ArsenalItem[] {
+  try {
+    return parseArsenalItems(JSON.parse(localStorage.getItem(arsenalKey()) ?? 'null'));
+  } catch {
+    return [];
+  }
+}
+function saveArsenalCache(items: ArsenalItem[]): void {
+  localStorage.setItem(arsenalKey(), JSON.stringify(items));
+}
+let arsenalItems: ArsenalItem[] = [];
+let arsenalFilter: ArsenalFilter = {};
+function arsenalItemName(item: ArsenalItem): string {
+  if (item.kind === 'hull') return unitDossier(item.defId)?.name ?? displayUnit(item.defId);
+  if (item.kind === 'module') return tData(data.modules[item.defId]?.name ?? item.defId);
+  return tData(data.heroFittings[item.defId]?.name ?? item.defId);
+}
+function arsenalCardHtml(item: ArsenalItem): string {
+  const badges = [item.grade ? `+${item.grade}` : '', typeof item.durability === 'number' ? `⛭${item.durability}` : '']
+    .filter(Boolean)
+    .join(' ');
+  const origin = t(ARSENAL_ORIGIN_RU[item.origin]);
+  return (
+    `<button class="hub-tile ar-card" data-codex="${ARSENAL_CODEX_KIND[item.kind]}:${esc(item.defId)}">` +
+    `<span class="ht-ic">${ARSENAL_KIND_ICON[item.kind]}</span><span>${esc(arsenalItemName(item))}</span>` +
+    `<span class="ar-meta">${badges ? badges + ' · ' : ''}${origin}</span></button>`
+  );
+}
+function renderArsenalPanel(): void {
+  const el = $('hp-arsenal');
+  if (arsenalItems.length === 0) {
+    el.innerHTML = `<div class="hub-empty"><span class="he-ic">⚔</span>${t('Арсенал пуст')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('войдите под аккаунтом на сервере с накоплением, чтобы увидеть коллекцию')}</span></div>`;
+    return;
+  }
+  const kinds: Array<ArsenalItem['kind']> = ['hull', 'module', 'hero_fitting'];
+  let chips = `<button class="ar-fchip${arsenalFilter.kind ? '' : ' on'}" data-ar-kind="">${t('Всё')}</button>`;
+  for (const k of kinds) chips += `<button class="ar-fchip${arsenalFilter.kind === k ? ' on' : ''}" data-ar-kind="${k}">${t(ARSENAL_KIND_RU[k])}</button>`;
+  const grades = gradesOf(arsenalItems);
+  if (grades.length) {
+    chips += `<span class="ar-fsep"></span>`;
+    for (const g of grades) chips += `<button class="ar-fchip${arsenalFilter.grade === g ? ' on' : ''}" data-ar-grade="${g}">+${g}</button>`;
+  }
+  const cards = filterArsenal(arsenalItems, arsenalFilter).map(arsenalCardHtml).join('');
+  el.innerHTML = `<div class="ar-filters">${chips}</div><div class="hub-grid ar-grid">${cards}</div>`;
+}
+$('hp-arsenal').addEventListener('click', (ev) => {
+  const tg = ev.target as HTMLElement;
+  const kindBtn = tg.closest('[data-ar-kind]') as HTMLElement | null;
+  if (kindBtn) {
+    const k = kindBtn.dataset.arKind as ArsenalItem['kind'] | '';
+    arsenalFilter = { ...arsenalFilter, kind: k || undefined };
+    renderArsenalPanel();
+    return;
+  }
+  const gradeBtn = tg.closest('[data-ar-grade]') as HTMLElement | null;
+  if (gradeBtn) {
+    const g = Number(gradeBtn.dataset.arGrade);
+    arsenalFilter = { ...arsenalFilter, grade: arsenalFilter.grade === g ? undefined : g };
+    renderArsenalPanel();
+    return;
+  }
+  const card = tg.closest('[data-codex]') as HTMLElement | null;
+  if (card?.dataset.codex) openCodex(card.dataset.codex);
+});
+/** Cache-first paint, then a best-effort session-gated refresh (never prompts for
+ *  a password — only reuses a session token a prior join already stashed). */
+async function refreshArsenal(): Promise<void> {
+  arsenalItems = loadArsenalCache();
+  renderArsenalPanel();
+  const srv = resolveServer();
+  if (!srv) return;
+  await probeAuthMode(srv.base);
+  if (!authMode) return;
+  const session = localStorage.getItem(sessionKey(srv.base));
+  if (!session) return;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, { headers: { authorization: `Bearer ${session}` } });
+    if (!res.ok) return;
+    const body = (await res.json().catch(() => null)) as { items?: unknown } | null;
+    arsenalItems = parseArsenalItems(body?.items);
+    saveArsenalCache(arsenalItems);
+    renderArsenalPanel();
+  } catch {
+    // offline/unreachable — the cache painted above stays the source of truth
+  }
+}
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
   const nick = nickInput.value.trim();
@@ -10275,6 +10531,11 @@ function frame(nowReal: number) {
     lastStewAt = nowReal;
     renderSteward();
   }
+  // Intel windows tick in hours — a lazy 5s refresh keeps the «Шпионаж» timers honest.
+  if (diploOpen && diploTab === 'intel' && nowReal - lastIntelAt > 5000) {
+    lastIntelAt = nowReal;
+    renderDiplo();
+  }
   requestAnimationFrame(frame);
 }
 
@@ -10900,7 +11161,7 @@ function drawPings(now: number): void {
     const c = world(pl.position);
     if (!visible(c, 40)) continue;
     const x = c.x;
-    const y = c.y - 18; // pin head floats above the node
+    const y = c.y - 22; // pin head floats above the node (плейтест: пинги крупнее)
     const col = ownerColor(m.from);
     const phase = x * 0.05; // de-syncs neighbouring pins so they don't blink in unison
     const pulse = 0.7 + 0.3 * Math.sin(now / 360 + phase);
@@ -10913,7 +11174,7 @@ function drawPings(now: number): void {
       // negative (a pin near the screen's left edge has x < 0 → JS % keeps sign,
       // and a negative k would feed cx.arc a negative radius = a thrown frame)
       const k = (((now / 2200 + off + phase) % 1) + 1) % 1;
-      const rr = 5 + k * 30;
+      const rr = 6 + k * 40;
       if (k < 0.18) {
         cx.fillStyle = rgba(col, (1 - k / 0.18) * 0.28); // the drop-in flash
         cx.beginPath();
@@ -10922,7 +11183,7 @@ function drawPings(now: number): void {
       }
       cx.shadowBlur = 6 * (1 - k);
       cx.strokeStyle = rgba(col, (1 - k) * 0.8);
-      cx.lineWidth = 2.6 - k * 1.8;
+      cx.lineWidth = 3.2 - k * 2.2;
       cx.beginPath();
       cx.arc(c.x, c.y, rr, 0, TAU);
       cx.stroke();
@@ -10934,20 +11195,20 @@ function drawPings(now: number): void {
     cx.strokeStyle = 'rgba(4,10,12,.85)';
     cx.lineWidth = 1.4;
     cx.beginPath(); // teardrop pin: head + tip toward the node
-    cx.moveTo(x, y + 11);
-    cx.lineTo(x - 5, y);
-    cx.arc(x, y - 1, 5.5, Math.PI, 0);
-    cx.lineTo(x, y + 11);
+    cx.moveTo(x, y + 14);
+    cx.lineTo(x - 6.5, y);
+    cx.arc(x, y - 1, 7, Math.PI, 0);
+    cx.lineTo(x, y + 14);
     cx.fill();
     cx.stroke();
     cx.shadowBlur = 0;
     cx.fillStyle = 'rgba(6,18,22,.95)';
     cx.beginPath();
-    cx.arc(x, y - 1, 2.1, 0, TAU);
+    cx.arc(x, y - 1, 2.7, 0, TAU);
     cx.fill();
     cx.fillStyle = rgba(col, pulse); // a blinking ember in the pin's eye
     cx.beginPath();
-    cx.arc(x, y - 1, 1.1, 0, TAU);
+    cx.arc(x, y - 1, 1.4, 0, TAU);
     cx.fill();
     cx.restore();
     pingHits.push({ loc: m.ping!, x, y: y - 1 });
@@ -11085,7 +11346,7 @@ if (diploEl) {
     if (tg.id === 'diplo' || tg.closest('.dp-close')) return closeDiplo();
     const tab = (tg.closest('.dp-tab') as HTMLElement | null)?.dataset.tab;
     if (tab) {
-      diploTab = tab as 'diplo' | 'msgs';
+      diploTab = tab as 'diplo' | 'msgs' | 'intel';
       renderDiplo();
       return;
     }
@@ -11123,6 +11384,12 @@ if (diploEl) {
     if (spyBtn) {
       playerOrder(spyOn(ME, spyBtn.dataset.seat!, spyBtn.dataset.spy as 'treasury' | 'fleets'));
       renderDiplo(); // the intel row (or the rejection note) reflects the outcome
+      return;
+    }
+    const iw = (tg.closest('[data-iw]') as HTMLElement | null)?.dataset.iw;
+    if (iw) {
+      closeDiplo(); // карта должна быть видна — перелетаем к миру из окна интела
+      focusWorld(iw);
       return;
     }
     const msgseat = (tg.closest('.dp-msg') as HTMLElement | null)?.dataset.msgseat;
@@ -11287,129 +11554,50 @@ requestAnimationFrame(frame);
   }
 }
 
-// --- corporation cabinet (mock meta-shell screen) ---------------------------
-// A UI prototype of the cross-session alliance ("corporation") management
-// screen designed in docs/corporation-ui.md. Everything here is LOCAL MOCK
-// data — there is no server, accounts, or meta-layer yet (metagame.md Контур 2).
-// The real screen would read server projections and send intents; this exists
-// to visualise the layout and interactions ahead of that work.
-type CorpRole = 'leader' | 'officer' | 'member';
-type CorpPresence = 'online' | 'match' | 'offline';
-interface CorpMember {
-  name: string;
-  role: CorpRole;
-  presence: CorpPresence;
-  influence: number; // lifetime influence contributed
-  joined: string;
-  me?: boolean;
-}
-interface CorpHolding {
-  sector: string;
-  bonus: string;
-  since: string;
-  threat: 'low' | 'med' | 'high';
-}
-interface CorpWar {
-  foe: string;
-  sector: string;
-  when: string;
-  status: 'scheduled' | 'incoming' | 'active';
-  signed: number;
-}
-interface CorpLedger {
-  kind: 'gain' | 'spend';
-  text: string;
-  amount: string;
-  when: string;
-}
-interface CorpMsg {
-  who: string;
-  text: string;
-  when: string;
-  pinned?: boolean;
-  audit?: boolean;
-}
-interface CorpData {
-  name: string;
-  tag: string;
-  motto: string;
-  influence: number;
-  supply: number;
-  cap: number;
-  rank: number;
-  myRole: CorpRole;
-  bonuses: string[];
-  members: CorpMember[];
-  holdings: CorpHolding[];
-  wars: CorpWar[];
-  ledger: CorpLedger[];
-  chat: CorpMsg[];
-}
-
-const MOCK_CORP: CorpData = {
-  name: 'Obsidian Vanguard',
-  tag: 'OBSV',
-  motto: 'Hold the void, take the dawn.',
-  influence: 48250,
-  supply: 1240,
-  rank: 7,
-  cap: 50,
-  myRole: 'officer',
-  bonuses: ['+5% добыча металла (сектор HELIOS-3)', '+3% скорость постройки (сектор AEGIS)'],
-  members: [
-    { name: 'Nyx', role: 'leader', presence: 'online', influence: 12400, joined: 'Day 12' },
-    { name: 'Max', role: 'officer', presence: 'online', influence: 9100, joined: 'Day 14', me: true },
-    { name: 'Corvus', role: 'officer', presence: 'match', influence: 8600, joined: 'Day 15' },
-    { name: 'Vega', role: 'member', presence: 'offline', influence: 6200, joined: 'Day 21' },
-    { name: 'Rhea', role: 'member', presence: 'online', influence: 5400, joined: 'Day 28' },
-    { name: 'Drax', role: 'member', presence: 'offline', influence: 3300, joined: 'Day 33' },
-    { name: 'Io', role: 'member', presence: 'match', influence: 3250, joined: 'Day 40' },
-  ],
-  holdings: [
-    { sector: 'HELIOS-3', bonus: '+5% добыча металла', since: 'Day 22', threat: 'med' },
-    { sector: 'AEGIS', bonus: '+3% скорость постройки', since: 'Day 31', threat: 'low' },
-    { sector: 'NULLPORT', bonus: '+2% доход кредитов', since: 'Day 44', threat: 'high' },
-  ],
-  wars: [
-    { foe: 'Crimson Syndicate', sector: 'VEIL-9', when: 'через 6ч', status: 'scheduled', signed: 8 },
-    { foe: 'Ashen Concord', sector: 'NULLPORT', when: 'через 2д', status: 'incoming', signed: 3 },
-    { foe: 'Pale Horizon', sector: 'HARBOR', when: 'идёт бой', status: 'active', signed: 11 },
-  ],
-  ledger: [
-    { kind: 'gain', text: 'Nyx — итог сессии skirmish-7', amount: '+1 850 ⟡', when: '1ч назад' },
-    { kind: 'spend', text: 'Объявлена AvA за VEIL-9', amount: '−12 000 ⟡', when: '3ч назад' },
-    { kind: 'gain', text: 'Corvus — итог сессии skirmish-6', amount: '+1 200 ⟡', when: '5ч назад' },
-    { kind: 'spend', text: 'Аренда флагмана «Nyx-класса» (Io)', amount: '−240 ◈', when: '8ч назад' },
-    { kind: 'gain', text: 'Rhea — итог сессии skirmish-5', amount: '+980 ⟡', when: '1д назад' },
-  ],
-  chat: [
-    { who: 'система', text: 'AvA за VEIL-9 назначена на через 6ч — заявляйтесь во вкладке «Войны».', when: '3ч', audit: true, pinned: true },
-    { who: 'Nyx', text: 'Собираем состав на VEIL-9. Нужны 2 генерала и адмирал.', when: '2ч' },
-    { who: 'Corvus', text: 'Беру адмирала. Арендую флагман из казны.', when: '2ч' },
-    { who: 'система', text: 'Corvus получил роль «офицер».', when: '2ч', audit: true },
-    { who: 'Rhea', text: 'Могу генералом, качаю десант.', when: '1ч' },
-  ],
-};
-
+// --- corporation cabinet (AVA-C1/C2) -----------------------------------------
+// The cross-session alliance ("corporation") management screen designed in
+// docs/corporation-ui.md — the REAL screen now, over the live CORP-0/AVA-2..9/
+// MED-1 HTTP API (packages/server/src/corpApi.ts/avaApi.ts/medalApi.ts). Scope
+// follows the doc's own §7 degradation order: Обзор/Участники/Войны/Казна are
+// real; Владения (sector ownership) and Чат (persistent corp chat) have no
+// server counterpart at all (no meta-layer Контур 2 yet) and stay honest "скоро"
+// stubs rather than simulated data.
 const CORP_TABS: { id: string; label: string }[] = [
   { id: 'overview', label: 'Обзор' },
   { id: 'members', label: 'Участники' },
+  { id: 'wars', label: 'Войны' },
   { id: 'treasury', label: 'Казна' },
   { id: 'holdings', label: 'Владения' },
-  { id: 'wars', label: 'Войны' },
-  { id: 'comms', label: 'Чат / Лог' },
+  { id: 'comms', label: 'Чат' },
 ];
 const CORP_ROLE_LABEL: Record<CorpRole, string> = {
-  leader: 'Глава',
+  head: 'Глава',
   officer: 'Офицер',
   member: 'Участник',
-};
-const CORP_PRESENCE: Record<CorpPresence, { c: string; t: string }> = {
-  online: { c: 'var(--grn)', t: 'онлайн' },
-  match: { c: 'var(--amber)', t: 'в матче' },
-  offline: { c: 'var(--dim)', t: 'оффлайн' },
+  recruit: 'Заявка',
 };
 const corpRoleLabel = (r: CorpRole): string => t(CORP_ROLE_LABEL[r]);
+const CORP_ROLE_DOT: Record<CorpRole, string> = {
+  head: 'var(--cyan)',
+  officer: 'var(--amber)',
+  member: 'var(--dim)',
+  recruit: 'var(--red)',
+};
+const CORP_AUDIT_RU: Record<string, string> = {
+  create: 'создала корпорацию',
+  accept: 'приняла заявку',
+  decline: 'отклонила заявку',
+  kick: 'исключила',
+  role: 'сменила роль',
+  transfer: 'передала главенство',
+  leave: 'покинула корпорацию',
+  disband: 'расформировала корпорацию',
+  influence: 'движение влияния',
+  ready: 'флаг готовности',
+  medal: 'выдала медаль',
+  rent: 'выдала предмет в аренду',
+  rent_return: 'вернула арендованный предмет',
+};
 
 const corpEl = $('corp');
 const corpHdEl = $('corphd');
@@ -11418,145 +11606,394 @@ const corpBodyEl = $('corpbody');
 let corpTab = 'overview';
 const nfmt = (n: number): string => n.toLocaleString('ru-RU');
 
-function corpOverviewHtml(c: CorpData): string {
-  const bonuses = c.bonuses.map((b) => `<li>${esc(b)}</li>`).join('');
-  const feed = c.ledger
-    .slice(0, 4)
-    .map((l) => `<div class="cline"><span>${esc(l.text)}</span><em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`)
+// --- live state (fetched via corpFetch — see refreshCorp) --------------------
+let corpMine: { corp: CorpRecord | null; membership: CorpMembership | null } = {
+  corp: null,
+  membership: null,
+};
+let corpDetail: { corp: CorpRecord; members: CorpMembership[] } | null = null;
+let corpAudit: CorpAuditEntry[] = [];
+let corpBrowseList: CorpSummary[] = [];
+let avaChallenges: AvaChallenge[] = [];
+let avaPool: Array<CorpSummary & { readySince: number }> = [];
+let avaFeed: AvaFeedEntry[] = [];
+let avaRoster: AvaRosterView | null = null;
+// AVA-6 setRoster eligibility — accountIds flagged ready in my corp (head/officer only,
+// fetched only while a roster window is open; empty otherwise).
+let avaReadyPlayers: string[] = [];
+// Optimistic — no GET exists for "am I flagged ready" (server has no such read
+// model yet); reflects only what THIS session successfully posted.
+let corpReadyOptimistic: boolean | null = null;
+let playerReadyOptimistic: boolean | null = null;
+let corpFetchBusy = false;
+
+/** Shared authenticated call for the corp/AvA/medals APIs — same session
+ *  resolution as ARS-5's /arsenal/me (resolveServer/probeAuthMode/sessionKey),
+ *  but no local cache: this data is too volatile (roster windows, challenges)
+ *  to show stale. Returns the parsed JSON body, or null on ANY failure (no
+ *  server configured, not logged in, network error, non-2xx) — surfaces a
+ *  server-given error code via `note()` when there is one, never throws. */
+async function corpFetch(path: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
+  const srv = resolveServer();
+  if (!srv) return null;
+  await probeAuthMode(srv.base);
+  if (!authMode) return null;
+  const session = localStorage.getItem(sessionKey(srv.base));
+  if (!session) return null;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}${path}`, {
+      method: init?.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${session}`,
+        ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
+    const body = (await res.json().catch(() => null)) as unknown;
+    if (!res.ok) {
+      const code = (body as { error?: unknown } | null)?.error;
+      if (typeof code === 'string') note('✖ ' + errText(code));
+      return null;
+    }
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+/** Full refresh of the cabinet's live state, then re-render. Cheap enough to
+ *  call after every intent (create/apply/accept/kick/…) — the server is the
+ *  only source of truth, no local optimistic membership mutation. */
+async function refreshCorp(): Promise<void> {
+  if (corpFetchBusy) return;
+  corpFetchBusy = true;
+  try {
+    const mineRaw = (await corpFetch('/corps/me')) as { corp?: unknown; membership?: unknown } | null;
+    corpMine = mineRaw
+      ? { corp: parseCorpRecord(mineRaw.corp), membership: parseMembership(mineRaw.membership) }
+      : { corp: null, membership: null };
+
+    if (corpMine.membership) {
+      const corpId = corpMine.membership.corpId;
+      const detailRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}`)) as
+        | { corp?: unknown; members?: unknown }
+        | null;
+      const corp = detailRaw ? parseCorpRecord(detailRaw.corp) : null;
+      corpDetail = corp ? { corp, members: parseMemberships(detailRaw?.members) } : null;
+      if (canManage(corpMine.membership.role)) {
+        const auditRaw = (await corpFetch(`/corps/${encodeURIComponent(corpId)}/audit`)) as
+          | { audit?: unknown }
+          | null;
+        corpAudit = parseAudit(auditRaw?.audit);
+      } else {
+        corpAudit = [];
+      }
+      corpBrowseList = [];
+    } else {
+      corpDetail = null;
+      corpAudit = [];
+      const listRaw = (await corpFetch('/corps')) as { corps?: unknown } | null;
+      corpBrowseList = parseCorpSummaries(listRaw?.corps);
+    }
+
+    const challengesRaw = (await corpFetch('/ava/challenges')) as { challenges?: unknown } | null;
+    avaChallenges = parseChallenges(challengesRaw?.challenges);
+    const poolRaw = (await corpFetch('/ava/pool')) as { pool?: unknown } | null;
+    avaPool = parseReadyPool(poolRaw?.pool);
+    const feedRaw = (await corpFetch('/ava/feed?limit=8')) as { feed?: unknown } | null;
+    avaFeed = parseFeed(feedRaw?.feed);
+
+    // A locked-or-accepted matchup my corp is party to: show its roster window.
+    const myCorpId = corpMine.membership?.corpId;
+    const activeMatchup = avaChallenges.find(
+      (c) =>
+        (c.status === 'accepted' || c.status === 'locked') &&
+        (c.challengerCorp === myCorpId || c.targetCorp === myCorpId),
+    );
+    avaRoster = activeMatchup
+      ? parseRosterView(await corpFetch(`/ava/matchup/${encodeURIComponent(activeMatchup.id)}`))
+      : null;
+
+    // The setRoster eligibility set (AVA-6) — head/officer only, only while curating.
+    avaReadyPlayers =
+      avaRoster?.status === 'accepted' && myCorpId && corpMine.membership && canManage(corpMine.membership.role)
+        ? parseAccountIds(
+            ((await corpFetch(`/corps/${encodeURIComponent(myCorpId)}/ready-players`)) as {
+              accountIds?: unknown;
+            } | null)?.accountIds,
+          )
+        : [];
+  } finally {
+    corpFetchBusy = false;
+  }
+  renderCorp();
+}
+
+/** Fire an intent, then always refresh (the server is authoritative — no local
+ *  guess at the new state). */
+async function corpIntent(path: string, body?: unknown): Promise<void> {
+  const result = await corpFetch(path, { method: 'POST', body: body ?? {} });
+  if (result) await refreshCorp();
+}
+
+function corpNameOf(corpId: string): string {
+  if (corpId === corpMine.membership?.corpId && corpMine.corp) return corpMine.corp.name;
+  return corpBrowseList.find((c) => c.corpId === corpId)?.name ?? avaPool.find((c) => c.corpId === corpId)?.name ?? corpId;
+}
+
+function corpNoneHtml(): string {
+  const rows = corpBrowseList
+    .map(
+      (c) =>
+        `<div class="crow2"><span class="cnm">${esc(c.name)}</span>` +
+        `<span class="cinf">${nfmt(c.influence)} ⟡</span>` +
+        `<span class="cpres">${t('{n} участников', { n: String(c.members) })}</span>` +
+        `<span class="cman"><button class="cbtn2" data-corpact="apply" data-corparg="${esc(c.corpId)}">${t('Заявиться')}</button></span></div>`,
+    )
     .join('');
-  const nextWar = c.wars.find((w) => w.status !== 'active');
-  const nextWarHtml = nextWar
-    ? `<div class="cwarn">⚔ AvA за ${esc(nextWar.sector)} vs ${esc(nextWar.foe)} — ${esc(nextWar.when)}</div>`
-    : '';
   return (
-    `${nextWarHtml}` +
     `<div class="ccols">` +
-    `<section class="ccard"><h4>${t('Пассивные бонусы')}</h4><ul class="clist">${bonuses}</ul>` +
-    `<p class="chint">${t('Применяются снапшотом при старте матча (gdd §5.2), не «на лету».')}</p></section>` +
-    `<section class="ccard"><h4>${t('Лента')}</h4>${feed}</section>` +
+    `<section class="ccard"><h4>${t('Создать корпорацию')}</h4>` +
+    `<div class="cinput"><input id="corpnewname" placeholder="${t('Название (3–24 символа)')}" maxlength="24">` +
+    `<button class="cbtn2" data-corpact="create">${t('Создать')}</button></div></section>` +
+    `<section class="ccard"><h4>${t('Найти и подать заявку')}</h4>` +
+    `<div class="ctable">${rows || `<p class="chint">${t('Пока нет других корпораций.')}</p>`}</div></section>` +
     `</div>`
   );
 }
 
-function corpMembersHtml(c: CorpData): string {
-  const canManage = c.myRole === 'leader' || c.myRole === 'officer';
-  const rows = c.members
+function corpOverviewHtml(): string {
+  if (!corpMine.corp || !corpMine.membership) return corpNoneHtml();
+  const c = corpMine.corp;
+  const feed = corpAudit
+    .slice(0, 6)
+    .map(
+      (a) =>
+        `<div class="cline"><span>${esc(a.actor)} ${t(CORP_AUDIT_RU[a.action] ?? a.action)}${a.target ? ` → ${esc(a.target)}` : ''}</span>` +
+        `<em class="cwhen">${new Date(a.at).toLocaleString('ru-RU')}</em></div>`,
+    )
+    .join('');
+  const feedHtml = canManage(corpMine.membership.role)
+    ? feed || `<p class="chint">${t('Пока пусто.')}</p>`
+    : `<p class="chint">${t('Журнал виден главе и офицерам.')}</p>`;
+  const nextWar = avaChallenges.find((w) => w.status === 'accepted' || w.status === 'pending');
+  const nextWarHtml = nextWar
+    ? `<div class="cwarn">⚔ ${t('AvA')} vs ${esc(corpNameOf(nextWar.challengerCorp === corpMine.membership.corpId ? nextWar.targetCorp : nextWar.challengerCorp))} — ${t(nextWar.status === 'accepted' ? 'идёт набор ростера' : 'ждёт ответа')}</div>`
+    : '';
+  return (
+    `${nextWarHtml}` +
+    `<div class="ccols">` +
+    `<section class="ccard"><h4>${t('Корпорация')}</h4>` +
+    `<div class="cline"><span>${t('Влияние')}</span><em>${nfmt(c.influence)} ⟡</em></div>` +
+    `<div class="cline"><span>${t('Моя роль')}</span><em>${corpRoleLabel(corpMine.membership.role)}</em></div>` +
+    `<p class="chint">${t('Пассивные бонусы владений придут вместе с мета-слоем секторов — пока их нет.')}</p></section>` +
+    `<section class="ccard"><h4>${t('Журнал')}</h4>${feedHtml}</section>` +
+    `</div>`
+  );
+}
+
+function corpMembersHtml(): string {
+  if (!corpDetail || !corpMine.membership) return corpNoneHtml();
+  const myRole = corpMine.membership.role;
+  const myId = corpMine.membership.accountId;
+  const rows = sortMembers(corpDetail.members)
     .map((m) => {
-      const p = CORP_PRESENCE[m.presence];
-      const manage =
-        canManage && m.role === 'member'
-          ? `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.name)}">↑ ${t('роль')}</button>` +
-            `<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.name)}">✖</button>`
-          : '';
+      const isMe = m.accountId === myId;
+      let manage = '';
+      if (m.role === 'recruit' && canManage(myRole)) {
+        manage =
+          `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(m.accountId)}">✓ ${t('принять')}</button>` +
+          `<button class="cbtn2 danger" data-corpact="decline" data-corparg="${esc(m.accountId)}">✖ ${t('отклонить')}</button>`;
+      } else if (!isMe && m.role !== 'head') {
+        const bits: string[] = [];
+        if (myRole === 'head') {
+          const toRole = m.role === 'officer' ? 'member' : 'officer';
+          bits.push(
+            `<button class="cbtn2" data-corpact="role" data-corparg="${esc(m.accountId)}" data-corprole="${toRole}">↑ ${corpRoleLabel(toRole)}</button>`,
+          );
+          bits.push(`<button class="cbtn2" data-corpact="transfer" data-corparg="${esc(m.accountId)}">⬆ ${t('передать главенство')}</button>`);
+        }
+        if (canManage(myRole) && !(myRole === 'officer' && m.role === 'officer')) {
+          bits.push(`<button class="cbtn2 danger" data-corpact="kick" data-corparg="${esc(m.accountId)}">✖</button>`);
+        }
+        manage = bits.join('');
+      }
       return (
-        `<div class="crow2${m.me ? ' me' : ''}">` +
-        `<span class="cdot" style="color:${p.c}"></span>` +
-        `<span class="cnm">${esc(m.name)}${m.me ? ` <i>(${t('вы')})</i>` : ''}</span>` +
+        `<div class="crow2${isMe ? ' me' : ''}">` +
+        `<span class="cdot" style="color:${CORP_ROLE_DOT[m.role]}"></span>` +
+        `<span class="cnm">${esc(m.login)}${isMe ? ` <i>(${t('вы')})</i>` : ''}</span>` +
         `<span class="crole">${corpRoleLabel(m.role)}</span>` +
-        `<span class="cinf">${nfmt(m.influence)} ⟡</span>` +
-        `<span class="cpres">${t(p.t)}</span>` +
         `<span class="cman">${manage}</span>` +
         `</div>`
       );
     })
     .join('');
-  const invite = canManage
-    ? `<button class="cbtn2 wide" data-corpact="invite">+ ${t('Пригласить участника')}</button>`
-    : '';
-  return `<div class="ctable">${rows}</div>${invite}`;
+  const mine = corpMine.membership;
+  const leave =
+    mine.role === 'head'
+      ? `<button class="cbtn2 danger wide" data-corpact="disband">${t('Расформировать корпорацию')}</button>`
+      : `<button class="cbtn2 wide" data-corpact="leave">${t('Покинуть корпорацию')}</button>`;
+  return `<div class="ctable">${rows}</div>${leave}`;
 }
 
-function corpTreasuryHtml(c: CorpData): string {
-  const rows = c.ledger
-    .map(
-      (l) =>
-        `<div class="cline"><span>${esc(l.text)} <b class="cwhen">· ${esc(l.when)}</b></span>` +
-        `<em class="${l.kind === 'gain' ? 'up' : 'dn'}">${esc(l.amount)}</em></div>`,
-    )
-    .join('');
-  const canSpend = c.myRole === 'leader';
-  const spend = canSpend
-    ? `<button class="cbtn2 wide" data-corpact="declare">⚔ ${t('Объявить AvA (−12 000 ⟡)')}</button>`
-    : `<p class="chint">${t('Трата влияния (объявление AvA) — только глава.')}</p>`;
-  return (
-    `<div class="cbig"><div><span>${t('Влияние')}</span><b>${nfmt(c.influence)} ⟡</b></div>` +
-    `<div><span>${t('Снабжение')}</span><b>${nfmt(c.supply)} ◈</b></div></div>` +
-    `<h4>${t('История')}</h4><div class="cledger">${rows}</div>${spend}`
-  );
-}
+function corpWarsHtml(): string {
+  const myCorpId = corpMine.membership?.corpId;
+  const iAmHead = corpMine.membership?.role === 'head';
+  const iCanFlag = corpMine.membership && corpMine.membership.role !== 'recruit';
+  const corpReady = corpReadyOptimistic ?? avaPool.some((p) => p.corpId === myCorpId);
+  const flags =
+    `<div class="cbig">` +
+    `<div><span>${t('Готовность корпорации')}</span><b>${corpReady ? t('да ✓') : t('нет')}</b>` +
+    (iAmHead
+      ? `<button class="cbtn2" data-corpact="${corpReady ? 'ready-corp-clear' : 'ready-corp'}">${corpReady ? t('снять') : t('в пул')}</button>`
+      : `<span class="chint">${t('только глава')}</span>`) +
+    `</div>` +
+    `<div><span>${t('Моя готовность')}</span><b>${playerReadyOptimistic ? t('да ✓') : t('—')}</b>` +
+    (iCanFlag
+      ? `<button class="cbtn2" data-corpact="${playerReadyOptimistic ? 'ready-player-clear' : 'ready-player'}">${playerReadyOptimistic ? t('снять') : t('готов')}</button>`
+      : '') +
+    `</div></div>`;
 
-function corpHoldingsHtml(c: CorpData): string {
-  const rows = c.holdings
-    .map(
-      (h) =>
-        `<div class="crow2"><span class="cnm">▦ ${esc(h.sector)}</span>` +
-        `<span class="cbonus">${esc(h.bonus)}</span>` +
-        `<span class="cwhen">${esc(h.since)}</span>` +
-        `<span class="cthreat t-${h.threat}">${h.threat === 'low' ? t('спокойно') : h.threat === 'med' ? t('угроза') : t('под ударом')}</span></div>`,
-    )
-    .join('');
-  return `<div class="ctable">${rows}</div><p class="chint">${t('Мета-карта создаётся в момент объявления войны (metagame.md). Здесь — витрина серверного состояния.')}</p>`;
-}
-
-function corpWarsHtml(c: CorpData): string {
-  const rows = c.wars
+  const wars = avaChallenges
     .map((w) => {
-      const st = w.status === 'active' ? t('идёт') : w.status === 'incoming' ? t('входящий вызов') : t('назначено');
-      const act =
-        w.status === 'incoming' && c.myRole === 'leader'
-          ? `<button class="cbtn2" data-corpact="accept" data-corparg="${esc(w.foe)}">${t('Принять')}</button>`
-          : `<button class="cbtn2" data-corpact="signup" data-corparg="${esc(w.sector)}">${t('Заявиться')}</button>`;
+      const iAmChallenger = w.challengerCorp === myCorpId;
+      const foe = corpNameOf(iAmChallenger ? w.targetCorp : w.challengerCorp);
+      const st: Record<AvaChallengeStatus, string> = {
+        pending: iAmChallenger ? t('ждёт ответа') : t('входящий вызов'),
+        accepted: t('набор ростера'),
+        declined: t('отклонён'),
+        expired: t('истёк'),
+        locked: t('заперт — скоро бой'),
+        cancelled: t('отменён'),
+        ended: t('завершён'),
+      };
+      const canRespond = w.status === 'pending' && !iAmChallenger && iAmHead;
+      const act = canRespond
+        ? `<button class="cbtn2" data-corpact="ava-accept" data-corparg="${esc(w.id)}">${t('Принять')}</button>` +
+          `<button class="cbtn2 danger" data-corpact="ava-decline" data-corparg="${esc(w.id)}">${t('Отклонить')}</button>`
+        : w.status === 'accepted' &&
+            corpMine.membership &&
+            corpMine.membership.role !== 'recruit' &&
+            !avaRoster?.mine.some((r) => r.accountId === corpMine.membership!.accountId)
+          ? `<button class="cbtn2" data-corpact="ava-join" data-corparg="${esc(w.id)}">${t('Заявиться в состав')}</button>`
+          : '';
+      const rosterOpen = w.status === 'accepted' && avaRoster && avaRoster.matchupId === w.id;
+      const rosterLine = rosterOpen
+        ? `<div class="cwmid">${t('состав')}: ${avaRoster!.counts.challenger}/${avaRoster!.counts.target}</div>`
+        : '';
+      // AVA-6 setRoster — head/officer curates from the flagged pool wholesale;
+      // everyone else still only has self-enroll `join` (rendered in `act` above).
+      const curate =
+        rosterOpen && canManage(corpMine.membership?.role ?? 'recruit') && avaReadyPlayers.length > 0
+          ? `<div class="cwroster">${avaReadyPlayers
+              .map((accountId) => {
+                const login = corpDetail?.members.find((m) => m.accountId === accountId)?.login ?? accountId;
+                const on = avaRoster!.mine.some((r) => r.accountId === accountId);
+                return (
+                  `<button class="cbtn2 ctoggle${on ? ' on' : ''}" data-corpact="ava-roster-toggle" ` +
+                  `data-corparg="${esc(w.id)}" data-corpaccount="${esc(accountId)}">${on ? '✓' : '·'} ${esc(login)}</button>`
+                );
+              })
+              .join('')}</div>`
+          : '';
       return (
-        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(w.sector)}</b><span class="cst st-${w.status}">${st}</span></div>` +
-        `<div class="cwmid">vs ${esc(w.foe)} · ${esc(w.when)} · состав ${w.signed}</div>` +
-        `<div class="cwact">${act}</div></div>`
+        `<div class="cwar"><div class="cwtop"><b>⚔ ${esc(foe)}</b><span class="cst st-${w.status}">${st[w.status]}</span></div>` +
+        `<div class="cwmid">${iAmChallenger ? t('вызов от нас') : t('вызов нам')} · ${nfmt(w.cost)} ⟡</div>${rosterLine}${curate}` +
+        (act ? `<div class="cwact">${act}</div>` : '') +
+        `</div>`
       );
     })
     .join('');
-  return `<div class="cwars">${rows}</div>`;
+
+  const pool = avaPool
+    .filter((p) => p.corpId !== myCorpId)
+    .map(
+      (p) =>
+        `<div class="crow2"><span class="cnm">${esc(p.name)}</span><span class="cinf">${nfmt(p.influence)} ⟡</span>` +
+        (iAmHead
+          ? `<span class="cman"><button class="cbtn2" data-corpact="ava-challenge" data-corparg="${esc(p.corpId)}">⚔ ${t('Вызвать')}</button></span>`
+          : '') +
+        `</div>`,
+    )
+    .join('');
+
+  const feed = avaFeed
+    .slice(0, 5)
+    .map(
+      (f) =>
+        `<div class="cline"><span>${esc(f.challengerName)} vs ${esc(f.targetName)}</span>` +
+        `<em class="cwhen">${f.kind === 'result' ? (f.winnerCorp ? t('победа') : t('ничья')) : t('назначен')}</em></div>`,
+    )
+    .join('');
+
+  return (
+    flags +
+    `<h4>${t('Мои вызовы')}</h4><div class="cwars">${wars || `<p class="chint">${t('Пока нет вызовов.')}</p>`}</div>` +
+    `<h4>${t('Готовые к войне')}</h4><div class="ctable">${pool || `<p class="chint">${t('Пул пуст.')}</p>`}</div>` +
+    `<h4>${t('Публичная лента AvA')}</h4><div class="cledger">${feed || `<p class="chint">${t('Пока пусто.')}</p>`}</div>`
+  );
 }
 
-function corpCommsHtml(c: CorpData): string {
-  const msgs = c.chat
-    .map((m) => {
-      const cls = m.audit ? 'cmsg audit' : 'cmsg';
-      const pin = m.pinned ? '<span class="cpin">📌</span>' : '';
-      return `<div class="${cls}">${pin}<b>${esc(m.who)}</b> <span class="cwhen">${esc(m.when)}</span><p>${esc(m.text)}</p></div>`;
-    })
+function corpTreasuryHtml(): string {
+  if (!corpMine.corp || !corpMine.membership) return corpNoneHtml();
+  const rows = corpAudit
+    .filter((a) => a.action === 'influence' || a.action === 'rent' || a.action === 'rent_return')
+    .map(
+      (a) =>
+        `<div class="cline"><span>${esc(a.detail ?? t(CORP_AUDIT_RU[a.action] ?? a.action))} <b class="cwhen">· ${new Date(a.at).toLocaleString('ru-RU')}</b></span></div>`,
+    )
     .join('');
-  return `<div class="cchat">${msgs}</div><div class="cinput"><input id="corpmsg" placeholder="${t('Сообщение в корп-чат…')}" maxlength="240"><button class="cbtn2" data-corpact="send">${t('Отправить')}</button></div>`;
+  const ledgerHtml = canManage(corpMine.membership.role)
+    ? rows || `<p class="chint">${t('Пока пусто.')}</p>`
+    : `<p class="chint">${t('История видна главе и офицерам.')}</p>`;
+  return (
+    `<div class="cbig"><div><span>${t('Влияние')}</span><b>${nfmt(corpMine.corp.influence)} ⟡</b></div></div>` +
+    `<h4>${t('История')}</h4><div class="cledger">${ledgerHtml}</div>` +
+    `<p class="chint">${t('Тратится на вызов AvA (100 ⟡ по умолчанию) — кнопка «Вызвать» во вкладке «Войны».')}</p>`
+  );
+}
+
+function corpHoldingsHtml(): string {
+  return `<div class="hub-empty"><span class="he-ic">▦</span>${t('Владения — скоро')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('мета-карта секторов появится вместе со вторым контуром метагейма')}</span></div>`;
+}
+
+function corpCommsHtml(): string {
+  return `<div class="hub-empty"><span class="he-ic">▭</span>${t('Чат — скоро')}<br><span style="font-size:11px;color:var(--cyan-dim)">${t('постоянный корп-чат ждёт мета-слой; журнал действий — во вкладке «Обзор»')}</span></div>`;
 }
 
 function renderCorp(): void {
-  const c = MOCK_CORP;
-  corpHdEl.innerHTML =
-    `<div class="chrow"><span class="cemblem">⬢</span>` +
-    `<div class="cident"><b>${esc(c.name)}</b> <span class="ctag">[${esc(c.tag)}]</span><div class="cmotto">${esc(c.motto)}</div></div>` +
-    `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>` +
-    `<div class="cmetrics">` +
-    `<span>${t('влияние')} <b>${nfmt(c.influence)} ⟡</b></span>` +
-    `<span>${t('снабжение')} <b>${nfmt(c.supply)} ◈</b></span>` +
-    `<span>${t('секторов')} <b>${c.holdings.length} ▦</b></span>` +
-    `<span>${t('участников')} <b>${c.members.length}/${c.cap} ♟</b></span>` +
-    `<span>${t('ранг')} <b>#${c.rank}</b></span>` +
-    `<span>${t('роль')} <b>${corpRoleLabel(c.myRole)}</b></span>` +
-    `</div>`;
+  const c = corpMine.corp;
+  const mem = corpMine.membership;
+  corpHdEl.innerHTML = c
+    ? `<div class="chrow"><span class="cemblem">⬢</span>` +
+      `<div class="cident"><b>${esc(c.name)}</b></div>` +
+      `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>` +
+      `<div class="cmetrics">` +
+      `<span>${t('влияние')} <b>${nfmt(c.influence)} ⟡</b></span>` +
+      `<span>${t('участников')} <b>${corpDetail?.members.filter((m) => m.role !== 'recruit').length ?? '—'}</b></span>` +
+      `<span>${t('роль')} <b>${mem ? corpRoleLabel(mem.role) : '—'}</b></span>` +
+      `</div>`
+    : `<div class="chrow"><span class="cemblem">⬢</span>` +
+      `<div class="cident"><b>${t('Без корпорации')}</b></div>` +
+      `<button id="corpclose" class="cx" title="${t('Закрыть')}">✕</button></div>`;
   corpTabsEl.innerHTML = CORP_TABS.map(
     (ct) => `<button class="ctab${ct.id === corpTab ? ' on' : ''}" data-corptab="${ct.id}">${t(ct.label)}</button>`,
   ).join('');
   let body = '';
-  if (corpTab === 'overview') body = corpOverviewHtml(c);
-  else if (corpTab === 'members') body = corpMembersHtml(c);
-  else if (corpTab === 'treasury') body = corpTreasuryHtml(c);
-  else if (corpTab === 'holdings') body = corpHoldingsHtml(c);
-  else if (corpTab === 'wars') body = corpWarsHtml(c);
-  else if (corpTab === 'comms') body = corpCommsHtml(c);
+  if (corpTab === 'overview') body = corpOverviewHtml();
+  else if (corpTab === 'members') body = corpMembersHtml();
+  else if (corpTab === 'wars') body = corpWarsHtml();
+  else if (corpTab === 'treasury') body = corpTreasuryHtml();
+  else if (corpTab === 'holdings') body = corpHoldingsHtml();
+  else if (corpTab === 'comms') body = corpCommsHtml();
   corpBodyEl.innerHTML = body;
 }
 
 function openCorp(): void {
-  renderCorp();
+  renderCorp(); // paint instantly from whatever's cached in memory…
   corpEl.style.display = 'flex';
+  void refreshCorp(); // …then refresh from the server
+  maybeIntro('corp');
 }
 function closeCorp(): void {
   corpEl.style.display = 'none';
@@ -11567,20 +12004,107 @@ corpTabsEl.addEventListener('click', (e) => {
   if (!b) return;
   corpTab = b.dataset.corptab ?? 'overview';
   renderCorp();
+  if (corpTab === 'wars') maybeIntro('ava');
 });
 corpEl.addEventListener('click', (e) => {
-  const t = e.target as HTMLElement | null;
-  if (!t) return;
-  if (t.id === 'corpclose' || t.id === 'corp') {
+  const tg = e.target as HTMLElement | null;
+  if (!tg) return;
+  if (tg.id === 'corpclose' || tg.id === 'corp') {
     closeCorp();
     return;
   }
-  const act = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corpact;
-  if (act) {
-    // Mock: no server yet — surface the intent as an in-game dispatch note so the
-    // interaction is visible. The real screen would send an authoritative intent.
-    const arg = (t.closest('[data-corpact]') as HTMLElement | null)?.dataset.corparg ?? '';
-    note(`[corp mock] intent: ${act}${arg ? ' → ' + arg : ''}`);
+  const btn = tg.closest('[data-corpact]') as HTMLElement | null;
+  const act = btn?.dataset.corpact;
+  if (!act) return;
+  const arg = btn?.dataset.corparg ?? '';
+  const corpId = corpMine.membership?.corpId ?? '';
+  const account = btn?.dataset.corpaccount ?? '';
+  switch (act) {
+    case 'create': {
+      const input = document.getElementById('corpnewname') as HTMLInputElement | null;
+      const name = input?.value.trim() ?? '';
+      if (name) void corpIntent('/corps', { name });
+      break;
+    }
+    case 'apply':
+      void corpIntent(`/corps/${encodeURIComponent(arg)}/apply`);
+      break;
+    case 'accept':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/accept`, { target: arg });
+      break;
+    case 'decline':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/decline`, { target: arg });
+      break;
+    case 'kick':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/kick`, { target: arg });
+      break;
+    case 'role':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/role`, { target: arg, role: btn?.dataset.corprole });
+      break;
+    case 'transfer':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/transfer`, { target: arg });
+      break;
+    case 'leave':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/leave`);
+      break;
+    case 'disband':
+      void corpIntent(`/corps/${encodeURIComponent(corpId)}/disband`);
+      break;
+    case 'ready-corp':
+      void corpFetch('/ava/ready/corp', { method: 'POST' }).then((r) => {
+        if (r) {
+          corpReadyOptimistic = true;
+          void refreshCorp();
+        }
+      });
+      break;
+    case 'ready-corp-clear':
+      void corpFetch('/ava/ready/corp/clear', { method: 'POST' }).then((r) => {
+        if (r) {
+          corpReadyOptimistic = false;
+          void refreshCorp();
+        }
+      });
+      break;
+    case 'ready-player':
+      void corpFetch('/ava/ready/player', { method: 'POST' }).then((r) => {
+        if (r) {
+          playerReadyOptimistic = true;
+          renderCorp();
+        }
+      });
+      break;
+    case 'ready-player-clear':
+      void corpFetch('/ava/ready/player/clear', { method: 'POST' }).then((r) => {
+        if (r) {
+          playerReadyOptimistic = false;
+          renderCorp();
+        }
+      });
+      break;
+    case 'ava-challenge':
+      void corpIntent('/ava/challenge', { target: arg });
+      break;
+    case 'ava-accept':
+      void corpIntent(`/ava/challenge/${encodeURIComponent(arg)}/accept`);
+      break;
+    case 'ava-decline':
+      void corpIntent(`/ava/challenge/${encodeURIComponent(arg)}/decline`);
+      break;
+    case 'ava-join':
+      void corpIntent(`/ava/matchup/${encodeURIComponent(arg)}/join`);
+      break;
+    case 'ava-roster-toggle': {
+      // arg = matchupId, account = the toggled accountId. Server is wholesale
+      // (setRoster REPLACES the side), so send the full desired set every time.
+      if (!avaRoster || avaRoster.matchupId !== arg) break;
+      const current = avaRoster.mine.map((r) => r.accountId);
+      const next = current.includes(account)
+        ? current.filter((id) => id !== account)
+        : [...current, account];
+      void corpIntent(`/ava/matchup/${encodeURIComponent(arg)}/roster`, { players: next });
+      break;
+    }
   }
 });
 const corpEntry = $('ccorp');

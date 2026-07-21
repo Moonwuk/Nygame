@@ -36,6 +36,7 @@
     "produces": {},
     "hp": 30,
     "shipRepair": 0.1,
+    "enablesShipConstruction": true,
     "scoreValue": 12,
     "traits": []
   },
@@ -73,6 +74,7 @@
     "buildTimeHours": 12,
     "hp": 25,
     "shipRepair": 0.05,
+    "enablesShipConstruction": true,
     "scoreValue": 6,
     "traits": []
   },

@@ -228,6 +228,10 @@ export function createMultiplayerServer(
           return;
         }
         let playerId: string;
+        // LARS-1: the JWT's accountId, when present, so the room can key a live
+        // ArsenalStore read to this seat. Only the auth handshake ever carries one —
+        // the dev/nick paths have no account.
+        let accountId: string | undefined;
         // Plaintext seat ticket minted THIS join (seat lock) — delivered once in
         // `welcome.seatTicket`; the server keeps only the hash.
         let mintedTicket: string | undefined;
@@ -250,6 +254,7 @@ export function createMultiplayerServer(
             return;
           }
           playerId = verified.claim.playerId;
+          accountId = verified.claim.accountId;
         } else if (options.seatLock) {
           // Seat lock (REL-5): nick+ticket is the SOLE identity on this path — the
           // direct `?player=` handshake would bypass the lock, so it is refused
@@ -330,7 +335,7 @@ export function createMultiplayerServer(
         // envelope's session binding, SV-1.1-live-A). A reconnect mints a fresh one.
         const sessionId = randomUUID();
         wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request, playerId, room, sessionId, mintedTicket);
+          wss.emit('connection', ws, request, playerId, room, sessionId, mintedTicket, accountId);
         });
       } catch {
         rejectUpgrade(socket, 500);
@@ -364,6 +369,7 @@ export function createMultiplayerServer(
       room: MatchRoom,
       sessionId: string,
       mintedTicket?: string,
+      accountId?: string,
     ) => {
       sockets.add(ws);
       alive.set(ws, true);
@@ -371,7 +377,15 @@ export function createMultiplayerServer(
       // Only retain when the peer actually joined — addPeer rejects (and closes the socket)
       // for an unknown player or a duplicate on a single-seat slot, and a spurious retain
       // would disarm a legitimate hibernation countdown, starving eviction under reconnects.
-      if (room.addPeer(playerId, ws, sessionId, mintedTicket ? { seatTicket: mintedTicket } : undefined)) {
+      if (
+        room.addPeer(
+          playerId,
+          ws,
+          sessionId,
+          mintedTicket ? { seatTicket: mintedTicket } : undefined,
+          accountId,
+        )
+      ) {
         registry.retain?.(room.id); // keep the match resident while this socket is connected
       }
       ws.on('message', (data) => {

@@ -1,0 +1,15 @@
+rules:
+  - id: core-no-math-random
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Determinism (CLAUDE.md invariant #1): shared-core must be a pure function of
+      (state, action, context) — never use Math.random(). Use the seeded Rng passed
+      to the handler instead.
+    patterns:
+      - pattern: Math.random(...)
+    paths:
+      include:
+        - "**/packages/shared-core/src"
+      exclude:
+        - "*.test.ts"

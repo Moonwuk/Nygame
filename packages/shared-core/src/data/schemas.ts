@@ -206,6 +206,10 @@ export const BuildingDefSchema = z.object({
   /** Anti-ship orbital-AA firepower per game hour (an emplacement building like an
    *  orbital-AA battery). Fires on hostile near-orbit fleets, summed with garrison AA. */
   aaDamage: z.number().nonnegative().default(0),
+  /** True for a building that can lay down hulls (shipyard/spaceport) — a planet needs
+   *  at least one standing (undestroyed) building with this flag to build any
+   *  space-domain unit (`unit.build`). Not per-level: the capability doesn't scale. */
+  enablesShipConstruction: z.boolean().default(false),
 });
 
 /**

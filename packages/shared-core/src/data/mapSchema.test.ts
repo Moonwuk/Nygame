@@ -20,7 +20,7 @@ describe('map schema (map-roadmap.md M1.1)', () => {
     expect(map.sectors.nexus!.owner).toBeNull();
     expect(map.sectors.nexus!.kind).toBe('nebula');
     expect(map.sectors.drift!.kind).toBe('asteroid');
-    expect(map.sectors.home_green!.buildings.length).toBe(2);
+    expect(map.sectors.home_green!.buildings.length).toBe(3);
     expect(map.sectors.veil!.garrison).toEqual([]);
     // building level defaults to 1
     expect(map.sectors.home_green!.buildings[0]!.level).toBe(1);

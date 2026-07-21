@@ -17,9 +17,12 @@ import type {
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
+  CorpRent,
+  CorpRentStore,
   CorpRole,
   CorpStore,
   CorpSummary,
+  DropStore,
   MatchSnapshot,
   MatchStore,
   Medal,
@@ -652,6 +655,80 @@ export class MemoryArsenalStore implements ArsenalStore {
     if (!row || row.accountId !== accountId) return Promise.resolve(false);
     this.items.delete(itemId);
     return Promise.resolve(true);
+  }
+
+  wear(itemId: string, by: number): Promise<{ durability?: number } | null> {
+    const row = this.items.get(itemId);
+    if (!row) return Promise.resolve(null);
+    if (row.durability === undefined) return Promise.resolve({ durability: undefined });
+    row.durability = Math.max(0, row.durability - by);
+    return Promise.resolve({ durability: row.durability });
+  }
+}
+
+/** In-memory corp-arsenal rental store (ARS-6): one item on rent to at most one war
+ *  at a time, an exactly-once close per (matchup, item). */
+export class MemoryCorpRentStore implements CorpRentStore {
+  private readonly active = new Map<string, CorpRent>(); // itemId -> row
+
+  rent(entry: CorpRent): Promise<boolean> {
+    if (this.active.has(entry.itemId)) return Promise.resolve(false);
+    this.active.set(entry.itemId, { ...entry });
+    return Promise.resolve(true);
+  }
+
+  activeForMatchup(matchupId: string): Promise<CorpRent[]> {
+    return Promise.resolve(
+      [...this.active.values()].filter((r) => r.matchupId === matchupId).map((r) => ({ ...r })),
+    );
+  }
+
+  activeForAccount(matchupId: string, accountId: string): Promise<CorpRent[]> {
+    return Promise.resolve(
+      [...this.active.values()]
+        .filter((r) => r.matchupId === matchupId && r.accountId === accountId)
+        .map((r) => ({ ...r })),
+    );
+  }
+
+  closeRent(matchupId: string, itemId: string): Promise<boolean> {
+    const row = this.active.get(itemId);
+    if (!row || row.matchupId !== matchupId) return Promise.resolve(false);
+    this.active.delete(itemId);
+    return Promise.resolve(true);
+  }
+}
+
+/** In-memory drop-loop store (ARS-4): exactly-once per-(match, account) roll claims,
+ *  the pity counter and the salvage-shard balance. */
+export class MemoryDropStore implements DropStore {
+  private readonly claims = new Set<string>();
+  private readonly pity = new Map<string, number>();
+  private readonly shards = new Map<string, number>();
+
+  claim(matchId: string, accountId: string): Promise<boolean> {
+    const key = `${matchId} ${accountId}`;
+    if (this.claims.has(key)) return Promise.resolve(false);
+    this.claims.add(key);
+    return Promise.resolve(true);
+  }
+
+  pityOf(accountId: string): Promise<number> {
+    return Promise.resolve(this.pity.get(accountId) ?? 0);
+  }
+
+  setPity(accountId: string, value: number): Promise<void> {
+    this.pity.set(accountId, value);
+    return Promise.resolve();
+  }
+
+  addShards(accountId: string, delta: number): Promise<void> {
+    this.shards.set(accountId, (this.shards.get(accountId) ?? 0) + delta);
+    return Promise.resolve();
+  }
+
+  shardsOf(accountId: string): Promise<number> {
+    return Promise.resolve(this.shards.get(accountId) ?? 0);
   }
 }
 

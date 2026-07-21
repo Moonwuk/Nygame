@@ -31,6 +31,9 @@ export default tseslint.config(
       'prototype/**',
       'testclient/**',
       'mobile/**',
+      // Semgrep rule fixtures (SEC-2) are intentionally-broken snippets for the
+      // `// ruleid:` / `// ok:` unit-test convention, not real source.
+      '.semgrep/**',
     ],
   },
   js.configs.recommended,

@@ -9,7 +9,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "green",
-      "buildings": [{ "type": "mine_t1" }, { "type": "radar" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "radar" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "home_red": {
@@ -17,7 +17,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "red",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "drift": { "position": { "x": 0, "y": -210 }, "kind": "asteroid", "terrain": "asteroid_field" },

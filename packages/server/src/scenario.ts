@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import {
   armyModule,
+  arsenalSyncModule,
   artilleryModule,
   captureOnArrivalModule,
   combatModule,
@@ -36,8 +37,9 @@ import {
 } from '@void/shared-core';
 import type { ActionGate } from '@void/action-layer';
 import { MatchRoom, type ActionReceipt, type RoomObservation } from './matchRoom';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import type { ArsenalStore, MatchSnapshot, StoredReceipt } from './store';
 import { validateStarterArsenal, type StarterArsenalTemplate } from './arsenal';
+import { validateDropTables, type DropTables } from './dropRoller';
 
 /**
  * A runnable dev match on the *real* simulation core — the smallest faithful
@@ -64,6 +66,18 @@ export function loadStarterArsenal(data: GameData): StarterArsenalTemplate[] {
   const issues = validateStarterArsenal(templates, data);
   if (issues.length > 0) throw new Error(`E_INVALID_STARTER_ARSENAL: ${issues.join('; ')}`);
   return templates;
+}
+
+/** The shipped drop tables (ARS-4), validated against the shipped catalogs at boot —
+ *  a pool line naming content that does not ship, or a malformed chance/weight,
+ *  refuses to start (fail-secure; balancing the loop is a JSON edit). */
+export function loadDropTables(data: GameData): DropTables {
+  const tables = JSON.parse(
+    readFileSync(new URL('../../../data/dropTables.json', import.meta.url), 'utf8'),
+  ) as DropTables;
+  const issues = validateDropTables(tables, data);
+  if (issues.length > 0) throw new Error(`E_INVALID_DROP_TABLES: ${issues.join('; ')}`);
+  return tables;
 }
 
 /** The AvA-eligible map pool (AVA-5/7): every validated map in `data/maps` tagged
@@ -96,6 +110,7 @@ export const DEV_MODULES: GameModule[] = [
   interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture of undefended neutral sectors (after combat)
   constructionModule,
+  arsenalSyncModule, // LARS-1: server-driver refresh of live build-catalog ownership (bypasses gate)
   stationModule, // deploy void stations on empty nodes (then build radar/fort there)
   technologyModule,
   scientistModule, // per-player research leader: +slot via research.slots + has_scientist gates
@@ -143,6 +158,8 @@ export interface DevMatchOptions {
   /** Player-action deny-list (see `MatchRoom.denyPlayerActions`) — e.g. an AvA room
    *  refuses `diplomacy.declare` because the orchestrator owns the stances (AVA-8). */
   denyPlayerActions?: (type: string) => string | null | undefined;
+  /** LARS-1 live ownership read (see `MatchRoom.arsenalStore`). */
+  arsenalStore?: ArsenalStore;
 }
 
 function player(id: string, name: string, faction: string): Player {
@@ -221,7 +238,12 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
       id.charAt(0).toUpperCase() + id.slice(1),
       DEV_FACTIONS[i % DEV_FACTIONS.length] ?? 'vanguard',
     );
-    planets[`home_${id}`] = planet(`home_${id}`, id, x, y, ['nexus'], 'terran');
+    const home = planet(`home_${id}`, id, x, y, ['nexus'], 'terran');
+    // A starting yard — space-domain hulls need a standing shipyard/spaceport to
+    // build at all (enablesShipConstruction); without one, turn-1 fleet-building
+    // would be impossible in every dev/test match.
+    home.buildings = [{ type: 'spaceport', level: 1, hp: 25 }];
+    planets[`home_${id}`] = home;
     fleets[`${id}_1`] = fleet(`${id}_1`, id, `home_${id}`, [
       ['cruiser', 2],
       ['scout_drone', 1],
@@ -245,5 +267,6 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
     actionRateWindowMs: options.actionRateWindowMs,
     ...(options.denyPlayerActions ? { denyPlayerActions: options.denyPlayerActions } : {}),
     ...(options.config ? { config: options.config } : {}),
+    ...(options.arsenalStore ? { arsenalStore: options.arsenalStore } : {}),
   });
 }

@@ -18,7 +18,9 @@ const data: GameData = parseGameData({
     },
   },
   factions: {},
-  buildings: {},
+  buildings: {
+    shipyard: { name: 'Shipyard', cost: {}, buildTimeHours: 0, hp: 20, enablesShipConstruction: true },
+  },
   events: {},
   modules: {
     targeting: { name: 'T', slot: 'weapon', tag: 'vertical', effects: { stats: { attack: 4 } }, cost: { metal: 60 } },
@@ -31,7 +33,15 @@ const ctx = (now: number): Context => ({ now, data });
 function world(metal = 5000): GameState {
   const s = createInitialState({ seed: 'ld', version: { data: '0.1.0', manifest: '1' } });
   const p1: Player = { id: 'p1', name: 'p1', faction: 'x', status: 'active', resources: { metal } };
-  const A: Planet = { id: 'A', owner: 'p1', position: { x: 0, y: 0 }, resources: {}, buildings: [], garrison: [], traits: [] };
+  const A: Planet = {
+    id: 'A',
+    owner: 'p1',
+    position: { x: 0, y: 0 },
+    resources: {},
+    buildings: [{ type: 'shipyard', level: 1, hp: 20 }],
+    garrison: [],
+    traits: [],
+  };
   return { ...s, players: { p1 }, planets: { A } };
 }
 const build = (modules?: string[], count = 1, seq = 1): Action => ({

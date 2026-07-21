@@ -1,11 +1,11 @@
 import type { ActionGate } from '@void/action-layer';
-import type { GameData } from '@void/shared-core';
+import type { DomainEvent, GameData, PlayerReward } from '@void/shared-core';
 import { createDevMatch } from './scenario';
 import { startClockDriver, type ClockDriverHandle } from './clockDriver';
 import { snapshotOf, type Stores } from './persistence';
 import type { LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
-import type { MatchSnapshot, StoredReceipt } from './store';
+import type { ArsenalStore, MatchSnapshot, StoredReceipt } from './store';
 
 /**
  * The match-loading wiring `main.ts` hands to the LazyRoomRegistry, extracted
@@ -27,14 +27,22 @@ export interface MatchLoaderDeps {
    *  refused at the wire (the orchestrator owns the stances) and the match end
    *  is handed to the settlement. `null` ⇒ an ordinary match, no extras. */
   matchExtras?: (matchId: string) => Promise<MatchExtras | null>;
+  /** LARS-1 live ownership read (see `MatchRoom.arsenalStore`) — shared by every
+   *  loaded room (a live re-read is keyed per-account, not per-room). */
+  arsenalStore?: ArsenalStore;
 }
 
 /** Per-match wiring extras (see {@link MatchLoaderDeps.matchExtras}). */
 export interface MatchExtras {
   /** Wire-level deny rule for player-submitted action types (server drivers pass). */
   denyPlayerActions?: (type: string) => string | null;
-  /** Called once per observed room `end` (the room fires it on the terminal commit). */
-  onEnd?: (winner: string | null) => void;
+  /** Called once per observed room `end` (the room fires it on the terminal commit).
+   *  `rewards` is the core's session-end table (SES-2: place/xp per seated player) —
+   *  the ARS-4 drop roller keys its per-place roll off it. */
+  onEnd?: (winner: string | null, rewards?: Record<string, PlayerReward>) => void;
+  /** Called per observed domain-event batch (the raw pre-fog server-side stream, M1)
+   *  — the ARS-4 salvage counter reads `battle.resolved`/`unit.died` from it. */
+  onEvents?: (events: DomainEvent[]) => void;
 }
 
 /**
@@ -64,7 +72,8 @@ export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => P
     // hands a terminal `end` to the extras hook (the AvA settlement path).
     const observe = (event: RoomObservation): void => {
       if (event.kind === 'action') driver?.reschedule();
-      if (event.kind === 'end') extras?.onEnd?.(event.winner);
+      if (event.kind === 'end') extras?.onEnd?.(event.winner, event.rewards);
+      if (event.kind === 'events') extras?.onEvents?.(event.events);
     };
 
     const room = createDevMatch(data, {
@@ -77,6 +86,7 @@ export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => P
       initialSeq: snap.seq,
       gate: deps.gateFactory?.(),
       ...(extras?.denyPlayerActions ? { denyPlayerActions: extras.denyPlayerActions } : {}),
+      ...(deps.arsenalStore ? { arsenalStore: deps.arsenalStore } : {}),
     });
 
     // The 24/7 heartbeat while this match is live: fire due scheduled events with no

@@ -30,6 +30,13 @@ const data: GameData = parseGameData({
   factions: {},
   buildings: {
     mine: { name: 'Mine', cost: { metal: 50 }, buildTimeHours: 4, produces: { metal: 10 } },
+    shipyard: {
+      name: 'Shipyard',
+      cost: { metal: 100 },
+      buildTimeHours: 4,
+      hp: 20,
+      enablesShipConstruction: true,
+    },
     fort: {
       name: 'Fort',
       cost: { metal: 20, credits: 5 },
@@ -275,7 +282,10 @@ describe('construction module — cancel/resume fail-secure validation', () => {
 describe('construction module — cancel/resume for units (no capacity concept)', () => {
   it('cancels a unit order for a partial refund and resumes it to completion', () => {
     const kernel = createKernel([constructionModule]);
-    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
+    const st = stateWith({
+      players: [player('p1', { metal: 100 })],
+      planets: [planet('A', 'p1', [{ type: 'shipyard', level: 1, hp: 20 }])],
+    });
     const ordered = okApply(kernel.applyAction(st, build('cruiser', 2, 'A', 'p1'), ctx(0))); // −20, 2h
     const seq = activeSeq(ordered.state);
     const paused = okApply(kernel.applyAction(ordered.state, cancel(seq), ctx(HOUR))); // 50%

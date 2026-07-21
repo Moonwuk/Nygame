@@ -25,8 +25,11 @@ on:
       - '.github/workflows/android.yml'
 
 # contents: write lets the build publish the APKs to the rolling releases.
+# id-token: write lets cosign sign-blob authenticate keylessly via GitHub's OIDC
+# token (Sigstore Fulcio/Rekor) — no managed signing key to leak/rotate (SEC-7).
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-apk:
@@ -174,12 +177,44 @@ jobs:
             exit 1
           fi
 
+      # SLSA-style build provenance (SEC-7): a keyless cosign signature over the exact
+      # APK bytes, tying them to this workflow run + commit (Fulcio cert) with a public
+      # Rekor transparency-log entry. Verify with:
+      #   cosign verify-blob app-debug.apk --signature app-debug.apk.sig \
+      #     --certificate app-debug.apk.cert \
+      #     --certificate-identity-regexp 'https://github.com/Moonwuk/MoonGame/.*' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      # cosign runs as a pinned container (same pattern as the scanners in
+      # security.yml), NOT the `actions/attest-build-provenance` Action — that Action
+      # isn't SHA-pinnable from this dev environment (outside GitHub-MCP's repo scope),
+      # while ghcr.io's registry API is directly reachable and gives a real, verified
+      # digest. Best-effort (continue-on-error): a Sigstore hiccup shouldn't block
+      # shipping an APK update to players.
+      - name: Sign APK build provenance with cosign (SEC-7, keyless)
+        continue-on-error: true
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          APK=mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          docker run --rm \
+            -e COSIGN_EXPERIMENTAL \
+            -e ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -e ACTIONS_ID_TOKEN_REQUEST_URL \
+            -v "$PWD:/work" -w /work \
+            ghcr.io/sigstore/cosign/cosign@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31 \
+            sign-blob --yes "$APK" \
+            --output-signature "$APK.sig" \
+            --output-certificate "$APK.cert"
+
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          path: |
+            mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            mobile/android/app/build/outputs/apk/debug/app-debug.apk.sig
+            mobile/android/app/build/outputs/apk/debug/app-debug.apk.cert
+          if-no-files-found: warn
 
       # A stable, shareable download link per lane: keep one rolling prerelease per tag
       # ("alpha" = dev client, "player" = player client) whose asset URL never changes,
@@ -191,6 +226,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "$ASSET"
+          # Provenance sig/cert are best-effort (SEC-7 cosign step above) — attach
+          # them to the release when present, skip quietly when the sign step failed.
+          RELEASE_ASSETS=("$ASSET")
+          if [ -f mobile/android/app/build/outputs/apk/debug/app-debug.apk.sig ]; then
+            cp mobile/android/app/build/outputs/apk/debug/app-debug.apk.sig "$ASSET.sig"
+            cp mobile/android/app/build/outputs/apk/debug/app-debug.apk.cert "$ASSET.cert"
+            RELEASE_ASSETS+=("$ASSET.sig" "$ASSET.cert")
+          fi
           {
             if [ "$PROFILE" = "player" ]; then
               echo "Rolling player build — the latest PLAYER-client APK built from main (${VOID_SHA})."
@@ -216,9 +259,16 @@ jobs:
             echo
             echo "Debug-signed (testing only, not Play-Store ready). For multiplayer, point the"
             echo "connect screen at a host running pnpm dev:proto-server (see docs/multiplayer.md)."
+            if [ "${#RELEASE_ASSETS[@]}" -gt 1 ]; then
+              echo
+              echo "Build provenance (SEC-7): verify these exact bytes came from this repo's CI —"
+              echo "  cosign verify-blob $ASSET --signature $ASSET.sig --certificate $ASSET.cert \\"
+              echo "    --certificate-identity-regexp 'https://github.com/Moonwuk/MoonGame/.*' \\"
+              echo "    --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            fi
           } > release-notes.md
           gh release delete "$RELEASE_TAG" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$RELEASE_TAG" "$ASSET" \
+          gh release create "$RELEASE_TAG" "${RELEASE_ASSETS[@]}" \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "$RELEASE_TITLE" \

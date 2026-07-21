@@ -1,0 +1,16 @@
+rules:
+  - id: no-sql-string-interpolation
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      SQL injection (SD-1.3): interpolating a value into a query template literal.
+      Always parameterize ($1, $2, ... — see packages/server/src/store/postgres.ts)
+      instead of splicing values into the query string.
+    # AST `pattern:` can't see through TS generic call type args (`.query<Row>(...)`,
+    # used everywhere reads happen) — regex on the call+template text instead.
+    pattern-regex: '\.query(?:<[^>]*>)?\(\s*`[^`]*\$\{'
+    paths:
+      include:
+        - packages
+      exclude:
+        - "*.test.ts"

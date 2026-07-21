@@ -14,7 +14,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_a1",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "home_a2": {
@@ -22,7 +22,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_a2",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "home_b1": {
@@ -30,7 +30,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_b1",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "home_b2": {
@@ -38,7 +38,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_b2",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     }
   },

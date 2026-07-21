@@ -30,6 +30,7 @@ import {
   sectorModule,
   planetTypeModule,
   constructionModule,
+  arsenalSyncModule,
   armyModule,
   victoryModule,
   technologyModule,
@@ -404,7 +405,7 @@ export const data: GameData = parseGameData({
       faction: 'blue',
       stats: { attack: 5, defense: 4, speed: 64, hp: 12, cargoCapacity: 1 },
       signature: 1, // quiet recon hull
-      radarRange: 210, // projects fleet radar — read by both the core fog and the prototype view
+      radarRange: 105, // projects fleet radar — read by both the core fog and the prototype view (плейтест 2026-07-18: −50%)
       cost: { metal: 20 },
       buildTimeHours: 1,
       upkeep: { credits: 1 },
@@ -711,6 +712,18 @@ export const data: GameData = parseGameData({
       ],
     },
     barracks: { name: 'Barracks', cost: { metal: 70 }, buildTimeHours: 3, hp: 25, scoreValue: 2 },
+    // spaceport — the yard a space-domain hull needs to be laid down at all
+    // (construction.ts `hasShipyard`/`enablesShipConstruction`); every homeworld
+    // starts with one (see `newGame`) so turn-1 fleet-building always works.
+    spaceport: {
+      name: 'Spaceport',
+      cost: { metal: 200, credits: 80 },
+      buildTimeHours: 5,
+      hp: 25,
+      shipRepair: 0.05,
+      enablesShipConstruction: true,
+      scoreValue: 4,
+    },
     // radar array — projects a detection radius (in jumps) that grows with its
     // level; enemy fleets inside it show up as coarse signatures (not identified).
     radar: {
@@ -2014,6 +2027,10 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
       { type: 'radar', level: 1, hp: hpOfLevel('radar', 1) },
       // Anti-ship defence is a building now: an orbital-AA emplacement over the homeworld.
       { type: 'orbital_aa', level: 1, hp: hpOfLevel('orbital_aa', 1) },
+      // A starting yard — space-domain hulls need a standing shipyard/spaceport to
+      // build at all (enablesShipConstruction); without one, turn-1 fleet-building
+      // would be impossible.
+      { type: 'spaceport', level: 1, hp: hpOfLevel('spaceport', 1) },
     ];
     // Ground defence is what holds a world against capture (an AA battery bleeds a fleet
     // but can't stop a landing — only ground troops do). Seed a starting infantry garrison
@@ -3223,6 +3240,7 @@ export const MODULES: GameModule[] = [
   interceptModule, // schedules lane-crossing meetings (resolved by combat)
   captureOnArrivalModule, // walk-in capture now a kernel rule (was client-side seizeSector)
   constructionModule,
+  arsenalSyncModule, // LARS-1: server-driver refresh of live build-catalog ownership (bypasses gate)
   technologyModule, // session research: branch/day-gated techs → effect bonuses + content unlocks
   stewardModule, // «Хранитель»: delegate the seat to the AI while you sleep (gated by the Steward tech)
   armyModule,

@@ -144,3 +144,27 @@ describe('loadout editor — build resolution', () => {
     expect(err(resolveLoadoutBuild(poor, 'planetA'))).toBe('E_INSUFFICIENT');
   });
 });
+
+describe('loadout editor — arsenal ownership filter (ARS-5)', () => {
+  it('no filter passed ⇒ unrestricted palette (graceful degradation, no snapshot)', () => {
+    const m = ok(createLoadoutEditor('cruiser', data, rich));
+    expect(m.palette).toHaveLength(4);
+    expect(m.ownedModules).toBeUndefined();
+  });
+
+  it('narrows the palette to owned defIds — unowned modules are absent, not just disabled', () => {
+    const m = ok(createLoadoutEditor('cruiser', data, rich, { ownedModules: new Set(['targeting', 'cargo']) }));
+    expect(m.palette.map((p) => p.id).sort()).toEqual(['cargo', 'targeting']);
+  });
+
+  it('the filter survives the reducer round-trip', () => {
+    const m0 = ok(createLoadoutEditor('cruiser', data, rich, { ownedModules: new Set(['targeting', 'shield']) }));
+    const m1 = ok(applyLoadoutAction({ kind: 'equip', moduleId: 'targeting' }, m0, data, rich));
+    expect(m1.palette.map((p) => p.id).sort()).toEqual(['shield', 'targeting']);
+  });
+
+  it('equipping an unowned module is rejected even off-palette (defense in depth; the server gate is authoritative)', () => {
+    const m0 = ok(createLoadoutEditor('cruiser', data, rich, { ownedModules: new Set(['targeting']) }));
+    expect(err(applyLoadoutAction({ kind: 'equip', moduleId: 'shield' }, m0, data, rich))).toBe('E_NOT_OWNED');
+  });
+});

@@ -229,6 +229,17 @@ export class CorpService {
     return { ok: true, audit: await this.store.auditOf(corpId) };
   }
 
+  /** Accounts flagged ready (AVA-3 consent) in this corp — visible to head/officers
+   *  only, since it's the exact eligibility set `AvaService.setRoster` curates from. */
+  async readyPlayers(
+    who: CorpActor,
+    corpId: string,
+  ): Promise<{ ok: true; accountIds: string[] } | CorpFail> {
+    const gate = await this.officerGate(who, corpId);
+    if (gate) return gate;
+    return { ok: true, accountIds: await this.store.readyPlayersOf(corpId) };
+  }
+
   private async memberIn(who: CorpActor, corpId: string): Promise<CorpMembership | null> {
     const row = await this.store.membershipOf(who.accountId);
     return row && row.corpId === corpId ? row : null;

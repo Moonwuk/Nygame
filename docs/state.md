@@ -474,7 +474,18 @@ INSTEAD-of-фокус — opportunity-cost (лидер-«+слот» branchless)
   `construction.complete` (`buildTimeHours`×timeScale). Одно здание каждого типа
   на планету; юниты идут в гарнизон. Коды: `E_BAD_PAYLOAD, E_NO_PLANET,
 E_FORBIDDEN, E_UNKNOWN_BUILDING/UNIT, E_ALREADY_BUILT, E_ALREADY_QUEUED,
-E_NO_BUILDING, E_MAX_LEVEL, E_INSUFFICIENT, E_BOMBARDED, E_WRONG_SECTOR`.
+E_NO_BUILDING, E_MAX_LEVEL, E_INSUFFICIENT, E_BOMBARDED, E_WRONG_SECTOR,
+E_NO_SHIPYARD`.
+- **Верфь-гейт на постройку кораблей (bugfix, `enablesShipConstruction`):**
+  `unit.build` для юнита с `domain: 'space'` требует хотя бы одно ЖИВОЕ (`hp>0`)
+  здание с флагом `BuildingDef.enablesShipConstruction` (`shipyard`/`spaceport`
+  в `data/buildings.json`) на планете — иначе `E_NO_SHIPYARD`; наземные юниты
+  (`domain: 'ground'`) гейт не проверяет. Проверяется ПОСЛЕ тех-лока
+  (`requireUnlocked`), так что заблокированный технологией юнит всё ещё даёт
+  `E_TECH_LOCKED`, не маскируется отсутствием верфи. Каждый домашний мир
+  (`prototype/src/game.ts newGame`, `packages/server/src/scenario.ts
+  createDevMatch`, `data/maps/*.json`) стартует с `spaceport`, иначе постройка
+  флота с хода 1 была бы невозможна.
 - **Ростер по типу провинции (province-centric):** `sectorKinds[kind].allowedBuildings`
   — единый источник «что здесь строится», редактируется в одном месте. `building.construct`
   проверяет `building ∈ allowedBuildings`, иначе `E_WRONG_SECTOR`. Отсутствует/`undefined`

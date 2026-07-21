@@ -1,0 +1,17 @@
+rules:
+  - id: core-no-date-now
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Determinism (CLAUDE.md invariant #1): shared-core must never read the wall
+      clock directly — take time via Context.now, never Date.now() or `new Date()`.
+    patterns:
+      - pattern-either:
+          - pattern: Date.now(...)
+          - pattern: new Date(...)
+          - pattern: new Date()
+    paths:
+      include:
+        - "**/packages/shared-core/src"
+      exclude:
+        - "*.test.ts"

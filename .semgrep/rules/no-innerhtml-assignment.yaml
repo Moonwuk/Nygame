@@ -1,0 +1,21 @@
+rules:
+  - id: no-innerhtml-assignment
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Potential XSS sink (SD-1.2): assigning to .innerHTML skips escaping. Build the
+      string through the local esc() helper (already used at every other call site)
+      or prefer textContent.
+    patterns:
+      - pattern: $EL.innerHTML = $X
+    paths:
+      include:
+        - packages
+      exclude:
+        - "*.test.ts"
+        - "*.test.tsx"
+        # welcomeScreen render: every dynamic field is run through esc() except two
+        # static-config values (provider id, legal id) — not user input. GitHub code
+        # scanning doesn't reliably honor inline `// nosemgrep` SARIF suppressions on
+        # new-alert checks, so this is a path exclusion instead (SEC-2 follow-up).
+        - "**/packages/client/src/main.ts"

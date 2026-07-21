@@ -277,4 +277,16 @@ describe('CORP-0 · read models and audit', () => {
       expect(await service.auditLog(actor, corpId)).toEqual({ ok: false, code: 'E_FORBIDDEN' });
     }
   });
+
+  it('readyPlayers exposes the flagged pool to head/officers only (AVA-6 eligibility)', async () => {
+    const { service, store, corpId } = await corpFixture();
+    await store.setPlayerReady(MEMBER.accountId, corpId, 1);
+    await store.setPlayerReady(OFFICER.accountId, corpId, 2);
+    const seen = await service.readyPlayers(OFFICER, corpId);
+    if (!seen.ok) throw new Error('expected ok');
+    expect(new Set(seen.accountIds)).toEqual(new Set([MEMBER.accountId, OFFICER.accountId]));
+    for (const actor of [MEMBER, RECRUIT, OUTSIDER]) {
+      expect(await service.readyPlayers(actor, corpId)).toEqual({ ok: false, code: 'E_FORBIDDEN' });
+    }
+  });
 });

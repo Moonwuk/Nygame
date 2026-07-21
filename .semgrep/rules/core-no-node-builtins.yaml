@@ -1,0 +1,24 @@
+rules:
+  - id: core-no-node-builtins
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      shared-core stays free of Node built-ins outside tests (CLAUDE.md: "Don't
+      import Node built-ins from non-test shared-core/src files" — the tsconfig
+      `types: ["node"]` is a typechecking convenience only, not license to use them).
+    patterns:
+      - pattern-either:
+          - pattern: import $X from "$MOD"
+          - pattern: import { $...A } from "$MOD"
+          - pattern: import * as $X from "$MOD"
+          - pattern: import "$MOD"
+          - pattern: require("$MOD")
+          - pattern: import("$MOD")
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?(fs|path|os|child_process|crypto|http|https|net|dns|cluster|worker_threads|module|vm|stream|tls|zlib|readline|repl|perf_hooks|inspector|v8)(/.*)?$
+    paths:
+      include:
+        - "**/packages/shared-core/src"
+      exclude:
+        - "*.test.ts"

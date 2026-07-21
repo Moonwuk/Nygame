@@ -14,6 +14,8 @@ import { slidingWindowIpLimiter } from './rateLimit';
  *   GET  /corps/me                 my corp + membership (nulls when corpless)
  *   GET  /corps/:id                corp detail + ranked member list
  *   GET  /corps/:id/audit          audit trail (head/officer only)
+ *   GET  /corps/:id/ready-players   accountIds flagged ready — AVA-6 setRoster
+ *        {accountIds}              eligibility set (head/officer only)
  *   POST /corps        {name}      create — the founder becomes the head
  *   POST /corps/:id/:intent        apply·cancel·accept·decline·kick·role·transfer·
  *        {target?, role?}          leave·disband (see corpService.ts)
@@ -119,6 +121,15 @@ export function registerCorpApi(app: FastifyInstance, deps: CorpApiDeps): void {
     const result = await service.auditLog(who, id);
     if (!result.ok) return failed(reply, result.code);
     return { audit: result.audit };
+  });
+
+  app.get('/corps/:id/ready-players', async (request, reply) => {
+    const who = await identified(request, reply);
+    if (!who) return { error: 'E_AUTH' as const };
+    const { id } = request.params as { id: string };
+    const result = await service.readyPlayers(who, id);
+    if (!result.ok) return failed(reply, result.code);
+    return { accountIds: result.accountIds };
   });
 
   app.post('/corps', async (request, reply) => {

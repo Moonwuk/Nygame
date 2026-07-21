@@ -17,10 +17,13 @@ function identifyByHeader(request: FastifyRequest): Promise<Identity | null> {
   return Promise.resolve({ accountId: `acc-${login}`, login });
 }
 
-function appWith(overrides: Partial<CorpApiDeps> = {}): FastifyInstance {
+function appWith(
+  overrides: Partial<CorpApiDeps> = {},
+  store: MemoryCorpStore = new MemoryCorpStore(),
+): FastifyInstance {
   const app = Fastify();
   registerCorpApi(app, {
-    service: new CorpService({ store: new MemoryCorpStore(), now: () => 7 }),
+    service: new CorpService({ store, now: () => 7 }),
     identify: identifyByHeader,
     ...overrides,
   });
@@ -48,6 +51,7 @@ describe('CORP-0 · corp API', () => {
       { method: 'GET' as const, url: '/corps/me' },
       { method: 'GET' as const, url: '/corps/some-id' },
       { method: 'GET' as const, url: '/corps/some-id/audit' },
+      { method: 'GET' as const, url: '/corps/some-id/ready-players' },
       { method: 'POST' as const, url: '/corps', payload: { name: 'Ghost Corp' } },
       { method: 'POST' as const, url: '/corps/some-id/apply' },
     ];
@@ -211,6 +215,37 @@ describe('CORP-0 · corp API', () => {
     const { audit } = res.json() as { audit: Array<{ action: string; actor: string }> };
     expect(audit.map((e) => e.action)).toEqual(['decline', 'create']); // newest first
     expect(audit[0]).toMatchObject({ actor: 'acc-alice' });
+    await app.close();
+  });
+
+  it('ready-players (AVA-6 eligibility) is readable by head/officers only', async () => {
+    const store = new MemoryCorpStore();
+    const app = appWith({}, store);
+    const corpId = await createCorp(app, 'alice', 'Void Miners');
+    await app.inject({ method: 'POST', url: `/corps/${corpId}/apply`, headers: as('bob') });
+    await app.inject({
+      method: 'POST',
+      url: `/corps/${corpId}/accept`,
+      headers: as('alice'),
+      payload: { target: 'acc-bob' },
+    });
+    await store.setPlayerReady('acc-bob', corpId, 1);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/corps/${corpId}/ready-players`,
+      headers: as('alice'),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ accountIds: ['acc-bob'] });
+
+    const forbidden = await app.inject({
+      method: 'GET',
+      url: `/corps/${corpId}/ready-players`,
+      headers: as('bob'), // a plain member, not head/officer
+    });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json()).toEqual({ error: 'E_FORBIDDEN' });
     await app.close();
   });
 

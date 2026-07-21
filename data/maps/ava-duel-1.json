@@ -10,7 +10,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_a",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "home_b": {
@@ -18,7 +18,7 @@
       "kind": "planet",
       "planetType": "terran",
       "owner": "slot_b",
-      "buildings": [{ "type": "mine_t1" }],
+      "buildings": [{ "type": "mine_t1" }, { "type": "spaceport" }],
       "garrison": [{ "unit": "militia", "count": 3 }]
     },
     "drift": { "position": { "x": 0, "y": -210 }, "kind": "asteroid", "terrain": "asteroid_field" },

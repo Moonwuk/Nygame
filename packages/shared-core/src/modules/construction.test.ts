@@ -32,10 +32,24 @@ const data: GameData = parseGameData({
       cost: { metal: 3 },
       buildTimeHours: 0, // instant build
     },
+    militia: {
+      faction: 'x',
+      domain: 'ground',
+      stats: { attack: 1, defense: 2, speed: 0, hp: 8 },
+      cost: { metal: 5 },
+      buildTimeHours: 0,
+    },
   },
   factions: {},
   buildings: {
     mine: { name: 'Mine', cost: { metal: 50 }, buildTimeHours: 4, produces: { metal: 10 } },
+    shipyard: {
+      name: 'Shipyard',
+      cost: { metal: 100 },
+      buildTimeHours: 4,
+      hp: 20,
+      enablesShipConstruction: true,
+    },
     fort: {
       name: 'Fort',
       cost: { metal: 20, credits: 5 },
@@ -61,7 +75,7 @@ function planet(id: string, owner: string | null, buildings: string[] = []): Pla
     owner,
     position: { x: 0, y: 0 },
     resources: {},
-    buildings: buildings.map((type) => ({ type, level: 1, hp: 0 })),
+    buildings: buildings.map((type) => ({ type, level: 1, hp: 100 })),
     garrison: [],
     traits: [],
   };
@@ -211,7 +225,10 @@ describe('construction module — buildings paid from the treasury', () => {
 describe('construction module — units paid from the treasury', () => {
   it('charges cost × count and reinforces the garrison on completion', () => {
     const kernel = createKernel([constructionModule]);
-    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
+    const st = stateWith({
+      players: [player('p1', { metal: 100 })],
+      planets: [planet('A', 'p1', ['shipyard'])],
+    });
 
     const ordered = okApply(kernel.applyAction(st, build('cruiser', 3), ctx(0)));
     expect(ordered.state.players.p1?.resources.metal).toBe(70); // 100 − 3 × 10
@@ -225,7 +242,7 @@ describe('construction module — units paid from the treasury', () => {
 
   it('defaults count to 1 and merges into an existing garrison stack', () => {
     const kernel = createKernel([constructionModule]);
-    const a = planet('A', 'p1');
+    const a = planet('A', 'p1', ['shipyard']);
     a.garrison = [{ unit: 'drone', count: 2 }];
     const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [a] });
 
@@ -233,6 +250,43 @@ describe('construction module — units paid from the treasury', () => {
     expect(ordered.state.players.p1?.resources.metal).toBe(97); // −3
     const done = okAdvance(kernel.advanceTo(ordered.state, ctx(0))); // drone builds instantly
     expect(done.state.planets.A?.garrison).toEqual([{ unit: 'drone', count: 3 }]); // 2 + 1
+  });
+});
+
+describe('construction module — a space-domain hull needs a standing shipyard', () => {
+  it('rejects unit.build for a space-domain unit with no shipyard/spaceport on the planet', () => {
+    const kernel = createKernel([constructionModule]);
+    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
+    const r = kernel.applyAction(st, build('cruiser'), ctx(0));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.code).toBe('E_NO_SHIPYARD');
+  });
+
+  it('a destroyed (hp<=0) shipyard does not count as standing', () => {
+    const kernel = createKernel([constructionModule]);
+    const a = planet('A', 'p1', ['shipyard']);
+    a.buildings[0]!.hp = 0;
+    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [a] });
+    const r = kernel.applyAction(st, build('cruiser'), ctx(0));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.code).toBe('E_NO_SHIPYARD');
+  });
+
+  it('ground-domain units never need a shipyard', () => {
+    const kernel = createKernel([constructionModule]);
+    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
+    const r = okApply(kernel.applyAction(st, build('militia'), ctx(0)));
+    expect(r.ok).toBe(true);
+  });
+
+  it('a shipyard unlocks every space-domain unit on that planet, not just the one that built it', () => {
+    const kernel = createKernel([constructionModule]);
+    const st = stateWith({
+      players: [player('p1', { metal: 100 })],
+      planets: [planet('A', 'p1', ['shipyard'])],
+    });
+    expect(okApply(kernel.applyAction(st, build('cruiser'), ctx(0))).ok).toBe(true);
+    expect(okApply(kernel.applyAction(st, build('drone'), ctx(0))).ok).toBe(true);
   });
 });
 
@@ -291,7 +345,10 @@ describe('construction module — fail-secure validation (OWASP A01/A10)', () =>
 describe('construction module — real-time integrity', () => {
   it('forfeits the reinforcement if the planet is captured before completion', () => {
     const kernel = createKernel([constructionModule]);
-    const st = stateWith({ players: [player('p1', { metal: 100 })], planets: [planet('A', 'p1')] });
+    const st = stateWith({
+      players: [player('p1', { metal: 100 })],
+      planets: [planet('A', 'p1', ['shipyard'])],
+    });
     const ordered = okApply(kernel.applyAction(st, build('cruiser', 2), ctx(0)));
     expect(ordered.state.players.p1?.resources.metal).toBe(80); // charged
 

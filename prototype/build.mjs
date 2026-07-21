@@ -428,6 +428,22 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .dp-spy:hover{border-color:var(--amber);background:rgba(255,180,58,.1);}
 .dp-intel{padding:2px 10px 9px 39px;font-size:11px;color:var(--cyan);}
 .dp-intel b{color:#eafffb;}
+/* SPY-UX: вкладка «Шпионаж» — активные окна интела, операции, сессионный журнал */
+.in-hint{margin:2px 0 8px;padding:8px 10px;border:1px solid var(--line-hi);border-radius:8px;
+  font-size:10px;color:var(--dim);line-height:1.55;}
+.in-sec{margin:12px 0 6px;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan-dim);}
+.in-row{display:flex;align-items:center;gap:8px;padding:7px 9px;margin-bottom:6px;
+  border:1px solid var(--line);border-radius:8px;background:rgba(53,214,230,.04);font-size:12px;color:var(--ink);}
+.in-row b{color:#eafffb;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.in-row[data-iw]{cursor:pointer;}
+.in-row[data-iw]:active{background:rgba(53,214,230,.12);}
+.in-row .in-k{flex:0 0 auto;color:var(--cyan);}
+.in-row .in-t{margin-left:auto;flex:0 0 auto;color:var(--amber);font-size:11px;white-space:nowrap;}
+.in-row .in-go{flex:0 0 auto;color:var(--cyan-dim);}
+.in-row .dp-spy{margin-left:auto;}
+.in-row .dp-spy + .dp-spy{margin-left:0;}
+.in-empty{padding:6px 2px;font-size:11px;color:var(--dim);}
+.in-log{padding:4px 2px;font-size:10.5px;color:var(--dim);line-height:1.45;border-bottom:1px dashed rgba(29,107,112,.25);}
 .dp-intel em{font-style:normal;color:var(--dim);font-size:9px;}
 .dp-msg{margin-left:auto;padding:6px 11px;border-radius:6px;border:1px solid var(--cyan-dim);
   background:rgba(53,214,230,.1);color:var(--cyan);font-size:13px;cursor:pointer;}
@@ -944,6 +960,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .cn-mod.locked{opacity:.42;cursor:not-allowed;background:rgba(255,255,255,.015);}
 .cn-mod.locked .cn-mic,.cn-mod.locked .cn-mn{color:var(--dim);}
 .cn-mod.locked .cn-me{color:var(--dim);}
+/* LARS-4: origin tag on a bay/palette card ("fresh from a drop/craft/auction") */
+.cn-mo,.cn-bay .cn-mo{margin-left:6px;padding:1px 6px;border-radius:8px;border:1px solid var(--amber-dim,var(--line-hi));
+  color:var(--amber,var(--cyan));font:600 9px ui-monospace,monospace;letter-spacing:.3px;vertical-align:middle;}
 .cn-note{margin-top:11px;font-size:10.5px;color:var(--dim);line-height:1.5;}
 .cn-note b{color:var(--cyan);}
 /* live stat preview bars (right column) */
@@ -1116,6 +1135,10 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   .rv{flex:none;gap:2px;overflow:visible;}
   #devline .dl-donate{font-size:11px;padding:2px 8px;}
 
+  /* phones: three tabs + ✕ no longer fit beside the window title — the tabs alone
+     identify the window, so the «ДИПЛОМАТИЯ» caption yields its room to them */
+  #diplo .dp-head b{display:none;}
+  #diplo .dp-tab{padding:6px 9px;}
   #side{right:0;left:0;bottom:0;top:auto;width:auto;max-height:50vh;z-index:28;clip-path:none;
     border-left:0;border-right:0;border-top:1px solid var(--cyan);
     padding-bottom:env(safe-area-inset-bottom,0px);}
@@ -1613,6 +1636,15 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 .mp-buy{padding:5px 12px;border:1px solid var(--cyan-dim);border-radius:7px;background:transparent;color:var(--cyan);font:700 11px ui-monospace,monospace;cursor:pointer;}
 .mp-buy:disabled{border-color:var(--line);color:var(--dim);cursor:default;}
 .mp-note{color:var(--dim);font-size:10px;margin:2px 0 0;}
+/* «Арсенал» — the account's persistent collection (hub tab, ARS-5) */
+#hp-arsenal{overflow-y:auto;gap:10px;}
+.ar-filters{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--line);}
+.ar-fchip{padding:3px 9px;border-radius:11px;border:1px solid var(--line);background:transparent;color:var(--dim);
+  font:600 10px ui-monospace,monospace;cursor:pointer;}
+.ar-fchip.on{color:var(--cyan);border-color:var(--cyan-dim);background:rgba(53,214,230,.08);}
+.ar-fsep{width:1px;height:14px;background:var(--line-hi);margin:0 2px;}
+.ar-grid .ar-card{min-height:78px;}
+.ar-meta{color:var(--dim);font-size:9px;letter-spacing:.3px;}
 #hub .hub-nav{flex:0 0 auto;display:flex;border-top:1px solid var(--line-hi);background:rgba(2,9,13,.94);
   padding-bottom:env(safe-area-inset-bottom,0);}
 #hub .hub-tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 2px 8px;cursor:pointer;
@@ -1693,6 +1725,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #corp .cst.st-active{color:var(--red);border-color:var(--red);}
 #corp .cst.st-incoming{color:var(--amber);border-color:var(--amber);}
 #corp .cwmid{color:var(--dim);font-size:11px;margin:6px 0 9px;}
+#corp .cwroster{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 9px;}
+#corp .ctoggle{opacity:.55;}
+#corp .ctoggle.on{opacity:1;background:rgba(53,214,230,.24);}
 #corp .cchat{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
 #corp .cmsg{border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;}
 #corp .cmsg.audit{border-style:dashed;color:var(--dim);}
@@ -2027,12 +2062,13 @@ const page = (js) => `<!doctype html>
       </div>
     </div>
     <div class="hub-panel" id="hp-meta" style="display:none"></div>
+    <div class="hub-panel" id="hp-arsenal" style="display:none"></div>
     <div class="hub-panel" id="hp-rank" style="display:none">
       <div class="hub-empty"><span class="he-ic">▤</span><span data-i18n>Рейтинги — скоро</span><br><span style="font-size:11px;color:var(--cyan-dim)" data-i18n>сезонный рейтинг по местам в матчах</span></div>
     </div>
     <div class="hub-panel" id="hp-ally" style="display:none">
-      <div class="hub-empty"><span class="he-ic">⚑</span><span data-i18n>Альянсы — скоро</span><br><span style="font-size:11px;color:var(--cyan-dim)" data-i18n>корпорации · общие AvA-битвы · влияние</span></div>
-      <button id="ccorp" class="hub-solo" type="button">⬢ <span data-i18n>Кабинет корпорации (макет)</span></button>
+      <div class="hub-empty"><span class="he-ic">⚑</span><span data-i18n>Альянсы</span><br><span style="font-size:11px;color:var(--cyan-dim)" data-i18n>корпорации · общие AvA-битвы · влияние</span></div>
+      <button id="ccorp" class="hub-solo" type="button">⬢ <span data-i18n>Кабинет корпорации</span></button>
     </div>
     <div class="hub-panel" id="hp-more" style="display:none">
       <div class="hub-grid">
@@ -2055,6 +2091,7 @@ const page = (js) => `<!doctype html>
     <button class="hub-tab" data-hub="games" type="button"><span class="hn-ic">▶</span><span data-i18n>Игры</span></button>
     <button class="hub-tab" data-hub="rank" type="button"><span class="hn-ic">▤</span><span data-i18n>Рейтинг</span></button>
     <button class="hub-tab" data-hub="meta" type="button"><span class="hn-ic">★</span><span data-i18n>Прокачка</span></button>
+    <button class="hub-tab" data-hub="arsenal" type="button"><span class="hn-ic">⚔</span><span data-i18n>Арсенал</span></button>
     <button class="hub-tab" data-hub="ally" type="button"><span class="hn-ic">⚑</span><span data-i18n>Альянсы</span></button>
     <button class="hub-tab" data-hub="more" type="button"><span class="hn-ic">≡</span><span data-i18n>Ещё</span></button>
   </nav>

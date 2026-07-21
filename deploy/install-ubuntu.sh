@@ -22,21 +22,22 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Конфигурация
-REPO_URL="https://github.com/Moonwuk/moongame.git"
-REPO_BRANCH="main"
+# Конфигурация (любую переменную можно переопределить окружением: VAR=... ./install-ubuntu.sh)
+REPO_URL="${REPO_URL:-https://github.com/Moonwuk/MoonGame.git}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 INSTALL_DIR="/opt/moongame"
 SERVICE_USER="moongame"
 SERVICE_NAME="moongame"
 DOCKER_COMPOSE_FILE="$INSTALL_DIR/deploy/docker-compose.yml"
 ENV_FILE="$INSTALL_DIR/deploy/server.env"
 
-# Параметры сервера
-INTERNAL_IP="192.168.1.7"
-EXTERNAL_IP="94.190.83.220"
-EXTERNAL_PORT="95367"
-INTERNAL_PORT="8788"
-TIME_SCALE="100"
+# Параметры сервера. INTERNAL_IP определяется автоматически; внешние адрес/порт
+# зависят от роутера/провайдера — задай их окружением, если пробрасываешь наружу.
+INTERNAL_IP="${INTERNAL_IP:-$(hostname -I | awk '{print $1}')}"
+EXTERNAL_IP="${EXTERNAL_IP:-}"
+EXTERNAL_PORT="${EXTERNAL_PORT:-}"
+INTERNAL_PORT="${INTERNAL_PORT:-8788}"
+TIME_SCALE="${TIME_SCALE:-100}"
 POSTGRES_PASSWORD="moongame_dev_$(openssl rand -hex 8)"
 
 # Функции для вывода
@@ -156,9 +157,10 @@ MATCHES=1
 # Пароль PostgreSQL
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 
-# Дополнительные параметры для разработки
-GATE=0
-SEAT_LOCK=0
+# Релизная постура (как в docker-compose): гейт действий + блокировка мест.
+# Для локальной отладки можно временно выставить 0/0 — но не на плейтесте с людьми.
+GATE=1
+SEAT_LOCK=1
 EOF
 
 chown $SERVICE_USER:$SERVICE_USER "$ENV_FILE"
@@ -217,15 +219,15 @@ set -e
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="moongame"
 
-echo "[*] Останавливаем сервер..."
-sudo systemctl stop $SERVICE_NAME
-
 echo "[*] Обновляем код из репозитория..."
 cd $INSTALL_DIR
 git pull origin main
 
-echo "[*] Запускаем сервер..."
-sudo systemctl start $SERVICE_NAME
+echo "[*] Пересобираем образ (сервер пока работает, ~1-3 мин)..."
+docker compose -f "$INSTALL_DIR/deploy/docker-compose.yml" build
+
+echo "[*] Перезапускаем сервер на новом образе..."
+sudo systemctl restart $SERVICE_NAME
 
 echo "[✓] Обновление завершено!"
 echo "[*] Логи: sudo journalctl -u $SERVICE_NAME -f"
@@ -321,7 +323,9 @@ log_success "=========================================="
 echo ""
 echo -e "${BLUE}🎮 Доступ к серверу:${NC}"
 echo "  Локально:  http://$INTERNAL_IP:$INTERNAL_PORT"
-echo "  Снаружи:   http://$EXTERNAL_IP:$EXTERNAL_PORT (требует проксирования)"
+if [ -n "$EXTERNAL_IP" ]; then
+    echo "  Снаружи:   http://$EXTERNAL_IP:${EXTERNAL_PORT:-$INTERNAL_PORT} (требует проксирования)"
+fi
 echo ""
 echo -e "${BLUE}⚙️  Управление:${NC}"
 echo "  Логи:           moongame logs"
@@ -335,7 +339,7 @@ echo "  PostgreSQL Пароль: $POSTGRES_PASSWORD"
 echo "  (сохранен в $ENV_FILE)"
 echo ""
 echo -e "${YELLOW}⚠️  Для проксирования внешнего адреса:${NC}"
-echo "  На роутере или nginx: перенаправь 94.190.83.220:95367 → $INTERNAL_IP:$INTERNAL_PORT"
+echo "  На роутере или nginx: перенаправь внешний порт → $INTERNAL_IP:$INTERNAL_PORT"
 echo ""
 echo -e "${GREEN}✓ Сервер готов!${NC}"
 echo ""

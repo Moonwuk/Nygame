@@ -105,13 +105,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: semgrep — custom rule unit tests (SEC-2)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
+            semgrep --test .semgrep/rules --metrics=off
       - name: semgrep
         id: scan
         run: |
           set +e
           # --error → exit 1 on findings (blocking, SEC-1)
           docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
-            semgrep scan --config=p/typescript --config=p/javascript --config=p/security-audit \
+            semgrep scan --config=p/typescript --config=p/javascript --config=p/security-audit --config=.semgrep/rules \
             --error --sarif --output=semgrep.sarif --metrics=off
           rc=$?
           set -e
