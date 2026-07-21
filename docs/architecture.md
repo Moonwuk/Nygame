@@ -293,8 +293,8 @@ durable-эволюция на мульти-процессе — pg-boss, см. `
 
 Много npm-пакетов (Fastify, BullMQ, ws…) = наш ландшафт риска.
 
-- Lock-файлы зафиксированы в репозитории (package-lock.json)
-- `npm audit` в CI
+- Lock-файлы зафиксированы в репозитории (`pnpm-lock.yaml` + `mobile/package-lock.json`)
+- SCA через **OSV-Scanner** в CI (`npm audit`/`pnpm audit` сняты — npm закрыл audit-эндпоинты)
 - Минимум зависимостей; проверка пакетов перед добавлением
 - Dependabot/Renovate для обновлений безопасности
 - Осторожно с typosquatting (fastfiy вместо fastify)
