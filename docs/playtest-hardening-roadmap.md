@@ -95,11 +95,17 @@ BF-22 coarse/fine-шаги) — точечными фиксами, без сис
 > ~30 строк bash. GHCR вместо build-on-server — деплоится ровно тот образ, что прошёл
 > гейт и trivy-scan.
 
-- **ADEP-0 · Починить текущий update-путь** `[ops]` — S · **первым, ценно сразу**.
-  `install-ubuntu.sh`: `--build` в `update-dev.sh` (сейчас `moongame update`
-  перезапускает СТАРЫЙ образ), `REPO_URL` → `Moonwuk/Nygame`, IP/порт — в переменные;
-  выровнять dev-постуру env (GATE/SEAT_LOCK) с релизной в compose.
-  **Готово:** `moongame update` реально доставляет новый код.
+- **ADEP-0 · Починить текущий update-путь** `[ops]` — S · ✅ (2026-07-21).
+  `install-ubuntu.sh`: генерируемый `update-dev.sh` теперь `pull → docker compose
+  build → restart` (пересборка при живом сервере — минимум даунтайма; раньше
+  `moongame update` перезапускал СТАРЫЙ образ); `REPO_URL` — каноничный
+  `Moonwuk/MoonGame.git` и переопределяем окружением (старый lowercase-URL работал
+  через регистронезависимость GitHub — гигиена, не поломка); IP/порты — env-переменные
+  с автоопределением INTERNAL_IP; генерируемый `server.env` — релизная постура
+  `GATE=1, SEAT_LOCK=1` (как в compose). README-тексты про «10–15 сек без
+  пересборки» заменены честными. ⚠️ На уже установленном сервере владельца новый
+  `update-dev.sh` появится после однократного ручного `git pull` + пересоздания
+  скрипта (или пере-прогона установщика) — сам себя он не обновит.
 - **ADEP-1 · CI публикует образ в GHCR** `[sec]` — M.
   Новый `.github/workflows/deploy.yml`: push в main → build → push
   `ghcr.io/moonwuk/nygame-server:latest` + `:<sha>`; логин через `GITHUB_TOKEN`

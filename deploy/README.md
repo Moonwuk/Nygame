@@ -21,7 +21,7 @@ sudo bash deploy/install-ubuntu.sh
 ```bash
 moongame status      # проверить статус
 moongame logs        # просмотреть логи
-moongame update      # быстрое обновление кода
+moongame update      # обновление кода (pull + пересборка образа)
 ```
 
 ### Вариант 2: Docker Compose вручную (как прежде)
@@ -71,7 +71,7 @@ moongame stop       # остановить
 moongame restart    # перезапустить
 moongame status     # статус сервера
 moongame logs       # просмотреть логи (реальное время)
-moongame update     # быстрое обновление кода (10-15 сек)
+moongame update     # обновление кода: pull + пересборка образа + рестарт (~1-3 мин)
 moongame shell      # shell в директории проекта
 ```
 
