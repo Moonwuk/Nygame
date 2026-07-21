@@ -1312,6 +1312,15 @@ pnpm run prototype   # собрать prototype/dist/void-dominion{,-player}.htm
 их видит). Прототип исключён из ESLint/tsc-скоупа (свой esbuild), но это уже НЕ
 throwaway — это играбельный клиент игроков. Разработка — на фиче-ветке, PR (draft).
 
+Поверх юнитов — **property/fuzz-слой ядра** (fast-check, playtest-hardening FUZZ-1…4,
+SD-7.3 ✅): test-only `shared-core/src/testkit/arbitraries.ts` (генераторы действий по
+каталогу `actionPayloadSchemas` + fixture-вселенная) и три сьюта в гейте —
+`applyAction.property.test.ts` (fail-secure на враждебном мусоре, чистота/детерминизм
+frozen-vs-thawed), `advanceTo.property.test.ts` (спаны, партиционная инвариантность:
+бит-в-бит на дискретном ядре, coarse ≈ fine на полном стеке, модуль-бомба),
+`delta.property.test.ts` (`applyDelta∘diffState = id` + JSON-провод + идемпотентность).
+Падение печатает seed — репро детерминирован.
+
 ## 11. Как возобновить работу
 
 1. Прочитать корневой `CLAUDE.md` (инварианты + рабочие правила), затем этот файл
