@@ -58,12 +58,11 @@ BF-22 coarse/fine-шаги) — точечными фиксами, без сис
   закрыты у провайдера, ACME HTTP-01 не пройдёт; запасной путь: свой домен через
   Cloudflare + cloudflared-туннель (wss уже работает по HTTPS-3.2).
   **Готово:** `ping домен` → IP сервера; 80/443 отвечают.
-- **TLS-2 · Провести защиту в прототипный хост** `[proto]` — S.
-  `netserver.ts:511-528`: передать `allowedOrigins` и `trustProxy` из `configFromEnv`
-  в `createMultiplayerServer` (+ warning как в `main.ts:241`). Без этого TLS-3 не
-  включает Origin-allowlist на реальном образе, а per-IP rate-limit за прокси
-  схлопывается в один bucket.
-  **Готово:** тест: с env `ALLOWED_ORIGINS` upgrade с чужим Origin → 403.
+- **TLS-2 · Провести защиту в прототипный хост** `[proto]` — S · ✅ (2026-07-21).
+  `netserver.ts`: `allowedOrigins` и `trustProxy` (env `TRUST_PROXY=1`) прокинуты в
+  `createMultiplayerServer` + CSWSH-warning как в `main.ts`. Живая проверка на
+  собранном хосте с `ALLOWED_ORIGINS`: чужой Origin → 403, отсутствующий → 403,
+  разрешённый → 101.
 - **TLS-3 · Caddy в compose** `[ops]` — M · 🔒(TLS-1, TLS-2).
   Новый `deploy/Caddyfile` (`<домен> { reverse_proxy server:8788 }` — авто-ACME и
   WebSocket из коробки, логирование query-строки отключить — `?token=`/`?ticket=` не

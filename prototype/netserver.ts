@@ -181,6 +181,14 @@ if (DATABASE_URL) {
 // One env, both worlds; the client self-configures via GET /auth/status.
 const authCfg = configFromEnv(process.env);
 const AUTH = authCfg.auth !== undefined;
+// Same guard as packages/server/src/main.ts: auth without an Origin allowlist leaves
+// the WS handshake open to cross-site hijack (CSWSH) — warn loudly, don't silently run.
+if (AUTH && !authCfg.allowedOrigins) {
+  process.stderr.write(
+    'warning: AUTH is on but ALLOWED_ORIGINS is unset — no Origin allowlist (CSWSH). ' +
+      'Set ALLOWED_ORIGINS before exposing this beyond a trusted network.\n',
+  );
+}
 // The prototype host defaults to a ten-chair FFA. `TEAMS=5v5` keeps all ten chairs and
 // seeds two allied flanks; `TEAMS=2v2` preserves the smaller four-chair playtest. Every
 // chair is claimable by a human, while the server AI stands in after the reconnect grace.
@@ -519,6 +527,12 @@ const server = createMultiplayerServer({
   // (`?token=`) and ignores nick/ticket entirely — the token is minted by the join
   // route below, AFTER the session + entry-window checks passed.
   ...(AUTH ? { auth: authCfg.auth } : {}),
+  // TLS-2 (playtest-hardening): за https-прокси хост обязан уважать Origin-allowlist
+  // (CSWSH) и реальные клиентские IP из X-Forwarded-For — без этой проводки env в
+  // docker-compose ничего не включает, а per-IP rate-limit auth-роутов за прокси
+  // схлопывается в один bucket. Зеркалит packages/server/src/main.ts.
+  ...(authCfg.allowedOrigins ? { allowedOrigins: authCfg.allowedOrigins } : {}),
+  trustProxy: process.env.TRUST_PROXY === '1',
   // Entry window (SES-2.3): the transport refuses a FIRST-time nick once the session's
   // window has closed (a returning seat-holder always reconnects). Same window the
   // browser feed uses to keep a closed session out of «Доступные». (In AUTH mode the
