@@ -192,10 +192,16 @@ BF-22 coarse/fine-шаги) — точечными фиксами, без сис
   Риск №3 (мутация `ctx.data` модулем) под морозом НЕ вскрылся — свойство живёт в
   полную силу. Семантические свойства — только на gate-валидных payload'ах
   (инвариант №5 CLAUDE.md), сырой мусор проверяет «no throw + стабильный код».
-- **FUZZ-3 · Property-suite advanceTo** `[core]` — M · 🔒(FUZZ-1).
-  Непрерывность спанов `time.advanced` на `[state.time, now]`; split-эквивалентность
-  (advanceTo(t₁)→t₂ ≡ advanceTo(t₂) по хэшу); финальное `time === ctx.now` при
-  `partial !== true`; модуль-бомба → `failures` растут, таймлайн не клинит.
+- **FUZZ-3 · Property-suite advanceTo** `[core]` — M · ✅ (2026-07-21).
+  `kernel/advanceTo.property.test.ts`, 7 свойств под рандомными таргетами и
+  ЧЛЕНЕНИЯМИ интервала: непрерывность спанов `time.advanced` на `[state.time,
+  committed]`, `time === ctx.now` при `partial !== true`; split-эквивалентность
+  **бит-в-бит по хэшу** на дискретном ядре (movement/combat/sector/market — без
+  спановых начислителей), на полном стеке — контракт RPL-1 «coarse ≈ fine»
+  (дискретный скелет бит-в-бит, ресурсы в float-пыли; глубокие кредиты уводят от
+  brownout-ножа); модуль-бомба → каждый due-бомб в `failures` (E_INTERNAL, без
+  утечки деталей, A10), часы не клинят, будущие бомбы нетронуты; чистота
+  (frozen vs thawed) и `E_TIME_BACKWARDS` на отмотку.
 - **FUZZ-4 · Property applyDelta∘diffState = id** `[core]` — S · 🔒(FUZZ-1).
   Под рандомными парами состояний по `hashState` — третий пункт SD-7.3.
 - **FUZZ-5 · Доки** `[docs]` — S · 🔒(FUZZ-2..4). SD-7.3 → ✅, SD-7.2 → частично ✅.
