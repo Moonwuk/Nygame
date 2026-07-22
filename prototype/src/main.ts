@@ -106,6 +106,7 @@ import {
   fleetAtOwnDock,
   smeltMetal,
   SMELT_RATE,
+  MARKET_FEE,
   MAX_CHAIN_STEPS,
   type ChainStep,
   type Patrol,
@@ -9050,7 +9051,11 @@ function renderMarket(): void {
     .sort((a, b) => b.price - a.price);
   const lotRow = (l: (typeof lots)[number], bid: boolean): string => {
     const mine = l.owner === ME;
-    const qp = `<span class="mk-qp"><b>${l.amount}</b> ${TECH_CUR[l.resource] ?? ''} @ ${l.price} ¤</span>`;
+    // ECON-4: получатель кредитов получает net (5% сгорает) — в биде это исполнитель.
+    const takerNet = Math.floor(l.amount * l.price * (1 - MARKET_FEE));
+    const qp = `<span class="mk-qp"><b>${l.amount}</b> ${TECH_CUR[l.resource] ?? ''} @ ${l.price} ¤${
+      bid && !mine ? ` <span class="mk-net">→ ${takerNet} ¤</span>` : ''
+    }</span>`;
     const who = `<span class="mk-who">${mine ? t('ваш лот') : nameOf(l.owner)}</span>`;
     let btn: string;
     if (mine) {
@@ -9072,7 +9077,8 @@ function renderMarket(): void {
     `<div class="mk-form"><div class="mk-seg">${seg('sell', t('Продать'))}${seg('buy', t('Купить'))}</div>` +
     `<span class="mk-lbl">${t('кол-во')}</span><input class="mk-in" id="mk-amt" type="number" min="1" value="10">` +
     `<span class="mk-lbl">${t('цена')}</span><input class="mk-in" id="mk-price" type="number" min="0" value="3">` +
-    `<button class="mk-go" data-mkgo>${t('Выставить')}</button></div>`;
+    `<button class="mk-go" data-mkgo>${t('Выставить')}</button></div>` +
+    `<div class="mk-lbl" id="mk-net"></div>`;
   const askList = asks.length
     ? asks.map((l) => lotRow(l, false)).join('')
     : `<div class="mk-empty">${t('Нет лотов на продажу')}</div>`;
@@ -9085,6 +9091,29 @@ function renderMarket(): void {
     `<div id="marketbody">${stock}${form}` +
     `<div class="mk-sec">${t('Продажа')} · ${asks.length}</div>${askList}` +
     `<div class="mk-sec buy">${t('Покупка')} · ${bids.length}</div>${bidList}</div></div>`;
+  // ECON-4: живой «к получению» под формой — net после комиссии для стороны,
+  // которая получит кредиты (sell-лот: вы, когда его исполнят; buy-бид: эскроу).
+  const updNet = (): void => {
+    const el = document.getElementById('mk-net');
+    if (!el) return;
+    const amt = Number((document.getElementById('mk-amt') as HTMLInputElement | null)?.value) || 0;
+    const price =
+      Number((document.getElementById('mk-price') as HTMLInputElement | null)?.value) || 0;
+    const gross = amt * price;
+    el.textContent =
+      marketFormSide === 'sell'
+        ? t('к получению после комиссии {p}%: {n} ¤', {
+            p: Math.round(MARKET_FEE * 100),
+            n: Math.floor(gross * (1 - MARKET_FEE)),
+          })
+        : t('в эскроу уйдёт {n} ¤ · комиссию {p}% платит получатель кредитов', {
+            n: Math.ceil(gross),
+            p: Math.round(MARKET_FEE * 100),
+          });
+  };
+  updNet();
+  document.getElementById('mk-amt')?.addEventListener('input', updNet);
+  document.getElementById('mk-price')?.addEventListener('input', updNet);
 }
 document.getElementById('rail-market')?.addEventListener('click', () => {
   marketWin.classList.add('show');

@@ -185,6 +185,8 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .chip-gold{flex:0 0 auto;padding:3px 8px;font-size:10px;cursor:pointer;color:#ffd76a;
   background:rgba(255,215,106,.08);border:1px solid rgba(255,215,106,.45);border-radius:4px;white-space:nowrap;}
 .chip-gold:hover{background:rgba(255,215,106,.18);box-shadow:0 0 8px rgba(255,215,106,.25);}
+/* ECON-4: net-подпись «→ N ¤» в биде книги (получатель кредитов платит комиссию) */
+.mk-net{color:var(--dim);font-size:10px;margin-left:6px;}
 /* ECON-3а: экспресс-ремонт за металл у дока — «обычная» пара к золотому чипу */
 .chip-metal{flex:0 0 auto;padding:3px 8px;font-size:10px;cursor:pointer;color:var(--cyan);
   background:rgba(53,214,230,.07);border:1px solid rgba(53,214,230,.45);border-radius:4px;white-space:nowrap;}

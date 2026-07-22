@@ -2637,6 +2637,11 @@ export const botDiplomacyModule: GameModule = {
 // that embargoes you (soured favour, botEmbargoes) refuses to let you take its lots —
 // this is the diplomacy embargo tier finally biting.
 export const MARKET_GOODS = ['metal', 'food', 'energy', 'microelectronics']; // credits = currency
+// ECON-4: рыночная комиссия — доля суммы сделки СГОРАЕТ (не переходит никому):
+// первый настоящий сток кредитов в торговле + анти-спам книги. Платит получатель
+// кредитов, симметрично для обеих сторон книги; эскроу-возврат при отмене без
+// комиссии.
+export const MARKET_FEE = 0.05;
 export type MarketSide = 'sell' | 'buy';
 export interface MarketLot {
   id: string;
@@ -2721,15 +2726,17 @@ export const marketModule: GameModule = {
       const qty = Math.min(lot.amount, Math.floor(p.amount ?? lot.amount));
       if (!(qty > 0)) return h.reject('E_BAD_PAYLOAD');
       const credits = qty * lot.price;
+      // ECON-4: получатель кредитов получает net, комиссия сгорает.
+      const net = credits * (1 - MARKET_FEE);
       if (lot.side === 'sell') {
         if (!canAfford(taker.resources, { credits })) return h.reject('E_NO_FUNDS');
         payCost(taker.resources, { credits }); // taker buys the goods
         creditTreasury(h.state, action.playerId, lot.resource, qty);
-        creditTreasury(h.state, lot.owner, 'credits', credits);
+        creditTreasury(h.state, lot.owner, 'credits', net);
       } else {
         if (!canAfford(taker.resources, { [lot.resource]: qty })) return h.reject('E_NO_FUNDS');
         payCost(taker.resources, { [lot.resource]: qty }); // taker sells the goods
-        creditTreasury(h.state, action.playerId, 'credits', credits); // from the escrow
+        creditTreasury(h.state, action.playerId, 'credits', net); // from the escrow
         creditTreasury(h.state, lot.owner, lot.resource, qty);
       }
       lot.amount -= qty;
@@ -2742,6 +2749,7 @@ export const marketModule: GameModule = {
         resource: lot.resource,
         amount: qty,
         price: lot.price,
+        fee: credits - net,
       });
     });
 

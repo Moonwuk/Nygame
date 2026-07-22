@@ -1514,4 +1514,8 @@ export const en: Record<string, string> = {
   'всё ({n}⬢)': 'all ({n}⬢)',
   'Мгновенно переплавляет металл в кредиты по курсу {n}:1 — сознательно хуже рынка: это пол под ценой, а не замена торговли.':
     'Instantly smelts metal into credits at {n}:1 — deliberately worse than the market: a floor under the price, not a trade substitute.',
+  // --- ECON-4: рыночная комиссия ------------------------------------------------
+  'к получению после комиссии {p}%: {n} ¤': 'you receive after the {p}% fee: {n} ¤',
+  'в эскроу уйдёт {n} ¤ · комиссию {p}% платит получатель кредитов':
+    'escrow: {n} ¤ · the {p}% fee is paid by whoever receives the credits',
 };
