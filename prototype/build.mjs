@@ -157,6 +157,14 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 #cmdbar button.on{background:rgba(53,214,230,.18);border-color:var(--cyan);}
 #cmdbar button.danger{color:var(--red);border-color:#7a2a22;}
 #cmdbar button.danger:hover:not(:disabled){background:rgba(255,90,77,.12);box-shadow:0 0 10px rgba(255,90,77,.3);}
+/* 🔥 режим огня: поповер-меню над командным рядом (одна кнопка → выбор режима) */
+#cmdbar .cmdpop{position:absolute;bottom:calc(100% + 8px);right:0;display:flex;flex-direction:column;gap:4px;
+  padding:6px;background:rgba(3,12,16,.94);border:1px solid var(--line-hi);border-radius:3px;
+  box-shadow:0 0 18px rgba(40,200,210,.18);min-width:230px;}
+#cmdbar .cmdpop button{flex-direction:row;justify-content:flex-start;gap:8px;height:auto;min-width:0;
+  padding:7px 10px;text-align:left;}
+#cmdbar .cmdpop button b{font-size:11px;letter-spacing:.5px;white-space:nowrap;}
+#cmdbar .cmdpop button span{font-size:9px;color:var(--dim);letter-spacing:.3px;text-transform:none;}
 /* panel is glued to the bottom edge — lift the fleet command bar above it (mobile overrides below) */
 body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 

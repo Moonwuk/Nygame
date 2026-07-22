@@ -604,6 +604,7 @@ let tgtHits: Array<{ target: string; fleetIds: string[]; x: number; y: number }>
 // order (Курс/Штурм/Цель…) — issuing one drops back out of the mode.
 let pickMode = false;
 let cmdMore = false; // ☰ — the second row of the command bar (extras live there)
+let fireMenu = false; // 🔥 — режим огня артиллерии: поповер-меню над командным рядом
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
@@ -5311,20 +5312,8 @@ function fleetPanelHtml(f: Fleet): string {
   if (nTr > 0)
     h += `<div class="sec">${t('Десант на борту')}</div>` + fleetTilesHtml(f, f.landing ?? []);
 
-  // Artillery rules of engagement — passive / return / standard / aggressive.
-  if (f.owner === ME && fleetHasArtillery(f)) {
-    const mode = f.barrageMode ?? 'standard';
-    const mbtn = (m: string, lbl: string) =>
-      btn('barragemode', m, (mode === m ? '● ' : '') + lbl, mode !== m);
-    h += `<div class="sec">${t('Артиллерия — режим огня')}</div><div class="row">`;
-    h +=
-      mbtn('passive', t('Пассив')) +
-      mbtn('return', t('Ответ')) +
-      mbtn('standard', t('Станд')) +
-      mbtn('aggressive', t('Агрес'));
-    h += `</div>`;
-    h += `<div class="hint">${t('Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.')}</div>`;
-  }
+  // Artillery rules of engagement moved to the ☰ command bar («🔥 Режим огня»
+  // button + popover menu) — the bottom sheet keeps information, not controls.
 
   // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
   // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
@@ -7168,12 +7157,28 @@ function renderCmdBar() {
     if (assaultAim) assaultAim = false;
     if (targetAim) targetAim = false;
     if (merging) merging = false;
+    fireMenu = false; // пустое выделение — 🔥-меню не должно всплыть при новом выборе
     cmdbar.classList.remove('show');
     lastCmdHtml = '';
     return;
   }
   const fleets = ids.map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
   const anyMoving = fleets.some((f) => f.movement);
+  // Режим огня артиллерии (одна кнопка + меню): на кнопке — общий режим арт-флотов
+  // выделения, при разнобое — нейтральная подпись.
+  const artFleets = fleets.filter((f) => f.owner === ME && fleetHasArtillery(f));
+  const FIRE_MODES: Array<{ m: string; lbl: string; sub: string }> = [
+    { m: 'passive', lbl: t('Пассив'), sub: t('не стреляет') },
+    { m: 'return', lbl: t('Ответ'), sub: t('только после урона по флоту') },
+    { m: 'standard', lbl: t('Станд'), sub: t('по тем, с кем война') },
+    { m: 'aggressive', lbl: t('Агрес'), sub: t('по любому, кроме пакта/союза') },
+  ];
+  const artModes = new Set(artFleets.map((f) => f.barrageMode ?? 'standard'));
+  const uniMode = artModes.size === 1 ? [...artModes][0] : null;
+  const fmLabel = uniMode
+    ? (FIRE_MODES.find((x) => x.m === uniMode)?.lbl ?? t('Режим огня'))
+    : t('Режим огня');
+  if (artFleets.length === 0) fireMenu = false; // выделение без артиллерии — меню гаснет
   const docked = fleets.filter((f) => f.location && !f.movement && !f.battleId);
   // PC: ШТУРМ is a targeting command (fly there + storm on arrival) — armable
   // whenever the selection has ships. Mobile keeps the in-orbit-only button.
@@ -7202,6 +7207,7 @@ function renderCmdBar() {
     cmdBtn('attack', '⚔', t('Штурм'), assaultAim ? 'on' : '', !canAssault) +
     cmdBtn('target', '◎', t('Цель'), targetAim ? 'on' : '', false) +
     (anyArtillery ? cmdBtn('barrage', '🎯', t('Обстрел'), barrageAim ? 'on' : '', false) : '') +
+    (artFleets.length > 0 ? cmdBtn('firemode', '🔥', fmLabel, fireMenu ? 'on' : '', false) : '') +
     cmdBtn(
       'merge',
       '⛬',
@@ -7239,6 +7245,15 @@ function renderCmdBar() {
               false,
             )
           : '')
+      : '') +
+    // 🔥 поповер над баром: четыре режима с подписью-правилом; ● — текущий.
+    (fireMenu && artFleets.length > 0
+      ? `<div class="cmdpop">` +
+        FIRE_MODES.map(
+          (x) =>
+            `<button data-cmd="fmset" data-mode="${x.m}"${uniMode === x.m ? ' class="on"' : ''}><b>${uniMode === x.m ? '● ' : ''}${x.lbl}</b><span>${x.sub}</span></button>`,
+        ).join('') +
+        `</div>`
       : '');
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
@@ -7432,8 +7447,6 @@ side.addEventListener('click', (ev) => {
     openPingMenu();
   } else if (act === 'bombard') {
     playerOrder(bombardFleet(ME, selFleet!, arg === 'on'));
-  } else if (act === 'barragemode') {
-    playerOrder(barrageModeFleet(ME, selFleet!, arg));
   } else if (act === 'assault') {
     playerOrder(assaultFleet(ME, selFleet!));
   } else if (act === 'retreat') {
@@ -7635,6 +7648,7 @@ cmdbar.addEventListener('click', (ev) => {
   const ids = selectedFleetIds();
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
+  if (cmd !== 'firemode' && cmd !== 'fmset') fireMenu = false; // другой приказ закрывает 🔥-меню
   if (cmd !== 'attack') assaultAim = false; // any other command disarms assault-targeting
   if (cmd !== 'target') targetAim = false; // any other command disarms order-targeting
   // A real order leaves «Выбрать+» (the group stays selected and takes it);
@@ -7686,6 +7700,19 @@ cmdbar.addEventListener('click', (ev) => {
     if (targetAim) note(t('◎ тапните цель на карте — соберём приказ'));
   } else if (cmd === 'more') {
     cmdMore = !cmdMore; // ☰ — show/hide the extras row
+  } else if (cmd === 'firemode') {
+    fireMenu = !fireMenu; // 🔥 — открыть/закрыть меню выбора режима огня
+    aiming = false;
+  } else if (cmd === 'fmset') {
+    // Выбор в 🔥-меню: единый режим всем выделенным флотам с артиллерией.
+    const mode = bEl.dataset.mode ?? 'standard';
+    for (const id of ids) {
+      const f = s.fleets[id];
+      if (f && f.owner === ME && fleetHasArtillery(f) && (f.barrageMode ?? 'standard') !== mode) {
+        playerOrder(barrageModeFleet(ME, id, mode));
+      }
+    }
+    fireMenu = false;
   } else if (cmd === 'boost') {
     // BOOST-1 форс-марш: toggle for the whole selection — ON unless everyone
     // already marches. Wear only bites while actually flying.

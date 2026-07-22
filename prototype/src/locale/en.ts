@@ -565,6 +565,12 @@ export const en: Record<string, string> = {
   Эскадрилья: 'Flight',
   Эскадра: 'Squadron',
   Армада: 'Armada',
+  // 🔥 режим огня артиллерии — кнопка в командном ряду + пункты меню
+  'Режим огня': 'Fire mode',
+  'не стреляет': 'holds fire',
+  'только после урона по флоту': 'only after the fleet takes damage',
+  'по тем, с кем война': 'at declared enemies',
+  'по любому, кроме пакта/союза': 'at anyone except pact/alliance',
   'Флоты на орбите': 'Fleets in orbit',
   Обновления: 'Updates',
   Фракция: 'Faction',

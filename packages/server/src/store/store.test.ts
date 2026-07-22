@@ -498,7 +498,12 @@ function resultStoreContract(
       const [m1, m2, a, b] = [uniq('r-m1'), uniq('r-m2'), uniq('r-c'), uniq('r-d')];
       await store.record({ matchupId: m1, challengerCorp: a, targetCorp: b, winnerCorp: null, at: 5 });
       await store.record({ matchupId: m2, challengerCorp: a, targetCorp: b, winnerCorp: b, at: 9 });
-      const recent = (await store.recent()).filter((r) => r.matchupId === m1 || r.matchupId === m2);
+      // Explicit big limit: the pg tables are SHARED across runs (see `stamp` above),
+      // so rows accumulate — the default top-50 window eventually crowds out this
+      // run's tiny `at` values (surfaced locally after ~15 gate runs in one day).
+      const recent = (await store.recent(100_000)).filter(
+        (r) => r.matchupId === m1 || r.matchupId === m2,
+      );
       expect(recent.map((r) => r.matchupId)).toEqual([m2, m1]); // newest (at=9) first
       expect(recent[1]?.winnerCorp).toBeNull();
     });
