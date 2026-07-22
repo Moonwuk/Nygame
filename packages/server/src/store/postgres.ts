@@ -524,38 +524,53 @@ export class PostgresUserStore implements UserStore {
     }
   }
 
+  // Each lookup is a FULLY-LITERAL query (no string interpolation into SQL — the WHERE
+  // clauses differ only by column, and are hardcoded here rather than passed in, so the
+  // `no-sql-string-interpolation` guard stays satisfied). All three share `rowToUser`.
   async findUser(login: string): Promise<UserRecord | null> {
-    return this.selectUser(`lower(login) = lower($1)`, login);
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE lower(login) = lower($1)`,
+      [login],
+    );
+    return rowToUser(r.rows[0]);
   }
 
   async findUserByEmail(email: string): Promise<UserRecord | null> {
-    return this.selectUser(`email IS NOT NULL AND lower(email) = lower($1)`, email);
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE email IS NOT NULL AND lower(email) = lower($1)`,
+      [email],
+    );
+    return rowToUser(r.rows[0]);
   }
 
   async findById(userId: string): Promise<UserRecord | null> {
-    return this.selectUser(`id = $1`, userId);
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE id = $1`,
+      [userId],
+    );
+    return rowToUser(r.rows[0]);
   }
 
   async setPassword(userId: string, passHash: string): Promise<void> {
     await this.pool.query(`UPDATE users SET pass_hash = $2 WHERE id = $1`, [userId, passHash]);
   }
+}
 
-  private async selectUser(where: string, arg: string): Promise<UserRecord | null> {
-    const r = await this.pool.query<{
-      id: string;
-      login: string;
-      pass_hash: string;
-      email: string | null;
-    }>(`SELECT id, login, pass_hash, email FROM users WHERE ${where}`, [arg]);
-    const row = r.rows[0];
-    if (!row) return null;
-    return {
-      userId: row.id,
-      login: row.login,
-      passHash: row.pass_hash,
-      ...(row.email ? { email: row.email } : {}),
-    };
-  }
+interface UserRow {
+  id: string;
+  login: string;
+  pass_hash: string;
+  email: string | null;
+}
+
+function rowToUser(row: UserRow | undefined): UserRecord | null {
+  if (!row) return null;
+  return {
+    userId: row.id,
+    login: row.login,
+    passHash: row.pass_hash,
+    ...(row.email ? { email: row.email } : {}),
+  };
 }
 
 interface CorpMemberRow {
