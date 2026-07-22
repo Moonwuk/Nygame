@@ -230,7 +230,10 @@ export interface ServerStateMessage extends VisibilityFields, LobbyField, HashFi
   seq: number;
   serverTime: number;
   state: GameState;
-  events: DomainEvent[];
+  // No `events`: a full `state` snapshot is a RESYNC (join / desync recovery / deduped
+  // retry) — the client rebuilds its baseline from `state` wholesale, so there is nothing
+  // incremental to replay. Domain events ride the `delta` message, and that is the only
+  // place the client reads them (multiplayer.ts). (NETA2-4: dropped an always-`[]` field.)
 }
 
 /** Incremental update — only the entities/fields that changed since the peer's

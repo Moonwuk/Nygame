@@ -1084,7 +1084,6 @@ export class MatchRoom {
       seq: this.seq,
       serverTime: this.clock(),
       state: view.base,
-      events: [],
       signatures: view.signatures,
       remembered: view.remembered,
       ...this.hashField(view.base),
