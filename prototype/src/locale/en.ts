@@ -1060,6 +1060,21 @@ export const en: Record<string, string> = {
   'Пароли не совпадают': 'Passwords do not match',
   'Восстановление доступа — скоро': 'Access recovery — coming soon',
   'Подключение к сессии…': 'Connecting to the session…',
+  'Почта (для восстановления)': 'Email (for recovery)',
+  'Восстановление доступа': 'Account recovery',
+  'Укажи почту аккаунта — пришлём ссылку для сброса пароля.':
+    'Enter your account email — we will send a password-reset link.',
+  Почта: 'Email',
+  'Отправить ссылку': 'Send link',
+  'Новый пароль': 'New password',
+  'Придумай новый пароль для входа.': 'Choose a new password to sign in.',
+  'Сменить пароль': 'Change password',
+  'Эта почта уже занята': 'That email is already in use',
+  'Введите почту': 'Enter an email',
+  'Если такая почта есть — прислали ссылку для сброса':
+    'If that email exists, a reset link is on its way',
+  'Ссылка недействительна или устарела': 'The link is invalid or expired',
+  'Пароль изменён': 'Password changed',
   'переподключение — приказ не отправлен, повтори через миг':
     'reconnecting — order not sent, try again in a moment',
   'матч заполнен — все места заняты': 'match is full — every seat is taken',

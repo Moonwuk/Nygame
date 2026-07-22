@@ -1,7 +1,13 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerAuthApi } from './authApi';
-import { signSessionToken, verifySessionToken, hmacSecret } from './auth';
+import {
+  signSessionToken,
+  verifySessionToken,
+  signResetToken,
+  verifyResetToken,
+  hmacSecret,
+} from './auth';
 import { MemoryUserStore } from './store';
 import { registerMatchApi, type MatchApiDeps } from './matchApi';
 import type { ScryptParams } from './password';
@@ -247,5 +253,132 @@ describe('SE-1.x · session gate on the match API', () => {
     });
     expect(created.statusCode).toBe(200);
     expect(created.json()).toEqual({ matchId: 'm1', seats: ['green', 'red'] });
+  });
+});
+
+describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
+  const RESET_SIGN = { key: KEY, algorithm: 'HS256', issuer: 'test', audience: 'reset' };
+  const RESET_VERIFY = { key: KEY, algorithms: ['HS256'], issuer: 'test', audience: 'reset' };
+
+  /** An auth app with recovery wired + a capturing mailer (the reset link never leaves the
+   *  test). Mirrors the serverConfig composition: same key, a distinct `reset` audience. */
+  function recoverApp(): { server: FastifyInstance; sent: Array<{ to: string; text: string }> } {
+    const sent: Array<{ to: string; text: string }> = [];
+    app = Fastify();
+    registerAuthApi(app, {
+      users: new MemoryUserStore(),
+      signSession: (accountId, login) =>
+        signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+      signReset: (accountId, pwfp) =>
+        signResetToken({ accountId, pwfp }, RESET_SIGN, { ttlSeconds: 900 }),
+      verifyReset: async (token) => {
+        const r = await verifyResetToken(token, RESET_VERIFY);
+        return r.ok ? r.claim : null;
+      },
+      resetBaseUrl: 'https://play.example',
+      sendMail: (msg) => {
+        sent.push({ to: msg.to, text: msg.text });
+        return Promise.resolve();
+      },
+      scryptParams: FAST,
+    });
+    return { server: app, sent };
+  }
+
+  const tokenFrom = (text: string): string => decodeURIComponent(text.match(/\?reset=(\S+)/)![1]!);
+
+  it('registers with an email, recovers via the mailed link, and sets a new password', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'zoe',
+      password: 'oldpassword',
+      email: 'zoe@example.com',
+    });
+
+    const rec = await post(server, '/auth/recover', { email: 'zoe@example.com' });
+    expect(rec.statusCode).toBe(200);
+    expect(rec.json()).toEqual({ ok: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe('zoe@example.com');
+    const token = tokenFrom(sent[0]!.text);
+
+    const reset = await post(server, '/auth/reset', { token, password: 'brandnewpass' });
+    expect(reset.statusCode).toBe(200);
+    expect((reset.json() as { login: string }).login).toBe('zoe');
+
+    // The new password works; the old one is dead.
+    expect(
+      (await post(server, '/auth/login', { login: 'zoe', password: 'brandnewpass' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await post(server, '/auth/login', { login: 'zoe', password: 'oldpassword' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('a reset token is single-use: the second reset with the same token is refused', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'ana',
+      password: 'firstpass1',
+      email: 'ana@example.com',
+    });
+    await post(server, '/auth/recover', { email: 'ana@example.com' });
+    const token = tokenFrom(sent[0]!.text);
+    expect((await post(server, '/auth/reset', { token, password: 'secondpass1' })).statusCode).toBe(
+      200,
+    );
+    // The password (and thus its fingerprint) changed → the same token no longer matches.
+    const again = await post(server, '/auth/reset', { token, password: 'thirdpass12' });
+    expect(again.statusCode).toBe(401);
+    expect(again.json()).toEqual({ error: 'E_AUTH' });
+  });
+
+  it('recover is anti-enumeration: an unknown email still 200s and sends nothing', async () => {
+    const { server, sent } = recoverApp();
+    const rec = await post(server, '/auth/recover', { email: 'ghost@example.com' });
+    expect(rec.statusCode).toBe(200);
+    expect(rec.json()).toEqual({ ok: true });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('an account registered WITHOUT an email has no recovery (nothing sent)', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', { login: 'noemail', password: 'longenough' });
+    await post(server, '/auth/recover', { email: 'noemail@example.com' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a duplicate recovery email is refused (E_EMAIL_TAKEN), case-insensitively', async () => {
+    const { server } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'first',
+      password: 'longenough',
+      email: 'shared@example.com',
+    });
+    const dup = await post(server, '/auth/register', {
+      login: 'second',
+      password: 'longenough',
+      email: 'Shared@Example.com',
+    });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json()).toEqual({ error: 'E_EMAIL_TAKEN' });
+  });
+
+  it('reset rejects a garbage/forged token uniformly (E_AUTH)', async () => {
+    const { server } = recoverApp();
+    const bad = await post(server, '/auth/reset', { token: 'not-a-jwt', password: 'longenough' });
+    expect(bad.statusCode).toBe(401);
+    expect(bad.json()).toEqual({ error: 'E_AUTH' });
+  });
+
+  it('a malformed email at registration is a 400 (not silently dropped)', async () => {
+    const { server } = recoverApp();
+    const r = await post(server, '/auth/register', {
+      login: 'baddie',
+      password: 'longenough',
+      email: 'notanemail',
+    });
+    expect(r.statusCode).toBe(400);
+    expect(r.json()).toEqual({ error: 'E_BAD_CREDENTIALS' });
   });
 });

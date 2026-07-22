@@ -89,10 +89,15 @@ export async function migrate(pool: Pool): Promise<void> {
       id         text PRIMARY KEY,
       login      text NOT NULL,
       pass_hash  text NOT NULL,
+      email      text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    -- existing DBs predating recovery: add the optional recovery-email column in place
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
     -- logins are unique case-insensitively: Vasya and vasya are one account
     CREATE UNIQUE INDEX IF NOT EXISTS users_login_idx ON users (lower(login));
+    -- recovery emails are unique case-insensitively WHEN present (the reset lookup key)
+    CREATE UNIQUE INDEX IF NOT EXISTS users_email_idx ON users (lower(email)) WHERE email IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS corps (
       id         text PRIMARY KEY,
@@ -498,29 +503,58 @@ export class PostgresUserStore implements UserStore {
   async createUser(
     login: string,
     passHash: string,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    email?: string,
+  ): Promise<
+    { ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' | 'E_EMAIL_TAKEN' }
+  > {
     const userId = randomUUID();
     try {
-      await this.pool.query(`INSERT INTO users (id, login, pass_hash) VALUES ($1, $2, $3)`, [
-        userId,
-        login,
-        passHash,
-      ]);
+      await this.pool.query(
+        `INSERT INTO users (id, login, pass_hash, email) VALUES ($1, $2, $3, $4)`,
+        [userId, login, passHash, email?.toLowerCase() ?? null],
+      );
       return { ok: true, userId };
-    } catch {
-      // The unique lower(login) index makes the INSERT the atomic claim; a violation
-      // (concurrent or pre-existing registration) is the one expected failure here.
-      return { ok: false, code: 'E_LOGIN_TAKEN' };
+    } catch (e) {
+      // A unique-index violation makes the INSERT the atomic claim. Which one tells the
+      // caller apart: login already taken vs. that recovery email already on another
+      // account (the constraint name is on the pg error). Any other cause is treated as a
+      // taken login too — fail-secure, no account is overwritten.
+      const constraint = (e as { constraint?: string }).constraint;
+      return { ok: false, code: constraint === 'users_email_idx' ? 'E_EMAIL_TAKEN' : 'E_LOGIN_TAKEN' };
     }
   }
 
   async findUser(login: string): Promise<UserRecord | null> {
-    const r = await this.pool.query<{ id: string; login: string; pass_hash: string }>(
-      `SELECT id, login, pass_hash FROM users WHERE lower(login) = lower($1)`,
-      [login],
-    );
+    return this.selectUser(`lower(login) = lower($1)`, login);
+  }
+
+  async findUserByEmail(email: string): Promise<UserRecord | null> {
+    return this.selectUser(`email IS NOT NULL AND lower(email) = lower($1)`, email);
+  }
+
+  async findById(userId: string): Promise<UserRecord | null> {
+    return this.selectUser(`id = $1`, userId);
+  }
+
+  async setPassword(userId: string, passHash: string): Promise<void> {
+    await this.pool.query(`UPDATE users SET pass_hash = $2 WHERE id = $1`, [userId, passHash]);
+  }
+
+  private async selectUser(where: string, arg: string): Promise<UserRecord | null> {
+    const r = await this.pool.query<{
+      id: string;
+      login: string;
+      pass_hash: string;
+      email: string | null;
+    }>(`SELECT id, login, pass_hash, email FROM users WHERE ${where}`, [arg]);
     const row = r.rows[0];
-    return row ? { userId: row.id, login: row.login, passHash: row.pass_hash } : null;
+    if (!row) return null;
+    return {
+      userId: row.id,
+      login: row.login,
+      passHash: row.pass_hash,
+      ...(row.email ? { email: row.email } : {}),
+    };
   }
 }
 

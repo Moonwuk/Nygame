@@ -9655,10 +9655,14 @@ if (!__PLAYER_BUILD__) {
 // it drops you straight into guest play by callsign, with a "скоро" notice.
 const welcomeStageEl = $('cwelcome');
 const registerStageEl = $('cregister');
+const recoverStageEl = $('crecover');
+const resetStageEl = $('creset');
 const browseStageEl = $('cbrowse');
-function showStage(stage: 'welcome' | 'register' | 'browse'): void {
+function showStage(stage: 'welcome' | 'register' | 'recover' | 'reset' | 'browse'): void {
   welcomeStageEl.style.display = stage === 'welcome' ? '' : 'none';
   registerStageEl.style.display = stage === 'register' ? '' : 'none';
+  recoverStageEl.style.display = stage === 'recover' ? '' : 'none';
+  resetStageEl.style.display = stage === 'reset' ? '' : 'none';
   browseStageEl.style.display = stage === 'browse' ? '' : 'none';
 }
 
@@ -10043,6 +10047,7 @@ for (const a of Array.from(document.querySelectorAll('.cfoot a'))) {
 // the account. «Восстановить доступ» is a stub until the accounts backend grows a real reset
 // (no email on file yet — docs/accounts-roadmap.md).
 const crNickInput = $('crnick') as HTMLInputElement;
+const crMailInput = $('crmail') as HTMLInputElement;
 const crPassInput = $('crpass') as HTMLInputElement;
 const crPass2Input = $('crpass2') as HTMLInputElement;
 function openRegister(): void {
@@ -10056,6 +10061,7 @@ function openRegister(): void {
 async function submitRegister(): Promise<void> {
   const nick = crNickInput.value.trim();
   const pass = crPassInput.value;
+  const email = crMailInput.value.trim();
   if (!nick) {
     statusEl.textContent = t('Введи имя командира');
     crNickInput.focus();
@@ -10076,7 +10082,9 @@ async function submitRegister(): Promise<void> {
   try {
     const srv = resolveServer();
     if (!srv) return;
-    const session = await ensureSession(srv.base, nick, pass);
+    // Email is OPTIONAL — it exists only so the account can be recovered later; skipping it
+    // just means no self-service reset. A malformed one is caught by the server (400).
+    const session = await ensureSession(srv.base, nick, pass, email || undefined);
     if (!session) {
       crPassInput.focus(); // ensureSession already explained why in the status line
       return;
@@ -10093,6 +10101,9 @@ async function submitRegister(): Promise<void> {
 }
 $('crgo').addEventListener('click', () => void submitRegister());
 crNickInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crMailInput.focus();
+});
+crMailInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') crPassInput.focus();
 });
 crPassInput.addEventListener('keydown', (e) => {
@@ -10105,9 +10116,116 @@ $('crback').addEventListener('click', () => {
   showStage('welcome');
   statusEl.textContent = '';
 });
+
+// --- Password recovery: request a reset link (email → /auth/recover) ------------------
+// Anti-enumeration mirrors the server: the confirmation is identical whether or not the
+// email is on file. «Восстановить доступ» on the registration page opens this stage.
+const crecMailInput = $('crecmail') as HTMLInputElement;
+async function submitRecover(): Promise<void> {
+  const email = crecMailInput.value.trim();
+  if (!email) {
+    statusEl.textContent = t('Введите почту');
+    crecMailInput.focus();
+    return;
+  }
+  const srv = resolveServer();
+  if (!srv) return;
+  try {
+    await fetch(`${httpBase(srv.base)}/auth/recover`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    /* swallow — never reveal a delivery/lookup outcome */
+  }
+  statusEl.textContent = t('Если такая почта есть — прислали ссылку для сброса');
+}
 $('crrecover').addEventListener('click', () => {
-  statusEl.textContent = t('Восстановление доступа — скоро');
+  showStage('recover');
+  crecMailInput.value = crMailInput.value.trim();
+  statusEl.textContent = '';
+  crecMailInput.focus();
 });
+$('crecgo').addEventListener('click', () => void submitRecover());
+crecMailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitRecover();
+});
+$('crecback').addEventListener('click', () => {
+  showStage('welcome');
+  statusEl.textContent = '';
+});
+
+// --- Password reset: spend a mailed «?reset=<token>» link (→ /auth/reset) -------------
+// The reset stage is opened by the boot deep-link (see the first-run gate). On success the
+// server hands back a session (reset IS a login) → straight into the hub.
+const cresetPassInput = $('cresetpass') as HTMLInputElement;
+const cresetPass2Input = $('cresetpass2') as HTMLInputElement;
+let resetToken = ''; // the token carried by the ?reset= deep-link
+async function submitReset(): Promise<void> {
+  const pass = cresetPassInput.value;
+  if (pass.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    cresetPassInput.focus();
+    return;
+  }
+  if (pass !== cresetPass2Input.value) {
+    statusEl.textContent = t('Пароли не совпадают');
+    cresetPass2Input.focus();
+    return;
+  }
+  if (signingIn) return;
+  signingIn = true;
+  try {
+    const srv = resolveServer();
+    if (!srv) return;
+    const res = await fetch(`${httpBase(srv.base)}/auth/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, password: pass }),
+    }).catch(() => null);
+    const body = ((res && (await res.json().catch(() => ({})))) ?? {}) as {
+      login?: string;
+      token?: string;
+    };
+    if (!res || !res.ok || !body.token || !body.login) {
+      statusEl.textContent = t('Ссылка недействительна или устарела');
+      return;
+    }
+    localStorage.setItem(
+      sessionKey(srv.base),
+      JSON.stringify({ login: body.login, token: body.token }),
+    );
+    localStorage.setItem('void.nick', body.login);
+    nickInput.value = body.login;
+    resetToken = '';
+    cresetPassInput.value = '';
+    cresetPass2Input.value = '';
+    statusEl.textContent = '';
+    note('✔ ' + t('Пароль изменён'));
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+$('cresetgo').addEventListener('click', () => void submitReset());
+cresetPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') cresetPass2Input.focus();
+});
+cresetPass2Input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitReset();
+});
+/** Open the reset stage for a «?reset=<token>» deep-link (called from the first-run gate). */
+function openReset(token: string): void {
+  resetToken = token;
+  showConnect(true);
+  showHub(false);
+  showStage('reset');
+  cresetPassInput.value = '';
+  cresetPass2Input.value = '';
+  statusEl.textContent = '';
+  cresetPassInput.focus();
+}
 
 // hub interactions
 $('hub-play').addEventListener('click', () => hubTab('games'));
@@ -10275,14 +10393,16 @@ settingsEl.addEventListener('click', (e) => {
 // and boots straight into the hub — the raw "Новый командир / войти" screen is only
 // for a genuinely new device. "Сменить командира" in the hub goes back to identity.
 //
-// Deep-link override: a «?join=<id>» URL (a new tab spawned by «Войти» in the match list)
-// boots straight into THAT session, reusing this browser's stored identity (nick / session
-// JWT). If there is no stored identity the join simply fails back onto the welcome card.
-const bootJoinId =
-  typeof location !== 'undefined'
-    ? (new URLSearchParams(location.search).get('join') ?? '').trim()
-    : '';
-if (bootJoinId) {
+// Deep-link overrides (checked before the returning-player shortcut):
+//  «?reset=<token>» — a mailed password-reset link → the reset page (set a new password).
+//  «?join=<id>»     — a new tab spawned by «Войти» in the match list → straight into THAT
+//                     session, reusing this browser's stored identity (nick / session JWT).
+const bootParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const bootReset = (bootParams?.get('reset') ?? '').trim();
+const bootJoinId = (bootParams?.get('join') ?? '').trim();
+if (bootReset) {
+  openReset(bootReset);
+} else if (bootJoinId) {
   showConnect(true);
   showHub(false);
   statusEl.textContent = t('Подключение к сессии…');
@@ -11175,7 +11295,12 @@ const authProbe: Promise<void> = (async () => {
  *  Zero-friction identity: try LOGIN first; unknown-or-wrong is a uniform 401, so
  *  then try REGISTER — a fresh login creates the account (registration IS the first
  *  login), while a taken one (409) means the password was simply wrong. */
-async function ensureSession(base: string, login: string, passwordArg?: string): Promise<string | null> {
+async function ensureSession(
+  base: string,
+  login: string,
+  passwordArg?: string,
+  emailArg?: string,
+): Promise<string | null> {
   // Only OUR OWN cached session counts — a token minted for a different callsign
   // (or a legacy unbound one) is ignored and replaced by a fresh login below.
   const cachedRec = sessionRecord(base);
@@ -11193,14 +11318,17 @@ async function ensureSession(base: string, login: string, passwordArg?: string):
     statusEl.textContent = t('Введите пароль (мин. 8 символов)');
     return null;
   }
-  const call = async (path: string): Promise<{ status: number; token?: string }> => {
+  const call = async (
+    path: string,
+    extra: Record<string, string> = {},
+  ): Promise<{ status: number; token?: string; error?: string }> => {
     const res = await fetch(`${httpBase(base)}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ login, password }),
+      body: JSON.stringify({ login, password, ...extra }),
     });
-    const body = (await res.json().catch(() => ({}))) as { token?: string };
-    return { status: res.status, token: body.token };
+    const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    return { status: res.status, token: body.token, error: body.error };
   };
   try {
     const login1 = await call('/auth/login');
@@ -11209,18 +11337,21 @@ async function ensureSession(base: string, login: string, passwordArg?: string):
       return login1.token;
     }
     if (login1.status === 401) {
-      const reg = await call('/auth/register');
+      // Registration carries the optional recovery email (login never needs it).
+      const reg = await call('/auth/register', emailArg ? { email: emailArg } : {});
       if (reg.token) {
         localStorage.setItem(sessionKey(base), JSON.stringify({ login, token: reg.token }));
         note('✔ ' + t('Аккаунт создан'));
         return reg.token;
       }
       statusEl.textContent =
-        reg.status === 409
-          ? t('Неверный пароль')
-          : reg.status === 429
-            ? t('Слишком часто — подождите')
-            : t('Регистрация отклонена');
+        reg.error === 'E_EMAIL_TAKEN'
+          ? t('Эта почта уже занята')
+          : reg.status === 409
+            ? t('Неверный пароль') // login 401 + register 409 (E_LOGIN_TAKEN) ⇒ wrong password
+            : reg.status === 429
+              ? t('Слишком часто — подождите')
+              : t('Регистрация отклонена');
       return null;
     }
     statusEl.textContent =

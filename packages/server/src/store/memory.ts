@@ -161,16 +161,44 @@ export class MemoryUserStore implements UserStore {
   createUser(
     login: string,
     passHash: string,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    email?: string,
+  ): Promise<
+    { ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' | 'E_EMAIL_TAKEN' }
+  > {
     const key = login.toLowerCase();
     if (this.byLogin.has(key)) return Promise.resolve({ ok: false, code: 'E_LOGIN_TAKEN' });
+    const mail = email?.toLowerCase();
+    if (mail && this.byEmail(mail)) return Promise.resolve({ ok: false, code: 'E_EMAIL_TAKEN' });
     const userId = randomUUID();
-    this.byLogin.set(key, { userId, login, passHash });
+    this.byLogin.set(key, { userId, login, passHash, ...(mail ? { email: mail } : {}) });
     return Promise.resolve({ ok: true, userId });
   }
 
   findUser(login: string): Promise<UserRecord | null> {
     return Promise.resolve(this.byLogin.get(login.toLowerCase()) ?? null);
+  }
+
+  findUserByEmail(email: string): Promise<UserRecord | null> {
+    return Promise.resolve(this.byEmail(email.toLowerCase()));
+  }
+
+  findById(userId: string): Promise<UserRecord | null> {
+    for (const rec of this.byLogin.values()) {
+      if (rec.userId === userId) return Promise.resolve(rec);
+    }
+    return Promise.resolve(null);
+  }
+
+  setPassword(userId: string, passHash: string): Promise<void> {
+    for (const rec of this.byLogin.values()) {
+      if (rec.userId === userId) rec.passHash = passHash;
+    }
+    return Promise.resolve();
+  }
+
+  private byEmail(mail: string): UserRecord | null {
+    for (const rec of this.byLogin.values()) if (rec.email === mail) return rec;
+    return null;
   }
 }
 

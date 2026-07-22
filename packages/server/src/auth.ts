@@ -177,3 +177,71 @@ export function signSessionToken(
     .setExpirationTime(nowSec + opts.ttlSeconds)
     .sign(config.key);
 }
+
+// ---------------------------------------------------------------------------
+// Password-reset tokens (SE-1.x recovery). A reset token is a SHORT-LIVED, single-use
+// capability minted by /auth/recover and mailed to the account's address; /auth/reset
+// spends it to set a new password. Same key infrastructure, a DIFFERENT pinned `typ`
+// (so it can never be replayed as a join/session token), and a `pwfp` password
+// fingerprint claim: once the password changes the fingerprint no longer matches, so a
+// used — or a stale, pre-change — token is dead (single-use without any server-side store).
+// ---------------------------------------------------------------------------
+
+const RESET_TOKEN_TYP = 'reset+jwt';
+
+/** What a verified reset token grants: the right to set `accountId`'s password, PROVIDED
+ *  the account's password fingerprint still matches `pwfp` (else the token was already
+ *  spent or superseded). */
+export interface ResetClaim {
+  accountId: string;
+  /** Fingerprint of the passHash at mint time — the reset endpoint re-checks it against
+   *  the CURRENT hash, so a token is void the moment the password changes. */
+  pwfp: string;
+}
+
+export type ResetTokenResult = { ok: true; claim: ResetClaim } | { ok: false; code: 'E_AUTH' };
+
+/** Verify + decode a reset token — same fail-secure contract as the other verifiers
+ *  (a stable `E_AUTH` for ANY failure; the reason stays server-side). */
+export async function verifyResetToken(
+  token: string,
+  config: JoinTokenVerifyConfig,
+): Promise<ResetTokenResult> {
+  try {
+    const { payload } = await jwtVerify(token, config.key, {
+      algorithms: config.algorithms,
+      issuer: config.issuer,
+      audience: config.audience,
+      typ: RESET_TOKEN_TYP, // a join/session token can never pass as a reset token
+      clockTolerance: 0,
+      requiredClaims: ['exp'],
+      ...(config.maxTokenAgeSec !== undefined ? { maxTokenAge: config.maxTokenAgeSec } : {}),
+    });
+    const accountId = payload.sub;
+    const pwfp = payload.pwfp;
+    if (typeof accountId !== 'string' || accountId === '') return { ok: false, code: 'E_AUTH' };
+    if (typeof pwfp !== 'string' || pwfp === '') return { ok: false, code: 'E_AUTH' };
+    return { ok: true, claim: { accountId, pwfp } };
+  } catch {
+    return { ok: false, code: 'E_AUTH' };
+  }
+}
+
+/** Mint a password-reset token (the /auth/recover endpoint's job). Short TTLs keep a
+ *  leaked reset link's window tiny; `pwfp` binds it to the current password so it dies on
+ *  first successful use. */
+export function signResetToken(
+  claim: ResetClaim,
+  config: JoinTokenSignConfig,
+  opts: { ttlSeconds: number; now?: () => number },
+): Promise<string> {
+  const nowSec = Math.floor((opts.now?.() ?? Date.now()) / 1000);
+  return new SignJWT({ pwfp: claim.pwfp })
+    .setProtectedHeader({ alg: config.algorithm, typ: RESET_TOKEN_TYP })
+    .setSubject(claim.accountId)
+    .setIssuer(config.issuer)
+    .setAudience(config.audience)
+    .setIssuedAt(nowSec)
+    .setExpirationTime(nowSec + opts.ttlSeconds)
+    .sign(config.key);
+}

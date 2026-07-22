@@ -97,17 +97,34 @@ export interface UserRecord {
   login: string;
   /** Password hash in the self-describing `scrypt$…` format (see password.ts). */
   passHash: string;
+  /** Optional recovery email (lower-cased on store, unique when present). Absent on
+   *  accounts created before recovery shipped, and on any registration that skipped it —
+   *  such an account simply has no self-service password reset. */
+  email?: string;
 }
 
-/** Accounts for login+password auth. Lookup is case-insensitive on `login`. */
+/** Accounts for login+password auth. Lookup is case-insensitive on `login` (and on
+ *  `email` for recovery). */
 export interface UserStore {
   /** Create an account; fail-secure duplicate handling: an existing login (any case)
-   *  → `E_LOGIN_TAKEN`, never an overwrite. */
+   *  → `E_LOGIN_TAKEN`, never an overwrite. `email` (optional) enables password recovery;
+   *  it is stored lower-cased and rejected as `E_EMAIL_TAKEN` if already in use. */
   createUser(
     login: string,
     passHash: string,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }>;
+    email?: string,
+  ): Promise<
+    { ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' | 'E_EMAIL_TAKEN' }
+  >;
   findUser(login: string): Promise<UserRecord | null>;
+  /** Look up by recovery email (case-insensitive). Null when no account carries it — the
+   *  recover route treats null and found identically (anti-enumeration). */
+  findUserByEmail(email: string): Promise<UserRecord | null>;
+  /** Look up by account id — the reset route re-fetches the current hash to re-check a
+   *  reset token's password fingerprint (single-use). Null when the account is gone. */
+  findById(userId: string): Promise<UserRecord | null>;
+  /** Set a new password hash (the /auth/reset endpoint). No-op if the account is gone. */
+  setPassword(userId: string, passHash: string): Promise<void>;
   close?(): Promise<void>;
 }
 

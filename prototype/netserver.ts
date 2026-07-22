@@ -601,7 +601,20 @@ const server = createMultiplayerServer({
       // Register/login (SE-1.x contour, shared with the production entry): scrypt
       // hashes, uniform-401 + decoy timing, per-IP rate limit — hands out the
       // session JWT the join route below authenticates.
-      registerAuthApi(app, { users: userStore, signSession: authCfg.signSession! });
+      registerAuthApi(app, {
+        users: userStore,
+        signSession: authCfg.signSession!,
+        // Recovery (/auth/recover + /auth/reset) mounts only when RESET_BASE_URL points the
+        // emailed link at this deployment's origin. No mailer wired → the default logs the
+        // link to stderr (a playtest admin can read it; a real transport is a later env).
+        ...(authCfg.signReset && authCfg.verifyReset && authCfg.resetBaseUrl
+          ? {
+              signReset: authCfg.signReset,
+              verifyReset: authCfg.verifyReset,
+              resetBaseUrl: authCfg.resetBaseUrl,
+            }
+          : {}),
+      });
       // Exchange a session for a seat + short-lived join token (SES-2.5). The seat
       // belongs to the SESSION's login (nobody joins as somebody else); the entry
       // window (SES-2.3) gates a FIRST-time claim exactly like the nick path — the

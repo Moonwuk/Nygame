@@ -55,18 +55,22 @@ export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export {
   hmacSecret,
   signJoinToken,
+  signResetToken,
   signSessionToken,
   verifyJoinToken,
+  verifyResetToken,
   verifySessionToken,
   type JoinClaim,
   type JoinTokenResult,
   type JoinTokenSignConfig,
   type JoinTokenVerifyConfig,
+  type ResetClaim,
+  type ResetTokenResult,
   type SessionClaim,
   type SessionTokenResult,
   type VerifyKey,
 } from './auth';
-export { registerAuthApi, type AuthApiDeps } from './authApi';
+export { registerAuthApi, type AuthApiDeps, type Mailer } from './authApi';
 export { configFromEnv, type ServerConfig } from './serverConfig';
 export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {

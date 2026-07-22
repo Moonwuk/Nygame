@@ -54,9 +54,17 @@ const bootTime = Date.now();
 // Security composition from the environment (all switches OFF by default → dev harness):
 // AUTH_JWT_SECRET (authenticated handshake + token minting + login/password accounts),
 // ALLOWED_ORIGINS (CSWSH), GATE=1 (validated action.v1 envelopes). See serverConfig.ts.
-const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory } = configFromEnv(
-  process.env,
-);
+const {
+  auth,
+  allowedOrigins,
+  signToken,
+  signSession,
+  verifySession,
+  signReset,
+  verifyReset,
+  resetBaseUrl,
+  gateFactory,
+} = configFromEnv(process.env);
 
 const data = loadShippedData();
 // ARS-2: the starter blueprint set, validated against the shipped catalogs at boot
@@ -354,6 +362,12 @@ const server = createMultiplayerServer({
         registerAuthApi(scope, {
           users: stores.userStore,
           signSession,
+          // Recovery (SE-1.x): mounts /auth/recover + /auth/reset only when RESET_BASE_URL
+          // is set. No mailer wired here → the default logs the reset link (a real SMTP/API
+          // transport is a `sendMail` the deployment injects when it has one).
+          ...(signReset && verifyReset && resetBaseUrl
+            ? { signReset, verifyReset, resetBaseUrl }
+            : {}),
           // ARS-2: every fresh account starts with the data-driven blueprint set —
           // "an empty arsenal" never exists. Idempotent end to end (deterministic
           // item ids + first-write-wins grant), so a crashed grant re-runs safely.

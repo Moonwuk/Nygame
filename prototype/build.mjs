@@ -2051,6 +2051,9 @@ const page = (js) => `<!doctype html>
         <label class="cfield"><span data-i18n>Имя командира</span>
           <input id="crnick" type="text" autocapitalize="off" autocomplete="username" spellcheck="false" maxlength="24" placeholder="позывной" data-i18n-ph>
         </label>
+        <label class="cfield"><span data-i18n>Почта (для восстановления)</span>
+          <input id="crmail" type="email" autocapitalize="off" autocomplete="email" spellcheck="false" maxlength="254" placeholder="you@mail.com">
+        </label>
         <label class="cfield"><span data-i18n>Пароль</span>
           <input id="crpass" type="password" autocomplete="new-password" maxlength="128" placeholder="минимум 8 символов" data-i18n-ph>
         </label>
@@ -2061,6 +2064,30 @@ const page = (js) => `<!doctype html>
           <button id="crgo" class="cbtn" type="button" data-i18n>Создать командира</button>
         </div>
         <button id="crrecover" class="clink" type="button" data-i18n>Восстановить доступ</button>
+      </div>
+      <div id="crecover" style="display:none">
+        <button id="crecback" class="cback" type="button" data-i18n>‹ назад</button>
+        <div class="ctitle"><span class="dia"></span><b data-i18n>Восстановление доступа</b></div>
+        <p class="csub" data-i18n>Укажи почту аккаунта — пришлём ссылку для сброса пароля.</p>
+        <label class="cfield"><span data-i18n>Почта</span>
+          <input id="crecmail" type="email" autocapitalize="off" autocomplete="email" spellcheck="false" maxlength="254" placeholder="you@mail.com">
+        </label>
+        <div class="crow">
+          <button id="crecgo" class="cbtn" type="button" data-i18n>Отправить ссылку</button>
+        </div>
+      </div>
+      <div id="creset" style="display:none">
+        <div class="ctitle"><span class="dia"></span><b data-i18n>Новый пароль</b></div>
+        <p class="csub" data-i18n>Придумай новый пароль для входа.</p>
+        <label class="cfield"><span data-i18n>Пароль</span>
+          <input id="cresetpass" type="password" autocomplete="new-password" maxlength="128" placeholder="минимум 8 символов" data-i18n-ph>
+        </label>
+        <label class="cfield"><span data-i18n>Повтор пароля</span>
+          <input id="cresetpass2" type="password" autocomplete="new-password" maxlength="128" placeholder="ещё раз" data-i18n-ph>
+        </label>
+        <div class="crow">
+          <button id="cresetgo" class="cbtn" type="button" data-i18n>Сменить пароль</button>
+        </div>
       </div>
       <div id="cbrowse" style="display:none">
         <button id="cback" class="cback" type="button" data-i18n>‹ назад</button>
