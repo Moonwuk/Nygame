@@ -192,6 +192,7 @@ export const en: Record<string, string> = {
   'Выбрать+': 'Select+',
   'Деж. вылет': 'Scramble',
   'голод: −25% на земле': 'starving: −25% on the ground',
+  'блэкаут: радары и ПВО −50%': 'blackout: radars and AA −50%',
   '⚔ авто-штурм включён — флот сам штурмует вражеский мир по прибытии':
     '⚔ auto-storm on — the fleet storms the hostile world it arrives at by itself',
   Ускорить: 'Boost',

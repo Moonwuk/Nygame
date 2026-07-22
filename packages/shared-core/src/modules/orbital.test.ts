@@ -240,6 +240,25 @@ describe('orbital — anti-air (orbital AA)', () => {
     expect(r.events.map((e) => e.type)).toContain('fleet.destroyed');
   });
 
+  it('ECON-2 blackout: unpaid energy halves BOTH flak tiers until the bill clears', () => {
+    const kernel = createKernel([orbitalModule]);
+    const scene = (arrears?: string[]) =>
+      stateWith({
+        players: [{ ...player('p1'), ...(arrears ? { arrears } : {}) }],
+        planets: [planet('P', 'p1', { buildings: [['flak', 1]] })], // 28 per hourly volley
+        fleets: [fleet('E', 'p2', 'P', [['cruiser', 1]], { orbit: 'near' })], // 40 hp
+      });
+    // Lights on: one hourly volley lands the full 28 (40 − 28 = 12).
+    const lit = okAdvance(kernel.advanceTo(scene(), at(1 * HOUR)));
+    expect(lit.state.fleets.E?.units[0]?.hp).toBe(12);
+    // Blackout: the same volley lands 14 (40 − 14 = 26).
+    const dark = okAdvance(kernel.advanceTo(scene(['energy']), at(1 * HOUR)));
+    expect(dark.state.fleets.E?.units[0]?.hp).toBe(26);
+    // A non-energy arrears (food) keeps the guns at full strength.
+    const fed = okAdvance(kernel.advanceTo(scene(['food']), at(1 * HOUR)));
+    expect(fed.state.fleets.E?.units[0]?.hp).toBe(12);
+  });
+
   it('ORBITAL tier (buildings) volleys hourly: a sub-hour dip escapes untouched', () => {
     const kernel = createKernel([orbitalModule]);
     const st = stateWith({
@@ -283,10 +302,7 @@ describe('orbital — anti-air (orbital AA)', () => {
     const st2 = okAdvance(kernel.advanceTo(st, at(0.9 * HOUR))).state;
     const r = okAdvance(kernel.advanceTo(st2, at(HOUR)));
     const volleys = r.events.filter((e) => e.type === 'aa.fired');
-    expect(volleys.map((v) => (v.payload as { tier: string }).tier)).toEqual([
-      'orbital',
-      'close',
-    ]);
+    expect(volleys.map((v) => (v.payload as { tier: string }).tier)).toEqual(['orbital', 'close']);
     // NB: (0, 0.9h] already dealt three close volleys (21) before this span.
     expect(r.state.fleets.E?.units[0]?.hp).toBe(80 - 21 - 28 - 7);
   });

@@ -502,6 +502,34 @@ describe('radar tracks the moving ship, not its destination', () => {
   });
 });
 
+describe('ECON-2 · blackout halves the viewer’s radar reach (unpaid energy)', () => {
+  const contactLocs = (state: GameState): string[] =>
+    (visibleState(state, 'p1', data).signatures ?? []).map((c) => c.location);
+
+  it('energy arrears drop the distance contacts; identity-by-jumps survives', () => {
+    // Base reach 300 sees C (x=250) and E (x=180); ×0.5 = 150 sees neither.
+    const lit = scenario();
+    expect(contactLocs(lit)).toEqual(expect.arrayContaining(['C', 'E']));
+    const dark = scenario();
+    dark.players.p1!.arrears = ['energy'];
+    const dimmed = contactLocs(dark);
+    expect(dimmed).not.toContain('C');
+    expect(dimmed).not.toContain('E');
+    // The jump-based identify (A,B) is sensors-on-the-ground, not radar — intact.
+    expect(visibleState(dark, 'p1', data).planets.B?.garrison).not.toEqual([]);
+  });
+
+  it('a non-energy arrears (credits) leaves the scope untouched, and the enemy’s radar is his own', () => {
+    const broke = scenario();
+    broke.players.p1!.arrears = ['credits'];
+    expect(contactLocs(broke)).toEqual(expect.arrayContaining(['C', 'E']));
+    // p2 in blackout does not dim p1's screens.
+    const enemyDark = scenario();
+    enemyDark.players.p2!.arrears = ['energy'];
+    expect(contactLocs(enemyDark)).toEqual(expect.arrayContaining(['C', 'E']));
+  });
+});
+
 describe('radar reach is stretched by tech / faction bonuses (A2)', () => {
   // In `scenario`, p1's level-1 radar at A reaches 300: D (x=450, hosting
   // `enemy-hidden`) is dark. A +50% bonus reaches 450 — D blips on radar but

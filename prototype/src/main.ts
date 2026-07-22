@@ -129,6 +129,7 @@ import {
   scanNodeThreats,
   identifiedNodes,
   thresholdRamp,
+  BLACKOUT_MULT,
   type PausedConstructionSite,
 } from '../../packages/shared-core/src/index';
 import {
@@ -1948,10 +1949,13 @@ function pushSpyLog(text: string): void {
 function computeVision(): Vision {
   const identify = new Set<string>();
   const radar = new Set<string>();
+  // ECON-2 «блэкаут»: неоплаченная энергия глушит каждый свой радар вдвое —
+  // зеркалит серверную fog-проекцию (radarMultiplier, visibility.ts).
+  const dim = (s.players[ME]?.arrears ?? []).includes('energy') ? BLACKOUT_MULT : 1;
   for (const p of Object.values(s.planets))
     if (p.owner === ME) {
       floodHops(p.id, SENSOR_HOPS, identify);
-      const rr = planetRadar(p);
+      const rr = planetRadar(p) * dim;
       if (rr > 0) {
         withinRadius(p.id, rr, radar); // signatures (outer)
         withinRadius(p.id, rr * IDENTIFY_REACH_FRACTION, identify); // full reveal (inner)
@@ -1962,7 +1966,7 @@ function computeVision(): Vision {
       const node = fleetNode(f);
       if (!node) continue;
       floodHops(node, 0, identify); // own node only — ships are near-blind (mirrors FLEET_IDENTIFY_HOPS)
-      const rr = fleetRadar(f);
+      const rr = fleetRadar(f) * dim;
       if (rr > 0) {
         const pos = fleetPos(f); // radar from the SHIP's position, not its destination
         if (pos) {
@@ -5331,6 +5335,10 @@ function planetPanelHtml(p: Planet): string {
       `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
     ) +
     `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
+  // ECON-2: блэкаут — неоплаченная энергия глушит радары и ПВО этого владельца вдвое.
+  if (mine && (s.players[ME]?.arrears ?? []).includes('energy')) {
+    h += `<div class="row" style="color:var(--red)">⚡ ${t('блэкаут: радары и ПВО −50%')}</div>`;
+  }
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
