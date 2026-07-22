@@ -112,7 +112,10 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'fleet.merge': z.object({ from: id, into: id }),
   'fleet.split': z.object({
     fleetId: id,
-    take: z.array(z.object({ unit: id, count })).min(1).max(32),
+    take: z
+      .array(z.object({ unit: id, count }))
+      .min(1)
+      .max(32),
   }),
   'fleet.engage': z.object({ fleetId: id, targetId: id }),
   // capital (hero respawn / re-fit anchor)
@@ -130,7 +133,10 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
     slot: z.number().int().nonnegative(),
     unit: z.string().nullable(),
   }),
-  'division.rename': z.object({ template: z.number().int().nonnegative(), name: z.string().min(1) }),
+  'division.rename': z.object({
+    template: z.number().int().nonnegative(),
+    name: z.string().min(1),
+  }),
   'division.load': z.object({ divisionId: id, fleetId: id }),
   'division.unload': z.object({ divisionId: id }),
   // steward («Хранитель») — postures are data-driven; the module gates the value
@@ -148,6 +154,9 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   'order.scramble': z.object({ fleetId: id, on: z.boolean() }),
   // BOOST-1 форс-марш: +50% speed for hull wear while in transit — client toggle.
   'fleet.forcemarch': z.object({ fleetId: id, on: z.boolean() }),
+  // Платный мгновенный ремонт корпуса (карточка флота): цена выводится из state
+  // на сервере — клиент шлёт только намерение.
+  'fleet.instantRepair': z.object({ fleetId: id }),
   // CC-1 order chain — the client atomically sets/cancels ([]) a fleet's whole queued
   // plan; the module re-validates against live state (known worlds, ownership).
   // `chain.stamp` is deliberately ABSENT: it is the SERVER driver's runtime stamp

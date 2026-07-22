@@ -1468,4 +1468,44 @@ export const en: Record<string, string> = {
   'КОНСТРУКТОР ДИВИЗИЙ': 'DIVISION BUILDER',
   'ХРАНИТЕЛЬ · ИИ НА СОН': 'STEWARD · AI WHILE ASLEEP',
   'Хранитель — передать ИИ на сон': 'Steward — hand to the AI while asleep',
+  // --- Bytro-карточка армии: ХП-бар, сводка, платный ремонт, кап линии огня ----
+  'Мгновенный ремонт всего корпуса за кредиты': 'Instant full-hull repair for credits',
+  Состав: 'Composition',
+  скауты: 'scouts',
+  боевые: 'combat',
+  артиллерия: 'artillery',
+  транспорты: 'transports',
+  флагман: 'flagship',
+  рой: 'swarm',
+  всего: 'total',
+  'бьют {n} юнитов': '{n} units firing',
+  'форс-марш': 'forced march',
+  'рывок отхода': 'retreat dash',
+  'по самому медленному; техи/фракция/местность — на переходе':
+    'at the slowest hull; tech/faction/terrain apply per leg',
+  Трюм: 'Cargo hold',
+  Радар: 'Radar',
+  'Сводка армии': 'Army summary',
+  '‹ Назад к карточке': '‹ Back to the card',
+  'Линия огня': 'Firing line',
+  'В залпе бьют максимум {n} юнитов — сильнейшие первыми; все сверх капа только впитывают урон.':
+    'At most {n} units fire per volley — the strongest first; everyone beyond the cap only soaks damage.',
+  'Текущая/полная прочность армии. Чинится у своего мира с верфью — или мгновенно за кредиты.':
+    'Current/full army hull. Mends over your world with a repair yard — or instantly for credits.',
+  'Аблятивный щит: принимает урон первым и бесплатно восстанавливается вне боя.':
+    'Ablative shield: takes damage first and recharges for free out of combat.',
+  // --- настройки: цвета сторон -------------------------------------------------
+  'Цвета сторон': 'Side colours',
+  'Свой цвет': 'Your colour',
+  'вы на карте и в панелях — форма несёт тип, цвет несёт сторону':
+    'you on the map and in panels — the shape carries the type, the colour carries the side',
+  Нейтральные: 'Neutrals',
+  'ничейные миры и неопознанные силы': 'unowned worlds and unidentified forces',
+  'Палитра соперников': 'Rival palette',
+  '«дальтоник» — оттенки, различимые при цветослепоте':
+    '«colourblind» — hues distinguishable with colour vision deficiency',
+  классика: 'classic',
+  тёплая: 'warm',
+  дальтоник: 'colourblind',
+  'Вернуть цвета по умолчанию': 'Reset colours to defaults',
 };

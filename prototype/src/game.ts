@@ -3582,6 +3582,58 @@ export const forcedMarchModule: GameModule = {
   },
 };
 
+// --- платное мгновенное восстановление («золотой ремонт») ---------------------
+// Донатная кнопка Bytro-стиля, ненавязчивая: маленький чип в карточке флота.
+// Кредиты играют роль премиум-валюты до монетизации (как шпионаж 150c). Мгновенный
+// топ-ап КОРПУСА всех стеков (корабли + десант) где угодно — кроме боя; щит регенит
+// бесплатно сам, медленный портовый ремонт (shipRepair) и план ECON-3 (metal в
+// доке) остаются как были.
+export const INSTANT_REPAIR_CREDITS_PER_HP = 1;
+
+/** Недостающий корпус флота (корабли + десант), по эффективному hp с фитингами. */
+export function missingHull(f: Fleet, data: GameData): number {
+  let missing = 0;
+  for (const stack of [...f.units, ...(f.landing ?? [])]) {
+    if (stack.count <= 0 || stack.hp === undefined) continue;
+    const def = data.units[stack.unit];
+    if (!def) continue;
+    const per = effectiveStats(def, stack, data).hp ?? 0;
+    const full = stack.count * per;
+    missing += Math.max(0, full - Math.min(stack.hp, full));
+  }
+  return missing;
+}
+
+/** Цена мгновенного ремонта в кредитах (0 — чинить нечего) — одна формула на
+ *  сервер и кнопку клиента, чтобы ценник в UI не расходился с гейтом. */
+export function instantRepairCost(f: Fleet, data: GameData): number {
+  return Math.ceil(missingHull(f, data) * INSTANT_REPAIR_CREDITS_PER_HP);
+}
+
+export const instantRepairModule: GameModule = {
+  id: 'instant-repair',
+  version: '0.1.0',
+  setup(api) {
+    api.onAction('fleet.instantRepair', (action, h) => {
+      const p = action.payload as { fleetId?: unknown };
+      if (typeof p?.fleetId !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const f = h.state.fleets[p.fleetId];
+      // Absent OR not-yours → one opaque code (A06 — no fleet-existence probing).
+      if (!f || f.owner !== action.playerId) return h.reject('E_NO_FLEET');
+      if (f.battleId) return h.reject('E_IN_BATTLE');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      const hull = missingHull(f, h.ctx.data);
+      if (hull <= 0) return h.reject('E_NOTHING_TO_REPAIR');
+      const credits = Math.ceil(hull * INSTANT_REPAIR_CREDITS_PER_HP);
+      if (!canAfford(player.resources, { credits })) return h.reject('E_NO_FUNDS');
+      payCost(player.resources, { credits });
+      for (const stack of [...f.units, ...(f.landing ?? [])]) delete stack.hp;
+      h.emit('fleet.instantRepaired', { fleetId: f.id, owner: f.owner, credits, hull });
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
@@ -3615,6 +3667,7 @@ export const MODULES: GameModule[] = [
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
   standingOrdersModule, // CC-2/CC-4 standing orders (auto-storm / дежурный вылет), server-driven
   forcedMarchModule, // BOOST-1 форс-марш: +50% скорости за 5% max-HP износа в час хода
+  instantRepairModule, // платный мгновенный ремонт корпуса (кредиты как премиум-валюта)
   effectsModule, // EFX-1: интерпретатор data.events (trigger→effect); инертен, пока events: {} пуст
 ];
 
@@ -4247,6 +4300,9 @@ export const orderChain = (playerId: string, fleetId: string, steps: ChainStep[]
 /** BOOST-1: toggle форс-марш on an owned fleet (+50% speed, hull wear in transit). */
 export const forceMarchFleet = (playerId: string, fleetId: string, on: boolean) =>
   act(playerId, 'fleet.forcemarch', { fleetId, on });
+/** Платный мгновенный ремонт корпуса всего флота (цена — `instantRepairCost`). */
+export const instantRepairFleet = (playerId: string, fleetId: string) =>
+  act(playerId, 'fleet.instantRepair', { fleetId });
 /** The chain driver's runtime stamp: consumed head / armed wait deadline. */
 export const chainStamp = (
   playerId: string,
