@@ -20,9 +20,10 @@
  * SH-0.1/0.2 — `shieldHp` pool); a derived power rating / damage-reduction still
  * don't exist in the core (docs/hud-inmatch.md HUD-2 ⏳) and land once they ship.
  */
-import { MS_PER_DAY } from '@void/shared-core';
+import { MS_PER_DAY, previewBattle, previewLossCount } from '@void/shared-core';
 import type {
   BattleId,
+  BattlePreviewSide,
   CombatantRef,
   Fleet,
   FleetId,
@@ -444,4 +445,93 @@ export function resolveBattleAction(action: BattleAction, model: BattleModel): B
     return { ok: false, code: 'E_CANNOT_RETREAT' };
   }
   return { ok: true, type: 'fleet.retreat', fleetId: model.retreatFleetId };
+}
+
+/* ─────────────────── Combat forecast — assault preview (G4) ──────────────────── */
+
+/** One side's forecast in the assault-preview panel — losses only (survivors are
+ *  already visible via the selection/battle panels), plus the two numbers the
+ *  copy thresholds on: how many units, and what hull-share is at stake. */
+export interface BattlePreviewSideView {
+  losses: SelectionStack[];
+  lossCount: number;
+  /** Share of this side's hull pool the forecast predicts lost, in [0,1]. */
+  damageFraction: number;
+}
+
+/** Render-ready «если атакую — что будет?» forecast (ONB-6/G4) for a fleet's
+ *  landing force against the garrison of the world it is docked over. */
+export interface BattlePreviewModel {
+  kind: 'preview';
+  outcome: 'attacker' | 'defender' | 'stalemate';
+  roundsEst: number;
+  attacker: BattlePreviewSideView;
+  defender: BattlePreviewSideView;
+}
+
+/** Preview projection outcome: the forecast, or a stable error code. */
+export type BattlePreviewResult = ({ ok: true } & BattlePreviewModel) | { ok: false; code: string };
+
+function previewSideView(
+  side: BattlePreviewSide,
+  data: Pick<GameData, 'units'>,
+): BattlePreviewSideView {
+  return {
+    losses: toStacks(side.losses, data),
+    lossCount: previewLossCount(side),
+    damageFraction: side.damageFraction,
+  };
+}
+
+/**
+ * Project the assault forecast for `fleetId`'s landing force against the garrison
+ * of the world it is docked at — a thin render-ready wrapper over the core's pure
+ * `previewBattle` (ONB-6). Fog-safe by construction: a stationed fleet has already
+ * identified its own world, so there is nothing here fog could still be hiding.
+ *
+ * Fail-secure: absent fleet → `E_NO_SELECTION`; not the viewer's own → `E_FORBIDDEN`;
+ * not stationed (in transit, parked mid-lane, or already fighting) → `E_NOT_DOCKED`;
+ * the docked world is the viewer's own, or its sector kind isn't capturable →
+ * `E_NOT_HOSTILE`; no landing force aboard, or the garrison is empty (nothing to
+ * forecast) → `E_NOTHING_TO_FORECAST`.
+ */
+export function createBattlePreviewModel(
+  state: GameState,
+  fleetId: FleetId,
+  viewerId: PlayerId,
+  data: GameData,
+): BattlePreviewResult {
+  const fleet = state.fleets[fleetId];
+  if (!fleet) {
+    return { ok: false, code: 'E_NO_SELECTION' };
+  }
+  if (fleet.owner !== viewerId) {
+    return { ok: false, code: 'E_FORBIDDEN' };
+  }
+  if (!fleet.location || fleet.movement || fleet.battleId) {
+    return { ok: false, code: 'E_NOT_DOCKED' };
+  }
+  const planet = state.planets[fleet.location];
+  if (!planet) {
+    return { ok: false, code: 'E_NOT_DOCKED' };
+  }
+  const capturable = planet.kind ? (data.sectorKinds[planet.kind]?.capturable ?? true) : true;
+  if (planet.owner === viewerId || !capturable) {
+    return { ok: false, code: 'E_NOT_HOSTILE' };
+  }
+  const landing = fleet.landing ?? [];
+  const garrison = planet.garrison;
+  if (!landing.some((u) => u.count > 0) || !garrison.some((u) => u.count > 0)) {
+    return { ok: false, code: 'E_NOTHING_TO_FORECAST' };
+  }
+
+  const preview = previewBattle(landing, garrison, data);
+  return {
+    ok: true,
+    kind: 'preview',
+    outcome: preview.outcome,
+    roundsEst: preview.roundsEst,
+    attacker: previewSideView(preview.attacker, data),
+    defender: previewSideView(preview.defender, data),
+  };
 }

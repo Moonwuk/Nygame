@@ -7,16 +7,20 @@ import {
   type GameData,
   type GameState,
   type Hero,
+  type Planet,
 } from '@void/shared-core';
 import {
   createBattleModel,
+  createBattlePreviewModel,
   createSelectionModel,
   createStatusBarModel,
   resolveBattleAction,
 } from './matchHud';
 
 /** Minimal game-data slice the HUD reads: canonical resource order + unit defs
- *  (only `domain` and `stats.hp` are consulted). Cast keeps the fixture terse. */
+ *  (only `domain` and `stats.hp` are consulted). Cast keeps the fixture terse.
+ *  `raider`/`sentry` carry `attack`/`defense` too — the assault-preview describe
+ *  below is the only one that runs the actual combat math. */
 const DATA = {
   resources: ['credits', 'metal', 'food', 'energy', 'microelectronics'],
   units: {
@@ -24,8 +28,14 @@ const DATA = {
     corvette: { domain: 'space', stats: { hp: 6 } },
     marine: { domain: 'ground', stats: { hp: 3 } },
     aegis: { domain: 'space', stats: { hp: 10, shield: 4 } }, // shielded hull
+    raider: { domain: 'ground', stats: { hp: 20, attack: 10, defense: 0 }, traits: [], line: 'front' },
+    sentry: { domain: 'ground', stats: { hp: 5, attack: 0, defense: 0 }, traits: [], line: 'front' },
   },
-} as unknown as Pick<GameData, 'resources' | 'units'>;
+  sectorKinds: {
+    outpost: { capturable: true },
+    fortress: { capturable: false },
+  },
+} as unknown as Pick<GameData, 'resources' | 'units' | 'sectorKinds'>;
 
 function baseState(): GameState {
   const s = createInitialState({ seed: 'hud', version: { data: '1', manifest: '1' } });
@@ -519,6 +529,143 @@ describe('createBattleModel', () => {
 
   it('produces a JSON-serialisable model', () => {
     const res = createBattleModel(orbitalScene(), 'b1', 'p1', DATA);
+    expect(JSON.parse(JSON.stringify(res))).toEqual(res);
+  });
+});
+
+describe('createBattlePreviewModel', () => {
+  // previewBattle (core) wants a full GameData; DATA above is intentionally a
+  // narrow Pick for the other describes, so widen it once here.
+  const PREVIEW_DATA = DATA as unknown as GameData;
+
+  function world(partial: Partial<Planet> = {}): Planet {
+    return {
+      id: 'A',
+      owner: 'p2',
+      position: { x: 0, y: 0 },
+      resources: {},
+      buildings: [],
+      garrison: [{ unit: 'sentry', count: 1 }],
+      traits: [],
+      ...partial,
+    };
+  }
+
+  function dockedScene(fleetPartial: Partial<Fleet> = {}, planetPartial: Partial<Planet> = {}): GameState {
+    const s = baseState();
+    s.planets = { A: world(planetPartial) };
+    s.fleets = {
+      f1: fleet({
+        id: 'f1',
+        owner: 'p1',
+        location: 'A',
+        landing: [{ unit: 'raider', count: 1 }],
+        ...fleetPartial,
+      }),
+    };
+    return s;
+  }
+
+  it('forecasts a clean attacker win: no counter-fire, one round, garrison wiped', () => {
+    const res = createBattlePreviewModel(dockedScene(), 'f1', 'p1', PREVIEW_DATA);
+    expect(res).toMatchObject({
+      ok: true,
+      kind: 'preview',
+      outcome: 'attacker',
+      roundsEst: 1,
+    });
+    if (!res.ok) return;
+    // sentry has 0 defense (no return fire) → the raider takes zero damage.
+    expect(res.attacker).toEqual({ losses: [], lossCount: 0, damageFraction: 0 });
+    // 1 sentry (5 hp) vs 10 attack → wiped in round 1.
+    expect(res.defender).toEqual({
+      losses: [{ unit: 'sentry', count: 1, domain: 'ground' }],
+      lossCount: 1,
+      damageFraction: 1,
+    });
+  });
+
+  it('fail-secure: absent fleet yields a stable code', () => {
+    expect(createBattlePreviewModel(baseState(), 'ghost', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NO_SELECTION',
+    });
+  });
+
+  it('fail-secure: not the viewer\'s own fleet yields a stable code', () => {
+    const s = dockedScene({ owner: 'p2' });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_FORBIDDEN',
+    });
+  });
+
+  it('fail-secure: a fleet in transit is not docked anywhere to forecast', () => {
+    const s = dockedScene({
+      location: null,
+      movement: { from: 'A', to: 'B', departedAt: 0, arrivesAt: 10 },
+    });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOT_DOCKED',
+    });
+  });
+
+  it('fail-secure: a fleet parked mid-lane is not docked anywhere to forecast', () => {
+    const s = dockedScene({ location: null, edge: { from: 'A', to: 'B', t: 0.5 } });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOT_DOCKED',
+    });
+  });
+
+  it('fail-secure: a fleet already fighting has nothing left to forecast', () => {
+    const s = dockedScene({ battleId: 'b1' });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOT_DOCKED',
+    });
+  });
+
+  it('fail-secure: the viewer\'s own world is not an assault target', () => {
+    const s = dockedScene({}, { owner: 'p1' });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOT_HOSTILE',
+    });
+  });
+
+  it('fail-secure: a non-capturable sector kind is not an assault target', () => {
+    const s = dockedScene({}, { kind: 'fortress' });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOT_HOSTILE',
+    });
+  });
+
+  it('a sector kind absent from game data defaults to capturable', () => {
+    const s = dockedScene({}, { kind: 'unknown_kind' });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA).ok).toBe(true);
+  });
+
+  it('fail-secure: no landing force aboard means nothing to forecast', () => {
+    const s = dockedScene({ landing: [] });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOTHING_TO_FORECAST',
+    });
+  });
+
+  it('fail-secure: an empty garrison means nothing to forecast', () => {
+    const s = dockedScene({}, { garrison: [] });
+    expect(createBattlePreviewModel(s, 'f1', 'p1', PREVIEW_DATA)).toEqual({
+      ok: false,
+      code: 'E_NOTHING_TO_FORECAST',
+    });
+  });
+
+  it('produces a JSON-serialisable model', () => {
+    const res = createBattlePreviewModel(dockedScene(), 'f1', 'p1', PREVIEW_DATA);
     expect(JSON.parse(JSON.stringify(res))).toEqual(res);
   });
 });
