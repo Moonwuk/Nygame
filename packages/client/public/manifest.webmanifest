@@ -1,0 +1,32 @@
+{
+  "name": "Void Dominion",
+  "short_name": "Void Dominion",
+  "description": "Real-time space grand strategy — drop in, issue orders, drop out. The war runs on while you're away.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "ru",
+  "theme_color": "#03141a",
+  "background_color": "#03141a",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
