@@ -125,7 +125,7 @@ terrain?, planetType?, owner?, buildings?, garrison? }` + рёбра `paths` (п
 
 ## Фаза M2 · Сектор как сущность (механика)
 
-### M2.1 · Виды секторов (`kind`) в данные `[core]` `[data]` 🔒(M0.2) — M
+### M2.1 · Виды секторов (`kind`) в данные `[core]` `[data]` 🔒(M0.2) — ✅
 **Цель:** перенести прототипный `SECTOR_TYPES` в контент+ядро. **Сделано:**
 `data/sectorKinds.json` (7 видов: planet/asteroid/nebula/empty/debris_field/
 dead_world/void_station + `capturable`/`buildable`/`orbit`) + `SectorKindDefSchema`

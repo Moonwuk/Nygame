@@ -185,10 +185,16 @@ export type RoomObservation =
       ok: boolean;
       seq: number;
       code?: string;
+      /** True when this action's receipt was ALREADY durably persisted by the
+       *  commit-before-broadcast `persist` callback (the gated durable path). A host
+       *  that persists receipts from `observe` must skip those to avoid a double write
+       *  (the sync path — server drivers, ungated actions — leaves this false). */
+      durable?: boolean;
     }
   /** Terminal match report. `rewards` is the session-end table the core computed
-   *  (SES-2: place + XP per seated player, GDD §3.4) — surfaced here so the
-   *  playtest JSONL carries it until account crediting exists (EC-*). */
+   *  (SES-2: place + XP per seated player, GDD §3.4) — the host banks each seat's XP
+   *  onto its account here (EC-*: `CommanderStore.creditMatch`, idempotent per match)
+   *  and the playtest JSONL carries the same table. */
   | {
       kind: 'end';
       winner: PlayerId | null;
@@ -278,8 +284,10 @@ function canSend(peer: RoomPeer): boolean {
 }
 
 /** Best-effort actionId from a raw envelope, for correlating a gate rejection back to the
- *  client's action. A malformed payload may carry none — then `''`, and the client
- *  correlates by its own clientSeq instead. */
+ *  client's action. The legit client always sends a string actionId
+ *  (`createActionEnvelope`), so `''` only arises for a malformed/hostile envelope — its
+ *  rejection is then simply not correlated (the client's handler ignores an empty
+ *  actionId) and dropped, which is harmless. There is NO clientSeq fallback. */
 function envelopeActionId(envelope: unknown): string {
   if (envelope !== null && typeof envelope === 'object') {
     const id = (envelope as { actionId?: unknown }).actionId;
@@ -433,7 +441,20 @@ export class MatchRoom {
     }
     this.emitStateHash = options.emitStateHash ?? false;
     this.singlePeerPerPlayer = options.singlePeerPerPlayer ?? false;
-    this.observe = options.observe;
+    // Enforce the metrics invariant (docs/metrics-roadmap): an observer is PURE
+    // telemetry and must NEVER feed back into the room. Wrap it once here so a
+    // throwing observer can't escape a commit/broadcast (a metrics bug must not take
+    // the match down) — every `this.observe(...)` call site is guarded for free.
+    const raw = options.observe;
+    this.observe = raw
+      ? (event): void => {
+          try {
+            raw(event);
+          } catch {
+            /* swallow — telemetry only; a bad consumer never disrupts the room */
+          }
+        }
+      : undefined;
     this.record = options.record;
     this.persist = options.persist;
     this.gate = options.gate;
@@ -549,6 +570,16 @@ export class MatchRoom {
   /** Whether a manual-start match has begun (lobby passed). */
   get isStarted(): boolean {
     return this.started;
+  }
+
+  /** Whether the world clock is currently ADVANCING (vs. frozen in a pre-start lobby).
+   *  Mirrors the `clock()` gate exactly: a no-lobby room (auto-start SES-2.1, or the
+   *  plain dev match) always runs; a waitForPlayers/manualStart lobby runs only once
+   *  released (`lobbyRunningSince` set). The offline heartbeat beats only a running
+   *  room — a frozen lobby has no live clock to keep on-screen, and its "due" events
+   *  must not fire (which would also trip the driver's stall guard). */
+  get isClockRunning(): boolean {
+    return (!this.waitFor && !this.manualStart) || this.lobbyRunningSince !== null;
   }
 
   /** Number of connected sockets across all seats — 0 means the match is unwatched
@@ -974,6 +1005,11 @@ export class MatchRoom {
         // so peers see the advanced world instead of losing it until the next accepted
         // action — without a tick loop, that could be hours of game time.
         if (advanced.events.length > 0) this.broadcastState(advanced.events);
+        // The advance itself may have ENDED the match (a score/domination threshold
+        // crossed on a `time.advanced` span) — the triggering action then rejects with
+        // E_MATCH_ENDED, but rewards must still be banked. observeEndIfNeeded is
+        // idempotent, so calling it on every advanced-reject is safe (EC-* banking bug).
+        this.observeEndIfNeeded();
         const receipt = this.recordReceipt(action, playerId, false, result.code);
         if (peer) this.sendRejection(peer, receipt);
         return { ok: false, seq: receipt.seq, events: [], code: receipt.code };
@@ -1072,7 +1108,6 @@ export class MatchRoom {
       seq: this.seq,
       serverTime: this.clock(),
       state: view.base,
-      events: [],
       signatures: view.signatures,
       remembered: view.remembered,
       ...this.hashField(view.base),
@@ -1184,7 +1219,7 @@ export class MatchRoom {
    *  `committing` false: a driver's `reschedule` reads `msUntilNextEvent`, which reports
    *  null while committing — so emitting mid-commit would leave the driver un-armed and
    *  the 24/7 world stalled for connected players until their next action. */
-  private observeAction(receipt: ActionReceipt, actionType: string): void {
+  private observeAction(receipt: ActionReceipt, actionType: string, durable = false): void {
     this.observe?.({
       kind: 'action',
       actionId: receipt.actionId,
@@ -1193,6 +1228,7 @@ export class MatchRoom {
       ok: receipt.ok,
       seq: receipt.seq,
       ...(receipt.code ? { code: receipt.code } : {}),
+      ...(durable ? { durable: true } : {}),
     });
   }
 
@@ -1333,7 +1369,7 @@ export class MatchRoom {
       if (action.playerId !== playerId || !this.hasPlayer(playerId)) {
         const receipt = await this.commitReject(playerId, action, 'E_FORBIDDEN', peer);
         if (!receipt) return TRANSIENT_VERDICT;
-        observeCommitted = () => this.observeAction(receipt, action.type);
+        observeCommitted = () => this.observeAction(receipt, action.type, true); // durable: persist already wrote the receipt
         return { ok: false, code: 'E_FORBIDDEN', durable: true };
       }
 
@@ -1345,7 +1381,7 @@ export class MatchRoom {
       if (!advanced.ok) {
         const receipt = await this.commitReject(playerId, action, advanced.code, peer);
         if (!receipt) return TRANSIENT_VERDICT;
-        observeCommitted = () => this.observeAction(receipt, action.type);
+        observeCommitted = () => this.observeAction(receipt, action.type, true); // durable: persist already wrote the receipt
         return { ok: false, code: advanced.code, durable: true };
       }
 
@@ -1374,8 +1410,11 @@ export class MatchRoom {
         this.stateValue = advanced.state;
         this.seq = seq;
         this.retainReceipt(receipt);
-        observeCommitted = () => this.observeAction(receipt, action.type);
+        observeCommitted = () => this.observeAction(receipt, action.type, true); // durable: persist already wrote the receipt
         if (advanced.events.length > 0) this.broadcastState(advanced.events);
+        // Same as the sync path: the durable catch-up advance may have ended the match
+        // while THIS action rejects (E_MATCH_ENDED) — bank rewards regardless (idempotent).
+        this.observeEndIfNeeded();
         if (peer) this.sendRejection(peer, receipt);
         return { ok: false, code: result.code, durable: true };
       }
@@ -1393,7 +1432,7 @@ export class MatchRoom {
       this.record?.({ at: effectiveNow, action }); // RPL-2: only SUCCESSFUL applies
       this.seq = seq;
       this.retainReceipt(receipt);
-      observeCommitted = () => this.observeAction(receipt, action.type);
+      observeCommitted = () => this.observeAction(receipt, action.type, true); // durable: persist already wrote the receipt
       this.broadcastState([...advanced.events, ...result.events]);
       this.observeEndIfNeeded();
       return { ok: true };

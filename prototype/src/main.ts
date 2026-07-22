@@ -259,6 +259,7 @@ import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
 import { buildRecap, type RecapEvent } from './recap';
 // ONB-7 — first-session goals checklist (mine/fleet/capture/score, ticked from state).
 import { FIRST_GOALS, metGoals, mergeDone, goalsComplete, type GoalSignals } from './firstGoals';
+import { reconnectDelayMs } from './reconnect';
 // ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
 // model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
 import {
@@ -609,7 +610,7 @@ let merging = false; // "Merge" armed → next tap on a friendly fleet picks the
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
 let pendingMerges: Array<{ mover: string; into: string }> = [];
-let additive = false; // Ctrl/⌘ held on the current tap → add to the fleet selection
+let additive = false; // Shift or Ctrl/⌘ held on the current tap → add to the fleet selection
 // Split-fleet dialog: which fleet, and how many of each ship type peel off.
 let splitState: { fleetId: string; take: Record<string, number> } | null = null;
 
@@ -2255,6 +2256,14 @@ function playerOrder(action: Action) {
     activeTour?.notifyAction(action.type); // optimistic — server result is async
     return;
   }
+  // Net match, socket temporarily down (auto-reconnecting): DON'T run the local reducer
+  // — the order would apply to `s`, look accepted on-screen, then vanish when the
+  // reconnect `welcome` overwrites state (the server never saw it). Refuse with feedback
+  // instead of silently losing it. (Solo/skirmish has `reconnecting === false`.)
+  if (reconnecting) {
+    note('⟳ ' + t('переподключение — приказ не отправлен, повтори через миг'));
+    return;
+  }
   const out = order(s, action, s.time);
   apply(out);
   if (out.error) note('✖ ' + errText(out.error));
@@ -3326,16 +3335,34 @@ function checkEnd() {
   const iWon = s.match.winner === ME || (s.match.winners?.includes(ME) ?? false);
   const draw = !iWon && s.match.winner === null;
   // Meta-progression: one XP award per finished match (прокачка командующего).
+  // `xpAwarded` alone is a per-INSTALL latch — a reconnect to an already-ended
+  // match resets it (net welcome handler), so refreshing the page would farm the
+  // award repeatedly. A durable per-match marker (keyed by the match's endedAt,
+  // unique per finished match for this nick) makes the award idempotent; the
+  // recorded amount replays on the end screen instead of a misleading «+0».
   let gained = 0;
   let levelUp: number | null = null;
+  const awardKey = 'vd.xpawarded.' + (nickInput.value.trim() || 'guest');
+  const endStamp = String(s.match.endedAt ?? 'ended');
+  let prior: { at: string; xp: number } | null = null;
+  try {
+    prior = JSON.parse(localStorage.getItem(awardKey) ?? 'null') as typeof prior;
+  } catch {
+    prior = null; // a corrupt marker never blocks the flow — fail open to a fresh award
+  }
   if (!xpAwarded) {
     xpAwarded = true;
-    const st = loadMeta();
-    gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
-    const before = metaLevel(st.xp);
-    const after = { xp: st.xp + gained, spent: st.spent };
-    saveMeta(after);
-    if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
+    if (prior?.at === endStamp) {
+      gained = prior.xp; // this match already paid out — just replay the receipt
+    } else {
+      const st = loadMeta();
+      gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
+      const before = metaLevel(st.xp);
+      const after = { xp: st.xp + gained, spent: st.spent };
+      saveMeta(after);
+      localStorage.setItem(awardKey, JSON.stringify({ at: endStamp, xp: gained }));
+      if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
+    }
   }
   // The full end screen (renderEndScreen) reads this — outcome, reason, XP. The old
   // thin victory `banner` is retired; `banner` now carries only NET-status lines.
@@ -5068,7 +5095,7 @@ function taskGroupPanelHtml(group: Fleet[]): string {
     t('ОПЕРАТИВНАЯ ГРУППА'),
     t('{f} флот(ов) · {s} кораблей · {tr} десанта', { f: group.length, s: ships, tr: troops }),
   );
-  h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift-рамка выделяет группу; Ctrl/⌘-клик добавляет флот.')}</div>`;
+  h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift- или Ctrl/⌘-клик по флоту добавляет его в группу; Shift-рамка по пустому месту выделяет несколько.')}</div>`;
   for (const f of group) {
     const loc =
       f.location ??
@@ -7902,7 +7929,7 @@ function selectAt(mx: number, my: number) {
     );
     if (mine) {
       if (additive)
-        toggleFleetInSelection(mine.id); // Ctrl/⌘ → extend the group
+        toggleFleetInSelection(mine.id); // Shift / Ctrl / ⌘ → extend the group
       else setFleetSelection([mine.id]); // (clears any selected planet)
       return;
     }
@@ -7999,8 +8026,19 @@ canvas.addEventListener('pointerdown', (ev) => {
     dragStart = p;
     tapByTouch = ev.pointerType === 'touch'; // preview + commit share the snap radius
     longPressFired = false;
-    boxSelecting = ev.shiftKey;
-    additive = ev.ctrlKey || ev.metaKey; // Ctrl/⌘-click → add to the fleet selection
+    // Shift OR Ctrl/⌘ extends the fleet selection (the RTS/Bytro habit — Shift-click
+    // gathers fleets for one group order). Shift over EMPTY space still opens a
+    // box-select; Shift over one of YOUR fleets is an additive click instead, so the
+    // two never fight (a rubber-band from a fleet would eat the click).
+    const overOwnFleet = !!nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner === ME),
+      fleetAnchor,
+      p.x,
+      p.y,
+      ev.pointerType === 'touch' ? 24 : 16,
+    );
+    additive = ev.ctrlKey || ev.metaKey || ev.shiftKey;
+    boxSelecting = ev.shiftKey && !overOwnFleet;
     selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
     if (aiming || assaultAim) aimPointer = p; // the aim preview starts under the finger at once
@@ -8085,8 +8123,12 @@ function endPointer(ev: PointerEvent) {
       const a = fleetAnchor(f);
       if (a && a.x >= x1 && a.x <= x2 && a.y >= y1 && a.y <= y2) picked.push(f.id);
     }
-    if (picked.length) setFleetSelection(picked);
-    else {
+    // A modifier-held box ADDS to the running group (Shift-gather is cumulative);
+    // a plain box replaces it. An empty additive box leaves the group untouched.
+    if (picked.length) {
+      if (additive) setFleetSelection([...new Set([...selectedFleetIds(), ...picked])]);
+      else setFleetSelection(picked);
+    } else if (!additive) {
       selFleets = new Set();
       selFleet = null;
       lastPanelHtml = '';
@@ -9612,9 +9654,15 @@ if (!__PLAYER_BUILD__) {
 // sign-in is a styled stub until accounts land (docs/accounts-roadmap.md AC-1.1):
 // it drops you straight into guest play by callsign, with a "скоро" notice.
 const welcomeStageEl = $('cwelcome');
+const registerStageEl = $('cregister');
+const recoverStageEl = $('crecover');
+const resetStageEl = $('creset');
 const browseStageEl = $('cbrowse');
-function showStage(stage: 'welcome' | 'browse'): void {
+function showStage(stage: 'welcome' | 'register' | 'recover' | 'reset' | 'browse'): void {
   welcomeStageEl.style.display = stage === 'welcome' ? '' : 'none';
+  registerStageEl.style.display = stage === 'register' ? '' : 'none';
+  recoverStageEl.style.display = stage === 'recover' ? '' : 'none';
+  resetStageEl.style.display = stage === 'reset' ? '' : 'none';
   browseStageEl.style.display = stage === 'browse' ? '' : 'none';
 }
 
@@ -9649,6 +9697,7 @@ const HUB_PANELS: Record<string, string> = {
   ally: 'hp-ally',
   more: 'hp-more',
 };
+let currentHubTab = 'home'; // the visible hub panel, so an async XP sync can repaint it
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -9657,6 +9706,7 @@ function hubTab(tab: string): void {
     enterBrowse(); // hand off to the existing match browser
     return;
   }
+  currentHubTab = tab;
   if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
   if (tab === 'arsenal') void refreshArsenal(); // cache paints now, server refresh trails
   for (const [k, pid] of Object.entries(HUB_PANELS))
@@ -9820,7 +9870,7 @@ async function refreshArsenal(): Promise<void> {
   if (!srv) return;
   await probeAuthMode(srv.base);
   if (!authMode) return;
-  const session = localStorage.getItem(sessionKey(srv.base));
+  const session = sessionToken(srv.base);
   if (!session) return;
   try {
     const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, {
@@ -9835,6 +9885,42 @@ async function refreshArsenal(): Promise<void> {
     // offline/unreachable — the cache painted above stays the source of truth
   }
 }
+/** Accounts mode (EC-*): pull the DURABLE account XP into the local meta mirror, so
+ *  the commander level/progress a player sees is account-backed and follows them to a
+ *  new device — not the per-callsign localStorage that only lived in one browser. The
+ *  server total is authoritative (it sums every credited match across devices); the
+ *  per-match award still lands optimistically at checkEnd (same formula as the core's
+ *  `data.rewards`, so they agree). Guest/nick mode has no account → keeps localStorage. */
+async function syncCommanderFromServer(): Promise<void> {
+  const srv = resolveServer();
+  if (!srv) return;
+  await probeAuthMode(srv.base);
+  if (!authMode) return;
+  const session = sessionToken(srv.base);
+  if (!session) return;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}/commander/me`, {
+      headers: { authorization: `Bearer ${session}` },
+    });
+    if (!res.ok) return;
+    const body = (await res.json().catch(() => null)) as { xp?: unknown } | null;
+    if (typeof body?.xp !== 'number') return;
+    const cur = loadMeta();
+    // XP only ever grows (accumulated per finished match). Take the max, never a
+    // regression: the server is the durable cross-device total, but if this device
+    // just awarded a match optimistically and the server hasn't credited it yet, we
+    // must NOT drop below the local figure. Both converge once the credit lands.
+    const total = Math.max(cur.xp, body.xp);
+    if (total !== cur.xp) {
+      saveMeta({ ...cur, xp: total }); // local `spent` tree is kept
+      // repaint the open hub panel so the new level/points show without a manual switch
+      if (hubEl.style.display !== 'none' && (currentHubTab === 'home' || currentHubTab === 'meta'))
+        hubTab(currentHubTab);
+    }
+  } catch {
+    // offline — the last mirrored total stays; a later login reconciles
+  }
+}
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
   const nick = nickInput.value.trim();
@@ -9844,15 +9930,32 @@ function openHub(note = ''): void {
   hubTab('home');
   hubNote.textContent = note;
   refreshOnboardOffer(); // ONB-0: first-run offer/nudge for a not-yet-onboarded commander
+  void syncCommanderFromServer(); // account-backed XP → local mirror (accounts mode only)
 }
 
-$('cnew').addEventListener('click', () => openHub());
+$('cnew').addEventListener('click', () => {
+  // «Новый командир» → the dedicated registration PAGE (its own stage of #connect, no live
+  // game behind it): callsign + password + repeat. Awaiting the probe closes the race — a
+  // tap before /auth/status answers must not take the guest branch on an accounts server.
+  // With accounts OFF (nick-only server) there is no password to set, so a new commander
+  // just gets a suggested callsign and drops into the hub.
+  void authProbe.then(() => {
+    if (authMode) {
+      openRegister();
+      return;
+    }
+    openHub();
+  });
+});
 // «Вход по позывному»: reveal an inline field and enter under a callsign YOU type (vs
 // «Новый командир», which auto-suggests one). The chosen callsign is remembered
-// (`void.nick`) so the next visit auto-recognises you (the first-run gate above). No
-// accounts backend yet — local identity, not cross-device recovery (accounts-roadmap.md).
+// (`void.nick`) so the next visit auto-recognises you (the first-run gate above).
+// With accounts on the server (authMode) the same form carries a password and the
+// welcome card itself registers/logs in (registration IS the first login).
 const wLoginEl = $('cwlogin');
 const wNickInput = $('cwnick') as HTMLInputElement;
+const wPassRowEl = $('cwpassrow');
+const wPassInput = $('cwpass') as HTMLInputElement;
 function signInByCallsign(): void {
   const nick = wNickInput.value.trim();
   if (!nick) {
@@ -9860,10 +9963,46 @@ function signInByCallsign(): void {
     wNickInput.focus();
     return;
   }
-  nickInput.value = nick;
-  localStorage.setItem('void.nick', nick); // remembered — next visit skips the welcome card
-  openHub();
+  // Same race guard as «Новый командир»: never pick the guest branch while the
+  // /auth/status probe is still in flight.
+  void authProbe.then(() => {
+    if (authMode) {
+      void welcomeSignIn(nick);
+      return;
+    }
+    nickInput.value = nick;
+    localStorage.setItem('void.nick', nick); // remembered — next visit skips the welcome card
+    openHub();
+  });
 }
+let signingIn = false; // in-flight guard: Enter + click must not double-register
+/** Bytro-style welcome sign-in: register-or-login right on the greeting card, then
+ *  land on the hub. Reuses ensureSession (login → 401 → register), so a fresh
+ *  callsign creates the account and a known one just logs in. */
+async function welcomeSignIn(nick: string): Promise<void> {
+  if (signingIn) return; // a second Enter/click while the first runs would double-POST
+  signingIn = true;
+  try {
+    wPassRowEl.style.display = 'flex'; // make sure the password is visible before we demand it
+    nickInput.value = nick;
+    const srv = resolveServer();
+    if (!srv) return;
+    const session = await ensureSession(srv.base, nick);
+    if (!session) {
+      wPassInput.focus(); // ensureSession already explained why in the status line
+      return;
+    }
+    localStorage.setItem('void.nick', nick);
+    wPassInput.value = ''; // the session JWT is stored instead — a password never lingers
+    statusEl.textContent = '';
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+wPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') signInByCallsign();
+});
 $('clogin').addEventListener('click', () => {
   const show = wLoginEl.style.display === 'none';
   wLoginEl.style.display = show ? 'flex' : 'none';
@@ -9902,6 +10041,192 @@ for (const a of Array.from(document.querySelectorAll('.cfoot a'))) {
   });
 }
 
+// --- «Новый командир» → dedicated registration page (its own #connect stage) -------
+// Callsign + password + repeat, on a page of its own (no live game behind it). Registration
+// IS the first login (ensureSession: login → 401 → register), so a fresh callsign creates
+// the account. «Восстановить доступ» is a stub until the accounts backend grows a real reset
+// (no email on file yet — docs/accounts-roadmap.md).
+const crNickInput = $('crnick') as HTMLInputElement;
+const crMailInput = $('crmail') as HTMLInputElement;
+const crPassInput = $('crpass') as HTMLInputElement;
+const crPass2Input = $('crpass2') as HTMLInputElement;
+function openRegister(): void {
+  showStage('register');
+  crNickInput.value = crNickInput.value.trim() || suggestCallsign();
+  crPassInput.value = '';
+  crPass2Input.value = '';
+  statusEl.textContent = '';
+  crPassInput.focus();
+}
+async function submitRegister(): Promise<void> {
+  const nick = crNickInput.value.trim();
+  const pass = crPassInput.value;
+  const email = crMailInput.value.trim();
+  if (!nick) {
+    statusEl.textContent = t('Введи имя командира');
+    crNickInput.focus();
+    return;
+  }
+  if (pass.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    crPassInput.focus();
+    return;
+  }
+  if (pass !== crPass2Input.value) {
+    statusEl.textContent = t('Пароли не совпадают');
+    crPass2Input.focus();
+    return;
+  }
+  if (signingIn) return; // Enter + click must not double-register
+  signingIn = true;
+  try {
+    const srv = resolveServer();
+    if (!srv) return;
+    // Email is OPTIONAL — it exists only so the account can be recovered later; skipping it
+    // just means no self-service reset. A malformed one is caught by the server (400).
+    const session = await ensureSession(srv.base, nick, pass, email || undefined);
+    if (!session) {
+      crPassInput.focus(); // ensureSession already explained why in the status line
+      return;
+    }
+    localStorage.setItem('void.nick', nick);
+    nickInput.value = nick;
+    crPassInput.value = '';
+    crPass2Input.value = '';
+    statusEl.textContent = '';
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+$('crgo').addEventListener('click', () => void submitRegister());
+crNickInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crMailInput.focus();
+});
+crMailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crPassInput.focus();
+});
+crPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crPass2Input.focus();
+});
+crPass2Input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitRegister();
+});
+$('crback').addEventListener('click', () => {
+  showStage('welcome');
+  statusEl.textContent = '';
+});
+
+// --- Password recovery: request a reset link (email → /auth/recover) ------------------
+// Anti-enumeration mirrors the server: the confirmation is identical whether or not the
+// email is on file. «Восстановить доступ» on the registration page opens this stage.
+const crecMailInput = $('crecmail') as HTMLInputElement;
+async function submitRecover(): Promise<void> {
+  const email = crecMailInput.value.trim();
+  if (!email) {
+    statusEl.textContent = t('Введите почту');
+    crecMailInput.focus();
+    return;
+  }
+  const srv = resolveServer();
+  if (!srv) return;
+  try {
+    await fetch(`${httpBase(srv.base)}/auth/recover`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    /* swallow — never reveal a delivery/lookup outcome */
+  }
+  statusEl.textContent = t('Если такая почта есть — прислали ссылку для сброса');
+}
+$('crrecover').addEventListener('click', () => {
+  showStage('recover');
+  crecMailInput.value = crMailInput.value.trim();
+  statusEl.textContent = '';
+  crecMailInput.focus();
+});
+$('crecgo').addEventListener('click', () => void submitRecover());
+crecMailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitRecover();
+});
+$('crecback').addEventListener('click', () => {
+  showStage('welcome');
+  statusEl.textContent = '';
+});
+
+// --- Password reset: spend a mailed «?reset=<token>» link (→ /auth/reset) -------------
+// The reset stage is opened by the boot deep-link (see the first-run gate). On success the
+// server hands back a session (reset IS a login) → straight into the hub.
+const cresetPassInput = $('cresetpass') as HTMLInputElement;
+const cresetPass2Input = $('cresetpass2') as HTMLInputElement;
+let resetToken = ''; // the token carried by the ?reset= deep-link
+async function submitReset(): Promise<void> {
+  const pass = cresetPassInput.value;
+  if (pass.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    cresetPassInput.focus();
+    return;
+  }
+  if (pass !== cresetPass2Input.value) {
+    statusEl.textContent = t('Пароли не совпадают');
+    cresetPass2Input.focus();
+    return;
+  }
+  if (signingIn) return;
+  signingIn = true;
+  try {
+    const srv = resolveServer();
+    if (!srv) return;
+    const res = await fetch(`${httpBase(srv.base)}/auth/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, password: pass }),
+    }).catch(() => null);
+    const body = ((res && (await res.json().catch(() => ({})))) ?? {}) as {
+      login?: string;
+      token?: string;
+    };
+    if (!res || !res.ok || !body.token || !body.login) {
+      statusEl.textContent = t('Ссылка недействительна или устарела');
+      return;
+    }
+    localStorage.setItem(
+      sessionKey(srv.base),
+      JSON.stringify({ login: body.login, token: body.token }),
+    );
+    localStorage.setItem('void.nick', body.login);
+    nickInput.value = body.login;
+    resetToken = '';
+    cresetPassInput.value = '';
+    cresetPass2Input.value = '';
+    statusEl.textContent = '';
+    note('✔ ' + t('Пароль изменён'));
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+$('cresetgo').addEventListener('click', () => void submitReset());
+cresetPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') cresetPass2Input.focus();
+});
+cresetPass2Input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitReset();
+});
+/** Open the reset stage for a «?reset=<token>» deep-link (called from the first-run gate). */
+function openReset(token: string): void {
+  resetToken = token;
+  showConnect(true);
+  showHub(false);
+  showStage('reset');
+  cresetPassInput.value = '';
+  cresetPass2Input.value = '';
+  statusEl.textContent = '';
+  cresetPassInput.focus();
+}
+
 // hub interactions
 $('hub-play').addEventListener('click', () => hubTab('games'));
 // Single-player entry — dev client only (the player build strips the tile + this hook).
@@ -9915,6 +10240,11 @@ $('hub-msg').addEventListener('click', () => {
   hubNote.textContent = t('Сообщения — скоро');
 });
 $('hub-logout').addEventListener('click', () => {
+  // «Сменить командира» must really switch identity: drop this server's session so
+  // the next sign-in authenticates the NEW callsign instead of replaying the old JWT.
+  const srv = resolveServer();
+  if (srv) localStorage.removeItem(sessionKey(srv.base));
+  statusEl.textContent = '';
   showHub(false);
   showConnect(true);
   showStage('welcome');
@@ -10062,7 +10392,28 @@ settingsEl.addEventListener('click', (e) => {
 // First-run gate: a returning commander (a saved callsign) skips the identity card
 // and boots straight into the hub — the raw "Новый командир / войти" screen is only
 // for a genuinely new device. "Сменить командира" in the hub goes back to identity.
-if ((localStorage.getItem('void.nick') ?? '').trim()) openHub();
+//
+// Deep-link overrides (checked before the returning-player shortcut):
+//  «?reset=<token>» — a mailed password-reset link → the reset page (set a new password).
+//  «?join=<id>»     — a new tab spawned by «Войти» in the match list → straight into THAT
+//                     session, reusing this browser's stored identity (nick / session JWT).
+const bootParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const bootReset = (bootParams?.get('reset') ?? '').trim();
+const bootJoinId = (bootParams?.get('join') ?? '').trim();
+if (bootReset) {
+  openReset(bootReset);
+} else if (bootJoinId) {
+  showConnect(true);
+  showHub(false);
+  statusEl.textContent = t('Подключение к сессии…');
+  void (async () => {
+    const srv = resolveServer();
+    if (srv) await probeAuthMode(srv.base);
+    connectToMatch(bootJoinId);
+  })();
+} else if ((localStorage.getItem('void.nick') ?? '').trim()) {
+  openHub();
+}
 
 // --- single-player setup overlay --------------------------------------------
 // Pick your homeworld on a mini-map and choose how many AI rivals join, then
@@ -10778,6 +11129,12 @@ function connect(): void {
           statusEl.textContent = 'that name is already playing (another tab or device?)';
         } else if (!admitted && code === 'E_UNKNOWN_PLAYER') {
           statusEl.textContent = 'could not get a seat';
+        } else if (!admitted && code === 'E_MATCH_FULL') {
+          // NETA2-1: the server COMPLETED the handshake just to tell us why — a real
+          // refusal, not "server down". Say it plainly instead of a generic error.
+          statusEl.textContent = t('матч заполнен — все места заняты');
+        } else if (!admitted && code === 'E_ENTRY_CLOSED') {
+          statusEl.textContent = t('вход в этот матч закрыт (окно приёма новых игроков истекло)');
         } else {
           statusEl.textContent = 'error: ' + code;
         }
@@ -10875,6 +11232,33 @@ let authMode = false;
 const passRow = document.getElementById('cpassrow') as HTMLElement | null;
 const passInput = document.getElementById('cpass') as HTMLInputElement | null;
 const sessionKey = (base: string): string => `void.session.${base}`;
+/** Session record: the JWT plus WHOSE it is. A cached token must never silently
+ *  authenticate a different callsign (family laptop: «Сменить командира» then a
+ *  new sign-in really switches the account). Legacy bare-JWT values fail the
+ *  parse → treated as absent, one harmless re-login. */
+interface SessionRec {
+  login: string;
+  token: string;
+}
+function sessionRecord(base: string): SessionRec | null {
+  try {
+    const rec = JSON.parse(localStorage.getItem(sessionKey(base)) ?? 'null') as {
+      login?: unknown;
+      token?: unknown;
+    } | null;
+    return rec && typeof rec.login === 'string' && typeof rec.token === 'string'
+      ? { login: rec.login, token: rec.token }
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** The cached session token for ANY identity on this server (best-effort reads:
+ *  arsenal refresh, redial). Auth-critical paths use ensureSession, which checks
+ *  the login matches. */
+function sessionToken(base: string): string | null {
+  return sessionRecord(base)?.token ?? null;
+}
 
 /** Probe the server's identity mode and show/hide the password field. Network
  *  failure ⇒ assume nick mode (the old handshake) — the join itself will surface
@@ -10889,41 +11273,85 @@ async function probeAuthMode(base: string): Promise<void> {
   if (passRow) passRow.style.display = authMode ? '' : 'none';
 }
 
+// First visit, Bytro-style (SES-2.5 UX): when the server runs accounts, sign-up IS
+// the welcome — probe the same-origin default and surface callsign+password on the
+// greeting card right away, so a new commander registers before the hub, not deep
+// inside the join flow. Probe failure ⇒ nick mode, the card stays as it was.
+// The probe ALWAYS runs and is awaited by the welcome buttons (cnew / sign-in), so
+// an early tap can't race /auth/status into the guest branch; revealing the form
+// applies to first visits only (a remembered nick skipped the welcome card above).
+const authProbe: Promise<void> = (async () => {
+  const base = srvInput.value.trim();
+  if (!base) return;
+  await probeAuthMode(base);
+  if (!authMode) return;
+  if ((localStorage.getItem('void.nick') ?? '').trim()) return; // welcome card was skipped
+  if (!wNickInput.value.trim()) wNickInput.value = suggestCallsign();
+  wLoginEl.style.display = 'flex';
+  wPassRowEl.style.display = 'flex';
+})();
+
 /** A valid session JWT for this server, or null (with the status line explaining).
  *  Zero-friction identity: try LOGIN first; unknown-or-wrong is a uniform 401, so
  *  then try REGISTER — a fresh login creates the account (registration IS the first
  *  login), while a taken one (409) means the password was simply wrong. */
-async function ensureSession(base: string, login: string): Promise<string | null> {
-  const cached = localStorage.getItem(sessionKey(base));
-  if (cached) return cached;
-  const password = passInput?.value ?? '';
+async function ensureSession(
+  base: string,
+  login: string,
+  passwordArg?: string,
+  emailArg?: string,
+): Promise<string | null> {
+  // Only OUR OWN cached session counts — a token minted for a different callsign
+  // (or a legacy unbound one) is ignored and replaced by a fresh login below.
+  const cachedRec = sessionRecord(base);
+  if (cachedRec && cachedRec.login.toLowerCase() === login.toLowerCase()) return cachedRec.token;
+  // Mirror the server's LOGIN_RE (authApi.ts) so a bad callsign gets a human
+  // explanation here instead of the server's uniform rejection.
+  if (!/^[\p{L}\p{N}_-]{3,24}$/u.test(login)) {
+    statusEl.textContent = t('Позывной для аккаунта: 3–24 символа — буквы, цифры, _ или -');
+    return null;
+  }
+  // The password may come from the welcome card (Bytro-style sign-up) or the match
+  // browser's field (custom-server joins) — whichever the player actually filled.
+  const password = passwordArg ?? (wPassInput.value || (passInput?.value ?? ''));
   if (password.length < 8) {
     statusEl.textContent = t('Введите пароль (мин. 8 символов)');
     return null;
   }
-  const call = async (path: string): Promise<{ status: number; token?: string }> => {
+  const call = async (
+    path: string,
+    extra: Record<string, string> = {},
+  ): Promise<{ status: number; token?: string; error?: string }> => {
     const res = await fetch(`${httpBase(base)}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ login, password }),
+      body: JSON.stringify({ login, password, ...extra }),
     });
-    const body = (await res.json().catch(() => ({}))) as { token?: string };
-    return { status: res.status, token: body.token };
+    const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    return { status: res.status, token: body.token, error: body.error };
   };
   try {
     const login1 = await call('/auth/login');
     if (login1.token) {
-      localStorage.setItem(sessionKey(base), login1.token);
+      localStorage.setItem(sessionKey(base), JSON.stringify({ login, token: login1.token }));
       return login1.token;
     }
     if (login1.status === 401) {
-      const reg = await call('/auth/register');
+      // Registration carries the optional recovery email (login never needs it).
+      const reg = await call('/auth/register', emailArg ? { email: emailArg } : {});
       if (reg.token) {
-        localStorage.setItem(sessionKey(base), reg.token);
+        localStorage.setItem(sessionKey(base), JSON.stringify({ login, token: reg.token }));
         note('✔ ' + t('Аккаунт создан'));
         return reg.token;
       }
-      statusEl.textContent = reg.status === 409 ? t('Неверный пароль') : t('Регистрация отклонена');
+      statusEl.textContent =
+        reg.error === 'E_EMAIL_TAKEN'
+          ? t('Эта почта уже занята')
+          : reg.status === 409
+            ? t('Неверный пароль') // login 401 + register 409 (E_LOGIN_TAKEN) ⇒ wrong password
+            : reg.status === 429
+              ? t('Слишком часто — подождите')
+              : t('Регистрация отклонена');
       return null;
     }
     statusEl.textContent =
@@ -11036,6 +11464,16 @@ function connectToMatch(id: string): void {
     pendingJoinToken = join.token;
     connect();
   })();
+}
+
+// Open a session in its OWN browser tab (deep-link «?join=<id>»): the hub/browser stays in
+// THIS tab while the match runs in a fresh one, which boots straight into it from the shared
+// same-origin localStorage identity (nick / session JWT). Popup blocked → join in this tab so
+// the player is never left stuck. (On the APK / a file:// page window.open may hand off to the
+// system browser; the deployed https origin is the intended path.)
+function openSessionTab(id: string): void {
+  const w = window.open(`${location.pathname}?join=${encodeURIComponent(id)}`, '_blank');
+  if (!w) connectToMatch(id);
 }
 
 async function refreshMatches(quiet = false): Promise<void> {
@@ -11153,7 +11591,7 @@ function renderMatches(): void {
     const join = document.createElement('button');
     join.className = 'mbtn';
     join.textContent = t('Войти');
-    join.addEventListener('click', () => connectToMatch(m.matchId));
+    join.addEventListener('click', () => openSessionTab(m.matchId));
     btns.appendChild(join);
     if (activeTab !== 'available') {
       const restore = activeTab === 'archived';
@@ -11208,12 +11646,16 @@ if (__PLAYER_BUILD__) {
 // The match browser (stage 2) loads its list on entry — "Новый командир" / "Вход"
 // call refreshMatches() themselves; nothing to prefetch while the clean welcome is up.
 
-// Auto-reconnect after an unexpected drop: rejoin our seat with capped exponential
-// backoff (1,2,4,8,8,8s, then give up). Same saved server + nick → same side.
+// Auto-reconnect after an unexpected drop: rejoin our seat with capped exponential backoff
+// (1,2,4,8,8,… s). The budget (`reconnectDelayMs`, NETA2-2) OUTLASTS the server's ~30s
+// socket-reap window on purpose — a reconnect within the reap must not give up before the
+// old socket frees the seat (else it loses the race with `E_SLOT_TAKEN`). Same saved
+// server + nick → same side.
 function scheduleReconnect(): void {
   if (reconnectTimer) return;
   reconnectAttempts++;
-  if (reconnectAttempts > 6) {
+  const delay = reconnectDelayMs(reconnectAttempts);
+  if (delay === null) {
     reconnecting = false;
     reconnectAttempts = 0;
     banner = null;
@@ -11222,7 +11664,6 @@ function scheduleReconnect(): void {
     return;
   }
   banner = t('⟳ переподключение…');
-  const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (!authMode) {
@@ -11234,7 +11675,7 @@ function scheduleReconnect(): void {
     // the redial to the connect screen with «введите пароль» (fail-explicit).
     void (async () => {
       const srv = resolveServer();
-      const session = srv ? localStorage.getItem(sessionKey(srv.base)) : null;
+      const session = srv ? sessionToken(srv.base) : null;
       if (!srv || !session) {
         reconnecting = false;
         banner = null;
@@ -13026,7 +13467,7 @@ async function corpFetch(
   if (!srv) return null;
   await probeAuthMode(srv.base);
   if (!authMode) return null;
-  const session = localStorage.getItem(sessionKey(srv.base));
+  const session = sessionToken(srv.base);
   if (!session) return null;
   try {
     const res = await fetch(`${httpBase(srv.base)}${path}`, {

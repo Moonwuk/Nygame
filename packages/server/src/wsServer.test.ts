@@ -140,4 +140,26 @@ describe('createMultiplayerServer', () => {
       await server.close();
     }
   });
+
+  it('NETA2-1: a full match refuses a newcomer with a READABLE error, not a dead socket', async () => {
+    const server = createMultiplayerServer({ room: makeRoom(), accountStore: new MemoryAccountStore() });
+    const url = await server.listen();
+    try {
+      const alice = new WebSocket(`${url}?nick=alice`);
+      await nextMessage(alice); // seats p1
+      const bob = new WebSocket(`${url}?nick=bob`);
+      await nextMessage(bob); // seats p2 — the 2-seat room is now full
+      // A third nick finds every seat taken. Before NETA2-1 the upgrade was destroyed
+      // (which a browser reads as "server down"); now the handshake COMPLETES and the
+      // reason rides an `error` frame the client can actually show.
+      const carol = new WebSocket(`${url}?nick=carol`);
+      const msg = await nextMessage(carol);
+      expect(msg).toMatchObject({ type: 'error', code: 'E_MATCH_FULL' });
+      alice.close();
+      bob.close();
+      carol.close();
+    } finally {
+      await server.close();
+    }
+  });
 });

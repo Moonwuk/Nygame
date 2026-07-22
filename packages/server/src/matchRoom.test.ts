@@ -232,6 +232,28 @@ function surrenderAction(id: string, playerId: string): Action {
   return { id, type: 'match.surrender', playerId, issuedAt: 1, payload: {} };
 }
 
+// Ends the match on a `time.advanced` SPAN once the world passes a deadline — the
+// score/domination shape, where the boundary is crossed by a catch-up advance and NOT
+// by the triggering action (which then rejects with E_MATCH_ENDED). Sets a reward table
+// so the test can assert it survives to the `end` observation.
+const deadlineModule: GameModule = {
+  id: 'deadline-test',
+  version: '1.0.0',
+  setup(api) {
+    api.on('time.advanced', (event, h) => {
+      // `time.advanced` fires with h.state.time at the span START and the reached time
+      // in the payload (`to`) — mirror how the real victory module ends mid-advance.
+      const to = (event.payload as { to?: number }).to ?? 0;
+      if (h.state.match.status !== 'ended' && to >= 100) {
+        h.state.match.status = 'ended';
+        h.state.match.winner = 'p1';
+        h.state.match.reason = 'domination';
+        h.state.match.rewards = { p1: { place: 1, xp: 200 }, p2: { place: 2, xp: 40 } };
+      }
+    });
+  },
+};
+
 describe('MatchRoom — observation & state hash (M0)', () => {
   function observed(options?: { emitStateHash?: boolean }): {
     r: MatchRoom;
@@ -279,6 +301,27 @@ describe('MatchRoom — observation & state hash (M0)', () => {
     ]);
   });
 
+  it('a THROWING observer never disrupts the room (metrics is pure telemetry)', () => {
+    const r = new MatchRoom({
+      id: 'obs-throw',
+      initialState: testState(),
+      kernel: createKernel([renameModule]),
+      data: testData(),
+      now: () => 10,
+      observe: () => {
+        throw new Error('a metrics consumer blew up on EVERY observation');
+      },
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1); // the 'join' observation throws internally — must not escape
+    // The action commits and broadcasts despite the observer throwing on join/action/
+    // events/broadcast/timing — if any escaped, submitAction would throw and fail here.
+    const res = r.submitAction('p1', action('a1', 'p1', 'Commander'), p1);
+    expect(res.ok).toBe(true);
+    expect(p1.messages.some((m) => (m as { type: string }).type === 'welcome')).toBe(true);
+    expect(r.state.players.p1?.name).toBe('Commander'); // the world actually advanced
+  });
+
   it('reports a match end exactly once', () => {
     const { r, events } = observed();
     const p1 = new MemoryPeer();
@@ -291,6 +334,37 @@ describe('MatchRoom — observation & state hash (M0)', () => {
 
     const ends = events.filter((e) => e.kind === 'end');
     expect(ends).toEqual([{ kind: 'end', winner: 'p2', reason: 'elimination' }]);
+  });
+
+  it('banks the end reward table when the match ends on an advance during a REJECTED action (EC-*)', () => {
+    let clock = 10;
+    const events: RoomObservation[] = [];
+    const r = new MatchRoom({
+      id: 'obs-deadline',
+      initialState: testState(),
+      kernel: createKernel([renameModule, deadlineModule]),
+      data: testData(),
+      now: () => clock,
+      observe: (e) => events.push(e),
+    });
+    const p1 = new MemoryPeer();
+    r.addPeer('p1', p1);
+    clock = 150; // the world must catch up past the deadline before this action applies
+    // The pre-apply advance crosses time 100 → deadlineModule ends the match; the rename
+    // then rejects with E_MATCH_ENDED. Before the fix, observeEndIfNeeded was skipped on
+    // this reject-but-advanced path, so the reward table was never banked.
+    r.submitAction('p1', action('a1', 'p1', 'Commander'), p1);
+
+    expect(events.filter((e) => e.kind === 'end')).toEqual([
+      {
+        kind: 'end',
+        winner: 'p1',
+        reason: 'domination',
+        rewards: { p1: { place: 1, xp: 200 }, p2: { place: 2, xp: 40 } },
+      },
+    ]);
+    const acts = events.filter((e) => e.kind === 'action');
+    expect(acts.at(-1)).toMatchObject({ ok: false, code: 'E_MATCH_ENDED' });
   });
 
   it('reports lobby running/paused flips when a gate is configured', () => {

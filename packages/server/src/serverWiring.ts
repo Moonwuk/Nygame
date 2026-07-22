@@ -1,7 +1,7 @@
 import type { ActionGate } from '@void/action-layer';
 import type { DomainEvent, GameData, PlayerReward } from '@void/shared-core';
 import { createDevMatch } from './scenario';
-import { startClockDriver, type ClockDriverHandle } from './clockDriver';
+import { startClockDriver, HEARTBEAT_MS, type ClockDriverHandle } from './clockDriver';
 import { snapshotOf, type Stores } from './persistence';
 import type { LoadedMatch } from './roomRegistry';
 import type { RoomObservation } from './matchRoom';
@@ -91,10 +91,14 @@ export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => P
 
     // The 24/7 heartbeat while this match is live: fire due scheduled events with no
     // player action, persisting each advance. (While hibernated, the registry's wake
-    // timer does it.)
+    // timer does it.) NETA2-6: `heartbeatMs` also keeps the published clock/economy
+    // ticking for connected players when the schedule is momentarily empty (a fresh
+    // match starts with none) — without it the real host froze on "Day 1" between
+    // actions, the exact drift the prototype host already fixed with its inline driver.
     driver = startClockDriver(room, {
       onTick: () => void stores.store.save(snapshotOf(room)),
       onStall: () => deps.onStall?.(matchId),
+      heartbeatMs: HEARTBEAT_MS,
     });
 
     const dispose = async (): Promise<void> => {

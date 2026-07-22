@@ -30,7 +30,7 @@
 
 ## B. Новые типы планет/секторов (`claude/proto-visuals`) — ✅ добавлены, балансные ❓
 
-Добавлены и проверены по zod (гейт зелёный, 293 теста). Планеты: `crystalline`,
+Добавлены и проверены по zod (гейт зелёный). Планеты: `crystalline`,
 `fortress_world`, `relic_world`, `irradiated`, `ringworld`. Секторы: `ion_storm`,
 `dense_nebula`, `solar_flare_zone`, `derelict_graveyard`, `deep_void`. Вид сектора:
 `debris_field` (непокупаемый коридор).
@@ -64,7 +64,7 @@
 ## C. Система пингов — ✅ реализована (NETP0); открытыми остались только вопросы тюнинга
 
 **Реализовано по рекомендованному варианту (эфемерный серверный сайд-канал):** пинги
-живут только в `MatchRoom` (`pings: Map` + TTL-sweep + rate-limit), НЕ в детерминированном
+живут только в `MatchRoom` за `EphemeralStore` (`this.ephemeral` + ленивое протухание при доступе + rate-limit через `pingWindow`), НЕ в детерминированном
 `GameState` — ядро о них не знает (нет ложных desync в `hashState`, ничего не попадает в
 реплеи/манифест). Протокол: `ping.place`/`ping.clear` → `ping.added`/`ping.removed`
 (`protocol.ts`, тесты `pings.test.ts`); прототип шлёт/рисует пинги и чат поверх карты.

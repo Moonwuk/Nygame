@@ -385,8 +385,8 @@ export const en: Record<string, string> = {
   МАТЧИ: 'MATCHES',
   'Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.':
     'Press "Move" (command bar), then tap a destination — the fleet routes there and stops. "Merge…" combines with another fleet; "Split" peels ships into a new fleet.',
-  'Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift-рамка выделяет группу; Ctrl/⌘-клик добавляет флот.':
-    'Press "Move" and tap a destination — every selected fleet routes there and stops. "Merge" fuses the group into one fleet (distant ones fly in first). Shift-drag selects a group; Ctrl/⌘-click adds a fleet.',
+  'Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift- или Ctrl/⌘-клик по флоту добавляет его в группу; Shift-рамка по пустому месту выделяет несколько.':
+    'Press "Move" and tap a destination — every selected fleet routes there and stops. "Merge" fuses the group into one fleet (distant ones fly in first). Shift- or Ctrl/⌘-click a fleet to add it to the group; Shift-drag empty space to box-select several.',
   'Наземная армия ⇄ гарнизон': 'Ground army ⇄ garrison',
   'Наземные части': 'Ground units',
   'Наземные части обороняют миры; грузятся на флот из панели флота.':
@@ -1046,6 +1046,42 @@ export const en: Record<string, string> = {
   'Кабинет корпорации': 'Corporation cabinet',
   'Нет матчей, ждущих приказа': 'No matches waiting on an order',
   'Новый командир': 'New Commander',
+  'Добро пожаловать, командир. Флот ждёт приказа.': 'Welcome, commander. The fleet awaits your orders.',
+  'Придумай пароль — аккаунт создастся сам': 'Choose a password — the account creates itself',
+  'Придумай позывной и пароль — так создаётся аккаунт.':
+    'Choose a callsign and password — that creates your account.',
+  'Имя командира': 'Commander name',
+  'Повтор пароля': 'Repeat password',
+  'Создать командира': 'Create commander',
+  'Восстановить доступ': 'Recover access',
+  'минимум 8 символов': 'at least 8 characters',
+  'ещё раз': 'once more',
+  'Введи имя командира': 'Enter a commander name',
+  'Пароли не совпадают': 'Passwords do not match',
+  'Восстановление доступа — скоро': 'Access recovery — coming soon',
+  'Подключение к сессии…': 'Connecting to the session…',
+  'Почта (для восстановления)': 'Email (for recovery)',
+  'Восстановление доступа': 'Account recovery',
+  'Укажи почту аккаунта — пришлём ссылку для сброса пароля.':
+    'Enter your account email — we will send a password-reset link.',
+  Почта: 'Email',
+  'Отправить ссылку': 'Send link',
+  'Новый пароль': 'New password',
+  'Придумай новый пароль для входа.': 'Choose a new password to sign in.',
+  'Сменить пароль': 'Change password',
+  'Эта почта уже занята': 'That email is already in use',
+  'Введите почту': 'Enter an email',
+  'Если такая почта есть — прислали ссылку для сброса':
+    'If that email exists, a reset link is on its way',
+  'Ссылка недействительна или устарела': 'The link is invalid or expired',
+  'Пароль изменён': 'Password changed',
+  'переподключение — приказ не отправлен, повтори через миг':
+    'reconnecting — order not sent, try again in a moment',
+  'матч заполнен — все места заняты': 'match is full — every seat is taken',
+  'вход в этот матч закрыт (окно приёма новых игроков истекло)':
+    'this match is closed to new players (the entry window has elapsed)',
+  'Позывной для аккаунта: 3–24 символа — буквы, цифры, _ или -':
+    'Account callsign: 3–24 chars — letters, digits, _ or -',
   Обновить: 'Update',
   'Обновить список': 'Refresh list',
   'Одиночная игра': 'Solo game',

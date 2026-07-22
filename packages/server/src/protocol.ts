@@ -20,6 +20,12 @@ export type ServerErrorCode =
   | 'E_PAYLOAD_TOO_LARGE'
   | 'E_SLOT_TAKEN'
   | 'E_UNKNOWN_PLAYER'
+  // Handshake refusals the client can act on (NETA2-1): delivered over a COMPLETED
+  // upgrade (then the socket closes) — a browser hides a failed WS handshake's HTTP
+  // status, so these ride an app-level `error` frame instead. Both are already public
+  // via the `GET /matches` browser feed, so surfacing them leaks nothing new.
+  | 'E_MATCH_FULL'
+  | 'E_ENTRY_CLOSED'
   | 'E_PING_TARGET'
   | 'E_PING_UNSEEN'
   | 'E_PING_BUILD'
@@ -224,7 +230,10 @@ export interface ServerStateMessage extends VisibilityFields, LobbyField, HashFi
   seq: number;
   serverTime: number;
   state: GameState;
-  events: DomainEvent[];
+  // No `events`: a full `state` snapshot is a RESYNC (join / desync recovery / deduped
+  // retry) — the client rebuilds its baseline from `state` wholesale, so there is nothing
+  // incremental to replay. Domain events ride the `delta` message, and that is the only
+  // place the client reads them (multiplayer.ts). (NETA2-4: dropped an always-`[]` field.)
 }
 
 /** Incremental update — only the entities/fields that changed since the peer's
@@ -357,7 +366,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     return { type: 'action.v1', envelope: decoded.envelope };
   }
   if (decoded.type === 'ping') {
-    return typeof decoded.clientTime === 'number'
+    // Require a FINITE clientTime (like the desync/perf branches) — a NaN/Infinity would
+    // ride back in `pong.clientTime` and poison the client's `now - clientTime` RTT math.
+    return typeof decoded.clientTime === 'number' && Number.isFinite(decoded.clientTime)
       ? { type: 'ping', clientTime: decoded.clientTime }
       : { type: 'ping' };
   }
@@ -368,6 +379,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     return { type: 'ping.place', ping: decoded.ping };
   }
   if (decoded.type === 'ping.clear') {
+    // A MISSING pingId = "clear ALL my pings" (a legit form). A PRESENT but wrong-typed
+    // one is malformed → reject (E_BAD_MESSAGE) rather than silently escalating to the
+    // destructive clear-all — the parser is the validation boundary.
+    if (decoded.pingId !== undefined && typeof decoded.pingId !== 'string') return null;
     return typeof decoded.pingId === 'string'
       ? { type: 'ping.clear', pingId: decoded.pingId }
       : { type: 'ping.clear' };

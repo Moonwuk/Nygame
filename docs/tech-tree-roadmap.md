@@ -66,14 +66,14 @@
 `technologies.json` по 4 веткам; вкладки UI маппятся на `branch`. Default-ветка для совместимости.
 **Готово, когда:** каждое техно имеет ветку; дерево группируется по 4 вкладкам; zod.
 **✅ уже в коде:** `schemas.ts` (`branch` enum из 5 значений вкл. `command`, default `space`), `data/technologies.json`
-(19 узлов по 5 веткам), тест `technology.test.ts:247` (парсинг + дефолт ветки).
+(19 узлов по 5 веткам), тест `technology.test.ts:248` (парсинг + дефолт ветки).
 
 ### TT-0.2 · День-гейт `dayGate` `[data][core]` ✅ — S
 **Подзадачи:** поле `dayGate` (день сессии, с которого техно доступно; 0 = с начала); сравнение с
 **прошедшим мировым временем** (`state.time`, timeScale уже в часах). Детерминированно.
 **Готово, когда:** техно с `dayGate=N` недоступно до дня N и доступно после; тест.
 **✅ уже в коде:** `schemas.ts` (`dayGate`, default 0), `technology.ts` (сравнение `state.time` со
-`startedAt` → `E_TOO_EARLY`), тест `technology.test.ts:217`.
+`startedAt` → `E_TOO_EARLY`), тест `technology.test.ts:218`.
 ✅ **Контент проставлен:** 15 из 19 нод в `data/technologies.json` несут ненулевой `dayGate`
 (значения `2/3/5/8/12/15`) — согласуется с контент-пасом эпох (строки 28, 50).
 
