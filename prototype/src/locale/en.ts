@@ -560,6 +560,11 @@ export const en: Record<string, string> = {
   Фильтр: 'Filter',
   Флагман: 'Flagship',
   Флот: 'Fleet',
+  // Авто-имена флотов (Bytro-стиль): тип соединения по размеру
+  Звено: 'Wing',
+  Эскадрилья: 'Flight',
+  Эскадра: 'Squadron',
+  Армада: 'Armada',
   'Флоты на орбите': 'Fleets in orbit',
   Обновления: 'Updates',
   Фракция: 'Faction',

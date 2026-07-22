@@ -116,6 +116,7 @@ import {
   unitGlyphSvg,
   unitSizeClass,
 } from './unitGlyphs';
+import { fleetCallsign, fleetKindKey } from './fleetName';
 import { OFFICERS, GROUND_ROSTER } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
@@ -5236,9 +5237,11 @@ function fleetPanelHtml(f: Fleet): string {
     nTr > 0 && f.owner === ME && (s.players[ME]?.arrears ?? []).includes('food')
       ? ` · 🍽 ${t('голод: −25% на земле')}`
       : '';
+  // Bytro-стиль: авто-имя соединения (тип по размеру + позывной), тап → сводка.
+  const fleetTitle = `${t(fleetKindKey(nShips))} «${fleetCallsign(f.id)}»`;
   let h = cardHeader(
     ownerColor(f.owner),
-    t('ФЛОТ'),
+    fleetTitle,
     (pcUi()
       ? t('Корабли: {s} · Десант: {tr}', { s: nShips, tr: nTr })
       : t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr })) +
@@ -5482,9 +5485,6 @@ function fleetPanelHtml(f: Fleet): string {
     const dh = fleetDivisionsHtml(f, here!); // load/unload divisions (landing on a hostile world)
     if (dh) cols.push(dh);
     h += pcols(cols);
-  }
-  if (!pcUi()) {
-    h += btn('cancel', '', t('Снять выделение'), true);
   }
   return h;
 }
