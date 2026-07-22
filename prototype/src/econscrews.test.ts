@@ -11,17 +11,14 @@ import type {
 import {
   econScrewsModule,
   repairFleet,
-  smeltMetal,
   dockRepairCost,
   fleetAtOwnDock,
   REPAIR_HP_PER_METAL,
-  SMELT_RATE,
   data,
 } from './game';
 
-// ECON-3 «ножницы»: (а) экспресс-ремонт за METAL у своего дока (shipRepair>0);
-// (б) переплавка metal → credits (floor(amount/4)) на мире с refinery/metal_station.
-// Оба — мгновенные стоки металла / кран кредитов; отказы fail-secure.
+// ECON-3: экспресс-ремонт корпуса за METAL у своего дока (shipRepair>0) —
+// сток металла в духе Bytro; отказы fail-secure.
 
 const kernel = createKernel([econScrewsModule]);
 const ctx = (now = 0): Context => ({ now, data });
@@ -129,67 +126,5 @@ describe('fleet.repair — ECON-3а: экспресс-ремонт за metal у
         ),
       ),
     ).toBe('E_NO_FLEET');
-  });
-});
-
-describe('resource.smelt — ECON-3б: переплавка metal → credits', () => {
-  it('курс floor(amount / 4): 100⬢ → 25💰, дробное floor-ится', () => {
-    const refinery = planet('A', { buildings: [{ type: 'refinery', level: 1, hp: 20 }] });
-    const s0 = stateWith([], [refinery], { metal: 150, credits: 5 });
-    const s1 = ok(kernel.applyAction(s0, smeltMetal('green', 'A', 100), ctx()));
-    expect(s1.players.green!.resources.metal).toBe(50);
-    expect(s1.players.green!.resources.credits).toBe(5 + Math.floor(100 / SMELT_RATE));
-    // 10⬢ → 2💰 (floor), списывается ровно 10
-    const s2 = ok(kernel.applyAction(s1, smeltMetal('green', 'A', 10.9), ctx()));
-    expect(s2.players.green!.resources.metal).toBe(40);
-    expect(s2.players.green!.resources.credits).toBe(30 + 2);
-  });
-
-  it('работает и с metal_station, а без плавильни — E_NO_SMELTER', () => {
-    const station = planet('A', { buildings: [{ type: 'metal_station', level: 1, hp: 20 }] });
-    const s1 = ok(
-      kernel.applyAction(
-        stateWith([], [station], { metal: 40 }),
-        smeltMetal('green', 'A', 40),
-        ctx(),
-      ),
-    );
-    expect(s1.players.green!.resources.credits).toBe(10);
-    const bare = planet('A', { buildings: [{ type: 'fort', level: 1, hp: 35 }] });
-    expect(
-      rej(
-        kernel.applyAction(
-          stateWith([], [bare], { metal: 40 }),
-          smeltMetal('green', 'A', 40),
-          ctx(),
-        ),
-      ),
-    ).toBe('E_NO_SMELTER');
-  });
-
-  it('отказы: чужой мир, металла меньше запрошенного, слишком мелкая плавка', () => {
-    const foreign = planet('A', { owner: 'red' });
-    expect(
-      rej(
-        kernel.applyAction(
-          stateWith([], [foreign], { metal: 99 }),
-          smeltMetal('green', 'A', 20),
-          ctx(),
-        ),
-      ),
-    ).toBe('E_NO_PLANET');
-    const refinery = () => planet('A', { buildings: [{ type: 'refinery', level: 1, hp: 20 }] });
-    const poor = stateWith([], [refinery()], { metal: 10 });
-    expect(rej(kernel.applyAction(poor, smeltMetal('green', 'A', 20), ctx()))).toBe('E_NO_FUNDS');
-    expect(poor.players.green!.resources.metal).toBe(10);
-    expect(
-      rej(
-        kernel.applyAction(
-          stateWith([], [refinery()], { metal: 99 }),
-          smeltMetal('green', 'A', 3),
-          ctx(),
-        ),
-      ),
-    ).toBe('E_BAD_PAYLOAD'); // floor(3/4)=0 — нечего плавить
   });
 });

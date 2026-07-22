@@ -104,8 +104,6 @@ import {
   repairFleet,
   dockRepairCost,
   fleetAtOwnDock,
-  smeltMetal,
-  SMELT_RATE,
   MARKET_FEE,
   MAX_CHAIN_STEPS,
   type ChainStep,
@@ -5403,14 +5401,7 @@ function fleetPanelHtml(f: Fleet): string {
       h += `<div class="hint">${t('Отход стоит −40% ТЕКУЩЕГО корпуса и щита (израненный флот теряет 40% остатка — отход не добивает) и даёт рывок скорости для бегства. Десант в высадке отступить не может; с орбиты вне боя корабль уходит свободно.')}</div>`;
     }
   }
-  if (!docked) {
-    if (!f.battleId)
-      h += `<div class="hint">${
-        f.edge
-          ? t('Стоит на трассе — нажмите «Курс», чтобы идти дальше (маршрут отсюда).')
-          : t('В пути — идёт по трассам. Столкновение начинает орбитальный бой.')
-      }</div>`;
-  } else {
+  if (docked) {
     // enemy/neutral world you can act on — empty space is pass-through only
     const hostile =
       here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
@@ -5493,7 +5484,6 @@ function fleetPanelHtml(f: Fleet): string {
     h += pcols(cols);
   }
   if (!pcUi()) {
-    h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
     h += btn('cancel', '', t('Снять выделение'), true);
   }
   return h;
@@ -5556,21 +5546,6 @@ function planetPanelHtml(p: Planet): string {
   // ECON-2: блэкаут — неоплаченная энергия глушит радары и ПВО этого владельца вдвое.
   if (mine && (s.players[ME]?.arrears ?? []).includes('energy')) {
     h += `<div class="row" style="color:var(--red)">⚡ ${t('блэкаут: радары и ПВО −50%')}</div>`;
-  }
-  // ECON-3б: переплавка metal → credits (курс хуже рынка сознательно — пол под
-  // ценой) на своём мире с живым refinery/metal_station.
-  if (
-    mine &&
-    p.buildings.some((b) => b.hp > 0 && (b.type === 'refinery' || b.type === 'metal_station'))
-  ) {
-    const metalStock = Math.floor(s.players[ME]?.resources.metal ?? 0);
-    const preset = (n: number) =>
-      btn('smelt', String(n), `${n}⬢ → ${Math.floor(n / SMELT_RATE)}💰`, metalStock >= n);
-    h += `<div class="row" data-desc="act:smelt">♨ ${t('Переплавка')} <span class="dim">${SMELT_RATE}⬢ = 1💰</span> ${preset(20)}${preset(100)}${
-      metalStock >= SMELT_RATE * 2
-        ? btn('smelt', String(metalStock), t('всё ({n}⬢)', { n: metalStock }), true)
-        : ''
-    }</div>`;
   }
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
@@ -6162,15 +6137,6 @@ function objDossier(key: string): Dossier | null {
     return {
       name: t('Конструктор дивизий'),
       body: t('Редактор шаблонов: состав слотов и доктрина дивизий.'),
-    };
-  }
-  if (key === 'act:smelt') {
-    return {
-      name: t('Переплавка'),
-      body: t(
-        'Мгновенно переплавляет металл в кредиты по курсу {n}:1 — сознательно хуже рынка: это пол под ценой, а не замена торговли.',
-        { n: SMELT_RATE },
-      ),
     };
   }
   if (key.startsWith('c:')) return constructionDossier(key);
@@ -7479,9 +7445,6 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'dockrepair') {
     // ECON-3а: экспресс-ремонт за metal — кнопка видна только у своего дока.
     playerOrder(repairFleet(ME, arg || selFleet!));
-  } else if (act === 'smelt') {
-    // ECON-3б: переплавка metal → credits на выбранном своём мире.
-    playerOrder(smeltMetal(ME, selPlanet!, Number(arg)));
   } else if (act === 'fleetinfo') {
     // Тап по имени армии: карточка ⇄ сводка (для текущего выбранного флота).
     if (selFleet) fleetInfoFor = fleetInfoFor === selFleet ? null : selFleet;

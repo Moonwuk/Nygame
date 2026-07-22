@@ -157,12 +157,9 @@ export const actionPayloadSchemas: Record<string, z.ZodType> = {
   // Платный мгновенный ремонт корпуса (карточка флота): цена выводится из state
   // на сервере — клиент шлёт только намерение.
   'fleet.instantRepair': z.object({ fleetId: id }),
-  // ECON-3а: экспресс-ремонт за metal у СВОЕГО дока (shipRepair > 0) — цена
+  // ECON-3: экспресс-ремонт за metal у СВОЕГО дока (shipRepair > 0) — цена
   // тоже серверная, клиент шлёт намерение.
   'fleet.repair': z.object({ fleetId: id }),
-  // ECON-3б: переплавка metal → credits на своём мире с refinery/metal_station;
-  // amount дробный легален (ресурсы копятся непрерывно), модуль floor-ит сам.
-  'resource.smelt': z.object({ planetId: id, amount: z.number().finite().positive() }),
   // CC-1 order chain — the client atomically sets/cancels ([]) a fleet's whole queued
   // plan; the module re-validates against live state (known worlds, ownership).
   // `chain.stamp` is deliberately ABSENT: it is the SERVER driver's runtime stamp

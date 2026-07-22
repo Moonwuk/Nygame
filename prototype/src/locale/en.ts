@@ -1508,12 +1508,8 @@ export const en: Record<string, string> = {
   тёплая: 'warm',
   дальтоник: 'colourblind',
   'Вернуть цвета по умолчанию': 'Reset colours to defaults',
-  // --- ECON-3: экспресс-ремонт за металл + переплавка --------------------------
+  // --- ECON-3: экспресс-ремонт за металл ---------------------------------------
   'Экспресс-ремонт у своего дока за металл': 'Express repair at your own dock for metal',
-  Переплавка: 'Smelting',
-  'всё ({n}⬢)': 'all ({n}⬢)',
-  'Мгновенно переплавляет металл в кредиты по курсу {n}:1 — сознательно хуже рынка: это пол под ценой, а не замена торговли.':
-    'Instantly smelts metal into credits at {n}:1 — deliberately worse than the market: a floor under the price, not a trade substitute.',
   // --- ECON-4: рыночная комиссия ------------------------------------------------
   'к получению после комиссии {p}%: {n} ¤': 'you receive after the {p}% fee: {n} ¤',
   'в эскроу уйдёт {n} ¤ · комиссию {p}% платит получатель кредитов':
