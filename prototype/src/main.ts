@@ -350,13 +350,24 @@ const RIVAL_PALETTES: Record<string, readonly string[]> = {
 };
 const readPref = (k: string): string | null =>
   typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null;
-let youColor = readPref('void.colorYou') ?? COLOR.p1!;
-let neutralColor = readPref('void.colorNeutral') ?? COLOR.null!;
+/** Side colours feed inline `style="color:…"` and `<input type=color value>` sinks, so a
+ *  value reaching them MUST be a literal `#rrggbb` — never free text. They originate from
+ *  `<input type="color">` (already constrained) but round-trip through localStorage, which a
+ *  hostile extension/page could tamper. Validate on the way IN and rebuild the string from
+ *  the matched digits so every downstream sink is safe by construction — a tampered value
+ *  degrades to the default instead of injecting markup (CWE-79 / CodeQL js/xss-through-dom).
+ *  The fallback is a trusted constant, used verbatim. */
+function safeHexColor(c: string | null | undefined, fallback: string): string {
+  const m = typeof c === 'string' ? /^#([0-9a-fA-F]{6})$/.exec(c) : null;
+  return m ? `#${m[1]!.toLowerCase()}` : fallback;
+}
+let youColor = safeHexColor(readPref('void.colorYou'), COLOR.p1!);
+let neutralColor = safeHexColor(readPref('void.colorNeutral'), COLOR.null!);
 let rivalPaletteId = readPref('void.rivalPalette') ?? 'classic';
 if (!RIVAL_PALETTES[rivalPaletteId]) rivalPaletteId = 'classic';
 function setSideColors(you: string, neutral: string, palette: string): void {
-  youColor = you;
-  neutralColor = neutral;
+  youColor = safeHexColor(you, COLOR.p1!);
+  neutralColor = safeHexColor(neutral, COLOR.null!);
   rivalPaletteId = RIVAL_PALETTES[palette] ? palette : 'classic';
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('void.colorYou', youColor);
