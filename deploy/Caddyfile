@@ -1,0 +1,32 @@
+# Void Dominion — public HTTPS/WSS via Caddy (HTTPS-2.1). Caddy terminates TLS in front
+# of the game server, which itself never binds a public port.
+#
+# Used with the TLS overlay (see deploy/docker-compose.tls.yml):
+#
+#   DOMAIN=play.example.com SERVER_BIND=127.0.0.1 \
+#     docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# DNS PREREQUISITE: point DOMAIN's A/AAAA record at THIS host first. Caddy proves
+# ownership over :80/:443 (ACME HTTP-01 / TLS-ALPN-01) before Let's Encrypt issues the
+# certificate — without working DNS the handshake for a cert cannot complete.
+#
+# What Caddy does out of the box, so this file stays tiny:
+#   * provisions AND auto-renews a Let's Encrypt cert for {$DOMAIN} (covers HTTPS-2.2 —
+#     renewal is automatic; certs persist in the caddy-data volume across restarts);
+#   * redirects http:// -> https:// and serves HTTP/3;
+#   * upgrades WebSocket transparently, so wss://{$DOMAIN}/matches/... just works;
+#   * sets X-Forwarded-Proto / -Host / -For on the upstream request — the server trusts
+#     these ONLY behind a proxy (TRUST_PROXY=1, HTTPS-1.1) to see the real scheme/host.
+#
+# The upstream is reached over the compose network at server:8788; the plain HTTP port
+# stays on loopback (HTTPS-2.1 DoD: no direct plain-port exposure to the internet).
+#
+# TESTING WITHOUT A REAL DOMAIN / CERT:
+#   * self-signed:  set `tls internal` inside the site block (Caddy's local CA);
+#   * ACME staging: add a global `{ acme_ca https://acme-staging-v02.api.letsencrypt.org/directory }`
+#     block to avoid Let's Encrypt production rate limits while iterating (HTTPS-2.2).
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy server:8788
+}

@@ -1,0 +1,45 @@
+# Void Dominion — TLS overlay (HTTPS-2.1). Public HTTPS/WSS via Caddy in front of the
+# game server, which drops its public port. Compose it WITH the base file:
+#
+#   DOMAIN=play.example.com SERVER_BIND=127.0.0.1 \
+#     docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# Prereqs: a domain whose A/AAAA record points at THIS host (Caddy needs :80/:443 to
+# prove ownership and fetch the cert — see deploy/Caddyfile).
+#
+# Why SERVER_BIND=127.0.0.1: the base publishes the server on ${SERVER_BIND:-0.0.0.0}.
+# Set it to loopback here so the plain HTTP port is reachable only from the host (curl,
+# debugging) and NEVER from the internet — Caddy is the sole public listener (:443).
+# Caddy still reaches the server over the compose network at server:8788 regardless.
+services:
+  server:
+    # Behind a proxy the server must trust X-Forwarded-* to see the real https scheme and
+    # client host/IP (HTTPS-1.1). Only set here — a directly-exposed server ignores these
+    # headers (a client could otherwise spoof its scheme/IP), which is the fail-secure default.
+    environment:
+      TRUST_PROXY: '1'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp' # HTTP/3 (QUIC)
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN to the public hostname whose DNS points at this host}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # issued certs + ACME account key — MUST persist across restarts (rate limits)
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  caddy-data:
+  caddy-config:

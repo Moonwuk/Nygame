@@ -24,7 +24,10 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - '8788:8788'
+      # Default 0.0.0.0 — the plain LAN/quick path (players open http://<host>:8788).
+      # For a public TLS deploy set SERVER_BIND=127.0.0.1 and put Caddy in front
+      # (docker-compose.tls.yml) so the plain port isn't exposed to the internet.
+      - '${SERVER_BIND:-0.0.0.0}:8788:8788'
     environment:
       PORT: 8788
       # Release posture: only validated action.v1 envelopes are accepted (the bundled
