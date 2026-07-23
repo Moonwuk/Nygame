@@ -291,7 +291,7 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
 
   /** An auth app with recovery wired + a capturing mailer (the reset link never leaves the
    *  test). Mirrors the serverConfig composition: same key, a distinct `reset` audience. */
-  function recoverApp(): {
+  function recoverApp(resetBaseUrl = 'https://play.example'): {
     server: FastifyInstance;
     sent: Array<{ to: string; text: string }>;
     users: MemoryUserStore;
@@ -309,7 +309,7 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
         const r = await verifyResetToken(token, RESET_VERIFY);
         return r.ok ? r.claim : null;
       },
-      resetBaseUrl: 'https://play.example',
+      resetBaseUrl,
       sendMail: (msg) => {
         sent.push({ to: msg.to, text: msg.text });
         return Promise.resolve();
@@ -441,6 +441,20 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
     const postClaim = await verifySessionToken(postToken, VERIFY);
     expect(postClaim.ok).toBe(true);
     if (postClaim.ok) expect(await liveSession(postClaim.claim, users)).not.toBeNull();
+  });
+
+  it('normalizes a resetBaseUrl with trailing slashes to a single-slash link', async () => {
+    // Guards the linear trailing-slash trim that replaced `/\/+$/` (ReDoS-free):
+    // the emitted link must carry exactly one '/' before '?reset=', for any run.
+    const { server, sent } = recoverApp('https://play.example///');
+    await post(server, '/auth/register', {
+      login: 'liv',
+      password: 'longenough',
+      email: 'liv@example.com',
+    });
+    await post(server, '/auth/recover', { email: 'liv@example.com' });
+    expect(sent[0]!.text).toContain('https://play.example/?reset=');
+    expect(sent[0]!.text).not.toContain('https://play.example//?reset=');
   });
 
   it('liveSession rejects a session for an unknown/deleted account', async () => {

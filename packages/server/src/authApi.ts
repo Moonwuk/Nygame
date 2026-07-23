@@ -221,7 +221,14 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
   if (deps.signReset && deps.verifyReset && deps.resetBaseUrl) {
     const signReset = deps.signReset;
     const verifyReset = deps.verifyReset;
-    const resetBaseUrl = deps.resetBaseUrl.replace(/\/+$/, '');
+    // Strip trailing slashes WITHOUT a backtracking regex: `/\/+$/` is a
+    // quadratic ReDoS on a run of '/' (CodeQL js/polynomial-redos). resetBaseUrl
+    // is deployment config, not request data, so the practical risk is nil — but
+    // a linear trim keeps the auth surface clear of the pattern altogether.
+    const base = deps.resetBaseUrl;
+    let baseEnd = base.length;
+    while (baseEnd > 0 && base[baseEnd - 1] === '/') baseEnd -= 1;
+    const resetBaseUrl = base.slice(0, baseEnd);
     const sendMail = deps.sendMail ?? logMailer;
 
     app.post('/auth/recover', async (request: FastifyRequest, reply: FastifyReply) => {
