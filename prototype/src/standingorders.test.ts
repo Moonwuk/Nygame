@@ -237,6 +237,19 @@ describe('serverPatrolActions — the CC-4 server driver core', () => {
     const gone = patrolState([], [planet('A', { x: 0, y: 0 })]);
     expect(serverPatrolActions(gone, 0)[0]).toMatchObject({ fleetId: 'W', drop: true });
   });
+
+  it('emits patrols in sorted fleet-id order regardless of record key order (invariant #6)', () => {
+    // Insert the patrol record in REVERSE-sorted key order — the way a Postgres JSONB
+    // round-trip (LazyRoomRegistry hibernate → rehydrate) can reshuffle object keys.
+    // The driver must still issue in a fixed order (like serverChainActions), else which
+    // of two co-located wings wins a race for the same target is host/wake dependent.
+    const s = stateWith([wing('W2'), wing('W1')], [planet('A', { x: 0, y: 0 })]);
+    (s as SOState).patrols = {
+      W2: { center: { x: 0, y: 0 }, radius: WING_RANGE, sortie: freshSortie(WING_FUEL), rearmAt: HOUR },
+      W1: { center: { x: 0, y: 0 }, radius: WING_RANGE, sortie: freshSortie(WING_FUEL), rearmAt: HOUR },
+    };
+    expect(serverPatrolActions(s, 0).map((o) => o.fleetId)).toEqual(['W1', 'W2']);
+  });
 });
 
 // BF-26: the scramble toggle must not refuel a wing. OFF stashes the sortie

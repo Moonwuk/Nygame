@@ -1024,6 +1024,7 @@ export const en: Record<string, string> = {
   '🛩 дежурный вылет включён — эскадрилья бьёт врага в радиусе':
     '🛩 standing patrol on — the wing strikes any enemy in range',
   '🛩 дежурный вылет — только со стоянки в узле': '🛩 standing patrol — only from a parked node',
+  '🛩 дежурный вылет — только когда флот свободен': '🛩 standing patrol — only when the fleet is free',
   '🛩 дежурный вылет: ВКЛ': '🛩 standing patrol: ON',
   '🛩 дежурный вылет: выкл': '🛩 standing patrol: off',
   '🛩 эскадрилья запущена — ведите её на цель': '🛩 squadron launched — steer it onto the target',

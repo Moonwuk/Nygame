@@ -598,6 +598,11 @@ const autoAssault = new Set<string>();
 // burning fuel and rearming on a game-hour cadence (SQ-2.1). Client-side plan, like the
 // order queue; single-player only (the server owns fleets in net play).
 const patrols = new Map<string, Patrol>();
+// Fuel/rearm stashed when a SOLO patrol is toggled OFF, so OFF→ON resumes the wing's
+// sortie instead of handing back a full tank — BF-26 parity with the server's
+// order.scramble path (st.wingSorties in game.ts); without it, toggling free-refuels a
+// dry wing. (NET arms via order.scramble, which does its own stash server-side.)
+const wingSorties = new Map<string, Patrol['sortie']>();
 let lastPatrolTick = 0; // game-time (ms) the rearm cadence last advanced
 // A staged move that would cross territory of a player you're at PEACE with: held
 // until you confirm in the war-prompt (declaring war opens the route) or cancel.
@@ -3249,7 +3254,12 @@ function setScramble(ids: string[], on: boolean): void {
     if (!!patrolOf(id) === on) continue;
     if (!on) {
       if (NET) playerOrder(orderScramble(ME, id, false));
-      else patrols.delete(id);
+      else {
+        // Stash the wing's sortie so OFF→ON resumes it (BF-26) instead of a free full tank.
+        const pt = patrols.get(id);
+        if (pt) wingSorties.set(id, pt.sortie);
+        patrols.delete(id);
+      }
       continue;
     }
     const pos = f.location ? s.planets[f.location]?.position : undefined;
@@ -3257,15 +3267,32 @@ function setScramble(ids: string[], on: boolean): void {
       note(t('🛩 дежурный вылет — только со стоянки в узле'));
       continue;
     }
+    // Mirror the reducer's order.scramble gate (game.ts): a patrol only stands from a
+    // parked, out-of-combat wing. Without this, solo would arm a patrol the net path
+    // rejects (E_CONDITIONS_UNMET), and the UI would offer an action the server refuses.
+    if (!fleetIdle(f)) {
+      note(t('🛩 дежурный вылет — только когда флот свободен'));
+      continue;
+    }
     if (NET) {
       playerOrder(orderScramble(ME, id, true));
     } else {
       if (patrols.size === 0) lastPatrolTick = s.time; // start the rearm cadence from now
+      const spec = sortieSpec(f);
+      const stashed = wingSorties.get(id);
       patrols.set(id, {
         center: { x: pos.x, y: pos.y },
         radius: squadronStrikeRange(f),
-        sortie: freshSortie(sortieSpec(f).maxFuel),
+        // Resume the stashed sortie (clamped to the current wing spec), like the server;
+        // only a never-flown wing starts on a fresh full tank.
+        sortie: stashed
+          ? {
+              fuel: Math.min(stashed.fuel, spec.maxFuel),
+              rearming: Math.min(stashed.rearming, spec.rearmRounds),
+            }
+          : freshSortie(spec.maxFuel),
       });
+      wingSorties.delete(id);
     }
   }
 }
@@ -3276,7 +3303,7 @@ function fmtHrs(h: number): string {
 }
 
 // CC-4 reactive auto-scramble driver: each frame, a squadron fleet on "дежурный вылет"
-// that's idle auto-sorties at the nearest identified, at-war contact inside its strike
+// that's idle auto-sorties at the lowest-id identified, at-war contact inside its strike
 // radius — burning one fuel (SQ-2.1) — and rearms one round per elapsed game-hour. The
 // pure decision is scrambleOrder (tested); this just reads the world (vision + diplomacy)
 // CC-1 chain driver (solo): the same pure core the netserver runs — stamp the chain

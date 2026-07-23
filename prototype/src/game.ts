@@ -4356,7 +4356,7 @@ export function serverChainActions(
 
 /** One tick of the SERVER-SIDE patrol driver (CC-4): tick each standing patrol's rearm
  *  on its game-hour cadence, then — if the wing is parked and flight-ready — scramble at
- *  the nearest identified, at-war contact inside the radius (the same pure scrambleOrder
+ *  the lowest-id identified, at-war contact inside the radius (the same pure scrambleOrder
  *  the solo driver uses; vision comes from the owner's identify coverage, so the server
  *  never lets a patrol see through the fog its owner has). Pure — the host applies the
  *  strike `actions` and persists `patch` via patrol.stamp; `drop` retires a patrol whose
@@ -4380,7 +4380,12 @@ export function serverPatrolActions(
     drop?: boolean;
   }> = [];
   const identify = new Map<string, Set<string>>(); // owner → identified nodes (hoisted per owner)
-  for (const [fid, p] of Object.entries(patrols)) {
+  // Sorted fleet-id iteration (like serverChainActions above): JSONB does not preserve
+  // object key order, so unsorted iteration would make the strike-issue order — and thus
+  // which of two co-located wings wins a race for the same target — host/hibernation
+  // dependent. Sorting pins one order across hosts and wake cycles (invariant #6).
+  for (const fid of Object.keys(patrols).sort()) {
+    const p = patrols[fid]!;
     const f = state.fleets[fid];
     if (!f || !fleetHasSquadron(f)) {
       out.push({ fleetId: fid, owner: f?.owner ?? '', actions: [], drop: true });
