@@ -436,17 +436,23 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # The zaproxy image runs as a non-root `zap` user; the runner's checkout dir
+          # isn't writable by it, so ZAP would silently fail to write zap.yaml/reports
+          # (AccessDeniedException) while the job still reported success. Mount a
+          # dedicated, world-writable subdir instead of the whole repo root.
+          mkdir -p zap-wrk
+          chmod 777 zap-wrk
           # TODO: Update to sha256 digest — run: ./.github/scripts/update-image-digests.sh
           # ghcr.io/zaproxy/zaproxy@sha256 pin snapped live from the registry API (SEC-3).
           # --network host: the target is the bare node process on the runner, not a
           # container — ZAP reaches it via localhost like trivy-image reaches the socket.
-          docker run --rm --network host -v "$PWD:/zap/wrk/:rw" \
+          docker run --rm --network host -v "$PWD/zap-wrk:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2 \
             zap-baseline.py -t http://localhost:8787 -r zap-report.html -J zap-report.json
           rc=$?
           set -e
           ok=true; case $rc in 125 | 126 | 127) ok=false ;; esac
-          [ -s zap-report.json ] || ok=false
+          [ -s zap-wrk/zap-report.json ] || ok=false
           echo "{\"key\":\"dast-zap\",\"ok\":$ok,\"exit\":$rc}" > status-dast-zap.json
       - name: stop the server
         if: always()
@@ -456,8 +462,8 @@ jobs:
         with:
           name: report-dast-zap
           path: |
-            zap-report.html
-            zap-report.json
+            zap-wrk/zap-report.html
+            zap-wrk/zap-report.json
             status-dast-zap.json
             server.log
           if-no-files-found: warn
