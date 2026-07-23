@@ -12,7 +12,7 @@
 `createKernel`); `checkEnd()` в `prototype/src/main.ts` выводит баннер из авторитетного
 `s.match.status==='ended'` (не фейк). На сервере есть **ручной старт-лобби** (хост + гард слотов,
 `packages/server/src/matchRoom.ts`) и **пер-игроковый архив** через `MatchRegistry`
-(`matchRegistry.ts`, HTTP `GET /matches` в `wsServer.ts`). Нет формальной машины состояний
+(`matchRegistry.ts`; хендлер HTTP `GET /matches` — в `matchApi.ts`/`registerBrowserApi`, смонтирован через `httpRoutes`-шов `wsServer.ts`). Нет формальной машины состояний
 матча/ready-check, очереди матчмейкинга, предматчевого экрана. Старт по фракции — `core` (CR-1.3).
 
 ## Зависимости
@@ -44,7 +44,7 @@ victoryModule) · `server-roadmap.md` (match-actor, lifecycle) · `persistence-r
 **Цель:** игроки собираются в матч.
 **Подзадачи:** создать/найти/присоединиться к лобби; слоты 5–10; готовность; приватные/публичные; права хоста.
 **Готово, когда:** игроки собираются в лобби и стартуют матч.
-> Частично уже в коде: ручной старт-лобби с ростером, правами хоста и гардом слотов (`packages/server/src/matchRoom.ts`); присоединение через `MatchRegistry` + read-model `GET /matches` (`matchRegistry.ts`, `wsServer.ts`, тест `matchRegistryHttp.test.ts`). Формальный ready-check остаётся ⏳.
+> Частично уже в коде: ручной старт-лобби с ростером, правами хоста и гардом слотов (`packages/server/src/matchRoom.ts`); присоединение через `MatchRegistry` + read-model `GET /matches` (хендлер `matchApi.ts`/`registerBrowserApi` поверх `matchRegistry.ts`, смонтирован через `wsServer.ts`, тест `matchRegistryHttp.test.ts`). Формальный ready-check остаётся ⏳.
 
 ### MM-1.2 · Предматчевый экран: фракция/технологии `[cli][srv]` 🔒(MM-1.1,CR-1.1) — M
 **Цель:** выбор фракции/стартовых техов. **Бирка H3.**

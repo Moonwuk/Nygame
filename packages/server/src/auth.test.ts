@@ -140,12 +140,23 @@ describe('SE-1.x · session tokens (typ/audience separation from join tokens)', 
   const sessionSign = { key: secret, algorithm: 'HS256', issuer: 'void', audience: 'session' };
   const sessionVerify = { key: secret, algorithms: ['HS256'], issuer: 'void', audience: 'session' };
 
-  it('round-trips a session claim', async () => {
-    const token = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
-      ttlSeconds: 3600,
-    });
+  it('round-trips a session claim (pwfp included)', async () => {
+    const token = await signSessionToken(
+      { accountId: 'acct-1', login: 'Vasya', pwfp: 'fp-abc' },
+      sessionSign,
+      { ttlSeconds: 3600 },
+    );
     const result = await verifySessionToken(token, sessionVerify);
-    expect(result).toEqual({ ok: true, claim: { accountId: 'acct-1', login: 'Vasya' } });
+    expect(result).toEqual({ ok: true, claim: { accountId: 'acct-1', login: 'Vasya', pwfp: 'fp-abc' } });
+  });
+
+  it('rejects a session with no pwfp (pre-upgrade / forged) — fail-secure', async () => {
+    const token = await signSessionToken(
+      { accountId: 'acct-1', login: 'Vasya', pwfp: '' },
+      sessionSign,
+      { ttlSeconds: 3600 },
+    );
+    expect(await verifySessionToken(token, sessionVerify)).toEqual({ ok: false, code: 'E_AUTH' });
   });
 
   it('a JOIN token can never pass as a session token (typ+aud pinned), nor vice versa', async () => {
@@ -153,18 +164,21 @@ describe('SE-1.x · session tokens (typ/audience separation from join tokens)', 
     const join = await signJoinToken(claim, signCfg, { ttlSeconds: 3600 });
     expect(await verifySessionToken(join, sessionVerify)).toEqual({ ok: false, code: 'E_AUTH' });
 
-    const session = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
-      ttlSeconds: 3600,
-    });
+    const session = await signSessionToken(
+      { accountId: 'acct-1', login: 'Vasya', pwfp: 'fp-abc' },
+      sessionSign,
+      { ttlSeconds: 3600 },
+    );
     expect(await verifyJoinToken(session, verifyCfg)).toEqual({ ok: false, code: 'E_AUTH' });
   });
 
   it('rejects an expired session with a stable E_AUTH', async () => {
     const past = Date.now() - 7_200_000; // minted two hours ago
-    const token = await signSessionToken({ accountId: 'acct-1', login: 'Vasya' }, sessionSign, {
-      ttlSeconds: 3600,
-      now: () => past,
-    });
+    const token = await signSessionToken(
+      { accountId: 'acct-1', login: 'Vasya', pwfp: 'fp-abc' },
+      sessionSign,
+      { ttlSeconds: 3600, now: () => past },
+    );
     expect(await verifySessionToken(token, sessionVerify)).toEqual({ ok: false, code: 'E_AUTH' });
   });
 });

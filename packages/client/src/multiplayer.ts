@@ -468,8 +468,15 @@ export class MultiplayerClient {
       // Transient, non-seq-consuming rejections are retried silently (BF-2); the
       // rejection surfaces only when the retry budget is exhausted. Everything else
       // consumed its seq — drop it from the resend window and surface as before.
+      // E_UNAVAILABLE = the durable store blipped: the server ROLLED BACK the sequence
+      // reservation (matchRoom.admitCommitted) expecting this same clientSeq again, so
+      // the client MUST re-send it — otherwise the cursor wedges on E_OUT_OF_ORDER
+      // forever (its counter already advanced). It is transient and non-seq-consuming,
+      // exactly like the two below.
       if (
-        (message.code === 'E_RATE_LIMIT' || message.code === 'E_OUT_OF_ORDER') &&
+        (message.code === 'E_RATE_LIMIT' ||
+          message.code === 'E_OUT_OF_ORDER' ||
+          message.code === 'E_UNAVAILABLE') &&
         this.queueResend(message.actionId)
       ) {
         return;

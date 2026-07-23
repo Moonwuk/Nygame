@@ -4,9 +4,10 @@ import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
 import { hoursToMs, timeScaleOf, type Context } from '../action/types';
 import { MS_PER_HOUR } from '../util/time';
-import { sumUnitStat } from '../util/stacks';
+import { cappedUnitStat, sumUnitStat } from '../util/stacks';
 import { requireOwnedIdleFleet } from '../util/fleet';
 import { isActivelyBombarding } from '../state/orbit';
+import { BLACKOUT_MULT } from '../state/visibility';
 import { applyDamageToSide, isHostile, removeIfWiped } from '../util/combat';
 
 /** Fraction of a bombarding fleet's firepower that rains on the planet below. */
@@ -56,9 +57,10 @@ function nearOrbitHostile(
   return best;
 }
 
-/** Bombardment firepower a fleet rains on the planet = Σ ship attack × fraction. */
+/** Bombardment firepower a fleet rains on the planet = Σ ship attack × fraction,
+ *  over at most COMBAT_UNIT_CAP units (the same firing line as melee/artillery). */
 function bombardPower(fleet: Fleet, data: GameData): number {
-  return sumUnitStat(fleet.units, data, 'attack') * BOMBARD_FRACTION;
+  return cappedUnitStat(fleet.units, data, 'attack') * BOMBARD_FRACTION;
 }
 
 /** Resolves the orbital layer over one continuous time span: planetary AA fires
@@ -103,8 +105,12 @@ function runOrbital(h: HandlerContext, from: number, to: number, hours: number):
     // The quarter grid contains the hour grid, so one walk over quarter boundaries
     // covers both; at a shared boundary the heavy orbital volley lands first.
     if (planet.owner !== null && !groundAssaults.has(planetId)) {
-      const aaOrbital = aaOrbitalAt(planet, data);
-      const aaClose = aaCloseAt(planet, data);
+      // ECON-2 «блэкаут»: unpaid energy halves BOTH flak tiers until the bill is
+      // covered — same knob as the radar dim (BLACKOUT_MULT, visibility.ts).
+      const starved = h.state.players[planet.owner]?.arrears?.includes('energy') === true;
+      const aaMult = starved ? BLACKOUT_MULT : 1;
+      const aaOrbital = aaOrbitalAt(planet, data) * aaMult;
+      const aaClose = aaCloseAt(planet, data) * aaMult;
       if (aaOrbital > 0 || aaClose > 0) {
         const hourMs = hourIntervalMs(h.ctx); // one game-hour of world time
         const quarterMs = hourMs / 4;

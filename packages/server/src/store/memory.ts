@@ -14,6 +14,7 @@ import type {
   AvaSession,
   AvaSessionStore,
   AvaSide,
+  CommanderStore,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -121,6 +122,36 @@ export class MemoryAccountStore implements AccountStore {
   occupiedSeats(room: string): Promise<number> {
     return Promise.resolve(this.rooms.get(room)?.size ?? 0);
   }
+
+  seatedNicks(room: string): Promise<Array<{ playerId: PlayerId; nick: string }>> {
+    const byNick = this.rooms.get(room);
+    if (!byNick) return Promise.resolve([]);
+    return Promise.resolve([...byNick].map(([nick, playerId]) => ({ playerId, nick })));
+  }
+}
+
+/** In-memory commander XP (EC-*): a lifetime-XP tally per account plus the set of
+ *  already-credited matchIds for idempotency. Loses everything on restart — the
+ *  Postgres store is the durable one; this serves tests and the no-DB dev run. */
+export class MemoryCommanderStore implements CommanderStore {
+  private readonly xp = new Map<string, number>();
+  private readonly credited = new Set<string>();
+
+  creditMatch(
+    matchId: string,
+    rows: ReadonlyArray<{ accountId: string; xp: number }>,
+  ): Promise<boolean> {
+    if (this.credited.has(matchId)) return Promise.resolve(false);
+    this.credited.add(matchId);
+    for (const { accountId, xp } of rows) {
+      if (xp > 0) this.xp.set(accountId, (this.xp.get(accountId) ?? 0) + xp);
+    }
+    return Promise.resolve(true);
+  }
+
+  xpOf(accountId: string): Promise<number> {
+    return Promise.resolve(this.xp.get(accountId) ?? 0);
+  }
 }
 
 /** In-memory user store — accounts keyed by lower-cased login (case-insensitive). */
@@ -130,16 +161,44 @@ export class MemoryUserStore implements UserStore {
   createUser(
     login: string,
     passHash: string,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    email?: string,
+  ): Promise<
+    { ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' | 'E_EMAIL_TAKEN' }
+  > {
     const key = login.toLowerCase();
     if (this.byLogin.has(key)) return Promise.resolve({ ok: false, code: 'E_LOGIN_TAKEN' });
+    const mail = email?.toLowerCase();
+    if (mail && this.byEmail(mail)) return Promise.resolve({ ok: false, code: 'E_EMAIL_TAKEN' });
     const userId = randomUUID();
-    this.byLogin.set(key, { userId, login, passHash });
+    this.byLogin.set(key, { userId, login, passHash, ...(mail ? { email: mail } : {}) });
     return Promise.resolve({ ok: true, userId });
   }
 
   findUser(login: string): Promise<UserRecord | null> {
     return Promise.resolve(this.byLogin.get(login.toLowerCase()) ?? null);
+  }
+
+  findUserByEmail(email: string): Promise<UserRecord | null> {
+    return Promise.resolve(this.byEmail(email.toLowerCase()));
+  }
+
+  findById(userId: string): Promise<UserRecord | null> {
+    for (const rec of this.byLogin.values()) {
+      if (rec.userId === userId) return Promise.resolve(rec);
+    }
+    return Promise.resolve(null);
+  }
+
+  setPassword(userId: string, passHash: string): Promise<void> {
+    for (const rec of this.byLogin.values()) {
+      if (rec.userId === userId) rec.passHash = passHash;
+    }
+    return Promise.resolve();
+  }
+
+  private byEmail(mail: string): UserRecord | null {
+    for (const rec of this.byLogin.values()) if (rec.email === mail) return rec;
+    return null;
   }
 }
 

@@ -53,6 +53,24 @@ describe('MetricsAggregator (M1)', () => {
     });
   });
 
+  it('surfaces EVERY failure signal in one summary (the /metrics/summary contract, NETA2-mon)', () => {
+    // A mixed stream a live server would produce; the glance-view must expose each anomaly.
+    const s = feed([
+      { kind: 'desync', playerId: 'p1', atSeq: 7, clientHash: 'deadbeef' },
+      { kind: 'desync', playerId: 'p2', atSeq: 9, clientHash: 'cafe' },
+      { kind: 'dead_letter', failures: [{ at: 1, type: 'combat.tick', code: 'E_INTERNAL' }] },
+      { kind: 'advance_overflow', reachedTime: 5, targetTime: 9, reason: 'stalled' },
+      { kind: 'action', actionId: 'x1', playerId: 'p1', type: 'fleet.move', ok: false, seq: 1, code: 'E_UNAVAILABLE' },
+      { kind: 'action', actionId: 'x2', playerId: 'p1', type: 'fleet.move', ok: false, seq: 2, code: 'E_UNAVAILABLE' },
+      { kind: 'action', actionId: 'x3', playerId: 'p2', type: 'unit.build', ok: false, seq: 3, code: 'E_MATCH_ENDED' },
+    ]).summary();
+    expect(s.desyncs).toBe(2); // target is 0 — a non-zero here is the loudest signal
+    expect(s.deadLetters).toBe(1);
+    expect(s.advanceOverflows).toBe(1);
+    expect(s.actions.rejected).toBe(3);
+    expect(s.actions.rejectByCode).toEqual({ E_UNAVAILABLE: 2, E_MATCH_ENDED: 1 });
+  });
+
   it('counts domain events by type and derives battles/captures', () => {
     const s = feed([
       {
@@ -126,6 +144,20 @@ describe('MetricsAggregator (M1)', () => {
     const s = new MetricsAggregator().summary();
     expect(s.clientFps).toBeNull();
     expect(s.clientRttMs).toBeNull();
+  });
+
+  it('ECON-6: counts economy snapshots and per-player arrears-hours', () => {
+    const snap = (arrears: string[]): RoomObservation => ({
+      kind: 'economy',
+      atTime: 3_600_000,
+      players: {
+        p1: { resources: { credits: 12 }, netPerHour: { credits: 1.5 }, arrears },
+        p2: { resources: { credits: 40 }, netPerHour: { credits: 3 }, arrears: [] },
+      },
+    });
+    expect(new MetricsAggregator().summary().economy).toBeNull();
+    const s = feed([snap(['food']), snap(['food', 'energy']), snap([])]).summary();
+    expect(s.economy).toEqual({ snapshots: 3, arrearsHours: { p1: 2 } }); // p2 never in arrears
   });
 
   it('summary is a snapshot — later observations do not mutate an earlier summary', () => {

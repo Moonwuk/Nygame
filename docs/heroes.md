@@ -90,7 +90,7 @@ interface Hero {
 - **`data/heroFittings.json`** — компоненты корабля: `{ statMods{}, grants?{ ability?|passive? } }` (без отдельного `slot` — общий слот-бюджет архетипа; `grants` — объект)
   (настройка самого корабля: статы / выдаёт способность).
 - **`data/heroSkillTrees.json`** — две ветки (`transhuman` / `psionic`): узлы
-  `{ requires[], grants: { ability? | passive? | statBonus? | abilityParam? } }` —
+  `{ requires[], grants: { ability? | passive? } }` —
   «дерево = бонусы к способностям».
 
 Всё проходит `parseGameData` до ядра (A05/A08), как остальной контент; загрузчик

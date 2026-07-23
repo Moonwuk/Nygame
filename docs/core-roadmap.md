@@ -87,7 +87,7 @@ action-log) — PE-1.1 в `persistence-roadmap.md`.
 ### CR-2.1 · Память «последнего увиденного» `[core]` ✅ — M
 
 **Подзадачи:** ✅ per-player снимки в `GameState` (`fog`); ✅ `visibleState` отдаёт серое «last known» вместо unknown. **Бирка A1m.**
-**Готово:** `visibilityModule` (`modules/visibility.ts`) снимает опознанные миры в per-player память тумана и кормит `visibleState` серым last-known миром покинутых зон; тест `visibility.test.ts:53`.
+**Готово:** `visibilityModule` (`modules/visibility.ts`) снимает опознанные миры в per-player память тумана и кормит `visibleState` серым last-known миром покинутых зон; тест `visibility.test.ts:54`.
 
 ### CR-2.2 · Сенсорная/радарная дальность от зданий `[core][data]` ⏳ (частично) — S
 

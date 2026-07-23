@@ -320,6 +320,20 @@ describe('MultiplayerClient · transient-rejection resend (BF-2)', () => {
     expect(resent.actionId).toBe('sess-A:p1:2');
   });
 
+  it('re-sends the SAME envelope after E_UNAVAILABLE (durable blip → server rolled back the seq)', () => {
+    const socket = new FakeSocket();
+    const rejections: string[] = [];
+    const client = new MultiplayerClient(socket, { onRejection: (_id, code) => rejections.push(code) });
+    client.receive(gatedWelcome(baseState(10), 'sess-A'));
+    client.sendAction(orbit()); // seq 1 — durable persist blips
+    client.receive(rejection('sess-A:p1:1', 'E_UNAVAILABLE'));
+    expect(rejections).toEqual([]); // absorbed — the store may recover; retry, don't wedge
+    vi.advanceTimersByTime(500);
+    expect(socket.sent).toHaveLength(2);
+    const resent = (JSON.parse(socket.sent[1] ?? '{}') as { envelope: ActionEnvelope }).envelope;
+    expect(resent.clientSeq).toBe(1); // the SAME seq the server rolled back to expect
+  });
+
   it('resends a wedged burst lowest-seq first so the strict cursor re-admits in order', () => {
     const socket = new FakeSocket();
     const client = new MultiplayerClient(socket, {});

@@ -37,12 +37,17 @@ export const planetTypeModule: GameModule = {
       }
       const flat = def.productionBonus; // applies to every resource
       const byRes = def.productionByResource; // extra, per-resource (e.g. dead world: +30% metal)
-      if (flat === 0 && Object.keys(byRes).length === 0) {
-        return bag; // nothing to scale — pass through unchanged
+      const base = def.baseOutput; // ECON-7: passive per-hour output biased by type
+      const baseKeys = Object.keys(base);
+      if (flat === 0 && Object.keys(byRes).length === 0 && baseKeys.length === 0) {
+        return bag; // nothing to add or scale — pass through unchanged
       }
+      // Passive base output is added FIRST (so building produces and it share the
+      // richness multiplier), then the whole bag is scaled by the type's bonuses.
       const out: Record<string, number> = {};
-      for (const res of Object.keys(bag)) {
-        out[res] = (bag[res] ?? 0) * (1 + flat) * (1 + (byRes[res] ?? 0));
+      for (const res of new Set([...Object.keys(bag), ...baseKeys])) {
+        const raw = (bag[res] ?? 0) + (base[res] ?? 0);
+        out[res] = raw * (1 + flat) * (1 + (byRes[res] ?? 0));
       }
       return out;
     });

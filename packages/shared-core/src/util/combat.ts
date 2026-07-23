@@ -1,7 +1,7 @@
 import type { HandlerContext } from '../kernel/module';
 import type { CombatantRef, Fleet, GameState, PlanetId, UnitStack } from '../state/gameState';
 import type { GameData, UnitDef } from '../data/schemas';
-import { sumUnitStat } from './stacks';
+import { cappedUnitStat } from './stacks';
 import { effectiveStats } from './loadout';
 import { getStance, type DiplomacyCapability } from '../state/diplomacy';
 
@@ -69,9 +69,11 @@ export function sideAlive(state: GameState, ref: CombatantRef): boolean {
 }
 
 /**
- * Damage a side deals in one round = Σ count × stat. The aggressor uses its
- * `attack` stat; a standing fleet that is attacked (the defender) answers with
- * its `defense` stat only — the return-fire mechanic (no separate attack order).
+ * Damage a side deals in one round = Σ count × stat over at most COMBAT_UNIT_CAP
+ * units — the strongest guns form the firing line, everyone behind them only
+ * soaks (Bytro line cap; the receiving hull pools stay whole-stack). The
+ * aggressor uses its `attack` stat; a standing fleet that is attacked (the
+ * defender) answers with its `defense` stat only — the return-fire mechanic.
  */
 export function sideDamage(
   state: GameState,
@@ -80,7 +82,7 @@ export function sideDamage(
   stat: 'attack' | 'defense',
 ): number {
   const units = sideUnits(state, ref);
-  return units ? sumUnitStat(units, data, stat) : 0;
+  return units ? cappedUnitStat(units, data, stat) : 0;
 }
 
 export function isHostile(h: HandlerContext, a: string, b: string): boolean {

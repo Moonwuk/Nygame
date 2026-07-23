@@ -59,7 +59,29 @@ function rejectStatus(target: string): Promise<number> {
       reject(new Error('expected the handshake to be rejected, but it connected'));
     });
     ws.on('error', () => {
-      /* the server writes a raw 401/409 then destroys — 'unexpected-response' carries it */
+      /* the server writes a raw 401 then destroys — 'unexpected-response' carries it */
+    });
+  });
+}
+
+/** Connect expecting an INFORMATIONAL refusal (NETA2-1): the handshake COMPLETES and the
+ *  server delivers the reason as an `error` frame (readable by a browser, unlike a raw
+ *  handshake status), then closes. Resolves the code. */
+function refuseReason(target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(target);
+    ws.on('message', (data) => {
+      ws.close();
+      const msg = JSON.parse(data.toString()) as { type?: string; code?: string };
+      if (msg.type === 'error' && msg.code) resolve(msg.code);
+      else reject(new Error('expected an error frame, got ' + data.toString()));
+    });
+    ws.on('unexpected-response', (_req, res) => {
+      ws.terminate();
+      reject(new Error('expected a readable error frame, got a raw ' + (res.statusCode ?? 0)));
+    });
+    ws.on('error', () => {
+      /* transient — the message/unexpected-response handlers settle the promise */
     });
   });
 }
@@ -202,7 +224,7 @@ describe('REL-5 · seat lock (nick + ticket)', () => {
     }
   });
 
-  it('a full room still answers 409 to a NEW nick (unchanged by the lock)', async () => {
+  it('a full room refuses a NEW nick with a readable E_MATCH_FULL (NETA2-1)', async () => {
     const server = createMultiplayerServer({
       room: makeRoom(),
       accountStore: new MemoryAccountStore(),
@@ -212,7 +234,7 @@ describe('REL-5 · seat lock (nick + ticket)', () => {
     try {
       const a = await join(`${url}?nick=alice`);
       const b = await join(`${url}?nick=bob`);
-      expect(await rejectStatus(`${url}?nick=carol`)).toBe(409);
+      expect(await refuseReason(`${url}?nick=carol`)).toBe('E_MATCH_FULL');
       a.ws.close();
       b.ws.close();
     } finally {
@@ -222,7 +244,7 @@ describe('REL-5 · seat lock (nick + ticket)', () => {
 });
 
 describe('SES-2.3 · entry window (admitNewSeat)', () => {
-  it('seat-lock path: a closed window refuses a NEW nick (403) but a seated nick reconnects', async () => {
+  it('seat-lock path: a closed window refuses a NEW nick (E_ENTRY_CLOSED) but a seated nick reconnects', async () => {
     let open = true;
     const server = createMultiplayerServer({
       room: makeRoom(),
@@ -240,9 +262,9 @@ describe('SES-2.3 · entry window (admitNewSeat)', () => {
       await once(alice.ws, 'close');
       // Window closes: a brand-new nick is refused BEFORE any seat is assigned.
       open = false;
-      expect(await rejectStatus(`${url}?nick=bob`)).toBe(403);
-      // …and bob never burned a chair, so the room still has a free seat (would be 403,
-      // not 409). Meanwhile alice — already seated — reconnects with her ticket.
+      expect(await refuseReason(`${url}?nick=bob`)).toBe('E_ENTRY_CLOSED');
+      // …and bob never burned a chair, so the room still has a free seat (entry closed,
+      // not full). Meanwhile alice — already seated — reconnects with her ticket.
       const again = await join(`${url}?nick=alice&ticket=${encodeURIComponent(ticket)}`);
       expect(again.welcome.playerId).toBe(seat);
       again.ws.close();
@@ -266,7 +288,7 @@ describe('SES-2.3 · entry window (admitNewSeat)', () => {
       alice.ws.close();
       await once(alice.ws, 'close');
       open = false;
-      expect(await rejectStatus(`${url}?nick=bob`)).toBe(403); // first-time claim, window shut
+      expect(await refuseReason(`${url}?nick=bob`)).toBe('E_ENTRY_CLOSED'); // first-time claim, window shut
       const again = await join(`${url}?nick=alice`); // already a participant → admitted
       expect(again.welcome.playerId).toBe(seat);
       again.ws.close();

@@ -4,6 +4,7 @@ import { createInitialState, type GameState } from '@void/shared-core';
 import {
   MemoryAccountStore,
   MemoryArsenalStore,
+  MemoryCommanderStore,
   MemoryUserStore,
   MemoryAvaChallengeStore,
   MemoryAvaFeedStore,
@@ -20,6 +21,7 @@ import {
 import {
   PostgresAccountStore,
   PostgresArsenalStore,
+  PostgresCommanderStore,
   PostgresUserStore,
   PostgresAvaChallengeStore,
   PostgresAvaFeedStore,
@@ -37,6 +39,7 @@ import {
 import type {
   AccountStore,
   ArsenalStore,
+  CommanderStore,
   CorpRentStore,
   DropStore,
   OwnedArsenalItem,
@@ -138,6 +141,60 @@ function accountStoreContract(name: string, make: () => AccountStore, uniq: (p: 
       await store.resolveSeat(uniq('r3'), 'bob', seats);
       expect(await store.seatTicket(uniq('r3'), 'bob')).toBeNull();
       expect(await store.bindSeatTicket(uniq('r4'), 'alice', 'x')).toBeNull(); // no seat there
+    });
+
+    it('seatedNicks lists every claimed (playerId, nick) — the match-end credit read', async () => {
+      const store = make();
+      expect(await store.seatedNicks(uniq('r5'))).toEqual([]);
+      await store.resolveSeat(uniq('r5'), 'alice', seats);
+      await store.resolveSeat(uniq('r5'), 'bob', seats);
+      const seated = await store.seatedNicks(uniq('r5'));
+      expect(new Set(seated)).toEqual(
+        new Set([
+          { playerId: 'p1', nick: 'alice' },
+          { playerId: 'p2', nick: 'bob' },
+        ]),
+      );
+    });
+  });
+}
+
+function commanderStoreContract(
+  name: string,
+  make: () => CommanderStore,
+  uniq: (p: string) => string,
+): void {
+  describe(`CommanderStore — ${name}`, () => {
+    it('credits a finished match once and accumulates XP per account', async () => {
+      const store = make();
+      const [a, b] = [uniq('acc-a'), uniq('acc-b')];
+      expect(await store.xpOf(a)).toBe(0); // never played
+      const first = await store.creditMatch(uniq('m1'), [
+        { accountId: a, xp: 200 },
+        { accountId: b, xp: 40 },
+      ]);
+      expect(first).toBe(true);
+      expect(await store.xpOf(a)).toBe(200);
+      expect(await store.xpOf(b)).toBe(40);
+      // a SECOND match adds to the running lifetime total
+      expect(await store.creditMatch(uniq('m2'), [{ accountId: a, xp: 140 }])).toBe(true);
+      expect(await store.xpOf(a)).toBe(340);
+    });
+
+    it('is idempotent per matchId — a re-observed end never double-pays', async () => {
+      const store = make();
+      const a = uniq('acc-c');
+      expect(await store.creditMatch(uniq('mx'), [{ accountId: a, xp: 100 }])).toBe(true);
+      // a server restart re-observes the same ended match → the marker refuses it
+      expect(await store.creditMatch(uniq('mx'), [{ accountId: a, xp: 100 }])).toBe(false);
+      expect(await store.xpOf(a)).toBe(100); // NOT 200
+    });
+
+    it('skips non-positive rows (a defeated participant with 0 XP earns nothing)', async () => {
+      const store = make();
+      const a = uniq('acc-d');
+      expect(await store.creditMatch(uniq('mz'), [{ accountId: a, xp: 0 }])).toBe(true);
+      expect(await store.xpOf(a)).toBe(0);
     });
   });
 }
@@ -498,7 +555,12 @@ function resultStoreContract(
       const [m1, m2, a, b] = [uniq('r-m1'), uniq('r-m2'), uniq('r-c'), uniq('r-d')];
       await store.record({ matchupId: m1, challengerCorp: a, targetCorp: b, winnerCorp: null, at: 5 });
       await store.record({ matchupId: m2, challengerCorp: a, targetCorp: b, winnerCorp: b, at: 9 });
-      const recent = (await store.recent()).filter((r) => r.matchupId === m1 || r.matchupId === m2);
+      // Explicit big limit: the pg tables are SHARED across runs (see `stamp` above),
+      // so rows accumulate — the default top-50 window eventually crowds out this
+      // run's tiny `at` values (surfaced locally after ~15 gate runs in one day).
+      const recent = (await store.recent(100_000)).filter(
+        (r) => r.matchupId === m1 || r.matchupId === m2,
+      );
       expect(recent.map((r) => r.matchupId)).toEqual([m2, m1]); // newest (at=9) first
       expect(recent[1]?.winnerCorp).toBeNull();
     });
@@ -886,6 +948,7 @@ function feedStoreContract(name: string, make: () => AvaFeedStore, uniq: (p: str
 
 matchStoreContract('memory', () => new MemoryMatchStore(), (p) => p);
 accountStoreContract('memory', () => new MemoryAccountStore(), (p) => p);
+commanderStoreContract('memory', () => new MemoryCommanderStore(), (p) => p);
 receiptStoreContract('memory', () => new MemoryReceiptStore(), (p) => p);
 userStoreContract('memory', () => new MemoryUserStore(), (p) => p);
 feedStoreContract('memory', () => new MemoryAvaFeedStore(), (p) => p);
@@ -957,6 +1020,7 @@ describe.skipIf(!DB)('Postgres adapters', () => {
   // The SAME contracts the memory adapter runs — no weakened hand copies.
   matchStoreContract('postgres', () => new PostgresMatchStore(pool), (p) => `${p}_${stamp}`);
   accountStoreContract('postgres', () => new PostgresAccountStore(pool), (p) => `${p}_${stamp}`);
+  commanderStoreContract('postgres', () => new PostgresCommanderStore(pool), (p) => `${p}_${stamp}`);
   receiptStoreContract('postgres', () => new PostgresReceiptStore(pool), (p) => `${p}_${stamp}`);
   userStoreContract('postgres', () => new PostgresUserStore(pool), (p) => `${p}_${stamp}`);
   feedStoreContract('postgres', () => new PostgresAvaFeedStore(pool), (p) => `${p}_${stamp}`);

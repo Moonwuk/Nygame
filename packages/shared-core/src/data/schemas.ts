@@ -246,6 +246,14 @@ export const SectorTypeDefSchema = z.object({
  */
 export const PlanetTypeDefSchema = z.object({
   name: z.string().optional(),
+  /** Passive per-hour base output every OWNED world of this type yields, biased
+   *  toward the type's dominant resource (ECON-7, Bytro province model): a metal
+   *  world leans metal, an oceanic one food, etc. Microelectronics is deliberately
+   *  EXCLUDED — it is the hi-tech good, produced only by a fabricator and consumed
+   *  by advanced content, never passively mined. Empty {} = no passive output
+   *  (buildings still produce). Added into the `economy.production` bag by
+   *  `planetTypeModule` before the richness multipliers scale it. */
+  baseOutput: ResourceBagSchema.default({}),
   /** Multiplier on the world's production, e.g. 0.25 = +25% (rich), −0.25 = poor. */
   productionBonus: z.number().default(0),
   /** Per-resource production multipliers layered ON TOP of `productionBonus`, e.g.

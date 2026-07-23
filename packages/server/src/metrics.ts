@@ -48,6 +48,10 @@ export interface MetricsSummary {
   clientFps: (SeriesStat & { avg: number; min: number }) | null;
   /** Client-reported round-trip samples (M2). */
   clientRttMs: (SeriesStat & { avg: number }) | null;
+  /** ECON-6: hourly economy snapshots seen + per-player hours spent with ANY
+   *  resource in arrears (snapshots are hourly, so a count ≈ hours). Curves live
+   *  in the JSONL — the aggregator keeps just the headline counters. */
+  economy: { snapshots: number; arrearsHours: Record<PlayerId, number> } | null;
   end: { winner: PlayerId | null; reason?: string } | null;
 }
 
@@ -85,6 +89,8 @@ export class MetricsAggregator {
   private fpsMin = Infinity;
   private readonly clientRttMs = series();
   private end: { winner: PlayerId | null; reason?: string } | null = null;
+  private economySnapshots = 0;
+  private readonly arrearsHours: Record<string, number> = {};
 
   observe(ev: RoomObservation): void {
     switch (ev.kind) {
@@ -130,6 +136,12 @@ export class MetricsAggregator {
         if (ev.fps < this.fpsMin) this.fpsMin = ev.fps;
         if (ev.rttMs !== undefined) record(this.clientRttMs, ev.rttMs);
         return;
+      case 'economy':
+        this.economySnapshots += 1;
+        for (const [pid, p] of Object.entries(ev.players)) {
+          if (p.arrears.length > 0) this.arrearsHours[pid] = (this.arrearsHours[pid] ?? 0) + 1;
+        }
+        return;
       case 'end':
         this.end = { winner: ev.winner, ...(ev.reason !== undefined ? { reason: ev.reason } : {}) };
         return;
@@ -162,6 +174,10 @@ export class MetricsAggregator {
       clientFps:
         this.clientFps.count === 0 ? null : { ...withAvg(this.clientFps), min: this.fpsMin },
       clientRttMs: this.clientRttMs.count === 0 ? null : withAvg(this.clientRttMs),
+      economy:
+        this.economySnapshots === 0
+          ? null
+          : { snapshots: this.economySnapshots, arrearsHours: { ...this.arrearsHours } },
       end: this.end,
     };
   }

@@ -52,7 +52,7 @@ TIME_SCALE=200 HOST=0.0.0.0 PORT=8788 pnpm host
   Готового `deploy/Caddyfile` ещё нет — кирпич HTTPS-2.1 в `docs/https-roadmap.md`.
 - **Клиент из веба (GitHub Pages)** — workflow `pages.yml` задуман публиковать HTML на
   `https://moonwuk.github.io/Nygame/`, но **деплой не проходит**: все раны падают за
-  ~2 с без раннера (окружение `github-pages` недоступно — включить Pages в
+  ~3 с без раннера (окружение `github-pages` недоступно — включить Pages в
   Settings → Pages, для приватного репозитория нужен платный план). Пока клиента
   из веба нет — но он и не обязателен: сервер раздаёт игру сам на `/`.
 - **Android APK** — workflow `android.yml`: артефакт на каждом ране + rolling-релиз

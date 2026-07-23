@@ -37,6 +37,12 @@ export {
   type OpenMatchesFeedDeps,
 } from './matchApi';
 export { MatchKeeper, type MatchKeeperOptions } from './matchFactory';
+export {
+  startClockDriver,
+  HEARTBEAT_MS,
+  type ClockDriverHandle,
+  type ClockDriverOptions,
+} from './clockDriver';
 export { pickAvaMap } from './avaMapPool';
 export {
   arsenalSnapshotOf,
@@ -49,18 +55,22 @@ export { InMemoryEphemeralStore, type EphemeralStore } from './ephemeral';
 export {
   hmacSecret,
   signJoinToken,
+  signResetToken,
   signSessionToken,
   verifyJoinToken,
+  verifyResetToken,
   verifySessionToken,
   type JoinClaim,
   type JoinTokenResult,
   type JoinTokenSignConfig,
   type JoinTokenVerifyConfig,
+  type ResetClaim,
+  type ResetTokenResult,
   type SessionClaim,
   type SessionTokenResult,
   type VerifyKey,
 } from './auth';
-export { registerAuthApi, type AuthApiDeps } from './authApi';
+export { registerAuthApi, liveSession, pwFingerprint, type AuthApiDeps, type Mailer } from './authApi';
 export { configFromEnv, type ServerConfig } from './serverConfig';
 export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {
@@ -79,6 +89,7 @@ export type {
 export { parseClientMessage, serializeServerMessage } from './protocol';
 export {
   type AccountStore,
+  type CommanderStore,
   type MatchSnapshot,
   type MatchStore,
   type ReceiptStore,
@@ -87,11 +98,13 @@ export {
   type UserRecord,
   type UserStore,
   MemoryAccountStore,
+  MemoryCommanderStore,
   MemoryMatchStore,
   MemoryReceiptStore,
   MemoryUserStore,
   migrate,
   PostgresAccountStore,
+  PostgresCommanderStore,
   PostgresMatchStore,
   PostgresReceiptStore,
   PostgresUserStore,

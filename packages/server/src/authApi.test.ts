@@ -1,7 +1,13 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { registerAuthApi } from './authApi';
-import { signSessionToken, verifySessionToken, hmacSecret } from './auth';
+import { registerAuthApi, liveSession, pwFingerprint } from './authApi';
+import {
+  signSessionToken,
+  verifySessionToken,
+  signResetToken,
+  verifyResetToken,
+  hmacSecret,
+} from './auth';
 import { MemoryUserStore } from './store';
 import { registerMatchApi, type MatchApiDeps } from './matchApi';
 import type { ScryptParams } from './password';
@@ -31,8 +37,8 @@ function authApp(options: AuthAppOptions = {}): FastifyInstance {
   app = Fastify();
   registerAuthApi(app, {
     users: new MemoryUserStore(),
-    signSession: (accountId, login) =>
-      signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+    signSession: (accountId, login, pwfp) =>
+      signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
     scryptParams: FAST,
     ...options,
   });
@@ -55,10 +61,12 @@ describe('SE-1.x · /auth/register + /auth/login', () => {
     expect(body.login).toBe('Vasya');
     expect(body.accountId).not.toBe('');
     const verified = await verifySessionToken(body.token, VERIFY);
-    expect(verified).toEqual({
-      ok: true,
-      claim: { accountId: body.accountId, login: 'Vasya' },
-    });
+    expect(verified.ok).toBe(true);
+    if (verified.ok) {
+      expect(verified.claim.accountId).toBe(body.accountId);
+      expect(verified.claim.login).toBe('Vasya');
+      expect(verified.claim.pwfp).not.toBe(''); // stamped with the password fingerprint
+    }
   });
 
   it('logs in with the right password; rejects a wrong one and an unknown login UNIFORMLY', async () => {
@@ -88,6 +96,21 @@ describe('SE-1.x · /auth/register + /auth/login', () => {
     const r = await post(server, '/auth/login', { login: 'VASYA', password: 'longenough' });
     expect(r.statusCode).toBe(200);
     expect((r.json() as { login: string }).login).toBe('Vasya'); // display form preserved
+  });
+
+  it('accepts the suggested cyrillic callsigns («Носорог-1») — the welcome golden path', async () => {
+    const server = authApp();
+    const r = await post(server, '/auth/register', { login: 'Носорог-1', password: 'longenough' });
+    expect(r.statusCode).toBe(201);
+    expect((r.json() as { login: string }).login).toBe('Носорог-1');
+    // …and unicode dedup stays case-insensitive
+    const dup = await post(server, '/auth/register', { login: 'носорог-1', password: 'longenough' });
+    expect(dup.statusCode).toBe(409);
+    const ok = await post(server, '/auth/login', { login: 'НОСОРОГ-1', password: 'longenough' });
+    expect(ok.statusCode).toBe(200);
+    // spaces/emoji are still out — \p{L}\p{N}_- only
+    const emoji = await post(server, '/auth/register', { login: 'зая🔥', password: 'longenough' });
+    expect(emoji.statusCode).toBe(400);
   });
 
   it('rejects malformed credentials with one stable code (no field-level detail)', async () => {
@@ -173,19 +196,21 @@ describe('SE-1.x · session gate on the match API', () => {
     app = Fastify();
     registerAuthApi(app, {
       users,
-      signSession: (accountId, login) =>
-        signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+      signSession: (accountId, login, pwfp) =>
+        signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
       scryptParams: FAST,
     });
     const deps: MatchApiDeps = {
       createMatch: () => Promise.resolve({ matchId: 'm1', seats: ['green', 'red'] }),
       join: (matchId, nick, accountId) =>
         Promise.resolve({ playerId: 'green', token: `join:${matchId}:${nick}:${accountId}` }),
+      // Mirrors production (main.ts / netserver.ts): signature verify THEN a live re-check
+      // against the current password, so a reset revokes older sessions at the seat gate.
       identify: async (request) => {
         const header = request.headers.authorization;
         if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
         const v = await verifySessionToken(header.slice(7), VERIFY);
-        return v.ok ? v.claim : null;
+        return v.ok ? liveSession(v.claim, users) : null;
       },
     };
     registerMatchApi(app, deps);
@@ -232,5 +257,195 @@ describe('SE-1.x · session gate on the match API', () => {
     });
     expect(created.statusCode).toBe(200);
     expect(created.json()).toEqual({ matchId: 'm1', seats: ['green', 'red'] });
+  });
+
+  it('a password change revokes older sessions at the seat gate (pwfp freshness)', async () => {
+    const { server, users } = gatedApp();
+    const reg = await post(server, '/auth/register', { login: 'carol', password: 'longenough' });
+    const { token, accountId } = reg.json() as { token: string; accountId: string };
+
+    // The fresh session joins fine — its stamped fingerprint matches the stored hash.
+    const before = await server.inject({
+      method: 'GET',
+      url: '/matches/m1/join',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(before.statusCode).toBe(200);
+
+    // The password changes (a reset) → the OLD session, stamped with the pre-change
+    // fingerprint, is revoked even though its JWT is still valid.
+    await users.setPassword(accountId, 'a-different-hash');
+    const after = await server.inject({
+      method: 'GET',
+      url: '/matches/m1/join',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(after.statusCode).toBe(401);
+    expect(after.json()).toEqual({ error: 'E_AUTH' });
+  });
+});
+
+describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
+  const RESET_SIGN = { key: KEY, algorithm: 'HS256', issuer: 'test', audience: 'reset' };
+  const RESET_VERIFY = { key: KEY, algorithms: ['HS256'], issuer: 'test', audience: 'reset' };
+
+  /** An auth app with recovery wired + a capturing mailer (the reset link never leaves the
+   *  test). Mirrors the serverConfig composition: same key, a distinct `reset` audience. */
+  function recoverApp(): {
+    server: FastifyInstance;
+    sent: Array<{ to: string; text: string }>;
+    users: MemoryUserStore;
+  } {
+    const sent: Array<{ to: string; text: string }> = [];
+    const users = new MemoryUserStore();
+    app = Fastify();
+    registerAuthApi(app, {
+      users,
+      signSession: (accountId, login, pwfp) =>
+        signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
+      signReset: (accountId, pwfp) =>
+        signResetToken({ accountId, pwfp }, RESET_SIGN, { ttlSeconds: 900 }),
+      verifyReset: async (token) => {
+        const r = await verifyResetToken(token, RESET_VERIFY);
+        return r.ok ? r.claim : null;
+      },
+      resetBaseUrl: 'https://play.example',
+      sendMail: (msg) => {
+        sent.push({ to: msg.to, text: msg.text });
+        return Promise.resolve();
+      },
+      scryptParams: FAST,
+    });
+    return { server: app, sent, users };
+  }
+
+  const tokenFrom = (text: string): string => decodeURIComponent(text.match(/\?reset=(\S+)/)![1]!);
+
+  it('registers with an email, recovers via the mailed link, and sets a new password', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'zoe',
+      password: 'oldpassword',
+      email: 'zoe@example.com',
+    });
+
+    const rec = await post(server, '/auth/recover', { email: 'zoe@example.com' });
+    expect(rec.statusCode).toBe(200);
+    expect(rec.json()).toEqual({ ok: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe('zoe@example.com');
+    const token = tokenFrom(sent[0]!.text);
+
+    const reset = await post(server, '/auth/reset', { token, password: 'brandnewpass' });
+    expect(reset.statusCode).toBe(200);
+    expect((reset.json() as { login: string }).login).toBe('zoe');
+
+    // The new password works; the old one is dead.
+    expect(
+      (await post(server, '/auth/login', { login: 'zoe', password: 'brandnewpass' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await post(server, '/auth/login', { login: 'zoe', password: 'oldpassword' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('a reset token is single-use: the second reset with the same token is refused', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'ana',
+      password: 'firstpass1',
+      email: 'ana@example.com',
+    });
+    await post(server, '/auth/recover', { email: 'ana@example.com' });
+    const token = tokenFrom(sent[0]!.text);
+    expect((await post(server, '/auth/reset', { token, password: 'secondpass1' })).statusCode).toBe(
+      200,
+    );
+    // The password (and thus its fingerprint) changed → the same token no longer matches.
+    const again = await post(server, '/auth/reset', { token, password: 'thirdpass12' });
+    expect(again.statusCode).toBe(401);
+    expect(again.json()).toEqual({ error: 'E_AUTH' });
+  });
+
+  it('recover is anti-enumeration: an unknown email still 200s and sends nothing', async () => {
+    const { server, sent } = recoverApp();
+    const rec = await post(server, '/auth/recover', { email: 'ghost@example.com' });
+    expect(rec.statusCode).toBe(200);
+    expect(rec.json()).toEqual({ ok: true });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('an account registered WITHOUT an email has no recovery (nothing sent)', async () => {
+    const { server, sent } = recoverApp();
+    await post(server, '/auth/register', { login: 'noemail', password: 'longenough' });
+    await post(server, '/auth/recover', { email: 'noemail@example.com' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a duplicate recovery email is refused (E_EMAIL_TAKEN), case-insensitively', async () => {
+    const { server } = recoverApp();
+    await post(server, '/auth/register', {
+      login: 'first',
+      password: 'longenough',
+      email: 'shared@example.com',
+    });
+    const dup = await post(server, '/auth/register', {
+      login: 'second',
+      password: 'longenough',
+      email: 'Shared@Example.com',
+    });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json()).toEqual({ error: 'E_EMAIL_TAKEN' });
+  });
+
+  it('reset rejects a garbage/forged token uniformly (E_AUTH)', async () => {
+    const { server } = recoverApp();
+    const bad = await post(server, '/auth/reset', { token: 'not-a-jwt', password: 'longenough' });
+    expect(bad.statusCode).toBe(401);
+    expect(bad.json()).toEqual({ error: 'E_AUTH' });
+  });
+
+  it('a malformed email at registration is a 400 (not silently dropped)', async () => {
+    const { server } = recoverApp();
+    const r = await post(server, '/auth/register', {
+      login: 'baddie',
+      password: 'longenough',
+      email: 'notanemail',
+    });
+    expect(r.statusCode).toBe(400);
+    expect(r.json()).toEqual({ error: 'E_BAD_CREDENTIALS' });
+  });
+
+  it('a completed reset kills the pre-reset session but its own new session is live', async () => {
+    const { server, sent, users } = recoverApp();
+    const reg = await post(server, '/auth/register', {
+      login: 'dan',
+      password: 'oldpassword',
+      email: 'dan@example.com',
+    });
+    const preToken = (reg.json() as { token: string }).token;
+    const preClaim = await verifySessionToken(preToken, VERIFY);
+    expect(preClaim.ok).toBe(true);
+    // Before the reset, the registration session authenticates against the live store.
+    if (preClaim.ok) expect(await liveSession(preClaim.claim, users)).not.toBeNull();
+
+    await post(server, '/auth/recover', { email: 'dan@example.com' });
+    const reset = await post(server, '/auth/reset', {
+      token: tokenFrom(sent[0]!.text),
+      password: 'brandnewpass',
+    });
+    const postToken = (reset.json() as { token: string }).token;
+
+    // The pre-reset session no longer authenticates; the session the reset handed back does.
+    if (preClaim.ok) expect(await liveSession(preClaim.claim, users)).toBeNull();
+    const postClaim = await verifySessionToken(postToken, VERIFY);
+    expect(postClaim.ok).toBe(true);
+    if (postClaim.ok) expect(await liveSession(postClaim.claim, users)).not.toBeNull();
+  });
+
+  it('liveSession rejects a session for an unknown/deleted account', async () => {
+    const users = new MemoryUserStore();
+    const claim = { accountId: 'ghost', login: 'ghost', pwfp: pwFingerprint('whatever') };
+    expect(await liveSession(claim, users)).toBeNull();
   });
 });

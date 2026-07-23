@@ -21,18 +21,25 @@ import {
   MetricsAggregator,
   createMultiplayerServer,
   registerBrowserApi,
+  startClockDriver,
+  HEARTBEAT_MS,
+  type ClockDriverHandle,
   MemoryAccountStore,
+  MemoryCommanderStore,
   MemoryMatchStore,
   MemoryReceiptStore,
   MemoryUserStore,
   PostgresAccountStore,
+  PostgresCommanderStore,
   PostgresMatchStore,
   PostgresReceiptStore,
   PostgresUserStore,
   migrate,
   registerAuthApi,
+  liveSession,
   configFromEnv,
   type AccountStore,
+  type CommanderStore,
   type MatchStore,
   type ReceiptStore,
   type RoomObservation,
@@ -55,6 +62,7 @@ import {
   orderScramble,
   patrolStamp,
   chainStamp,
+  economySnapshot,
 } from './src/game';
 import { ActionGate } from '../packages/action-layer/src/index';
 import { isValidActionPayload } from '../packages/shared-core/src/actions/payloadSchemas';
@@ -160,6 +168,7 @@ let matchStore: MatchStore;
 let accountStore: AccountStore;
 let receiptStore: ReceiptStore;
 let userStore: UserStore;
+let commanderStore: CommanderStore;
 if (DATABASE_URL) {
   pool = new Pool({ connectionString: DATABASE_URL });
   await migrate(pool);
@@ -167,11 +176,33 @@ if (DATABASE_URL) {
   accountStore = new PostgresAccountStore(pool);
   receiptStore = new PostgresReceiptStore(pool);
   userStore = new PostgresUserStore(pool);
+  commanderStore = new PostgresCommanderStore(pool);
 } else {
   matchStore = new MemoryMatchStore();
   accountStore = new MemoryAccountStore();
   receiptStore = new MemoryReceiptStore();
   userStore = new MemoryUserStore();
+  commanderStore = new MemoryCommanderStore();
+}
+
+/** Account crediting (EC-*): the core already computed `match.rewards` (place + XP per
+ *  seat, deterministic). At match end, map each seat's nick → account and bank the XP
+ *  durably, EXACTLY ONCE (creditMatch's idempotency marker survives a restart that
+ *  re-observes the same end). Nick-mode servers have no accounts → nothing to credit. */
+async function creditCommanderXp(
+  matchId: string,
+  rewards: Record<string, { xp: number }> | undefined,
+): Promise<void> {
+  if (!rewards) return;
+  const seats = await accountStore.seatedNicks(matchId);
+  const rows: Array<{ accountId: string; xp: number }> = [];
+  for (const { playerId, nick } of seats) {
+    const xp = rewards[playerId]?.xp ?? 0;
+    if (xp <= 0) continue;
+    const user = await userStore.findUser(nick); // nick === account login in AUTH mode
+    if (user) rows.push({ accountId: user.userId, xp });
+  }
+  if (rows.length) await commanderStore.creditMatch(matchId, rows);
 }
 
 // Accounts on the PLAYABLE path (SES-2.5): with AUTH_JWT_SECRET set, the full account
@@ -203,15 +234,11 @@ const NET_SEATS = networkSeats(NETWORK_MODE);
 const MATCHES = Math.max(1, Math.min(16, Number(process.env.MATCHES ?? 1) || 1));
 const matchIds = Array.from({ length: MATCHES }, (_, i) => (i === 0 ? 'proto' : `proto-${i + 1}`));
 
-// Shared wakeup-driver tuning (one instance of these per hosted match below).
-const MAX_TIMER_MS = 60 * 60_000; // 1h cap (setTimeout overflow + clock-drift safety)
-// While a match has connected players, tick at least this often even if the
-// schedule is momentarily empty — otherwise the world only advances when someone issues
-// an order (submitAction), so the published clock/economy/in-flight fleets freeze
-// on-screen between actions. newGame() starts with NO scheduled events, so without this
-// the very first thing players see after joining is a frozen "Day 1 00:00".
-const HEARTBEAT_MS = 1_000;
-const WAKE_STALL_LIMIT = 3; // consecutive due-but-non-progressing wakes → back off
+// Wakeup-driver tuning. NETA2-6: the arm/fire/stall loop + the live-player HEARTBEAT_MS
+// beat now live in the shared `startClockDriver` (packages/server) — one scheduler for
+// both hosts. This host only pins a tighter 1h timer cap (setTimeout overflow +
+// clock-drift safety); the stall limit and the beat interval come from the shared driver.
+const MAX_TIMER_MS = 60 * 60_000; // 1h cap, passed as the driver's maxDelayMs
 
 /** One hosted session: a MatchRoom plus ALL its per-match machinery — the empty-seat
  *  AI (with the BF-17 reconnect grace), the standing-order drivers, the debounced
@@ -221,14 +248,16 @@ interface HostedMatch {
   id: string;
   room: MatchRoom;
   restored: boolean;
-  armWakeup(): void;
   /** Final durable flush (shutdown). */
   flush(): Promise<void>;
   clearTimers(): void;
 }
 
 async function createHostedMatch(id: string): Promise<HostedMatch> {
-  let connected = 0; // live players in THIS match (drives its running-match heartbeat)
+  let connected = 0; // live players in THIS match (gates the empty-seat AI)
+  // The shared offline scheduler (assigned after `room` below). `observe` re-arms it,
+  // so it is declared here — before `observe` — and read with `?.` until it exists.
+  let driver: ClockDriverHandle | null = null;
   // Seats with a live human peer. Any seat NOT in here is "empty" and is driven by
   // the server-side AI (mirrors single-player: empty slots are taken by the AI).
   const humans = new Set<string>();
@@ -244,6 +273,8 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
   // Rehydrate idempotency receipts so a retried action stays deduped across a restart.
   const initialReceipts = await receiptStore.loadAll(id);
 
+  // ECON-6: игровое время последнего экономического среза (первый — через час).
+  let lastEconAt = initialState.time;
   const observe = (ev: RoomObservation): void => {
     metrics.observe(ev);
     if (worthLogging(ev)) {
@@ -257,8 +288,12 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
       connected = Math.max(0, connected - 1);
       humans.delete(ev.playerId);
       aiEligibleAt.set(ev.playerId, Date.now() + AI_GRACE_MS); // reconnect window
-    } else if (ev.kind === 'action') {
+    } else if (ev.kind === 'action' && !ev.durable) {
       // Persist the receipt so a retried action stays deduped across a restart.
+      // NETA2-3: a DURABLE action (gated committed path) already had its receipt
+      // written by the room's commit-before-broadcast `persist` callback — skip it
+      // here or we double-write. Only the SYNC path (server drivers, ungated actions)
+      // has no other durable writer, so it still persists through this branch.
       void receiptStore.save(id, {
         actionId: ev.actionId,
         playerId: ev.playerId,
@@ -266,6 +301,9 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
         ok: ev.ok,
         ...(ev.code ? { code: ev.code } : {}),
       });
+    } else if (ev.kind === 'end' && AUTH) {
+      // Bank each seated commander's match XP onto their account (idempotent).
+      void creditCommanderXp(id, ev.rewards);
     }
     // Persist after anything that changes the world (debounced below), and re-arm
     // the offline wakeup: an action may schedule or consume events — both move the
@@ -273,13 +311,14 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
     // never emit it — SES-2.1.)
     if (ev.kind === 'action' || ev.kind === 'lobby' || ev.kind === 'end') scheduleSave();
     // Re-arm on room events: an action may (un)schedule events, and a join/leave
-    // starts/stops the live-player heartbeat below. A genuine
-    // external event also gives the stall guard a fresh chance (the situation may have
-    // changed). `advance_overflow` is EXCLUDED: a stalled catch-up emits it from inside
-    // `room.tick()` itself, so resetting/re-arming on it would defeat the wake-stall
-    // back-off in `onWake` (an eternal 0ms wake spin). The M1 metrics kinds are excluded
-    // too: they describe work already done (fan-out size, timings, desync reports) and
-    // never move the next-event time — re-arming on every broadcast would churn the timer.
+    // starts/stops the live-player heartbeat (the driver reads room.peerCount).
+    // `reschedule()` re-evaluates the next wake AND resets the driver's stall guard —
+    // a genuine external event means the situation may have changed. `advance_overflow`
+    // is EXCLUDED: a stalled catch-up emits it from inside `room.tick()` itself, so
+    // rescheduling on it would defeat the stall back-off (an eternal 0ms wake spin). The
+    // M1 metrics kinds are excluded too: they describe work already done (fan-out size,
+    // timings, desync reports) and never move the next-event time — rescheduling on every
+    // broadcast would churn the timer.
     if (
       ev.kind === 'join' ||
       ev.kind === 'leave' ||
@@ -288,8 +327,7 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
       ev.kind === 'end' ||
       ev.kind === 'dead_letter'
     ) {
-      wakeStalls = 0;
-      armWakeup();
+      driver?.reschedule();
     }
   };
 
@@ -369,31 +407,18 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
     saving = false;
   }
 
-  // Offline scheduler (PA-4.1): a per-room wakeup driver so the world runs
-  // 24/7 even with nobody connected. The in-state schedule is mirrored as ONE
-  // pending timer set to the soonest event; when it fires we `tick()` the room
-  // (advance + broadcast the arrivals/battles/captures that came due) and re-arm.
-  // `setTimeout` overflows past ~24.8 days, so a far-future event is capped to
-  // MAX_TIMER_MS and we re-arm — a long sleep taken in hops. Note: NO downtime
-  // catch-up — the room resumes its clock at the saved `state.time` (initiallyStarted),
-  // so the gap while the process was down is simply skipped, not replayed. The
-  // distributed/durable evolution is a job queue on Postgres (pg-boss): one shared
-  // "wake match X at T" job across many server processes instead of one in-memory
-  // timer per room — see docs/persistence-accounts-roadmap.md (PA-4).
-  let wakeTimer: ReturnType<typeof setTimeout> | null = null;
-  let wakeStalls = 0;
-  let driversBusy = false; // re-entrancy guard: one async driver pass at a time
-  function armWakeup(): void {
-    if (wakeTimer) {
-      clearTimeout(wakeTimer);
-      wakeTimer = null;
-    }
-    const ev = room.msUntilNextEvent(); // wall-ms to the next scheduled event, or null
-    const beat = room.isStarted && connected > 0 ? HEARTBEAT_MS : null; // live-player heartbeat
-    if (ev === null && beat === null) return; // nothing scheduled and nobody live → idle
-    const ms = ev === null ? beat : beat === null ? ev : Math.min(ev, beat);
-    wakeTimer = setTimeout(onWake, Math.min(ms ?? MAX_TIMER_MS, MAX_TIMER_MS));
-  }
+  // Offline scheduler (PA-4.1): the shared `startClockDriver` (assigned below, after the
+  // driver bodies its onTick calls) runs the world 24/7 — it arms one timer for the
+  // soonest scheduled event, ticks the room when it fires (advance + broadcast the
+  // arrivals/battles/captures that came due), and re-arms; the live-player HEARTBEAT_MS
+  // beat keeps a watched room's clock moving on-screen even with an empty schedule. NO
+  // downtime catch-up — the room resumes at the saved `state.time` (initiallyStarted), so
+  // a gap while the process was down is skipped, not replayed. The distributed evolution
+  // is a Postgres job queue (pg-boss): one shared "wake match X at T" job across processes
+  // instead of one in-memory timer per room — see docs/persistence-accounts-roadmap.md.
+  // `driversBusy` guards re-entrancy: on a DURABLE room a driver pass awaits the room's
+  // mailbox, so a later (heartbeat) tick must not start a second pass mid-flight.
+  let driversBusy = false;
   // Server-side AI for empty seats: every ~2 game-hours, any match seat with no live
   // human peer issues the same orders the single-player AI would (shared `aiOrders`),
   // submitted through the authoritative room. Runs only while the match is started and
@@ -437,11 +462,15 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
     }
     for (const p of serverPatrolActions(room.state, room.state.time)) {
       if (p.drop) {
-        if (p.owner) await room.submitServerAction(p.owner, orderScramble(p.owner, p.fleetId, false));
+        if (p.owner)
+          await room.submitServerAction(p.owner, orderScramble(p.owner, p.fleetId, false));
         continue;
       }
       if (p.patch) {
-        await room.submitServerAction(p.owner, patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt));
+        await room.submitServerAction(
+          p.owner,
+          patrolStamp(p.owner, p.fleetId, p.patch.sortie, p.patch.rearmAt),
+        );
       }
       for (const act of p.actions) await room.submitServerAction(p.owner, act);
     }
@@ -449,62 +478,69 @@ async function createHostedMatch(id: string): Promise<HostedMatch> {
     // then the head step's orders; a rejected order is skipped, the chain moves on.
     for (const c of serverChainActions(room.state, room.state.time)) {
       if (c.patch) {
-        await room.submitServerAction(c.owner, chainStamp(c.owner, c.fleetId, c.patch.steps, c.patch.waitUntil));
+        await room.submitServerAction(
+          c.owner,
+          chainStamp(c.owner, c.fleetId, c.patch.steps, c.patch.waitUntil),
+        );
       }
       for (const act of c.actions) await room.submitServerAction(c.owner, act);
     }
   }
 
-  function onWake(): void {
-    wakeTimer = null;
-    const progressed = room.tick(); // fire whatever is now due (no-op if a capped timer fired early)
-    // Stall guard: work is due (ms 0) but the clock didn't move ⇒ a same-instant runaway.
-    // While stalled, SKIP the AI/standing-order drivers — their submissions (even rejected ones)
-    // emit `action` observations that would reset this guard and re-arm a 0ms wake — and
-    // back off after a few tries instead of busy-looping (the room has already surfaced
-    // an advance_overflow). A real player action re-arms via `observe`, which resets the
-    // counter and gives it a fresh chance.
-    const stalled = !progressed && room.msUntilNextEvent() === 0;
-    if (!stalled && !driversBusy) {
-      wakeStalls = 0;
-      // Async drivers (durable rooms await the mailbox); the busy flag stops a later
-      // heartbeat from double-running them while a slow persist is still in flight.
-      driversBusy = true;
-      void (async () => {
-        try {
-          await runServerAI(); // drive any empty seat once the clock has moved
-          await runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
-        } finally {
-          driversBusy = false;
-        }
-      })();
-    }
-    scheduleSave(); // persist the advanced world
-    if (stalled && ++wakeStalls >= WAKE_STALL_LIMIT) {
+  // Raise the shared clock driver for this room. onTick fires AFTER room.tick(): persist
+  // the advanced world and — unless the tick stalled or a pass is still in flight — run
+  // the empty-seat AI + standing orders. The driver owns the arm/stall/re-arm loop and the
+  // HEARTBEAT_MS beat; `observe` calls driver.reschedule() when an action moves the
+  // next-event time (or a join/leave flips the beat).
+  driver = startClockDriver(room, {
+    heartbeatMs: HEARTBEAT_MS,
+    maxDelayMs: MAX_TIMER_MS,
+    onTick: ({ progressed }) => {
+      // ECON-6: почасовой экономический срез в пайплайн наблюдений (JSONL — кривые
+      // казны/притока/arrears, агрегатор — arrears-часы). Раз в игровой час, не спам.
+      // (Merged from main's inline onWake into the shared driver's onTick — same cadence.)
+      if (room.state.time - lastEconAt >= HOUR) {
+        lastEconAt = room.state.time;
+        observe(economySnapshot(room.state));
+      }
+      // Same-instant runaway: work is due (ms 0) but the clock didn't move. SKIP the
+      // drivers then — their submissions emit `action` observations that reschedule the
+      // driver and reset its stall guard, which would spin a 0ms wake. The driver's own
+      // STALL_LIMIT backs off; here we just avoid feeding it.
+      const stalled = !progressed && room.msUntilNextEvent() === 0;
+      if (!stalled && !driversBusy) {
+        // Async drivers (durable rooms await the mailbox); the busy flag stops a later
+        // heartbeat from double-running them while a slow persist is still in flight.
+        driversBusy = true;
+        void (async () => {
+          try {
+            await runServerAI(); // drive any empty seat once the clock has moved
+            await runServerStanding(); // CC-2/CC-4: standing orders (auto-storm / дежурный вылет)
+          } finally {
+            driversBusy = false;
+          }
+        })();
+      }
+      scheduleSave(); // persist the advanced world
+    },
+    onStall: () =>
       process.stderr.write(
         `wakeup driver idling (${id}): the world clock stalled (a same-instant scheduling loop) — ` +
           'check for a module scheduling events at its own instant.\n',
-      );
-      return; // idle — do not re-arm
-    }
-    armWakeup(); // re-arm for the next event (or the remainder of a long sleep)
-  }
+      ),
+  });
 
   return {
     id,
     room,
     restored: !!restoredSnap,
-    armWakeup,
     flush: doSave,
     clearTimers(): void {
       if (saveTimer) {
         clearTimeout(saveTimer);
         saveTimer = null;
       }
-      if (wakeTimer) {
-        clearTimeout(wakeTimer);
-        wakeTimer = null;
-      }
+      driver?.stop(); // cancel the pending wake
     },
   };
 }
@@ -553,6 +589,12 @@ const server = createMultiplayerServer({
   // headers as `/` — a stale dev client is as confusing as a stale player one).
   httpRoutes: (app) => {
     registerBrowserApi(app, registry);
+    // NETA2-mon: the aggregator's FAILURE signals, live over HTTP — glance at desyncs /
+    // rejects-by-code / dead-letters / advance-overflows / worst fps without waiting for
+    // the on-exit JSONL summary. Process-wide aggregates only, no match ids (F-13), no
+    // PII — public like `/metrics` and `/health`, so a playtest host is one `curl` away
+    // from "is anything going wrong right now?".
+    app.get('/metrics/summary', async () => metrics.summary());
     // The client self-configures: accounts mode shows the password field + goes
     // через register/login+join-token; nick mode keeps the old handshake.
     app.get('/auth/status', async () => ({ enabled: AUTH }));
@@ -560,7 +602,20 @@ const server = createMultiplayerServer({
       // Register/login (SE-1.x contour, shared with the production entry): scrypt
       // hashes, uniform-401 + decoy timing, per-IP rate limit — hands out the
       // session JWT the join route below authenticates.
-      registerAuthApi(app, { users: userStore, signSession: authCfg.signSession! });
+      registerAuthApi(app, {
+        users: userStore,
+        signSession: authCfg.signSession!,
+        // Recovery (/auth/recover + /auth/reset) mounts only when RESET_BASE_URL points the
+        // emailed link at this deployment's origin. No mailer wired → the default logs the
+        // link to stderr (a playtest admin can read it; a real transport is a later env).
+        ...(authCfg.signReset && authCfg.verifyReset && authCfg.resetBaseUrl
+          ? {
+              signReset: authCfg.signReset,
+              verifyReset: authCfg.verifyReset,
+              resetBaseUrl: authCfg.resetBaseUrl,
+            }
+          : {}),
+      });
       // Exchange a session for a seat + short-lived join token (SES-2.5). The seat
       // belongs to the SESSION's login (nobody joins as somebody else); the entry
       // window (SES-2.3) gates a FIRST-time claim exactly like the nick path — the
@@ -573,7 +628,10 @@ const server = createMultiplayerServer({
             ? header.slice('Bearer '.length).trim()
             : null;
         const who = bearer ? await authCfg.verifySession!(bearer) : null;
-        if (!who?.ok) {
+        // Signature + freshness: re-check the session against the current password so a
+        // reset revokes older sessions before they can claim/reclaim a seat (SE-1.x).
+        const live = who?.ok ? await liveSession(who.claim, userStore) : null;
+        if (!live) {
           void reply.code(401);
           return { error: 'E_AUTH' as const };
         }
@@ -583,7 +641,7 @@ const server = createMultiplayerServer({
           void reply.code(404);
           return { error: 'E_NO_MATCH' as const };
         }
-        const login = who.claim.login;
+        const login = live.login;
         const held = await accountStore.seatOf(id, login);
         if (!held && !registry.entryOpen(id)) {
           void reply.code(403);
@@ -598,8 +656,25 @@ const server = createMultiplayerServer({
         }
         return {
           playerId: seat.playerId,
-          token: await authCfg.signToken!(id, seat.playerId, who.claim.accountId),
+          token: await authCfg.signToken!(id, seat.playerId, live.accountId),
         };
+      });
+      // Commander progression (EC-*): the session reads its own durable lifetime XP.
+      // The client turns `xp` into a level/points locally (prototype meta.ts), so the
+      // end screen and hub show account-backed progress, not per-device localStorage.
+      app.get('/commander/me', async (request, reply) => {
+        const header = request.headers.authorization;
+        const bearer =
+          typeof header === 'string' && header.startsWith('Bearer ')
+            ? header.slice('Bearer '.length).trim()
+            : null;
+        const who = bearer ? await authCfg.verifySession!(bearer) : null;
+        const live = who?.ok ? await liveSession(who.claim, userStore) : null;
+        if (!live) {
+          void reply.code(401);
+          return { error: 'E_AUTH' as const };
+        }
+        return { xp: await commanderStore.xpOf(live.accountId) };
       });
     }
     if (playerHtml !== undefined && devHtml !== undefined) {
@@ -649,6 +724,7 @@ const lines = [
       : `  game   : ${localHttp}/   (open in a browser → Connect)`
     : `  game   : run \`pnpm prototype\` first to serve the HTML at /`,
   `  health : ${localHttp}/health`,
+  `  metrics: ${localHttp}/metrics/summary   (desyncs / rejects-by-code / dead-letters / latencies — live)`,
   DATABASE_URL
     ? `  store  : Postgres — durable${restoredCount > 0 ? ` (resumed ${restoredCount} saved match${restoredCount > 1 ? 'es' : ''})` : ''}`
     : '  store  : in-memory — a restart loses the matches (set DATABASE_URL for durability)',
@@ -697,9 +773,10 @@ lines.push(
 );
 process.stdout.write(lines.join('\n'));
 
-// Start the offline heartbeat per room: if a restored match already has a due/pending
-// event, this arms its first wake (no burst — the clock resumes at the saved time).
-for (const h of hosted) h.armWakeup();
+// The per-room offline scheduler self-arms when its clock driver is created inside
+// createHostedMatch (a restored match with a due/pending event arms its first wake then;
+// a fresh, empty schedule idles until the first join re-arms it via `observe`). No burst
+// on resume — the clock picks up at the saved time (initiallyStarted).
 
 // On Ctrl-C: print the playtest summary (counts gathered by `observe`) and where
 // the raw JSONL landed, then close cleanly — the per-match data survives the run.
@@ -726,7 +803,9 @@ const printSummary = (): void => {
       `  broadcast : ${ms(s.broadcastMs)} · delta ${kb(s.deltaBytes)}`,
       s.clientFps
         ? `  client    : fps avg ${s.clientFps.avg.toFixed(0)} · min ${s.clientFps.min.toFixed(0)}` +
-          (s.clientRttMs ? ` · rtt avg ${s.clientRttMs.avg.toFixed(0)}ms · max ${s.clientRttMs.max.toFixed(0)}ms` : '')
+          (s.clientRttMs
+            ? ` · rtt avg ${s.clientRttMs.avg.toFixed(0)}ms · max ${s.clientRttMs.max.toFixed(0)}ms`
+            : '')
         : '  client    : — (перф-сэмплы не приходили)',
       s.end
         ? `  match end : winner ${s.end.winner ?? '—'}${s.end.reason ? ` (${s.end.reason})` : ''}`
@@ -744,7 +823,10 @@ const shutdown = (): void => {
   // only anomalous broadcast/timing entries, so without this the report script would
   // have no full latency/delta aggregates to read.
   try {
-    appendFileSync(logFile, JSON.stringify({ t: Date.now(), kind: 'summary', summary: metrics.summary() }) + '\n');
+    appendFileSync(
+      logFile,
+      JSON.stringify({ t: Date.now(), kind: 'summary', summary: metrics.summary() }) + '\n',
+    );
   } catch {
     /* the report just falls back to the partial per-line data */
   }

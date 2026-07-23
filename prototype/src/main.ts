@@ -98,10 +98,27 @@ import {
   chainStamp,
   orderChain,
   forceMarchFleet,
+  FORCED_MARCH_MULT,
+  instantRepairFleet,
+  instantRepairCost,
+  repairFleet,
+  dockRepairCost,
+  fleetAtOwnDock,
+  MARKET_FEE,
   MAX_CHAIN_STEPS,
   type ChainStep,
   type Patrol,
 } from './game';
+import {
+  ARCHETYPE_PATH,
+  dominantUnit,
+  unitArchetype,
+  unitGlyphSvg,
+  unitSizeClass,
+} from './unitGlyphs';
+import { fleetCallsign, fleetKindKey } from './fleetName';
+import { planetName } from './planetName';
+import { provinceScore } from '../../packages/shared-core/src/state/sectorKind';
 import { OFFICERS, GROUND_ROSTER } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
@@ -116,9 +133,13 @@ import {
 import {
   buildingLevel,
   buildingMaxLevel,
+  cappedUnitStat,
+  COMBAT_UNIT_CAP,
+  effectiveStats,
   estimateTravelHours,
   findHealthyStack,
   fleetBaseSpeed,
+  sumUnitStat,
   getStance,
   getOffer,
   pairHas,
@@ -129,6 +150,7 @@ import {
   scanNodeThreats,
   identifiedNodes,
   thresholdRamp,
+  BLACKOUT_MULT,
   type PausedConstructionSite,
 } from '../../packages/shared-core/src/index';
 import {
@@ -239,6 +261,7 @@ import { resolveIntro, parseSeenIntros, type IntroCard } from './intros';
 import { buildRecap, type RecapEvent } from './recap';
 // ONB-7 — first-session goals checklist (mine/fleet/capture/score, ticked from state).
 import { FIRST_GOALS, metGoals, mergeDone, goalsComplete, type GoalSignals } from './firstGoals';
+import { reconnectDelayMs } from './reconnect';
 // ONB-0 — first-run onboarding state + funnel (per-callsign localStorage). Pure
 // model; main.ts persists it and drives the hub offer / «Ещё → Обучение» replay.
 import {
@@ -259,6 +282,7 @@ import type {
   DomainEvent,
   IntelGrant,
   ArsenalItem,
+  UnitStack,
 } from '../../packages/shared-core/src/index';
 
 // --- constants ---------------------------------------------------------------
@@ -295,14 +319,61 @@ const RIVAL_COLORS = [
 ];
 const SEAT_IDS = Array.from({ length: 10 }, (_, i) => `p${i + 1}`);
 const VOID_COLOR = '#46606e'; // empty-space provinces — uncapturable void
-// Political colour is relative to the local commander: YOU are always green, neutral gray,
-// each rival its own hue. Works for solo (you = p1) and net (you may be any seat).
+// --- side-colour preferences (client-only, localStorage) ---------------------
+// Постер «цвет = принадлежность»: свой/нейтральный цвет настраиваются, палитра
+// соперников выбирается пресетом (включая дальтоник-безопасный, Okabe–Ito-подобные
+// оттенки). Чистая косметика поверх ownerColor — механика сторон не трогается.
+const RIVAL_PALETTES: Record<string, readonly string[]> = {
+  classic: RIVAL_COLORS,
+  warm: [
+    '#ff4d3d',
+    '#ff9d2e',
+    '#ffd23d',
+    '#ff6fa0',
+    '#e8703a',
+    '#d94f6c',
+    '#ffb073',
+    '#c9522f',
+    '#ff8355',
+  ],
+  cvd: [
+    '#e69f00',
+    '#56b4e9',
+    '#f0e442',
+    '#0072b2',
+    '#d55e00',
+    '#cc79a7',
+    '#999999',
+    '#a6761d',
+    '#8da0cb',
+  ],
+};
+const readPref = (k: string): string | null =>
+  typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null;
+let youColor = readPref('void.colorYou') ?? COLOR.p1!;
+let neutralColor = readPref('void.colorNeutral') ?? COLOR.null!;
+let rivalPaletteId = readPref('void.rivalPalette') ?? 'classic';
+if (!RIVAL_PALETTES[rivalPaletteId]) rivalPaletteId = 'classic';
+function setSideColors(you: string, neutral: string, palette: string): void {
+  youColor = you;
+  neutralColor = neutral;
+  rivalPaletteId = RIVAL_PALETTES[palette] ? palette : 'classic';
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('void.colorYou', youColor);
+    localStorage.setItem('void.colorNeutral', neutralColor);
+    localStorage.setItem('void.rivalPalette', rivalPaletteId);
+  }
+}
+// Political colour is relative to the local commander: YOU are always green (or
+// your configured hue), neutral gray, each rival its own palette hue. Works for
+// solo (you = p1) and net (you may be any seat).
 function ownerColor(owner: string | null | undefined): string {
-  if (!owner) return COLOR.null;
-  if (owner === ME) return COLOR.p1;
+  if (!owner) return neutralColor;
+  if (owner === ME) return youColor;
   const rivals = SEAT_IDS.filter((id) => id !== ME);
   const i = rivals.indexOf(owner);
-  return i >= 0 ? RIVAL_COLORS[i % RIVAL_COLORS.length]! : RIVAL_COLORS[0]!;
+  const pal = RIVAL_PALETTES[rivalPaletteId] ?? RIVAL_COLORS;
+  return i >= 0 ? pal[i % pal.length]! : pal[0]!;
 }
 // Build profile. `__PLAYER_BUILD__` is an esbuild define — REQUIRED by every bundler
 // of this file (build.mjs sets it for both artifacts, uitest.mjs pins `false`); a
@@ -536,11 +607,12 @@ let tgtHits: Array<{ target: string; fleetIds: string[]; x: number; y: number }>
 // order (Курс/Штурм/Цель…) — issuing one drops back out of the mode.
 let pickMode = false;
 let cmdMore = false; // ☰ — the second row of the command bar (extras live there)
+let fireMenu = false; // 🔥 — режим огня артиллерии: поповер-меню над командным рядом
 let merging = false; // "Merge" armed → next tap on a friendly fleet picks the anchor
 // Fleets ordered to merge but not yet co-located: each flies to its anchor and the
 // fusion fires once they share a docked sector (see resolvePendingMerges()).
 let pendingMerges: Array<{ mover: string; into: string }> = [];
-let additive = false; // Ctrl/⌘ held on the current tap → add to the fleet selection
+let additive = false; // Shift or Ctrl/⌘ held on the current tap → add to the fleet selection
 // Split-fleet dialog: which fleet, and how many of each ship type peel off.
 let splitState: { fleetId: string; take: Record<string, number> } | null = null;
 
@@ -642,6 +714,12 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let aimPointer: { x: number; y: number } | null = null; // last canvas pointer (for the move preview)
 let hoverObj: string | null = null; // side-panel object under the pointer (data-desc key)
 let planetTab: PlanetTab = 'buildings';
+// Bytro-карточка: тап по имени флота открывает сводку армии — какой флот сейчас
+// в режиме сводки (другой флот в панели → обычная карточка сама собой).
+let fleetInfoFor: string | null = null;
+// Тап по имени МИРА открывает карточку статистики планеты (какой мир сейчас в
+// режиме сводки; другой мир в панели → обычная карточка сама собой).
+let planetInfoFor: string | null = null;
 let mobTplIdx = 0; // which division template the mobilisation panel is assembling
 const buildQueues: Record<string, PlanetBuildQueue> = {};
 const logLines: string[] = [];
@@ -1285,6 +1363,12 @@ function afford(bag: Record<string, number> | undefined): boolean {
 }
 function unitIcon(unit: string): string {
   return UNIT_ICON[unit] ?? (isGround(unit) ? '◆' : '▲');
+}
+// Path2D-кэш силуэтов постера для канвы — панель берёт те же пути через SVG,
+// так что карта и карточка не могут разъехаться по форме.
+const ARCH_PATH2D: Partial<Record<keyof typeof ARCHETYPE_PATH, Path2D>> = {};
+function archPath2d(arch: keyof typeof ARCHETYPE_PATH): Path2D {
+  return (ARCH_PATH2D[arch] ??= new Path2D(ARCHETYPE_PATH[arch]));
 }
 function displayUnit(unit: string): string {
   // Unit ids are English-ish ("scout_drone") — the space-joined id is the DATA name
@@ -1948,10 +2032,13 @@ function pushSpyLog(text: string): void {
 function computeVision(): Vision {
   const identify = new Set<string>();
   const radar = new Set<string>();
+  // ECON-2 «блэкаут»: неоплаченная энергия глушит каждый свой радар вдвое —
+  // зеркалит серверную fog-проекцию (radarMultiplier, visibility.ts).
+  const dim = (s.players[ME]?.arrears ?? []).includes('energy') ? BLACKOUT_MULT : 1;
   for (const p of Object.values(s.planets))
     if (p.owner === ME) {
       floodHops(p.id, SENSOR_HOPS, identify);
-      const rr = planetRadar(p);
+      const rr = planetRadar(p) * dim;
       if (rr > 0) {
         withinRadius(p.id, rr, radar); // signatures (outer)
         withinRadius(p.id, rr * IDENTIFY_REACH_FRACTION, identify); // full reveal (inner)
@@ -1962,7 +2049,7 @@ function computeVision(): Vision {
       const node = fleetNode(f);
       if (!node) continue;
       floodHops(node, 0, identify); // own node only — ships are near-blind (mirrors FLEET_IDENTIFY_HOPS)
-      const rr = fleetRadar(f);
+      const rr = fleetRadar(f) * dim;
       if (rr > 0) {
         const pos = fleetPos(f); // radar from the SHIP's position, not its destination
         if (pos) {
@@ -2172,6 +2259,14 @@ function playerOrder(action: Action) {
   if (NET && netClient) {
     netClient.sendAction(action); // server is authoritative — await its broadcast
     activeTour?.notifyAction(action.type); // optimistic — server result is async
+    return;
+  }
+  // Net match, socket temporarily down (auto-reconnecting): DON'T run the local reducer
+  // — the order would apply to `s`, look accepted on-screen, then vanish when the
+  // reconnect `welcome` overwrites state (the server never saw it). Refuse with feedback
+  // instead of silently losing it. (Solo/skirmish has `reconnecting === false`.)
+  if (reconnecting) {
+    note('⟳ ' + t('переподключение — приказ не отправлен, повтори через миг'));
     return;
   }
   const out = order(s, action, s.time);
@@ -3245,16 +3340,34 @@ function checkEnd() {
   const iWon = s.match.winner === ME || (s.match.winners?.includes(ME) ?? false);
   const draw = !iWon && s.match.winner === null;
   // Meta-progression: one XP award per finished match (прокачка командующего).
+  // `xpAwarded` alone is a per-INSTALL latch — a reconnect to an already-ended
+  // match resets it (net welcome handler), so refreshing the page would farm the
+  // award repeatedly. A durable per-match marker (keyed by the match's endedAt,
+  // unique per finished match for this nick) makes the award idempotent; the
+  // recorded amount replays on the end screen instead of a misleading «+0».
   let gained = 0;
   let levelUp: number | null = null;
+  const awardKey = 'vd.xpawarded.' + (nickInput.value.trim() || 'guest');
+  const endStamp = String(s.match.endedAt ?? 'ended');
+  let prior: { at: string; xp: number } | null = null;
+  try {
+    prior = JSON.parse(localStorage.getItem(awardKey) ?? 'null') as typeof prior;
+  } catch {
+    prior = null; // a corrupt marker never blocks the flow — fail open to a fresh award
+  }
   if (!xpAwarded) {
     xpAwarded = true;
-    const st = loadMeta();
-    gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
-    const before = metaLevel(st.xp);
-    const after = { xp: st.xp + gained, spent: st.spent };
-    saveMeta(after);
-    if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
+    if (prior?.at === endStamp) {
+      gained = prior.xp; // this match already paid out — just replay the receipt
+    } else {
+      const st = loadMeta();
+      gained = matchXp({ won: iWon, score: s.match.scores?.[ME]?.total ?? 0 });
+      const before = metaLevel(st.xp);
+      const after = { xp: st.xp + gained, spent: st.spent };
+      saveMeta(after);
+      localStorage.setItem(awardKey, JSON.stringify({ at: endStamp, xp: gained }));
+      if (metaLevel(after.xp) > before) levelUp = metaLevel(after.xp);
+    }
   }
   // The full end screen (renderEndScreen) reads this — outcome, reason, XP. The old
   // thin victory `banner` is retired; `banner` now carries only NET-status lines.
@@ -4657,59 +4770,41 @@ function render(now: number) {
     }
     cx.globalAlpha = detail; // full detail fades back in toward 1.45
 
-    // Fleet emblem: ships are up-triangles, ONE per three hulls, packed into a
-    // pyramid — "каждые 3 корабля = один треугольник". Cargo glues to the TAIL
-    // (behind the base): carried divisions and hold squadrons as diamonds, then
-    // ground troops as squares (loaded = filled, loading ~1h = a pip filling up).
-    const BW = 8,
-      TH = 6.5; // triangle base width / height; rows stack TH apart (плейтест: крупнее)
-    const nTri = Math.max(1, Math.ceil(ships / 3));
-    // pack the triangles into a bottom-heavy pyramid: full rows 1..R, then shave the
-    // apex rows of any empty slots so the BASE is always widest (1→[1], 2→[2],
-    // 4→[1,3], 6→[1,2,3], 10→[1,2,3,4]).
-    let R = 1;
-    while ((R * (R + 1)) / 2 < nTri) R++;
-    const tri: number[] = [];
-    for (let r = 1; r <= R; r++) tri.push(r);
-    for (let r = 0, trim = (R * (R + 1)) / 2 - nTri; trim > 0 && r < tri.length; r++) {
-      const cut = Math.min(tri[r]!, trim);
-      tri[r]! -= cut;
-      trim -= cut;
-    }
-    const rows = tri.filter((x) => x > 0);
-    const yBase = A.y; // baseline of the bottom (widest) row
-    const apexTop = yBase - rows.length * TH;
+    // Fleet emblem (постер «Типы кораблей»): ОДИН силуэт ДОМИНАНТА — сильнейшего
+    // корабля флота — вместо пирамиды треугольников; количество несёт счётчик
+    // «×N» за хвостом («флот на карте = доминант + счёт», полный состав — в
+    // панели выделения). Размер S/M/L по hp доминанта, гало-кольцо при щите
+    // (у флагмана — всегда), нос по курсу — heading от fleetAnchor, как раньше;
+    // карго-хвост и счётчик едут по тому же курсу.
+    const dom = dominantUnit(f.units, data);
+    const arch = dom ? unitArchetype(dom.def) : 'combat';
+    const domK = dom ? { S: 0.62, M: 0.8, L: 1 }[unitSizeClass(dom.def.stats.hp ?? 0)] : 0.62;
+    const domStack = dom ? f.units.find((st) => st.unit === dom.unit && st.count > 0) : undefined;
+    const domShield =
+      dom && domStack ? (effectiveStats(dom.def, domStack, data).shield ?? 0) > 0 : false;
     cx.save();
-    // Point the ship pyramid along its heading ("нос по курсу"): the apex (drawn toward
-    // -y / up) rotates onto A.ang — the travel lane while in transit, or the orbital
-    // tangent while stationed on the ring (both supplied by fleetAnchor). Previously this
-    // was gated on `f.movement`, so an orbiting fleet kept its default apex-up pose and
-    // appeared frozen pointing straight up. The cargo pips and ship count follow the
-    // SAME heading (they sit on the tail, behind the base — «за треугольниками»), but
-    // each pip/glyph is drawn upright at its rotated spot, so a square never reads
-    // as a diamond on a diagonal course.
     cx.translate(A.x, A.y);
     cx.rotate(A.ang + Math.PI / 2);
-    cx.translate(-A.x, -A.y);
     cx.shadowColor = col;
     cx.shadowBlur = 6 + 6 * engine;
-    cx.fillStyle = rgba(col, 0.16 + 0.12 * engine);
-    cx.strokeStyle = col;
-    cx.lineWidth = 1.3;
-    for (let r = 0; r < rows.length; r++) {
-      const base = apexTop + (r + 1) * TH; // this row's baseline
-      const rw = rows[r]! * BW;
-      for (let i = 0; i < rows[r]!; i++) {
-        const x0 = A.x - rw / 2 + i * BW;
-        cx.beginPath();
-        cx.moveTo(x0 + BW / 2, base - TH); // apex up
-        cx.lineTo(x0 + BW, base); // flat base, right corner
-        cx.lineTo(x0, base); // flat base, left corner
-        cx.closePath();
-        cx.fill();
-        cx.stroke();
-      }
+    if (domShield || arch === 'flagship') {
+      // модификатор «есть щит»: пунктирная орбита вокруг силуэта
+      cx.strokeStyle = rgba(col, 0.7);
+      cx.lineWidth = 1.1;
+      cx.setLineDash([2.6, 2.8]);
+      cx.beginPath();
+      cx.arc(0, 0, 12.5 * domK + 2, 0, TAU);
+      cx.stroke();
+      cx.setLineDash([]);
     }
+    cx.scale(domK, domK);
+    cx.translate(-12, -12);
+    cx.fillStyle = rgba(col, 0.92);
+    cx.strokeStyle = 'rgba(4,10,12,.8)';
+    cx.lineWidth = 1;
+    const p2d = archPath2d(arch);
+    cx.fill(p2d, 'evenodd');
+    cx.stroke(p2d);
     cx.restore();
 
     // cargo glued to the tail (behind the base, following the heading), SPLIT by
@@ -4851,12 +4946,12 @@ function render(now: number) {
       }
     }
 
-    // ship count (hulls in the pyramid), small, past the cargo tail — placed along
-    // the heading like the pips, glyph upright; drops lower when both rows are out.
+    // ship count («×N» — счёт при доминанте, как на постере), small, past the
+    // cargo tail — placed along the heading like the pips, glyph upright.
     const cnt = tailAt(0, diaRow.length && sqRow.length ? 21 + CELL : 21);
     cx.fillStyle = rgba(col, 0.95);
     cx.font = '700 10px ui-monospace,Menlo,monospace';
-    cx.fillText(String(ships), cnt.x, cnt.y);
+    cx.fillText(`×${ships}`, cnt.x, cnt.y);
 
     cx.globalAlpha = 1; // end of the per-fleet LOD cross-fade
   }
@@ -4898,13 +4993,18 @@ function block(inner: string): string {
 function pcols(blocks: string[]): string {
   return `<div class="pcols">${blocks.map(block).join('')}</div>`;
 }
-function cardHeader(color: string, title: string, sub: string): string {
+function cardHeader(color: string, title: string, sub: string, titleAct?: string): string {
   // PC: the one-line header truncates the subtitle — drop the spaces around the
   // separator dots so more of it fits. Mobile keeps the airy ' · '.
   const subFit = pcUi() ? sub.replace(/ · /g, '·') : sub;
+  // Bytro-стиль: тап по ИМЕНИ открывает сводку (армии) — заголовок становится
+  // кнопкой только когда карточка передала действие, прочие панели не меняются.
+  const tt = titleAct
+    ? `<button class="ptitle-btn" data-act="${titleAct}" data-arg="">${esc(title)} ▸</button>`
+    : `<b>${esc(title)}</b>`;
   return `<div class="phead">
     <span class="pflag" style="background:${color}"></span>
-    <div class="ptitle"><b>${esc(title)}</b><span>${esc(subFit)}</span></div>
+    <div class="ptitle">${tt}<span>${esc(subFit)}</span></div>
     <button class="pclose" data-act="close" data-arg="">✕</button>
   </div>`;
 }
@@ -5000,7 +5100,7 @@ function taskGroupPanelHtml(group: Fleet[]): string {
     t('ОПЕРАТИВНАЯ ГРУППА'),
     t('{f} флот(ов) · {s} кораблей · {tr} десанта', { f: group.length, s: ships, tr: troops }),
   );
-  h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift-рамка выделяет группу; Ctrl/⌘-клик добавляет флот.')}</div>`;
+  h += `<div class="hint">${t('Нажмите «Курс» и тапните цель — все выбранные флоты пойдут туда (проложат маршрут и встанут). «Слить» сплавляет группу в один флот (дальние сначала подлетят). Shift- или Ctrl/⌘-клик по флоту добавляет его в группу; Shift-рамка по пустому месту выделяет несколько.')}</div>`;
   for (const f of group) {
     const loc =
       f.location ??
@@ -5018,32 +5118,163 @@ function taskGroupPanelHtml(group: Fleet[]): string {
 }
 
 /** Side-panel: a single selected fleet — combat stats, orders, docking. */
+/** Тайлы состава флота Bytro-стиля: силуэт-архетип в цвете стороны (наземные —
+ *  прежние текст-глифы), счётчик и мини-бар корпуса стека; тап — досье юнита. */
+function fleetTilesHtml(f: Fleet, stacks: UnitStack[]): string {
+  const tiles = stacks
+    .filter((u) => u.count > 0)
+    .map((u) => {
+      const def = data.units[u.unit];
+      if (!def) return '';
+      const name = unitDossier(u.unit)?.name ?? displayUnit(u.unit);
+      const eff = effectiveStats(def, u, data);
+      const full = u.count * (eff.hp ?? 0);
+      const pct = full > 0 ? Math.round((Math.min(u.hp ?? full, full) / full) * 100) : 100;
+      const icon =
+        def.domain === 'ground'
+          ? `<span class="pt-ic">${unitIcon(u.unit)}</span>`
+          : `<span class="pt-ic">${unitGlyphSvg(def, { color: ownerColor(f.owner), shield: (eff.shield ?? 0) > 0 })}</span>`;
+      return `<button class="ptile" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}">${icon}<span class="pt-c">×${u.count}</span><span class="pt-hp${pct < 30 ? ' low' : ''}"><i style="width:${pct}%"></i></span></button>`;
+    })
+    .join('');
+  return tiles ? `<div class="ptiles">${tiles}</div>` : '';
+}
+
+/** Сводка армии (тап по имени в шапке карточки): состав по архетипам, боевой вес
+ *  с капом, пулы корпуса/щита, скорость с активными множителями, трюм, радар,
+ *  содержание. Обратно — тем же тапом по имени или кнопкой «назад». */
+function fleetSummaryHtml(f: Fleet): string {
+  const rows: string[] = [];
+  // состав по архетипам постера
+  const byArch = new Map<string, number>();
+  for (const st of f.units) {
+    const def = data.units[st.unit];
+    if (!def || st.count <= 0) continue;
+    const a = unitArchetype(def);
+    byArch.set(a, (byArch.get(a) ?? 0) + st.count);
+  }
+  const ARCH_LABEL: Record<string, string> = {
+    scout: t('скауты'),
+    combat: t('боевые'),
+    artillery: t('артиллерия'),
+    transport: t('транспорты'),
+    flagship: t('флагман'),
+    swarm: t('рой'),
+  };
+  const comp = [...byArch.entries()].map(([a, n]) => `${ARCH_LABEL[a] ?? a} ×${n}`).join(' · ');
+  const nTr = sumUnits(f.landing ?? []);
+  rows.push(
+    `<div class="row">${t('Состав')}: <b>${comp || t('нет')}</b>${nTr ? ` · ${t('десант')} ×${nTr}` : ''}</div>`,
+  );
+  // боевой вес: кап против полной суммы — видно, сколько стволов «за линией»
+  const atkCap = Math.round(cappedUnitStat(f.units, data, 'attack'));
+  const atkAll = Math.round(sumUnitStat(f.units, data, 'attack'));
+  const defCap = Math.round(cappedUnitStat(f.units, data, 'defense'));
+  rows.push(
+    `<div class="row">⚔ ${t('Атака')}: <b>${atkCap}</b>${atkAll > atkCap ? ` <span class="dim">(${t('всего')} ${atkAll} — ${t('бьют {n} юнитов', { n: COMBAT_UNIT_CAP })})</span>` : ''}</div>`,
+  );
+  rows.push(`<div class="row">🛡 ${t('Защита')}: <b>${defCap}</b></div>`);
+  // пулы
+  let curHull = 0,
+    maxHull = 0,
+    curSh = 0,
+    maxSh = 0;
+  for (const st of [...f.units, ...(f.landing ?? [])]) {
+    const def = data.units[st.unit];
+    if (!def || st.count <= 0) continue;
+    const eff = effectiveStats(def, st, data);
+    const m = st.count * (eff.hp ?? 0);
+    maxHull += m;
+    curHull += Math.min(st.hp ?? m, m);
+    const ms = st.count * (eff.shield ?? 0);
+    maxSh += ms;
+    curSh += Math.min(st.shieldHp ?? ms, ms);
+  }
+  rows.push(
+    `<div class="row">♥ ${t('Корпус')}: <b>${kfmt(Math.round(curHull))}/${kfmt(maxHull)}</b>${maxSh > 0 ? ` · ◈ ${t('Щит')}: <b>${kfmt(Math.round(curSh))}/${kfmt(maxSh)}</b>` : ''}</div>`,
+  );
+  // скорость: база (мин по корпусам, лимп учтён) + активные множители
+  const spd = fleetBaseSpeed(f, data);
+  const mults: string[] = [];
+  if (marchFlagged(f.id)) mults.push(`⚡ ${t('форс-марш')} ×${FORCED_MARCH_MULT}`);
+  if (
+    (f as { retreatHasteUntil?: number }).retreatHasteUntil != null &&
+    s.time < (f as { retreatHasteUntil?: number }).retreatHasteUntil!
+  )
+    mults.push(`⤺ ${t('рывок отхода')} ×1.5`);
+  rows.push(
+    `<div class="row">⚡ ${t('Скорость')}: <b>${spd > 0 ? Math.round(spd) : '—'}</b>${mults.length ? ` <span class="dim">${mults.join(' · ')}</span>` : ''} <span class="dim">· ${t('по самому медленному; техи/фракция/местность — на переходе')}</span></div>`,
+  );
+  // трюм и радар
+  const cargoCap = sumUnitStat(f.units, data, 'cargoCapacity');
+  const cargoUsed = (f.landing ?? []).reduce((n, st) => {
+    const def = data.units[st.unit];
+    return n + (def ? st.count * (effectiveStats(def, st, data).cargoSize ?? 1) : 0);
+  }, 0);
+  if (cargoCap > 0)
+    rows.push(
+      `<div class="row">📦 ${t('Трюм')}: <b>${cargoUsed}/${Math.round(cargoCap)}</b></div>`,
+    );
+  const radar = Math.max(
+    0,
+    ...f.units.filter((u) => u.count > 0).map((u) => data.units[u.unit]?.radarRange ?? 0),
+  );
+  if (radar > 0) rows.push(`<div class="row">📡 ${t('Радар')}: <b>${radar}</b></div>`);
+  // содержание
+  const upkeep: Record<string, number> = {};
+  for (const st of f.units) {
+    const def = data.units[st.unit];
+    if (!def || st.count <= 0) continue;
+    for (const [r, n] of Object.entries(def.upkeep ?? {}))
+      upkeep[r] = (upkeep[r] ?? 0) + st.count * (n ?? 0);
+  }
+  const up = Object.entries(upkeep)
+    .filter(([, n]) => n > 0)
+    .map(([r, n]) => `${n} ${tData(r)}`)
+    .join(', ');
+  if (up) rows.push(`<div class="row dim">${t('Содержание')}: ${up}/${t('день')}</div>`);
+  return (
+    `<div class="sec">${t('Сводка армии')}</div>` +
+    rows.join('') +
+    `<div class="row">${btn('fleetinfo', '', t('‹ Назад к карточке'), true)}</div>`
+  );
+}
+
 function fleetPanelHtml(f: Fleet): string {
   const nShips = sumUnits(f.units);
   const nTr = sumUnits(f.landing ?? []);
   const inOrbit = f.orbit === 'near';
   // Hull integrity across the squadron (persistent between fights now): a stack's
-  // current hp ?? full. Below 30% the fleet limps (route.ts) until it repairs.
+  // current hp ?? full — по ЭФФЕКТИВНОМУ hp (обшивка-фитинг считается), корабли +
+  // десант вместе, как в Bytro-карточке. Below 30% the fleet limps (route.ts)
+  // until it repairs. Щит — отдельный пул (регенит бесплатно сам).
   let curHull = 0,
-    maxHull = 0;
-  for (const st of f.units) {
+    maxHull = 0,
+    curSh = 0,
+    maxSh = 0;
+  for (const st of [...f.units, ...(f.landing ?? [])]) {
     const u = data.units[st.unit];
-    if (!u) continue;
-    const m = st.count * u.stats.hp;
+    if (!u || st.count <= 0) continue;
+    const eff = effectiveStats(u, st, data);
+    const m = st.count * (eff.hp ?? 0);
     maxHull += m;
-    curHull += st.hp ?? m;
+    curHull += Math.min(st.hp ?? m, m);
+    const ms = st.count * (eff.shield ?? 0);
+    maxSh += ms;
+    curSh += Math.min(st.shieldHp ?? ms, ms);
   }
   const hullPct = maxHull > 0 ? Math.round((curHull / maxHull) * 100) : 100;
-  const hullTag =
-    hullPct < 100 ? ` · ${hullPct < 30 ? '⚠ ' : ''}${t('корпус {p}%', { p: hullPct })}` : '';
+  const hullTag = hullPct < 30 ? ` · ⚠ ${t('корпус {p}%', { p: hullPct })}` : '';
   // ECON-1: голодный десант — владелец в food-arrears бьёт на земле на −25%.
   const hungry =
     nTr > 0 && f.owner === ME && (s.players[ME]?.arrears ?? []).includes('food')
       ? ` · 🍽 ${t('голод: −25% на земле')}`
       : '';
+  // Bytro-стиль: авто-имя соединения (тип по размеру + позывной), тап → сводка.
+  const fleetTitle = `${t(fleetKindKey(nShips))} «${fleetCallsign(f.id)}»`;
   let h = cardHeader(
     ownerColor(f.owner),
-    t('ФЛОТ'),
+    fleetTitle,
     (pcUi()
       ? t('Корабли: {s} · Десант: {tr}', { s: nShips, tr: nTr })
       : t('{s} кораблей · {tr} десанта', { s: nShips, tr: nTr })) +
@@ -5051,22 +5282,43 @@ function fleetPanelHtml(f: Fleet): string {
       hungry +
       (inOrbit ? ' · ' + t('на орбите') : '') +
       (f.bombarding ? ' · ⊗ ' + t('бомбардирует') : ''),
+    'fleetinfo',
   );
-  // Aggregate combat weight, summed across the squadron's ships (it moves at its
-  // slowest hull). The hero aura (+5%, noted below) is not folded into these totals.
-  let atk = 0,
-    def = 0,
-    hpTot = 0,
-    spd = Infinity;
-  for (const u of f.units) {
-    const st = data.units[u.unit]?.stats;
-    if (!st || u.count <= 0) continue;
-    atk += (st.attack ?? 0) * u.count;
-    def += (st.defense ?? 0) * u.count;
-    hpTot += (st.hp ?? 0) * u.count;
-    if ((st.speed ?? 0) > 0) spd = Math.min(spd, st.speed ?? Infinity);
+  // Тап по имени открыл сводку армии — карточка целиком уступает ей место.
+  if (fleetInfoFor === f.id) return h + fleetSummaryHtml(f);
+  // ХП-бар Bytro-стиля + два ремонта: ECON-3а — экспресс за METAL у своего дока
+  // (дешёвый, основной), и ненавязчивый платный за кредиты — где угодно вне боя
+  // (цены — те же формулы, что в гейте).
+  const repairCost = instantRepairCost(f, data);
+  const canRepair = f.owner === ME && !f.battleId && repairCost > 0;
+  const atDock = canRepair && fleetAtOwnDock(f, s, data);
+  if (maxHull > 0) {
+    h += `<div class="row hullrow" data-desc="stat:hull"><span class="hico">♥</span><span class="hbar${hullPct < 30 ? ' low' : ''}"><i style="width:${hullPct}%"></i></span><b>${kfmt(Math.round(curHull))}/${kfmt(maxHull)}</b>${
+      atDock
+        ? `<button class="chip-metal" data-act="dockrepair" data-arg="${f.id}" title="${t('Экспресс-ремонт у своего дока за металл')}">🔧 ${dockRepairCost(f, data)}⬢</button>`
+        : ''
+    }${
+      canRepair
+        ? `<button class="chip-gold" data-act="instantrepair" data-arg="${f.id}" title="${t('Мгновенный ремонт всего корпуса за кредиты')}">🔧 ${repairCost}💰</button>`
+        : ''
+    }</div>`;
+    if (maxSh > 0)
+      h += `<div class="row hullrow" data-desc="stat:shield"><span class="hico">◈</span><span class="hbar sh"><i style="width:${Math.round((curSh / maxSh) * 100)}%"></i></span><b>${kfmt(Math.round(curSh))}/${kfmt(maxSh)}</b></div>`;
   }
-  const spdTxt = spd === Infinity ? '—' : String(spd);
+  // Aggregate combat weight — БОЕВОЙ вес, как его считает ядро: effectiveStats +
+  // кап линии огня (топ-10 стволов). Скорость — базовая скорость флота (мин по
+  // корпусам, лимп <30% учтён), с меткой форс-марша. The hero aura (+5%, noted
+  // below) is not folded into these totals.
+  const atk = Math.round(cappedUnitStat(f.units, data, 'attack'));
+  const def = Math.round(cappedUnitStat(f.units, data, 'defense'));
+  const spd = fleetBaseSpeed(f, data);
+  const boosted = marchFlagged(f.id);
+  const spdTxt =
+    spd > 0
+      ? boosted
+        ? `${Math.round(spd)} ⚡×${FORCED_MARCH_MULT}`
+        : String(Math.round(spd))
+      : '—';
   const flavor: string[] = [];
   if (f.units.some((u) => u.count > 0 && data.units[u.unit]?.traits.includes('hero')))
     flavor.push(t('с героем-флагманом'));
@@ -5085,27 +5337,15 @@ function fleetPanelHtml(f: Fleet): string {
           );
     h += `<div class="row dim">${blurb}</div>`;
   }
-  h += `<div class="pstats"><span data-desc="stat:atk">⚔ ${t('АТК')} ${atk}</span><span data-desc="stat:def">🛡 ${t('ЗАЩ')} ${def}</span><span data-desc="stat:hp">❤ ${t('ОЗ')} ${hpTot}</span><span data-desc="stat:spd">⚡ ${t('СКР')} ${spdTxt}</span></div>`;
+  h += `<div class="pstats"><span data-desc="stat:atk">⚔ ${t('АТК')} ${atk}</span><span data-desc="stat:def">🛡 ${t('ЗАЩ')} ${def}</span><span data-desc="stat:cap">Ⅹ ${Math.min(nShips, COMBAT_UNIT_CAP)}/${COMBAT_UNIT_CAP}</span><span data-desc="stat:spd">⚡ ${t('СКР')} ${spdTxt}</span></div>`;
   h += nShips
-    ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + unitTilesHtml(f.units)
+    ? `<div class="sec">${t('Корабли — тап для характеристик')}</div>` + fleetTilesHtml(f, f.units)
     : '';
   if (nTr > 0)
-    h += `<div class="sec">${t('Десант на борту')}</div>` + unitTilesHtml(f.landing ?? []);
+    h += `<div class="sec">${t('Десант на борту')}</div>` + fleetTilesHtml(f, f.landing ?? []);
 
-  // Artillery rules of engagement — passive / return / standard / aggressive.
-  if (f.owner === ME && fleetHasArtillery(f)) {
-    const mode = f.barrageMode ?? 'standard';
-    const mbtn = (m: string, lbl: string) =>
-      btn('barragemode', m, (mode === m ? '● ' : '') + lbl, mode !== m);
-    h += `<div class="sec">${t('Артиллерия — режим огня')}</div><div class="row">`;
-    h +=
-      mbtn('passive', t('Пассив')) +
-      mbtn('return', t('Ответ')) +
-      mbtn('standard', t('Станд')) +
-      mbtn('aggressive', t('Агрес'));
-    h += `</div>`;
-    h += `<div class="hint">${t('Пассив — не стреляет. Ответ — только после урона по флоту. Станд — по тем, с кем война. Агрес — по любому, кроме пакта/союза.')}</div>`;
-  }
+  // Artillery rules of engagement moved to the ☰ command bar («🔥 Режим огня»
+  // button + popover menu) — the bottom sheet keeps information, not controls.
 
   // Carrier air wing (squadrons-roadmap SQ-1.1) — launch the squadron ships as a
   // separate fast strike fleet. Needs a non-squadron ship left behind (fleet.split
@@ -5150,9 +5390,13 @@ function fleetPanelHtml(f: Fleet): string {
     // every frame, so it's a placeholder here (stable signature → no rebuild) and
     // patched in place by updatePanelLive() — keeps the panel's buttons put.
     const dest = f.movement.destination ?? f.movement.to;
-    const restH =
+    // Гибкое время в пути: остаток маршрута за текущим лейном пересчитывается с
+    // учётом форс-марша (×1.5 с СЛЕДУЮЩЕГО лейна — текущий уже расписан
+    // авторитетно в arrivesAt, его не трогаем). Выключил буст — оценка удлиняется.
+    const rawRestH =
       dest !== f.movement.to ? (estimateTravelHours(s, data, f.movement.to, dest, f) ?? 0) : 0;
-    h += `<div class="row">${t('↗ идёт к {dest} · прибытие через', { dest: `<b>${esc(dest)}</b>` })} <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b></div>`;
+    const restH = boosted ? rawRestH / FORCED_MARCH_MULT : rawRestH;
+    h += `<div class="row">${t('↗ идёт к {dest} · прибытие через', { dest: `<b>${esc(dest)}</b>` })} <b class="pn-eta" data-arrive="${f.movement.arrivesAt}" data-rest="${restH}">…</b>${boosted ? ' <span class="dim">⚡</span>' : ''}</div>`;
   } else if (f.edge) {
     const pct = Math.round(f.edge.t * 100);
     h += `<div class="row">${t('⟜ стоит на трассе {lane} · {p}% пути', { lane: `<b>${esc(f.edge.from)}–${esc(f.edge.to)}</b>`, p: pct })}</div>`;
@@ -5181,14 +5425,7 @@ function fleetPanelHtml(f: Fleet): string {
       h += `<div class="hint">${t('Отход стоит −40% ТЕКУЩЕГО корпуса и щита (израненный флот теряет 40% остатка — отход не добивает) и даёт рывок скорости для бегства. Десант в высадке отступить не может; с орбиты вне боя корабль уходит свободно.')}</div>`;
     }
   }
-  if (!docked) {
-    if (!f.battleId)
-      h += `<div class="hint">${
-        f.edge
-          ? t('Стоит на трассе — нажмите «Курс», чтобы идти дальше (маршрут отсюда).')
-          : t('В пути — идёт по трассам. Столкновение начинает орбитальный бой.')
-      }</div>`;
-  } else {
+  if (docked) {
     // enemy/neutral world you can act on — empty space is pass-through only
     const hostile =
       here!.owner !== f.owner && (SECTOR_TYPES[SECTOR_OF[here!.id]]?.capturable ?? false);
@@ -5270,10 +5507,6 @@ function fleetPanelHtml(f: Fleet): string {
     if (dh) cols.push(dh);
     h += pcols(cols);
   }
-  if (!pcUi()) {
-    h += `<div class="hint">${t('Нажмите «Курс» (командная панель) и тапните цель — флот проложит маршрут и встанет. «Слить…» объединяет с другим флотом; «Разделить» отделяет корабли в новый флот.')}</div>`;
-    h += btn('cancel', '', t('Снять выделение'), true);
-  }
   return h;
 }
 
@@ -5312,6 +5545,72 @@ function unknownPlanetHtml(p: Planet): string {
 }
 
 /** Side-panel: a known world — ownership header + ground/ships/squadron/buildings tabs. */
+/** Карточка статистики мира (тап по имени планеты) — полная сводка: обозначение,
+ *  владелец, вид/тип/местность, пассивный выход по ресурсам (ECON-7 перекос),
+ *  бонусы типа, гарнизон, постройки, очки победы, флоты на орбите. */
+function planetSummaryHtml(p: Planet): string {
+  const rows: string[] = [];
+  const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
+  const ptName = tData(pt?.name ?? p.planetType ?? '—');
+  const kindName = tData(SECTOR_TYPES[SECTOR_OF[p.id]]?.name ?? SECTOR_OF[p.id] ?? '—');
+  const sec = tData(data.sectors[p.terrain ?? '']?.name ?? p.terrain ?? '—');
+  const ground = p.garrison.filter((st) => isGround(st.unit));
+  const ships = p.garrison.filter((st) => isShip(st.unit));
+  const wing = p.garrison.filter((st) => isSquadron(st.unit));
+  rows.push(`<div class="row">${t('Обозначение')}: <b>${esc(p.id)}</b></div>`);
+  rows.push(
+    `<div class="row">${t('Владелец')}: <b style="color:${ownerColor(p.owner)}">${p.owner ? esc(NAME[p.owner] ?? p.owner) : t('Нейтрал')}</b></div>`,
+  );
+  rows.push(
+    `<div class="row">${t('Вид / тип / местность')}: <b>${esc(kindName)}</b> · ${esc(ptName)} · ${esc(sec)}</div>`,
+  );
+  // ECON-7: пассивный базовый выход мира по ресурсам — перекос типа планеты.
+  const base = (pt?.baseOutput ?? {}) as Record<string, number>;
+  const baseStr = ['metal', 'credits', 'food', 'energy']
+    .filter((r) => (base[r] ?? 0) > 0)
+    .map((r) => `${TECH_CUR[r] ?? tData(r)} ${base[r]}`)
+    .join(' · ');
+  if (baseStr)
+    rows.push(
+      `<div class="row">${t('Базовый выход/ч')}: <b>${baseStr}</b> <span class="dim">${t('— перекос типа мира')}</span></div>`,
+    );
+  const pctf = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
+  const bonus: string[] = [];
+  if (pt && pt.productionBonus !== 0) bonus.push(`${t('произв.')} ${pctf(pt.productionBonus)}`);
+  if (pt && (pt.defenseBonus ?? 0) !== 0)
+    bonus.push(`${t('оборона')} ${pctf(pt.defenseBonus ?? 0)}`);
+  if (bonus.length)
+    rows.push(`<div class="row">${t('Бонусы типа')}: <b>${bonus.join(' · ')}</b></div>`);
+  rows.push(
+    `<div class="row">⚔ ${t('Гарнизон')}: <b>${sumUnits(ground)}</b> ${t('наземных')} · <b>${sumUnits(ships)}</b> ${t('кораблей')}${sumUnits(wing) ? ` · <b>${sumUnits(wing)}</b> ${t('эскадрилий')}` : ''}</div>`,
+  );
+  const blist =
+    p.buildings
+      .map(
+        (b) =>
+          `${BUILD_ICON[b.type] ?? '▣'} ${buildingName(b.type)}${b.level > 1 ? ' L' + b.level : ''}`,
+      )
+      .join(', ') || t('нет');
+  rows.push(`<div class="row">▣ ${t('Постройки')} (${p.buildings.length}): <b>${blist}</b></div>`);
+  rows.push(
+    `<div class="row">✦ ${t('Очки победы')}: <b>${Math.round(provinceScore(data, p))}</b></div>`,
+  );
+  const here = Object.values(s.fleets).filter((f) => f.location === p.id);
+  if (here.length) {
+    const fShips = here.reduce((n, f) => n + sumUnits(f.units), 0);
+    rows.push(
+      `<div class="row">▲ ${t('Флоты на орбите')}: <b>${here.length}</b> <span class="dim">(${t('{n} кораблей', { n: fShips })})</span></div>`,
+    );
+  }
+  if (p.owner === ME && capitalOf(s, ME) === p.id)
+    rows.push(`<div class="row"><b style="color:var(--grn)">★ ${t('Столица')}</b></div>`);
+  return (
+    `<div class="sec">${t('Сводка мира')}</div>` +
+    rows.join('') +
+    `<div class="row">${btn('planetinfo', '', t('‹ Назад к карточке'), true)}</div>`
+  );
+}
+
 function planetPanelHtml(p: Planet): string {
   const mine = p.owner === ME;
   const sec = tData(data.sectors[p.terrain ?? '']?.name ?? p.terrain ?? '—');
@@ -5324,13 +5623,23 @@ function planetPanelHtml(p: Planet): string {
   const wing = p.garrison.filter((st) => isSquadron(st.unit));
   const gcount = sumUnits(p.garrison);
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
+  // Bytro-стиль: у мира авто-имя (тап → карточка статистики); координата (grid id)
+  // остаётся отдельным обозначением в подзаголовке.
+  const header = cardHeader(
+    ownerColor(p.owner),
+    planetName(p.id),
+    `${esc(p.id)} · ${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
+    'planetinfo',
+  );
+  // Тап по имени открыл сводку мира — панель целиком уступает ей место.
+  if (planetInfoFor === p.id) return header + planetSummaryHtml(p);
   let h =
-    cardHeader(
-      ownerColor(p.owner),
-      p.id,
-      `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
-    ) +
+    header +
     `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
+  // ECON-2: блэкаут — неоплаченная энергия глушит радары и ПВО этого владельца вдвое.
+  if (mine && (s.players[ME]?.arrears ?? []).includes('energy')) {
+    h += `<div class="row" style="color:var(--red)">⚡ ${t('блэкаут: радары и ПВО −50%')}</div>`;
+  }
   if (pt && (pt.productionBonus !== 0 || pt.defenseBonus !== 0)) {
     const pct = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
     const parts: string[] = [];
@@ -5878,6 +6187,25 @@ function objDossier(key: string): Dossier | null {
       atk: [t('Атака'), t('Суммарная атака кораблей флота.')],
       def: [t('Защита'), t('Суммарная защита кораблей флота.')],
       hp: [t('Очки здоровья'), t('Суммарная прочность кораблей флота.')],
+      cap: [
+        t('Линия огня'),
+        t(
+          'В залпе бьют максимум {n} юнитов — сильнейшие первыми; все сверх капа только впитывают урон.',
+          {
+            n: COMBAT_UNIT_CAP,
+          },
+        ),
+      ],
+      hull: [
+        t('Корпус'),
+        t(
+          'Текущая/полная прочность армии. Чинится у своего мира с верфью — или мгновенно за кредиты.',
+        ),
+      ],
+      shield: [
+        t('Щит'),
+        t('Аблятивный щит: принимает урон первым и бесплатно восстанавливается вне боя.'),
+      ],
       spd: [
         t('Скорость'),
         t('Скорость перелёта — флот движется со скоростью самого медленного корабля.'),
@@ -6933,12 +7261,28 @@ function renderCmdBar() {
     if (assaultAim) assaultAim = false;
     if (targetAim) targetAim = false;
     if (merging) merging = false;
+    fireMenu = false; // пустое выделение — 🔥-меню не должно всплыть при новом выборе
     cmdbar.classList.remove('show');
     lastCmdHtml = '';
     return;
   }
   const fleets = ids.map((id) => s.fleets[id]).filter((f): f is Fleet => !!f);
   const anyMoving = fleets.some((f) => f.movement);
+  // Режим огня артиллерии (одна кнопка + меню): на кнопке — общий режим арт-флотов
+  // выделения, при разнобое — нейтральная подпись.
+  const artFleets = fleets.filter((f) => f.owner === ME && fleetHasArtillery(f));
+  const FIRE_MODES: Array<{ m: string; lbl: string; sub: string }> = [
+    { m: 'passive', lbl: t('Пассив'), sub: t('не стреляет') },
+    { m: 'return', lbl: t('Ответ'), sub: t('только после урона по флоту') },
+    { m: 'standard', lbl: t('Станд'), sub: t('по тем, с кем война') },
+    { m: 'aggressive', lbl: t('Агрес'), sub: t('по любому, кроме пакта/союза') },
+  ];
+  const artModes = new Set(artFleets.map((f) => f.barrageMode ?? 'standard'));
+  const uniMode = artModes.size === 1 ? [...artModes][0] : null;
+  const fmLabel = uniMode
+    ? (FIRE_MODES.find((x) => x.m === uniMode)?.lbl ?? t('Режим огня'))
+    : t('Режим огня');
+  if (artFleets.length === 0) fireMenu = false; // выделение без артиллерии — меню гаснет
   const docked = fleets.filter((f) => f.location && !f.movement && !f.battleId);
   // PC: ШТУРМ is a targeting command (fly there + storm on arrival) — armable
   // whenever the selection has ships. Mobile keeps the in-orbit-only button.
@@ -6967,6 +7311,7 @@ function renderCmdBar() {
     cmdBtn('attack', '⚔', t('Штурм'), assaultAim ? 'on' : '', !canAssault) +
     cmdBtn('target', '◎', t('Цель'), targetAim ? 'on' : '', false) +
     (anyArtillery ? cmdBtn('barrage', '🎯', t('Обстрел'), barrageAim ? 'on' : '', false) : '') +
+    (artFleets.length > 0 ? cmdBtn('firemode', '🔥', fmLabel, fireMenu ? 'on' : '', false) : '') +
     cmdBtn(
       'merge',
       '⛬',
@@ -7004,6 +7349,15 @@ function renderCmdBar() {
               false,
             )
           : '')
+      : '') +
+    // 🔥 поповер над баром: четыре режима с подписью-правилом; ● — текущий.
+    (fireMenu && artFleets.length > 0
+      ? `<div class="cmdpop">` +
+        FIRE_MODES.map(
+          (x) =>
+            `<button data-cmd="fmset" data-mode="${x.m}"${uniMode === x.m ? ' class="on"' : ''}><b>${uniMode === x.m ? '● ' : ''}${x.lbl}</b><span>${x.sub}</span></button>`,
+        ).join('') +
+        `</div>`
       : '');
   if (html !== lastCmdHtml) {
     cmdbar.innerHTML = html;
@@ -7197,12 +7551,23 @@ side.addEventListener('click', (ev) => {
     openPingMenu();
   } else if (act === 'bombard') {
     playerOrder(bombardFleet(ME, selFleet!, arg === 'on'));
-  } else if (act === 'barragemode') {
-    playerOrder(barrageModeFleet(ME, selFleet!, arg));
   } else if (act === 'assault') {
     playerOrder(assaultFleet(ME, selFleet!));
   } else if (act === 'retreat') {
     playerOrder(retreatFleet(ME, selFleet!));
+  } else if (act === 'instantrepair') {
+    // Платный мгновенный ремонт: цена и отказы — на сервере; панель перерисуется
+    // по факту (полный бар = получилось), нотификаций-обещаний не даём.
+    playerOrder(instantRepairFleet(ME, arg || selFleet!));
+  } else if (act === 'dockrepair') {
+    // ECON-3а: экспресс-ремонт за metal — кнопка видна только у своего дока.
+    playerOrder(repairFleet(ME, arg || selFleet!));
+  } else if (act === 'fleetinfo') {
+    // Тап по имени армии: карточка ⇄ сводка (для текущего выбранного флота).
+    if (selFleet) fleetInfoFor = fleetInfoFor === selFleet ? null : selFleet;
+  } else if (act === 'planetinfo') {
+    // Тап по имени мира: карточка ⇄ сводка статистики (для выбранной планеты).
+    if (selPlanet) planetInfoFor = planetInfoFor === selPlanet ? null : selPlanet;
   } else if (act === 'launchsquad') {
     // Split the squadron stack off into its own fast strike fleet (SQ-1.1).
     const f = selFleet ? s.fleets[selFleet] : undefined;
@@ -7390,6 +7755,7 @@ cmdbar.addEventListener('click', (ev) => {
   const ids = selectedFleetIds();
   if (cmd !== 'merge') merging = false; // any other command disarms merge-targeting
   if (cmd !== 'barrage') barrageAim = false; // any other command disarms barrage-targeting
+  if (cmd !== 'firemode' && cmd !== 'fmset') fireMenu = false; // другой приказ закрывает 🔥-меню
   if (cmd !== 'attack') assaultAim = false; // any other command disarms assault-targeting
   if (cmd !== 'target') targetAim = false; // any other command disarms order-targeting
   // A real order leaves «Выбрать+» (the group stays selected and takes it);
@@ -7441,6 +7807,19 @@ cmdbar.addEventListener('click', (ev) => {
     if (targetAim) note(t('◎ тапните цель на карте — соберём приказ'));
   } else if (cmd === 'more') {
     cmdMore = !cmdMore; // ☰ — show/hide the extras row
+  } else if (cmd === 'firemode') {
+    fireMenu = !fireMenu; // 🔥 — открыть/закрыть меню выбора режима огня
+    aiming = false;
+  } else if (cmd === 'fmset') {
+    // Выбор в 🔥-меню: единый режим всем выделенным флотам с артиллерией.
+    const mode = bEl.dataset.mode ?? 'standard';
+    for (const id of ids) {
+      const f = s.fleets[id];
+      if (f && f.owner === ME && fleetHasArtillery(f) && (f.barrageMode ?? 'standard') !== mode) {
+        playerOrder(barrageModeFleet(ME, id, mode));
+      }
+    }
+    fireMenu = false;
   } else if (cmd === 'boost') {
     // BOOST-1 форс-марш: toggle for the whole selection — ON unless everyone
     // already marches. Wear only bites while actually flying.
@@ -7630,7 +8009,7 @@ function selectAt(mx: number, my: number) {
     );
     if (mine) {
       if (additive)
-        toggleFleetInSelection(mine.id); // Ctrl/⌘ → extend the group
+        toggleFleetInSelection(mine.id); // Shift / Ctrl / ⌘ → extend the group
       else setFleetSelection([mine.id]); // (clears any selected planet)
       return;
     }
@@ -7727,8 +8106,19 @@ canvas.addEventListener('pointerdown', (ev) => {
     dragStart = p;
     tapByTouch = ev.pointerType === 'touch'; // preview + commit share the snap radius
     longPressFired = false;
-    boxSelecting = ev.shiftKey;
-    additive = ev.ctrlKey || ev.metaKey; // Ctrl/⌘-click → add to the fleet selection
+    // Shift OR Ctrl/⌘ extends the fleet selection (the RTS/Bytro habit — Shift-click
+    // gathers fleets for one group order). Shift over EMPTY space still opens a
+    // box-select; Shift over one of YOUR fleets is an additive click instead, so the
+    // two never fight (a rubber-band from a fleet would eat the click).
+    const overOwnFleet = !!nearestHit(
+      Object.values(s.fleets).filter((f) => f.owner === ME),
+      fleetAnchor,
+      p.x,
+      p.y,
+      ev.pointerType === 'touch' ? 24 : 16,
+    );
+    additive = ev.ctrlKey || ev.metaKey || ev.shiftKey;
+    boxSelecting = ev.shiftKey && !overOwnFleet;
     selectionBox = boxSelecting ? { x1: p.x, y1: p.y, x2: p.x, y2: p.y } : null;
     dragged = false;
     if (aiming || assaultAim) aimPointer = p; // the aim preview starts under the finger at once
@@ -7813,8 +8203,12 @@ function endPointer(ev: PointerEvent) {
       const a = fleetAnchor(f);
       if (a && a.x >= x1 && a.x <= x2 && a.y >= y1 && a.y <= y2) picked.push(f.id);
     }
-    if (picked.length) setFleetSelection(picked);
-    else {
+    // A modifier-held box ADDS to the running group (Shift-gather is cumulative);
+    // a plain box replaces it. An empty additive box leaves the group untouched.
+    if (picked.length) {
+      if (additive) setFleetSelection([...new Set([...selectedFleetIds(), ...picked])]);
+      else setFleetSelection(picked);
+    } else if (!additive) {
       selFleets = new Set();
       selFleet = null;
       lastPanelHtml = '';
@@ -8769,7 +9163,11 @@ function renderMarket(): void {
     .sort((a, b) => b.price - a.price);
   const lotRow = (l: (typeof lots)[number], bid: boolean): string => {
     const mine = l.owner === ME;
-    const qp = `<span class="mk-qp"><b>${l.amount}</b> ${TECH_CUR[l.resource] ?? ''} @ ${l.price} ¤</span>`;
+    // ECON-4: получатель кредитов получает net (5% сгорает) — в биде это исполнитель.
+    const takerNet = Math.floor(l.amount * l.price * (1 - MARKET_FEE));
+    const qp = `<span class="mk-qp"><b>${l.amount}</b> ${TECH_CUR[l.resource] ?? ''} @ ${l.price} ¤${
+      bid && !mine ? ` <span class="mk-net">→ ${takerNet} ¤</span>` : ''
+    }</span>`;
     const who = `<span class="mk-who">${mine ? t('ваш лот') : nameOf(l.owner)}</span>`;
     let btn: string;
     if (mine) {
@@ -8791,7 +9189,8 @@ function renderMarket(): void {
     `<div class="mk-form"><div class="mk-seg">${seg('sell', t('Продать'))}${seg('buy', t('Купить'))}</div>` +
     `<span class="mk-lbl">${t('кол-во')}</span><input class="mk-in" id="mk-amt" type="number" min="1" value="10">` +
     `<span class="mk-lbl">${t('цена')}</span><input class="mk-in" id="mk-price" type="number" min="0" value="3">` +
-    `<button class="mk-go" data-mkgo>${t('Выставить')}</button></div>`;
+    `<button class="mk-go" data-mkgo>${t('Выставить')}</button></div>` +
+    `<div class="mk-lbl" id="mk-net"></div>`;
   const askList = asks.length
     ? asks.map((l) => lotRow(l, false)).join('')
     : `<div class="mk-empty">${t('Нет лотов на продажу')}</div>`;
@@ -8804,6 +9203,29 @@ function renderMarket(): void {
     `<div id="marketbody">${stock}${form}` +
     `<div class="mk-sec">${t('Продажа')} · ${asks.length}</div>${askList}` +
     `<div class="mk-sec buy">${t('Покупка')} · ${bids.length}</div>${bidList}</div></div>`;
+  // ECON-4: живой «к получению» под формой — net после комиссии для стороны,
+  // которая получит кредиты (sell-лот: вы, когда его исполнят; buy-бид: эскроу).
+  const updNet = (): void => {
+    const el = document.getElementById('mk-net');
+    if (!el) return;
+    const amt = Number((document.getElementById('mk-amt') as HTMLInputElement | null)?.value) || 0;
+    const price =
+      Number((document.getElementById('mk-price') as HTMLInputElement | null)?.value) || 0;
+    const gross = amt * price;
+    el.textContent =
+      marketFormSide === 'sell'
+        ? t('к получению после комиссии {p}%: {n} ¤', {
+            p: Math.round(MARKET_FEE * 100),
+            n: Math.floor(gross * (1 - MARKET_FEE)),
+          })
+        : t('в эскроу уйдёт {n} ¤ · комиссию {p}% платит получатель кредитов', {
+            n: Math.ceil(gross),
+            p: Math.round(MARKET_FEE * 100),
+          });
+  };
+  updNet();
+  document.getElementById('mk-amt')?.addEventListener('input', updNet);
+  document.getElementById('mk-price')?.addEventListener('input', updNet);
 }
 document.getElementById('rail-market')?.addEventListener('click', () => {
   marketWin.classList.add('show');
@@ -9312,9 +9734,15 @@ if (!__PLAYER_BUILD__) {
 // sign-in is a styled stub until accounts land (docs/accounts-roadmap.md AC-1.1):
 // it drops you straight into guest play by callsign, with a "скоро" notice.
 const welcomeStageEl = $('cwelcome');
+const registerStageEl = $('cregister');
+const recoverStageEl = $('crecover');
+const resetStageEl = $('creset');
 const browseStageEl = $('cbrowse');
-function showStage(stage: 'welcome' | 'browse'): void {
+function showStage(stage: 'welcome' | 'register' | 'recover' | 'reset' | 'browse'): void {
   welcomeStageEl.style.display = stage === 'welcome' ? '' : 'none';
+  registerStageEl.style.display = stage === 'register' ? '' : 'none';
+  recoverStageEl.style.display = stage === 'recover' ? '' : 'none';
+  resetStageEl.style.display = stage === 'reset' ? '' : 'none';
   browseStageEl.style.display = stage === 'browse' ? '' : 'none';
 }
 
@@ -9349,6 +9777,7 @@ const HUB_PANELS: Record<string, string> = {
   ally: 'hp-ally',
   more: 'hp-more',
 };
+let currentHubTab = 'home'; // the visible hub panel, so an async XP sync can repaint it
 function hubTab(tab: string): void {
   hubNote.textContent = '';
   if (tab === 'games') {
@@ -9357,6 +9786,7 @@ function hubTab(tab: string): void {
     enterBrowse(); // hand off to the existing match browser
     return;
   }
+  currentHubTab = tab;
   if (tab === 'meta') renderMetaPanel(); // live numbers every visit (XP may have grown)
   if (tab === 'arsenal') void refreshArsenal(); // cache paints now, server refresh trails
   for (const [k, pid] of Object.entries(HUB_PANELS))
@@ -9520,7 +9950,7 @@ async function refreshArsenal(): Promise<void> {
   if (!srv) return;
   await probeAuthMode(srv.base);
   if (!authMode) return;
-  const session = localStorage.getItem(sessionKey(srv.base));
+  const session = sessionToken(srv.base);
   if (!session) return;
   try {
     const res = await fetch(`${httpBase(srv.base)}/arsenal/me`, {
@@ -9535,6 +9965,42 @@ async function refreshArsenal(): Promise<void> {
     // offline/unreachable — the cache painted above stays the source of truth
   }
 }
+/** Accounts mode (EC-*): pull the DURABLE account XP into the local meta mirror, so
+ *  the commander level/progress a player sees is account-backed and follows them to a
+ *  new device — not the per-callsign localStorage that only lived in one browser. The
+ *  server total is authoritative (it sums every credited match across devices); the
+ *  per-match award still lands optimistically at checkEnd (same formula as the core's
+ *  `data.rewards`, so they agree). Guest/nick mode has no account → keeps localStorage. */
+async function syncCommanderFromServer(): Promise<void> {
+  const srv = resolveServer();
+  if (!srv) return;
+  await probeAuthMode(srv.base);
+  if (!authMode) return;
+  const session = sessionToken(srv.base);
+  if (!session) return;
+  try {
+    const res = await fetch(`${httpBase(srv.base)}/commander/me`, {
+      headers: { authorization: `Bearer ${session}` },
+    });
+    if (!res.ok) return;
+    const body = (await res.json().catch(() => null)) as { xp?: unknown } | null;
+    if (typeof body?.xp !== 'number') return;
+    const cur = loadMeta();
+    // XP only ever grows (accumulated per finished match). Take the max, never a
+    // regression: the server is the durable cross-device total, but if this device
+    // just awarded a match optimistically and the server hasn't credited it yet, we
+    // must NOT drop below the local figure. Both converge once the credit lands.
+    const total = Math.max(cur.xp, body.xp);
+    if (total !== cur.xp) {
+      saveMeta({ ...cur, xp: total }); // local `spent` tree is kept
+      // repaint the open hub panel so the new level/points show without a manual switch
+      if (hubEl.style.display !== 'none' && (currentHubTab === 'home' || currentHubTab === 'meta'))
+        hubTab(currentHubTab);
+    }
+  } catch {
+    // offline — the last mirrored total stays; a later login reconciles
+  }
+}
 function openHub(note = ''): void {
   if (!nickInput.value.trim()) nickInput.value = suggestCallsign();
   const nick = nickInput.value.trim();
@@ -9544,15 +10010,32 @@ function openHub(note = ''): void {
   hubTab('home');
   hubNote.textContent = note;
   refreshOnboardOffer(); // ONB-0: first-run offer/nudge for a not-yet-onboarded commander
+  void syncCommanderFromServer(); // account-backed XP → local mirror (accounts mode only)
 }
 
-$('cnew').addEventListener('click', () => openHub());
+$('cnew').addEventListener('click', () => {
+  // «Новый командир» → the dedicated registration PAGE (its own stage of #connect, no live
+  // game behind it): callsign + password + repeat. Awaiting the probe closes the race — a
+  // tap before /auth/status answers must not take the guest branch on an accounts server.
+  // With accounts OFF (nick-only server) there is no password to set, so a new commander
+  // just gets a suggested callsign and drops into the hub.
+  void authProbe.then(() => {
+    if (authMode) {
+      openRegister();
+      return;
+    }
+    openHub();
+  });
+});
 // «Вход по позывному»: reveal an inline field and enter under a callsign YOU type (vs
 // «Новый командир», which auto-suggests one). The chosen callsign is remembered
-// (`void.nick`) so the next visit auto-recognises you (the first-run gate above). No
-// accounts backend yet — local identity, not cross-device recovery (accounts-roadmap.md).
+// (`void.nick`) so the next visit auto-recognises you (the first-run gate above).
+// With accounts on the server (authMode) the same form carries a password and the
+// welcome card itself registers/logs in (registration IS the first login).
 const wLoginEl = $('cwlogin');
 const wNickInput = $('cwnick') as HTMLInputElement;
+const wPassRowEl = $('cwpassrow');
+const wPassInput = $('cwpass') as HTMLInputElement;
 function signInByCallsign(): void {
   const nick = wNickInput.value.trim();
   if (!nick) {
@@ -9560,10 +10043,46 @@ function signInByCallsign(): void {
     wNickInput.focus();
     return;
   }
-  nickInput.value = nick;
-  localStorage.setItem('void.nick', nick); // remembered — next visit skips the welcome card
-  openHub();
+  // Same race guard as «Новый командир»: never pick the guest branch while the
+  // /auth/status probe is still in flight.
+  void authProbe.then(() => {
+    if (authMode) {
+      void welcomeSignIn(nick);
+      return;
+    }
+    nickInput.value = nick;
+    localStorage.setItem('void.nick', nick); // remembered — next visit skips the welcome card
+    openHub();
+  });
 }
+let signingIn = false; // in-flight guard: Enter + click must not double-register
+/** Bytro-style welcome sign-in: register-or-login right on the greeting card, then
+ *  land on the hub. Reuses ensureSession (login → 401 → register), so a fresh
+ *  callsign creates the account and a known one just logs in. */
+async function welcomeSignIn(nick: string): Promise<void> {
+  if (signingIn) return; // a second Enter/click while the first runs would double-POST
+  signingIn = true;
+  try {
+    wPassRowEl.style.display = 'flex'; // make sure the password is visible before we demand it
+    nickInput.value = nick;
+    const srv = resolveServer();
+    if (!srv) return;
+    const session = await ensureSession(srv.base, nick);
+    if (!session) {
+      wPassInput.focus(); // ensureSession already explained why in the status line
+      return;
+    }
+    localStorage.setItem('void.nick', nick);
+    wPassInput.value = ''; // the session JWT is stored instead — a password never lingers
+    statusEl.textContent = '';
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+wPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') signInByCallsign();
+});
 $('clogin').addEventListener('click', () => {
   const show = wLoginEl.style.display === 'none';
   wLoginEl.style.display = show ? 'flex' : 'none';
@@ -9602,6 +10121,204 @@ for (const a of Array.from(document.querySelectorAll('.cfoot a'))) {
   });
 }
 
+// --- «Новый командир» → dedicated registration page (its own #connect stage) -------
+// Callsign + password + repeat, on a page of its own (no live game behind it). Registration
+// IS the first login (ensureSession: login → 401 → register), so a fresh callsign creates
+// the account. «Восстановить доступ» is a stub until the accounts backend grows a real reset
+// (no email on file yet — docs/accounts-roadmap.md).
+const crNickInput = $('crnick') as HTMLInputElement;
+const crMailInput = $('crmail') as HTMLInputElement;
+const crPassInput = $('crpass') as HTMLInputElement;
+const crPass2Input = $('crpass2') as HTMLInputElement;
+function openRegister(): void {
+  showStage('register');
+  crNickInput.value = crNickInput.value.trim() || suggestCallsign();
+  crPassInput.value = '';
+  crPass2Input.value = '';
+  statusEl.textContent = '';
+  crPassInput.focus();
+}
+async function submitRegister(): Promise<void> {
+  const nick = crNickInput.value.trim();
+  const pass = crPassInput.value;
+  const email = crMailInput.value.trim();
+  if (!nick) {
+    statusEl.textContent = t('Введи имя командира');
+    crNickInput.focus();
+    return;
+  }
+  if (pass.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    crPassInput.focus();
+    return;
+  }
+  if (pass !== crPass2Input.value) {
+    statusEl.textContent = t('Пароли не совпадают');
+    crPass2Input.focus();
+    return;
+  }
+  if (signingIn) return; // Enter + click must not double-register
+  signingIn = true;
+  try {
+    const srv = resolveServer();
+    if (!srv) return;
+    // Email is OPTIONAL — it exists only so the account can be recovered later; skipping it
+    // just means no self-service reset. A malformed one is caught by the server (400).
+    const session = await ensureSession(srv.base, nick, pass, email || undefined);
+    if (!session) {
+      crPassInput.focus(); // ensureSession already explained why in the status line
+      return;
+    }
+    localStorage.setItem('void.nick', nick);
+    nickInput.value = nick;
+    crPassInput.value = '';
+    crPass2Input.value = '';
+    statusEl.textContent = '';
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+$('crgo').addEventListener('click', () => void submitRegister());
+crNickInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crMailInput.focus();
+});
+crMailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crPassInput.focus();
+});
+crPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') crPass2Input.focus();
+});
+crPass2Input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitRegister();
+});
+$('crback').addEventListener('click', () => {
+  showStage('welcome');
+  statusEl.textContent = '';
+});
+
+// --- Password recovery: request a reset link (email → /auth/recover) ------------------
+// Anti-enumeration mirrors the server: the confirmation is identical whether or not the
+// email is on file. «Восстановить доступ» on the registration page opens this stage.
+const crecMailInput = $('crecmail') as HTMLInputElement;
+async function submitRecover(): Promise<void> {
+  const email = crecMailInput.value.trim();
+  if (!email) {
+    statusEl.textContent = t('Введите почту');
+    crecMailInput.focus();
+    return;
+  }
+  const srv = resolveServer();
+  if (!srv) return;
+  try {
+    await fetch(`${httpBase(srv.base)}/auth/recover`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    /* swallow — never reveal a delivery/lookup outcome */
+  }
+  statusEl.textContent = t('Если такая почта есть — прислали ссылку для сброса');
+}
+$('crrecover').addEventListener('click', () => {
+  showStage('recover');
+  crecMailInput.value = crMailInput.value.trim();
+  statusEl.textContent = '';
+  crecMailInput.focus();
+});
+$('crecgo').addEventListener('click', () => void submitRecover());
+crecMailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitRecover();
+});
+$('crecback').addEventListener('click', () => {
+  showStage('welcome');
+  statusEl.textContent = '';
+});
+
+// --- Password reset: spend a mailed «?reset=<token>» link (→ /auth/reset) -------------
+// The reset stage is opened by the boot deep-link (see the first-run gate). On success the
+// server hands back a session (reset IS a login) → straight into the hub.
+const cresetPassInput = $('cresetpass') as HTMLInputElement;
+const cresetPass2Input = $('cresetpass2') as HTMLInputElement;
+let resetToken = ''; // the token carried by the ?reset= deep-link
+async function submitReset(): Promise<void> {
+  const pass = cresetPassInput.value;
+  if (pass.length < 8) {
+    statusEl.textContent = t('Введите пароль (мин. 8 символов)');
+    cresetPassInput.focus();
+    return;
+  }
+  if (pass !== cresetPass2Input.value) {
+    statusEl.textContent = t('Пароли не совпадают');
+    cresetPass2Input.focus();
+    return;
+  }
+  if (signingIn) return;
+  signingIn = true;
+  try {
+    const srv = resolveServer();
+    if (!srv) return;
+    const res = await fetch(`${httpBase(srv.base)}/auth/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, password: pass }),
+    }).catch(() => null);
+    const body = ((res && (await res.json().catch(() => ({})))) ?? {}) as {
+      login?: string;
+      token?: string;
+    };
+    if (!res || !res.ok || !body.token || !body.login) {
+      statusEl.textContent = t('Ссылка недействительна или устарела');
+      return;
+    }
+    localStorage.setItem(
+      sessionKey(srv.base),
+      JSON.stringify({ login: body.login, token: body.token }),
+    );
+    localStorage.setItem('void.nick', body.login);
+    nickInput.value = body.login;
+    resetToken = '';
+    cresetPassInput.value = '';
+    cresetPass2Input.value = '';
+    statusEl.textContent = '';
+    note('✔ ' + t('Пароль изменён'));
+    openHub();
+  } finally {
+    signingIn = false;
+  }
+}
+$('cresetgo').addEventListener('click', () => void submitReset());
+cresetPassInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') cresetPass2Input.focus();
+});
+cresetPass2Input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitReset();
+});
+/** Open the reset stage for a «?reset=<token>» deep-link (called from the first-run gate). */
+function openReset(token: string): void {
+  resetToken = token;
+  // Strip ?reset=<token> from the address bar + history: the token is a live 15-minute
+  // account-takeover capability and must not linger in the URL (referer leaks, shoulder
+  // surfing, back/forward, synced history). Remove only `reset`, keep any other params.
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has('reset')) {
+      url.searchParams.delete('reset');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+  } catch {
+    /* history/URL unavailable (non-browser test env) — nothing to scrub */
+  }
+  showConnect(true);
+  showHub(false);
+  showStage('reset');
+  cresetPassInput.value = '';
+  cresetPass2Input.value = '';
+  statusEl.textContent = '';
+  cresetPassInput.focus();
+}
+
 // hub interactions
 $('hub-play').addEventListener('click', () => hubTab('games'));
 // Single-player entry — dev client only (the player build strips the tile + this hook).
@@ -9615,6 +10332,11 @@ $('hub-msg').addEventListener('click', () => {
   hubNote.textContent = t('Сообщения — скоро');
 });
 $('hub-logout').addEventListener('click', () => {
+  // «Сменить командира» must really switch identity: drop this server's session so
+  // the next sign-in authenticates the NEW callsign instead of replaying the old JWT.
+  const srv = resolveServer();
+  if (srv) localStorage.removeItem(sessionKey(srv.base));
+  statusEl.textContent = '';
   showHub(false);
   showConnect(true);
   showStage('welcome');
@@ -9657,6 +10379,29 @@ function renderSettings(): void {
         `<div class="set-ctl"><label class="set-switch"><input id="set-compact" type="checkbox"${compactPanel ? ' checked' : ''} aria-label="${t('Компактный режим меню')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-compact-val" class="set-val">${compactPanel ? t('вкл') : t('выкл')}</span></div>` +
         `</div>`
       : '') +
+    `<div class="pc-sec">${t('Цвета сторон')}</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Свой цвет')}<span class="set-sub">${t('вы на карте и в панелях — форма несёт тип, цвет несёт сторону')}</span></div>` +
+    `<div class="set-ctl"><input id="set-colyou" type="color" value="${youColor}" aria-label="${t('Свой цвет')}"></div>` +
+    `</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Нейтральные')}<span class="set-sub">${t('ничейные миры и неопознанные силы')}</span></div>` +
+    `<div class="set-ctl"><input id="set-colneutral" type="color" value="${neutralColor}" aria-label="${t('Нейтральные')}"></div>` +
+    `</div>` +
+    `<div class="set-row">` +
+    `<div class="set-lbl">${t('Палитра соперников')}<span class="set-sub">${t('«дальтоник» — оттенки, различимые при цветослепоте')}</span></div>` +
+    `<div class="set-ctl set-pals">` +
+    (['classic', 'warm', 'cvd'] as const)
+      .map(
+        (p) =>
+          `<button type="button" class="set-pal${rivalPaletteId === p ? ' on' : ''}" data-pal="${p}">${
+            p === 'classic' ? t('классика') : p === 'warm' ? t('тёплая') : t('дальтоник')
+          }</button>`,
+      )
+      .join('') +
+    `<button type="button" class="set-pal" id="set-colreset" title="${t('Вернуть цвета по умолчанию')}">⟲</button>` +
+    `</div>` +
+    `</div>` +
     `<div class="pc-sec">${t('Графика')}</div>` +
     `<div class="set-row">` +
     `<div class="set-lbl">${t('Свечение и ореолы')}<span class="set-sub">${t('мягкое сияние вокруг миров, флотов и границ — выключите ради чёткой карты и скорости')}</span></div>` +
@@ -9698,6 +10443,27 @@ function renderSettings(): void {
     setStarfield(star.checked);
     if (starVal) starVal.textContent = star.checked ? t('вкл') : t('выкл');
   });
+  // Цвета сторон: живые инпуты + пресеты палитры соперников. Карта красится на
+  // следующем кадре сама (ownerColor читается при отрисовке), панель — при
+  // следующей перестройке.
+  const colYou = document.getElementById('set-colyou') as HTMLInputElement | null;
+  const colNeutral = document.getElementById('set-colneutral') as HTMLInputElement | null;
+  colYou?.addEventListener('input', () =>
+    setSideColors(colYou.value, neutralColor, rivalPaletteId),
+  );
+  colNeutral?.addEventListener('input', () =>
+    setSideColors(youColor, colNeutral.value, rivalPaletteId),
+  );
+  for (const b of Array.from(settingsEl.querySelectorAll('.set-pal[data-pal]'))) {
+    b.addEventListener('click', () => {
+      setSideColors(youColor, neutralColor, (b as HTMLElement).dataset.pal ?? 'classic');
+      renderSettings(); // перерисовать активный пресет
+    });
+  }
+  document.getElementById('set-colreset')?.addEventListener('click', () => {
+    setSideColors(COLOR.p1!, COLOR.null!, 'classic');
+    renderSettings();
+  });
   document
     .getElementById('set-close')
     ?.addEventListener('click', () => settingsEl.classList.remove('show'));
@@ -9718,7 +10484,28 @@ settingsEl.addEventListener('click', (e) => {
 // First-run gate: a returning commander (a saved callsign) skips the identity card
 // and boots straight into the hub — the raw "Новый командир / войти" screen is only
 // for a genuinely new device. "Сменить командира" in the hub goes back to identity.
-if ((localStorage.getItem('void.nick') ?? '').trim()) openHub();
+//
+// Deep-link overrides (checked before the returning-player shortcut):
+//  «?reset=<token>» — a mailed password-reset link → the reset page (set a new password).
+//  «?join=<id>»     — a new tab spawned by «Войти» in the match list → straight into THAT
+//                     session, reusing this browser's stored identity (nick / session JWT).
+const bootParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const bootReset = (bootParams?.get('reset') ?? '').trim();
+const bootJoinId = (bootParams?.get('join') ?? '').trim();
+if (bootReset) {
+  openReset(bootReset);
+} else if (bootJoinId) {
+  showConnect(true);
+  showHub(false);
+  statusEl.textContent = t('Подключение к сессии…');
+  void (async () => {
+    const srv = resolveServer();
+    if (srv) await probeAuthMode(srv.base);
+    connectToMatch(bootJoinId);
+  })();
+} else if ((localStorage.getItem('void.nick') ?? '').trim()) {
+  openHub();
+}
 
 // --- single-player setup overlay --------------------------------------------
 // Pick your homeworld on a mini-map and choose how many AI rivals join, then
@@ -10434,6 +11221,12 @@ function connect(): void {
           statusEl.textContent = 'that name is already playing (another tab or device?)';
         } else if (!admitted && code === 'E_UNKNOWN_PLAYER') {
           statusEl.textContent = 'could not get a seat';
+        } else if (!admitted && code === 'E_MATCH_FULL') {
+          // NETA2-1: the server COMPLETED the handshake just to tell us why — a real
+          // refusal, not "server down". Say it plainly instead of a generic error.
+          statusEl.textContent = t('матч заполнен — все места заняты');
+        } else if (!admitted && code === 'E_ENTRY_CLOSED') {
+          statusEl.textContent = t('вход в этот матч закрыт (окно приёма новых игроков истекло)');
         } else {
           statusEl.textContent = 'error: ' + code;
         }
@@ -10531,6 +11324,33 @@ let authMode = false;
 const passRow = document.getElementById('cpassrow') as HTMLElement | null;
 const passInput = document.getElementById('cpass') as HTMLInputElement | null;
 const sessionKey = (base: string): string => `void.session.${base}`;
+/** Session record: the JWT plus WHOSE it is. A cached token must never silently
+ *  authenticate a different callsign (family laptop: «Сменить командира» then a
+ *  new sign-in really switches the account). Legacy bare-JWT values fail the
+ *  parse → treated as absent, one harmless re-login. */
+interface SessionRec {
+  login: string;
+  token: string;
+}
+function sessionRecord(base: string): SessionRec | null {
+  try {
+    const rec = JSON.parse(localStorage.getItem(sessionKey(base)) ?? 'null') as {
+      login?: unknown;
+      token?: unknown;
+    } | null;
+    return rec && typeof rec.login === 'string' && typeof rec.token === 'string'
+      ? { login: rec.login, token: rec.token }
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** The cached session token for ANY identity on this server (best-effort reads:
+ *  arsenal refresh, redial). Auth-critical paths use ensureSession, which checks
+ *  the login matches. */
+function sessionToken(base: string): string | null {
+  return sessionRecord(base)?.token ?? null;
+}
 
 /** Probe the server's identity mode and show/hide the password field. Network
  *  failure ⇒ assume nick mode (the old handshake) — the join itself will surface
@@ -10545,41 +11365,85 @@ async function probeAuthMode(base: string): Promise<void> {
   if (passRow) passRow.style.display = authMode ? '' : 'none';
 }
 
+// First visit, Bytro-style (SES-2.5 UX): when the server runs accounts, sign-up IS
+// the welcome — probe the same-origin default and surface callsign+password on the
+// greeting card right away, so a new commander registers before the hub, not deep
+// inside the join flow. Probe failure ⇒ nick mode, the card stays as it was.
+// The probe ALWAYS runs and is awaited by the welcome buttons (cnew / sign-in), so
+// an early tap can't race /auth/status into the guest branch; revealing the form
+// applies to first visits only (a remembered nick skipped the welcome card above).
+const authProbe: Promise<void> = (async () => {
+  const base = srvInput.value.trim();
+  if (!base) return;
+  await probeAuthMode(base);
+  if (!authMode) return;
+  if ((localStorage.getItem('void.nick') ?? '').trim()) return; // welcome card was skipped
+  if (!wNickInput.value.trim()) wNickInput.value = suggestCallsign();
+  wLoginEl.style.display = 'flex';
+  wPassRowEl.style.display = 'flex';
+})();
+
 /** A valid session JWT for this server, or null (with the status line explaining).
  *  Zero-friction identity: try LOGIN first; unknown-or-wrong is a uniform 401, so
  *  then try REGISTER — a fresh login creates the account (registration IS the first
  *  login), while a taken one (409) means the password was simply wrong. */
-async function ensureSession(base: string, login: string): Promise<string | null> {
-  const cached = localStorage.getItem(sessionKey(base));
-  if (cached) return cached;
-  const password = passInput?.value ?? '';
+async function ensureSession(
+  base: string,
+  login: string,
+  passwordArg?: string,
+  emailArg?: string,
+): Promise<string | null> {
+  // Only OUR OWN cached session counts — a token minted for a different callsign
+  // (or a legacy unbound one) is ignored and replaced by a fresh login below.
+  const cachedRec = sessionRecord(base);
+  if (cachedRec && cachedRec.login.toLowerCase() === login.toLowerCase()) return cachedRec.token;
+  // Mirror the server's LOGIN_RE (authApi.ts) so a bad callsign gets a human
+  // explanation here instead of the server's uniform rejection.
+  if (!/^[\p{L}\p{N}_-]{3,24}$/u.test(login)) {
+    statusEl.textContent = t('Позывной для аккаунта: 3–24 символа — буквы, цифры, _ или -');
+    return null;
+  }
+  // The password may come from the welcome card (Bytro-style sign-up) or the match
+  // browser's field (custom-server joins) — whichever the player actually filled.
+  const password = passwordArg ?? (wPassInput.value || (passInput?.value ?? ''));
   if (password.length < 8) {
     statusEl.textContent = t('Введите пароль (мин. 8 символов)');
     return null;
   }
-  const call = async (path: string): Promise<{ status: number; token?: string }> => {
+  const call = async (
+    path: string,
+    extra: Record<string, string> = {},
+  ): Promise<{ status: number; token?: string; error?: string }> => {
     const res = await fetch(`${httpBase(base)}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ login, password }),
+      body: JSON.stringify({ login, password, ...extra }),
     });
-    const body = (await res.json().catch(() => ({}))) as { token?: string };
-    return { status: res.status, token: body.token };
+    const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    return { status: res.status, token: body.token, error: body.error };
   };
   try {
     const login1 = await call('/auth/login');
     if (login1.token) {
-      localStorage.setItem(sessionKey(base), login1.token);
+      localStorage.setItem(sessionKey(base), JSON.stringify({ login, token: login1.token }));
       return login1.token;
     }
     if (login1.status === 401) {
-      const reg = await call('/auth/register');
+      // Registration carries the optional recovery email (login never needs it).
+      const reg = await call('/auth/register', emailArg ? { email: emailArg } : {});
       if (reg.token) {
-        localStorage.setItem(sessionKey(base), reg.token);
+        localStorage.setItem(sessionKey(base), JSON.stringify({ login, token: reg.token }));
         note('✔ ' + t('Аккаунт создан'));
         return reg.token;
       }
-      statusEl.textContent = reg.status === 409 ? t('Неверный пароль') : t('Регистрация отклонена');
+      statusEl.textContent =
+        reg.error === 'E_EMAIL_TAKEN'
+          ? t('Эта почта уже занята')
+          : reg.status === 409
+            ? t('Неверный пароль') // login 401 + register 409 (E_LOGIN_TAKEN) ⇒ wrong password
+            : reg.status === 429
+              ? t('Слишком часто — подождите')
+              : t('Регистрация отклонена');
       return null;
     }
     statusEl.textContent =
@@ -10692,6 +11556,16 @@ function connectToMatch(id: string): void {
     pendingJoinToken = join.token;
     connect();
   })();
+}
+
+// Open a session in its OWN browser tab (deep-link «?join=<id>»): the hub/browser stays in
+// THIS tab while the match runs in a fresh one, which boots straight into it from the shared
+// same-origin localStorage identity (nick / session JWT). Popup blocked → join in this tab so
+// the player is never left stuck. (On the APK / a file:// page window.open may hand off to the
+// system browser; the deployed https origin is the intended path.)
+function openSessionTab(id: string): void {
+  const w = window.open(`${location.pathname}?join=${encodeURIComponent(id)}`, '_blank');
+  if (!w) connectToMatch(id);
 }
 
 async function refreshMatches(quiet = false): Promise<void> {
@@ -10809,7 +11683,7 @@ function renderMatches(): void {
     const join = document.createElement('button');
     join.className = 'mbtn';
     join.textContent = t('Войти');
-    join.addEventListener('click', () => connectToMatch(m.matchId));
+    join.addEventListener('click', () => openSessionTab(m.matchId));
     btns.appendChild(join);
     if (activeTab !== 'available') {
       const restore = activeTab === 'archived';
@@ -10864,12 +11738,16 @@ if (__PLAYER_BUILD__) {
 // The match browser (stage 2) loads its list on entry — "Новый командир" / "Вход"
 // call refreshMatches() themselves; nothing to prefetch while the clean welcome is up.
 
-// Auto-reconnect after an unexpected drop: rejoin our seat with capped exponential
-// backoff (1,2,4,8,8,8s, then give up). Same saved server + nick → same side.
+// Auto-reconnect after an unexpected drop: rejoin our seat with capped exponential backoff
+// (1,2,4,8,8,… s). The budget (`reconnectDelayMs`, NETA2-2) OUTLASTS the server's ~30s
+// socket-reap window on purpose — a reconnect within the reap must not give up before the
+// old socket frees the seat (else it loses the race with `E_SLOT_TAKEN`). Same saved
+// server + nick → same side.
 function scheduleReconnect(): void {
   if (reconnectTimer) return;
   reconnectAttempts++;
-  if (reconnectAttempts > 6) {
+  const delay = reconnectDelayMs(reconnectAttempts);
+  if (delay === null) {
     reconnecting = false;
     reconnectAttempts = 0;
     banner = null;
@@ -10878,7 +11756,6 @@ function scheduleReconnect(): void {
     return;
   }
   banner = t('⟳ переподключение…');
-  const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (!authMode) {
@@ -10890,7 +11767,7 @@ function scheduleReconnect(): void {
     // the redial to the connect screen with «введите пароль» (fail-explicit).
     void (async () => {
       const srv = resolveServer();
-      const session = srv ? localStorage.getItem(sessionKey(srv.base)) : null;
+      const session = srv ? sessionToken(srv.base) : null;
       if (!srv || !session) {
         reconnecting = false;
         banner = null;
@@ -12682,7 +13559,7 @@ async function corpFetch(
   if (!srv) return null;
   await probeAuthMode(srv.base);
   if (!authMode) return null;
-  const session = localStorage.getItem(sessionKey(srv.base));
+  const session = sessionToken(srv.base);
   if (!session) return null;
   try {
     const res = await fetch(`${httpBase(srv.base)}${path}`, {
