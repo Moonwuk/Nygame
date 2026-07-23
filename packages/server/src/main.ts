@@ -14,7 +14,7 @@ import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
 import { createMatchLoader } from './serverWiring';
 import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
-import { registerAuthApi } from './authApi';
+import { registerAuthApi, liveSession } from './authApi';
 import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
 import { registerAvaApi, registerAvaFeed } from './avaApi';
@@ -243,7 +243,9 @@ const identify: MatchApiDeps['identify'] = verifySession
       const header = request.headers.authorization;
       if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
       const verified = await verifySession(header.slice('Bearer '.length).trim());
-      return verified.ok ? verified.claim : null;
+      // Signature is not enough: re-check the session against the CURRENT password so a
+      // password reset revokes older sessions at the seat gate (SE-1.x).
+      return verified.ok ? liveSession(verified.claim, stores.userStore) : null;
     }
   : undefined;
 

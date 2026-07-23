@@ -32,7 +32,7 @@ export interface ServerConfig {
   /** Mint a session token for an authenticated account (the /auth API). Present iff
    *  auth is configured — same secret, but a distinct `typ` + audience, so session and
    *  join tokens can never be replayed as each other. */
-  signSession?: (accountId: string, login: string) => Promise<string>;
+  signSession?: (accountId: string, login: string, pwfp: string) => Promise<string>;
   /** Verify a session token (the identity gate on /matches routes). Present iff auth. */
   verifySession?: (token: string) => Promise<SessionTokenResult>;
   /** Mint a password-reset token (the /auth/recover endpoint). Same secret, a distinct
@@ -77,9 +77,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
   const sessionAudience = env.AUTH_SESSION_AUDIENCE ?? 'session';
   const sessionTtlSec = Number(env.SESSION_TTL_SEC ?? '') || SESSION_TTL_SEC_DEFAULT;
   const signSession = authSecret
-    ? (accountId: string, login: string): Promise<string> =>
+    ? (accountId: string, login: string, pwfp: string): Promise<string> =>
         signSessionToken(
-          { accountId, login },
+          { accountId, login, pwfp },
           { key: hmacSecret(authSecret), algorithm: 'HS256', issuer, audience: sessionAudience },
           { ttlSeconds: sessionTtlSec },
         )

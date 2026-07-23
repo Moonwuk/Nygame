@@ -36,6 +36,7 @@ import {
   PostgresUserStore,
   migrate,
   registerAuthApi,
+  liveSession,
   configFromEnv,
   type AccountStore,
   type CommanderStore,
@@ -627,7 +628,10 @@ const server = createMultiplayerServer({
             ? header.slice('Bearer '.length).trim()
             : null;
         const who = bearer ? await authCfg.verifySession!(bearer) : null;
-        if (!who?.ok) {
+        // Signature + freshness: re-check the session against the current password so a
+        // reset revokes older sessions before they can claim/reclaim a seat (SE-1.x).
+        const live = who?.ok ? await liveSession(who.claim, userStore) : null;
+        if (!live) {
           void reply.code(401);
           return { error: 'E_AUTH' as const };
         }
@@ -637,7 +641,7 @@ const server = createMultiplayerServer({
           void reply.code(404);
           return { error: 'E_NO_MATCH' as const };
         }
-        const login = who.claim.login;
+        const login = live.login;
         const held = await accountStore.seatOf(id, login);
         if (!held && !registry.entryOpen(id)) {
           void reply.code(403);
@@ -652,7 +656,7 @@ const server = createMultiplayerServer({
         }
         return {
           playerId: seat.playerId,
-          token: await authCfg.signToken!(id, seat.playerId, who.claim.accountId),
+          token: await authCfg.signToken!(id, seat.playerId, live.accountId),
         };
       });
       // Commander progression (EC-*): the session reads its own durable lifetime XP.
@@ -665,11 +669,12 @@ const server = createMultiplayerServer({
             ? header.slice('Bearer '.length).trim()
             : null;
         const who = bearer ? await authCfg.verifySession!(bearer) : null;
-        if (!who?.ok) {
+        const live = who?.ok ? await liveSession(who.claim, userStore) : null;
+        if (!live) {
           void reply.code(401);
           return { error: 'E_AUTH' as const };
         }
-        return { xp: await commanderStore.xpOf(who.claim.accountId) };
+        return { xp: await commanderStore.xpOf(live.accountId) };
       });
     }
     if (playerHtml !== undefined && devHtml !== undefined) {

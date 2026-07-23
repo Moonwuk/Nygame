@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { registerAuthApi } from './authApi';
+import { registerAuthApi, liveSession, pwFingerprint } from './authApi';
 import {
   signSessionToken,
   verifySessionToken,
@@ -37,8 +37,8 @@ function authApp(options: AuthAppOptions = {}): FastifyInstance {
   app = Fastify();
   registerAuthApi(app, {
     users: new MemoryUserStore(),
-    signSession: (accountId, login) =>
-      signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+    signSession: (accountId, login, pwfp) =>
+      signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
     scryptParams: FAST,
     ...options,
   });
@@ -61,10 +61,12 @@ describe('SE-1.x · /auth/register + /auth/login', () => {
     expect(body.login).toBe('Vasya');
     expect(body.accountId).not.toBe('');
     const verified = await verifySessionToken(body.token, VERIFY);
-    expect(verified).toEqual({
-      ok: true,
-      claim: { accountId: body.accountId, login: 'Vasya' },
-    });
+    expect(verified.ok).toBe(true);
+    if (verified.ok) {
+      expect(verified.claim.accountId).toBe(body.accountId);
+      expect(verified.claim.login).toBe('Vasya');
+      expect(verified.claim.pwfp).not.toBe(''); // stamped with the password fingerprint
+    }
   });
 
   it('logs in with the right password; rejects a wrong one and an unknown login UNIFORMLY', async () => {
@@ -194,19 +196,21 @@ describe('SE-1.x · session gate on the match API', () => {
     app = Fastify();
     registerAuthApi(app, {
       users,
-      signSession: (accountId, login) =>
-        signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+      signSession: (accountId, login, pwfp) =>
+        signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
       scryptParams: FAST,
     });
     const deps: MatchApiDeps = {
       createMatch: () => Promise.resolve({ matchId: 'm1', seats: ['green', 'red'] }),
       join: (matchId, nick, accountId) =>
         Promise.resolve({ playerId: 'green', token: `join:${matchId}:${nick}:${accountId}` }),
+      // Mirrors production (main.ts / netserver.ts): signature verify THEN a live re-check
+      // against the current password, so a reset revokes older sessions at the seat gate.
       identify: async (request) => {
         const header = request.headers.authorization;
         if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
         const v = await verifySessionToken(header.slice(7), VERIFY);
-        return v.ok ? v.claim : null;
+        return v.ok ? liveSession(v.claim, users) : null;
       },
     };
     registerMatchApi(app, deps);
@@ -254,6 +258,31 @@ describe('SE-1.x · session gate on the match API', () => {
     expect(created.statusCode).toBe(200);
     expect(created.json()).toEqual({ matchId: 'm1', seats: ['green', 'red'] });
   });
+
+  it('a password change revokes older sessions at the seat gate (pwfp freshness)', async () => {
+    const { server, users } = gatedApp();
+    const reg = await post(server, '/auth/register', { login: 'carol', password: 'longenough' });
+    const { token, accountId } = reg.json() as { token: string; accountId: string };
+
+    // The fresh session joins fine — its stamped fingerprint matches the stored hash.
+    const before = await server.inject({
+      method: 'GET',
+      url: '/matches/m1/join',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(before.statusCode).toBe(200);
+
+    // The password changes (a reset) → the OLD session, stamped with the pre-change
+    // fingerprint, is revoked even though its JWT is still valid.
+    await users.setPassword(accountId, 'a-different-hash');
+    const after = await server.inject({
+      method: 'GET',
+      url: '/matches/m1/join',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(after.statusCode).toBe(401);
+    expect(after.json()).toEqual({ error: 'E_AUTH' });
+  });
 });
 
 describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
@@ -262,13 +291,18 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
 
   /** An auth app with recovery wired + a capturing mailer (the reset link never leaves the
    *  test). Mirrors the serverConfig composition: same key, a distinct `reset` audience. */
-  function recoverApp(): { server: FastifyInstance; sent: Array<{ to: string; text: string }> } {
+  function recoverApp(): {
+    server: FastifyInstance;
+    sent: Array<{ to: string; text: string }>;
+    users: MemoryUserStore;
+  } {
     const sent: Array<{ to: string; text: string }> = [];
+    const users = new MemoryUserStore();
     app = Fastify();
     registerAuthApi(app, {
-      users: new MemoryUserStore(),
-      signSession: (accountId, login) =>
-        signSessionToken({ accountId, login }, SIGN, { ttlSeconds: 3600 }),
+      users,
+      signSession: (accountId, login, pwfp) =>
+        signSessionToken({ accountId, login, pwfp }, SIGN, { ttlSeconds: 3600 }),
       signReset: (accountId, pwfp) =>
         signResetToken({ accountId, pwfp }, RESET_SIGN, { ttlSeconds: 900 }),
       verifyReset: async (token) => {
@@ -282,7 +316,7 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
       },
       scryptParams: FAST,
     });
-    return { server: app, sent };
+    return { server: app, sent, users };
   }
 
   const tokenFrom = (text: string): string => decodeURIComponent(text.match(/\?reset=(\S+)/)![1]!);
@@ -380,5 +414,38 @@ describe('SE-1.x · password recovery (/auth/recover + /auth/reset)', () => {
     });
     expect(r.statusCode).toBe(400);
     expect(r.json()).toEqual({ error: 'E_BAD_CREDENTIALS' });
+  });
+
+  it('a completed reset kills the pre-reset session but its own new session is live', async () => {
+    const { server, sent, users } = recoverApp();
+    const reg = await post(server, '/auth/register', {
+      login: 'dan',
+      password: 'oldpassword',
+      email: 'dan@example.com',
+    });
+    const preToken = (reg.json() as { token: string }).token;
+    const preClaim = await verifySessionToken(preToken, VERIFY);
+    expect(preClaim.ok).toBe(true);
+    // Before the reset, the registration session authenticates against the live store.
+    if (preClaim.ok) expect(await liveSession(preClaim.claim, users)).not.toBeNull();
+
+    await post(server, '/auth/recover', { email: 'dan@example.com' });
+    const reset = await post(server, '/auth/reset', {
+      token: tokenFrom(sent[0]!.text),
+      password: 'brandnewpass',
+    });
+    const postToken = (reset.json() as { token: string }).token;
+
+    // The pre-reset session no longer authenticates; the session the reset handed back does.
+    if (preClaim.ok) expect(await liveSession(preClaim.claim, users)).toBeNull();
+    const postClaim = await verifySessionToken(postToken, VERIFY);
+    expect(postClaim.ok).toBe(true);
+    if (postClaim.ok) expect(await liveSession(postClaim.claim, users)).not.toBeNull();
+  });
+
+  it('liveSession rejects a session for an unknown/deleted account', async () => {
+    const users = new MemoryUserStore();
+    const claim = { accountId: 'ghost', login: 'ghost', pwfp: pwFingerprint('whatever') };
+    expect(await liveSession(claim, users)).toBeNull();
   });
 });
