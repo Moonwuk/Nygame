@@ -10218,6 +10218,18 @@ cresetPass2Input.addEventListener('keydown', (e) => {
 /** Open the reset stage for a «?reset=<token>» deep-link (called from the first-run gate). */
 function openReset(token: string): void {
   resetToken = token;
+  // Strip ?reset=<token> from the address bar + history: the token is a live 15-minute
+  // account-takeover capability and must not linger in the URL (referer leaks, shoulder
+  // surfing, back/forward, synced history). Remove only `reset`, keep any other params.
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has('reset')) {
+      url.searchParams.delete('reset');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+  } catch {
+    /* history/URL unavailable (non-browser test env) — nothing to scrub */
+  }
   showConnect(true);
   showHub(false);
   showStage('reset');

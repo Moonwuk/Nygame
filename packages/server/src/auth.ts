@@ -127,10 +127,16 @@ export function hmacSecret(secret: string): Uint8Array {
 /** JWT `typ` pinned on every session token (mirrors JOIN_TOKEN_TYP's key-reuse guard). */
 const SESSION_TOKEN_TYP = 'session+jwt';
 
-/** What a verified session token grants: an authenticated account. */
+/** What a verified session token grants: an authenticated account. `pwfp` is a fingerprint
+ *  of the account's password hash at mint time; a password change (today, a `/auth/reset`)
+ *  rotates the stored hash, so the fingerprint stops matching and the session is revoked at
+ *  the identity gate (see `liveSession` in authApi.ts) — a stolen session doesn't outlive a
+ *  password reset. The signature only proves authenticity; `pwfp` adds a cheap freshness
+ *  check against the store where it matters (join/create), not on every request. */
 export interface SessionClaim {
   accountId: string;
   login: string;
+  pwfp: string;
 }
 
 export type SessionTokenResult = { ok: true; claim: SessionClaim } | { ok: false; code: 'E_AUTH' };
@@ -153,22 +159,26 @@ export async function verifySessionToken(
     });
     const accountId = payload.sub;
     const login = payload.login;
+    const pwfp = payload.pwfp;
     if (typeof accountId !== 'string' || accountId === '') return { ok: false, code: 'E_AUTH' };
     if (typeof login !== 'string' || login === '') return { ok: false, code: 'E_AUTH' };
-    return { ok: true, claim: { accountId, login } };
+    // A session minted before `pwfp` existed (or otherwise malformed) is rejected — the
+    // freshness check can't run without it, so fail secure and force a re-login.
+    if (typeof pwfp !== 'string' || pwfp === '') return { ok: false, code: 'E_AUTH' };
+    return { ok: true, claim: { accountId, login, pwfp } };
   } catch {
     return { ok: false, code: 'E_AUTH' };
   }
 }
 
-/** Mint a session token (the /auth/login and /auth/register endpoints' job). */
+/** Mint a session token (the /auth/login, /auth/register and /auth/reset endpoints' job). */
 export function signSessionToken(
   claim: SessionClaim,
   config: JoinTokenSignConfig,
   opts: { ttlSeconds: number; now?: () => number },
 ): Promise<string> {
   const nowSec = Math.floor((opts.now?.() ?? Date.now()) / 1000);
-  return new SignJWT({ login: claim.login })
+  return new SignJWT({ login: claim.login, pwfp: claim.pwfp })
     .setProtectedHeader({ alg: config.algorithm, typ: SESSION_TOKEN_TYP })
     .setSubject(claim.accountId)
     .setIssuer(config.issuer)

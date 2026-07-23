@@ -70,7 +70,7 @@ export {
   type SessionTokenResult,
   type VerifyKey,
 } from './auth';
-export { registerAuthApi, type AuthApiDeps, type Mailer } from './authApi';
+export { registerAuthApi, liveSession, pwFingerprint, type AuthApiDeps, type Mailer } from './authApi';
 export { configFromEnv, type ServerConfig } from './serverConfig';
 export { hashPassword, verifyPassword, type ScryptParams } from './password';
 export type {

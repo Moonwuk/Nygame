@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { SessionClaim } from './auth';
 import { hashPassword, verifyPassword, decoyHash, type ScryptParams } from './password';
 import type { UserStore } from './store';
 import { slidingWindowIpLimiter } from './rateLimit';
@@ -23,24 +24,49 @@ import { slidingWindowIpLimiter } from './rateLimit';
  *  SMTP/API mailer is wired via config when the deployment has one. */
 export type Mailer = (msg: { to: string; subject: string; text: string }) => Promise<void>;
 
-/** The default mailer: write the message to stderr. Enough for a dev/playtest admin to
- *  retrieve a reset link from the server logs; production overrides it with a real
- *  transport (there is otherwise no way to actually deliver mail from this repo). */
+/** The default mailer: write to stderr. The message BODY carries a live reset link (a
+ *  15-minute account-takeover token), so by default we log only metadata (to/subject) —
+ *  enabling recovery without a real transport must not spill takeover tokens into the
+ *  logs. A playtest admin who genuinely needs the link opts in with `MAILER_LOG_BODY=1`;
+ *  production wires a real transport instead (there is otherwise no way to deliver mail
+ *  from this repo). */
 const logMailer: Mailer = (msg) => {
-  process.stderr.write(`[mail] to=${msg.to} · ${msg.subject}\n  ${msg.text}\n`);
+  const body =
+    process.env.MAILER_LOG_BODY === '1'
+      ? `\n  ${msg.text}`
+      : ' (body hidden — set MAILER_LOG_BODY=1 to log it, or wire a real mailer)';
+  process.stderr.write(`[mail] to=${msg.to} · ${msg.subject}${body}\n`);
   return Promise.resolve();
 };
 
-/** Password fingerprint for single-use reset tokens: a short digest of the hash. When the
- *  password changes the hash — and thus this fingerprint — changes, so a spent or stale
- *  reset token no longer matches and is dead (no server-side token store needed). */
-const pwFingerprint = (passHash: string): string =>
+/** Password fingerprint: a short digest of the password hash. When the password changes
+ *  the hash — and thus this fingerprint — changes. Two consumers: single-use reset tokens
+ *  (a spent/stale token stops matching → dead, no token store needed) and session freshness
+ *  (`liveSession` below re-checks a session's stamped fingerprint against the current hash,
+ *  so a reset revokes older sessions). No server-side state either way. */
+export const pwFingerprint = (passHash: string): string =>
   createHash('sha256').update(passHash).digest('base64url').slice(0, 22);
+
+/** Re-check a signature-verified session against the CURRENT password: the account must
+ *  still exist and its password hash must still fingerprint to the session's stamped `pwfp`.
+ *  A password change (today, a `/auth/reset`) breaks the match, so an older session — a
+ *  stolen one that outlived the reset included — no longer authenticates. Returns the
+ *  claim on success, `null` on any failure (fail-secure). Meant for the identity gate
+ *  (join/create), not every request: it costs one indexed `findById`. */
+export async function liveSession(
+  claim: SessionClaim,
+  users: Pick<UserStore, 'findById'>,
+): Promise<SessionClaim | null> {
+  const user = await users.findById(claim.accountId);
+  if (!user || pwFingerprint(user.passHash) !== claim.pwfp) return null;
+  return claim;
+}
 
 export interface AuthApiDeps {
   users: UserStore;
-  /** Mint a session token for an authenticated account (from serverConfig). */
-  signSession(accountId: string, login: string): Promise<string>;
+  /** Mint a session token for an authenticated account (from serverConfig). `pwfp` binds
+   *  the session to the current password (see `liveSession`) so a reset revokes it. */
+  signSession(accountId: string, login: string, pwfp: string): Promise<string>;
   /** Recovery (SE-1.x): mint a short-lived reset token bound to `pwfp`. Present together
    *  with `resetBaseUrl` mounts `/auth/recover` + `/auth/reset`; absent leaves them off. */
   signReset?(accountId: string, pwfp: string): Promise<string>;
@@ -153,7 +179,7 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
       }
     }
     // Auto-login: registration IS the first login — hand the session token right away.
-    const token = await deps.signSession(created.userId, creds.login);
+    const token = await deps.signSession(created.userId, creds.login, pwFingerprint(passHash));
     void reply.code(201);
     return { accountId: created.userId, login: creds.login, token };
   });
@@ -183,7 +209,7 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
       void reply.code(401);
       return { error: 'E_AUTH' as const };
     }
-    const token = await deps.signSession(user.userId, user.login);
+    const token = await deps.signSession(user.userId, user.login, pwFingerprint(user.passHash));
     return { accountId: user.userId, login: user.login, token };
   });
 
@@ -254,8 +280,9 @@ export function registerAuthApi(app: FastifyInstance, deps: AuthApiDeps): void {
       }
       const passHash = await hashPassword(password, deps.scryptParams);
       await deps.users.setPassword(user.userId, passHash);
-      // Reset IS a login: hand back a fresh session so the client drops straight in.
-      const sessionToken = await deps.signSession(user.userId, user.login);
+      // Reset IS a login: hand back a fresh session (stamped with the NEW password's
+      // fingerprint, so it survives while every pre-reset session is now revoked).
+      const sessionToken = await deps.signSession(user.userId, user.login, pwFingerprint(passHash));
       return { accountId: user.userId, login: user.login, token: sessionToken };
     });
   }
