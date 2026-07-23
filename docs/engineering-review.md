@@ -30,7 +30,7 @@
 
 | Где | Проблема | Решение | Приоритет |
 |---|---|---|---|
-| `deepClone` на каждый `runStep` | JSON.parse/stringify на ~80 планет + флоты — O(N) на каждое действие | Structural sharing (Immer-style draft proxy) или copy-on-write по секциям. На старте OK, но при 500+ объектах станет заметно | Низкий (сейчас), Средний (сервер) |
+| `deepClone` на каждый `runStep` | ручной рекурсивный структурный клон (сознательно НЕ JSON.parse/stringify и не structuredClone) на ~80 планет + флоты — O(N) на каждое действие | Structural sharing (Immer-style draft proxy) или copy-on-write по секциям. На старте OK, но при 500+ объектах станет заметно | Низкий (сейчас), Средний (сервер) |
 | `isBombarded` | `Object.values(fleets)` на каждую планету, на каждый `time.advanced` в economy и construction | ✅ СДЕЛАНО: `bombardedPlanets(state)` считается O(fleets) один раз за тик, дальше O(1)/планета | ✅ |
 | `earliestDue` | Линейный поиск по `scheduled[]` на каждый шаг `advanceTo` | ✅ СДЕЛАНО: `scheduled[]` держится отсортированным по (at,seq) → earliestDue O(1), вставка бинарным поиском | ✅ |
 | `shortestPath` (Дейкстра) | Пересчитывается на каждый `fleet.move` | ✅ СДЕЛАНО: `RouteCache` в `movement.ts` мемоизирует пути (ключ включает версию топологии) | ✅ |

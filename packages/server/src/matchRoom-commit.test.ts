@@ -8,7 +8,7 @@ import {
   type Player,
 } from '@void/shared-core';
 import { createDevMatch, loadShippedData } from './scenario';
-import { MatchRoom, type RoomPeer } from './matchRoom';
+import { MatchRoom, type RoomObservation, type RoomPeer } from './matchRoom';
 import { MemoryArsenalStore, type ArsenalStore, type MatchSnapshot, type StoredReceipt } from './store';
 import type { ServerMessage } from './protocol';
 
@@ -78,6 +78,41 @@ describe('MatchRoom · strict commit-before-broadcast', () => {
     expect(room.state.fleets.green_1?.orbit).toBe('near');
     expect(room.sequence).toBe(1);
     expect(peer.deltas().length).toBeGreaterThan(0);
+  });
+
+  it('tags a DURABLE action observation `durable:true`; a SYNC one leaves it unset (NETA2-3)', async () => {
+    // Durable path (persist configured): the receipt is written by the commit-before-
+    // broadcast persist callback, so the observation is tagged — a host that persists
+    // receipts from `observe` must skip it or double-write.
+    const durableSeen: RoomObservation[] = [];
+    const durableRoom = createDevMatch(data, {
+      now: () => 1000,
+      time: 1000,
+      persist: () => Promise.resolve(),
+      observe: (e) => durableSeen.push(e),
+    });
+    const dpeer = new MemoryPeer();
+    durableRoom.addPeer('green', dpeer);
+    await durableRoom.receive('green', dpeer, raw(orbit('green_1', 1)));
+    await flush();
+    const durableActions = durableSeen.filter((e) => e.kind === 'action');
+    expect(durableActions.length).toBeGreaterThan(0);
+    expect(durableActions.every((a) => (a as { durable?: boolean }).durable === true)).toBe(true);
+
+    // Sync path (no persist): recordReceipt is the only writer, nothing else persists it,
+    // so it must NOT be tagged durable — the host still writes it from observe.
+    const syncSeen: RoomObservation[] = [];
+    const syncRoom = createDevMatch(data, {
+      now: () => 1000,
+      time: 1000,
+      observe: (e) => syncSeen.push(e),
+    });
+    const speer = new MemoryPeer();
+    syncRoom.addPeer('green', speer);
+    await syncRoom.receive('green', speer, raw(orbit('green_1', 1)));
+    const syncActions = syncSeen.filter((e) => e.kind === 'action');
+    expect(syncActions.length).toBeGreaterThan(0);
+    expect(syncActions.every((a) => (a as { durable?: boolean }).durable === undefined)).toBe(true);
   });
 
   it('commits nothing and stays retriable when the durable write fails', async () => {

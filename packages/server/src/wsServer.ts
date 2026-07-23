@@ -8,6 +8,7 @@ import type { MatchRoom } from './matchRoom';
 import { InMemoryRoomRegistry, type RoomRegistry } from './roomRegistry';
 import type { AccountStore } from './store';
 import { verifyJoinToken, type JoinTokenVerifyConfig } from './auth';
+import { serializeServerMessage, type ServerErrorCode } from './protocol';
 
 export interface MultiplayerServerOptions {
   /** Single-match shortcut. Exactly one of `room` / `registry` must be given; `room`
@@ -189,6 +190,23 @@ export function createMultiplayerServer(
     // Async because auth/nick-login resolve identity through the join-token verifier or
     // the (possibly DB-backed) account store before we accept the upgrade.
     void (async () => {
+      // NETA2-1: a refusal the client can READ. A browser hides a rejected WS handshake's
+      // HTTP status from JS, so `rejectUpgrade` (raw status + destroy) is indistinguishable
+      // from "server down". For NON-security reasons that the public `GET /matches` feed
+      // already exposes (match full / entry closed), COMPLETE the upgrade, deliver the
+      // reason as an `error` frame (mirrors MatchRoom's E_SLOT_TAKEN path), then close —
+      // CloseEvent + message ARE readable. Security refusals (auth/origin/ticket) stay
+      // `rejectUpgrade` — no socket for an unauthenticated/cross-origin peer, no leak.
+      const refuseWithReason = (id: string, code: ServerErrorCode): void => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          try {
+            ws.send(serializeServerMessage({ type: 'error', matchId: id, code }));
+          } catch {
+            /* peer vanished before the frame went out — nothing to do */
+          }
+          ws.close(1008, code); // 1008 = policy violation
+        });
+      };
       try {
         // Origin allowlist (F-06): reject a cross-site upgrade up front. A missing Origin
         // (a non-browser client) is not on any allowlist, so it is refused when configured.
@@ -270,14 +288,14 @@ export function createMultiplayerServer(
           // seat-holder skips this and reconnects as always.
           if (options.admitNewSeat && !(await accountStore.seatOf(room.id, nick))) {
             if (!(await options.admitNewSeat(room.id))) {
-              rejectUpgrade(socket, 403);
+              refuseWithReason(room.id, 'E_ENTRY_CLOSED'); // real match, closed to newcomers
               return;
             }
           }
           const seats = Object.keys(room.state.players) as PlayerId[];
           const seat = await accountStore.resolveSeat(room.id, nick, seats);
           if (!seat) {
-            rejectUpgrade(socket, 409); // every side already taken by another nick
+            refuseWithReason(room.id, 'E_MATCH_FULL'); // every side already taken by another nick
             return;
           }
           playerId = seat.playerId;
@@ -313,14 +331,14 @@ export function createMultiplayerServer(
             // is refused once the window closed; a returning seat-holder is not.
             if (options.admitNewSeat && !(await accountStore.seatOf(room.id, nick))) {
               if (!(await options.admitNewSeat(room.id))) {
-                rejectUpgrade(socket, 403);
+                refuseWithReason(room.id, 'E_ENTRY_CLOSED'); // real match, closed to newcomers
                 return;
               }
             }
             const seats = Object.keys(room.state.players) as PlayerId[];
             const seat = await accountStore.resolveSeat(room.id, nick, seats);
             if (!seat) {
-              rejectUpgrade(socket, 409); // every side already taken by another nick
+              refuseWithReason(room.id, 'E_MATCH_FULL'); // every side already taken by another nick
               return;
             }
             playerId = seat.playerId;

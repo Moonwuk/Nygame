@@ -1,5 +1,5 @@
 import type { UnitStack } from '../state/gameState';
-import type { GameData } from '../data/schemas';
+import type { GameData, UnitDef } from '../data/schemas';
 import { effectiveStats } from './loadout';
 
 /** Canonical, order-independent signature of a loadout (one instance per module
@@ -58,6 +58,44 @@ export function sumUnitStat(stacks: readonly UnitStack[], data: GameData, stat: 
     if (def) {
       total += s.count * (effectiveStats(def, s, data)[stat] ?? 0);
     }
+  }
+  return total;
+}
+
+/** Combat line cap (Bytro-style): only this many units per combatant side fire in
+ *  a volley — everyone beyond the cap only adds hull/shield to soak damage. Binds
+ *  melee attack/defense, bombardment and artillery standoff; NOT AA, cargo or the
+ *  receiving hull pools. A balance constant (like BROWNOUT) — data after shakeout. */
+export const COMBAT_UNIT_CAP = 10;
+
+/** `sumUnitStat` bounded by the combat line cap: only the `cap` strongest units
+ *  (per-unit EFFECTIVE `stat`, strongest first, ties by unit id) contribute.
+ *  Stacks the optional `eligible` filter rejects neither fire nor consume budget
+ *  (artillery standoff spends the cap on artillery units only). Deterministic:
+ *  the sort key is (stat desc, unit id asc); stacks tied on both have identical
+ *  per-unit contributions, so their relative order can't change the sum. */
+export function cappedUnitStat(
+  stacks: readonly UnitStack[],
+  data: GameData,
+  stat: string,
+  eligible?: (def: UnitDef) => boolean,
+  cap: number = COMBAT_UNIT_CAP,
+): number {
+  const rows: Array<{ per: number; unit: string; count: number }> = [];
+  for (const s of stacks) {
+    if (s.count <= 0) continue;
+    const def = data.units[s.unit];
+    if (!def || (eligible && !eligible(def))) continue;
+    rows.push({ per: effectiveStats(def, s, data)[stat] ?? 0, unit: s.unit, count: s.count });
+  }
+  rows.sort((a, b) => b.per - a.per || (a.unit < b.unit ? -1 : a.unit > b.unit ? 1 : 0));
+  let budget = cap;
+  let total = 0;
+  for (const r of rows) {
+    if (budget <= 0) break;
+    const n = Math.min(r.count, budget);
+    total += n * r.per;
+    budget -= n;
   }
   return total;
 }

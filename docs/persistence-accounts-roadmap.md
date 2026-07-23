@@ -98,8 +98,9 @@ list/filter по матчам делает full-scan по блобу.
 ```sql
 matches(id PK, data_version, seq, status, state JSONB, created_at, updated_at)
   INDEX (status)
-seats(room, nick, player_id, joined_at, PRIMARY KEY(room,nick))
+seats(room, nick, player_id, joined_at, ticket_hash, PRIMARY KEY(room,nick))
   UNIQUE INDEX (room, player_id)   -- одна сторона ≤ одной ники
+  -- ticket_hash добавлен ALTER'ом для seat-lock (REL-5)
 ```
 Оптимистическая запись по `seq` (устаревший late-save не затирает свежий).
 **Готово, когда:** ✅ матч сохраняется/восстанавливается, конкурентная запись
@@ -107,7 +108,7 @@ seats(room, nick, player_id, joined_at, PRIMARY KEY(room,nick))
 
 ### PA-1.2 · Стор квитанций (идемпотентность) `[srv][data]` ✅ — M · **(= PE-0.2 / E2)**
 **Цель:** receipts переживают рестарт (повтор действия не выполняется дважды).
-**Подзадачи:** таблица/стор `receipts(action_id PK, player_id, seq, ok, code)`;
+**Подзадачи:** таблица/стор `receipts(match_id, action_id, player_id, seq, ok, code, created_at, PRIMARY KEY(match_id, action_id))` (дедуп per-match по `action_id`; in-memory `StoredReceipt` несёт те же поля без `match_id`/`created_at`);
 интерфейс receipt-стора вместо in-memory `MatchRoom.receipts`; дедуп по `action_id`
 across рестартов; TTL/компактизация.
 **Сделано:** `ReceiptStore` (memory/Postgres) подключён к обоим хостам — на старте

@@ -71,7 +71,7 @@
 1. **Сводка сервера** — скопировать из терминала блок `── playtest summary ──`
    (joins/leaves/actions/ok/rejects/by type/by reject/match end).
 2. **JSONL-лог** — `playtest-logs/proto-<timestamp>.jsonl` (по строке на событие:
-   `join` / `leave` / `lobby` / `action` / `end`). Быстрый разбор, например:
+   `join` / `leave` / `action` / `end`; `lobby` оставлен для паритета транспорта, но при авто-старте SES-2.1 не эмитится). Быстрый разбор, например:
    ```bash
    # сколько действий каждого типа и сколько реджектов
    grep '"kind":"action"' playtest-logs/proto-*.jsonl | wc -l

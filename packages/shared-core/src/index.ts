@@ -97,8 +97,19 @@ export {
   type DiplomacyCapability,
 } from './state/diplomacy';
 export { diffState, applyDelta, type StateDelta } from './state/delta';
-export { visibleState, visibleView, identifiedNodes, isVisibleTo } from './state/visibility';
-export type { VisibleState, VisibleView, SignatureContact, SignatureSize } from './state/visibility';
+export {
+  visibleState,
+  visibleView,
+  identifiedNodes,
+  isVisibleTo,
+  BLACKOUT_MULT,
+} from './state/visibility';
+export type {
+  VisibleState,
+  VisibleView,
+  SignatureContact,
+  SignatureSize,
+} from './state/visibility';
 export { hashState } from './state/hash';
 
 // Deterministic replay (RPL-1): self-contained log + pure runner — the CI harness
@@ -251,7 +262,13 @@ export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loa
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';
 export { MS_PER_HOUR, MS_PER_DAY } from './util/time';
-export { findHealthyStack, addUnits, sumUnitStat } from './util/stacks';
+export {
+  findHealthyStack,
+  addUnits,
+  sumUnitStat,
+  cappedUnitStat,
+  COMBAT_UNIT_CAP,
+} from './util/stacks';
 export {
   effectiveStats,
   slotUsage,

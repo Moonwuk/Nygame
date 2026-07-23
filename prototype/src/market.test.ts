@@ -8,6 +8,7 @@ import {
   marketLots,
   declareWar,
   aiOrders,
+  MARKET_FEE,
 } from './game';
 import type { GameState } from '../../packages/shared-core/src/index';
 
@@ -49,11 +50,12 @@ describe('session market — two-sided order book', () => {
     s = ok(order(s, marketTake('p2', marketLots(s)[0]!.id), s.time));
     expect(s.players.p2!.resources.metal).toBe(1100); // got the goods
     expect(s.players.p2!.resources.credits).toBe(700); // paid 100 × 3
-    expect(s.players.p1!.resources.credits).toBe(1300); // seller received credits
+    // ECON-4: продавец получает net — 5% суммы сгорает (первый сток кредитов в торговле)
+    expect(s.players.p1!.resources.credits).toBe(1000 + 300 * (1 - MARKET_FEE));
     expect(marketLots(s)).toHaveLength(0);
-    // Conservation: nothing minted or lost (treasuries + escrow are constant).
+    // Conservation: товары не минтятся; кредиты — минус сгоревшая комиссия.
     expect(held(s, 'metal') + escrow(s, 'metal')).toBe(total.metal);
-    expect(held(s, 'credits') + escrow(s, 'credits')).toBe(total.credits);
+    expect(held(s, 'credits') + escrow(s, 'credits')).toBe(total.credits - 300 * MARKET_FEE);
   });
 
   it('a buy lot escrows credits, then a seller delivers goods for them', () => {
@@ -62,7 +64,8 @@ describe('session market — two-sided order book', () => {
     expect(s.players.p1!.resources.credits).toBe(900);
     s = ok(order(s, marketTake('p2', marketLots(s)[0]!.id), s.time));
     expect(s.players.p2!.resources.food).toBe(70); // p2 delivered 50 (seeded 120)
-    expect(s.players.p2!.resources.credits).toBe(1100); // got the escrowed credits
+    // ECON-4: комиссию платит получатель кредитов — тут это продавец-исполнитель
+    expect(s.players.p2!.resources.credits).toBe(1000 + 100 * (1 - MARKET_FEE));
     expect(s.players.p1!.resources.food).toBe(170); // bidder received the food
     expect(marketLots(s)).toHaveLength(0);
   });
@@ -73,6 +76,8 @@ describe('session market — two-sided order book', () => {
     s = ok(order(s, marketTake('p2', marketLots(s)[0]!.id, 40), s.time)); // take 40 of 100
     expect(marketLots(s)[0]!.amount).toBe(60); // 60 still on offer
     expect(s.players.p2!.resources.metal).toBe(1040);
+    // комиссия пропорциональна исполненной части: 40 × 2 × 5% = 4 сгорело
+    expect(s.players.p1!.resources.credits).toBe(1000 + 80 * (1 - MARKET_FEE));
   });
 
   it('cancel refunds the remaining escrow to the owner', () => {
@@ -80,7 +85,7 @@ describe('session market — two-sided order book', () => {
     s = ok(order(s, marketList('p1', 'sell', 'metal', 100, 3), 0));
     expect(s.players.p1!.resources.metal).toBe(900);
     s = ok(order(s, marketCancel('p1', marketLots(s)[0]!.id), s.time));
-    expect(s.players.p1!.resources.metal).toBe(1000); // goods returned
+    expect(s.players.p1!.resources.metal).toBe(1000); // goods returned — эскроу БЕЗ комиссии
     expect(marketLots(s)).toHaveLength(0);
   });
 
@@ -115,7 +120,9 @@ describe('session market — two-sided order book', () => {
     const atStart = aiOrders(s, 'p2').filter(
       (a) => a.type === 'market.list' && (a.payload as { side?: string }).side === 'sell',
     );
-    expect(atStart.find((a) => (a.payload as { resource?: string }).resource === 'food')).toBeUndefined();
+    expect(
+      atStart.find((a) => (a.payload as { resource?: string }).resource === 'food'),
+    ).toBeUndefined();
     // …and lists only the surplus ABOVE the reserve once it is flush.
     s.players.p2!.resources.food = 220;
     const sells = aiOrders(s, 'p2').filter(

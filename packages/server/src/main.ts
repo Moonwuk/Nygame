@@ -14,7 +14,7 @@ import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
 import { createMatchLoader } from './serverWiring';
 import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
-import { registerAuthApi } from './authApi';
+import { registerAuthApi, liveSession } from './authApi';
 import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
 import { registerAvaApi, registerAvaFeed } from './avaApi';
@@ -54,9 +54,17 @@ const bootTime = Date.now();
 // Security composition from the environment (all switches OFF by default → dev harness):
 // AUTH_JWT_SECRET (authenticated handshake + token minting + login/password accounts),
 // ALLOWED_ORIGINS (CSWSH), GATE=1 (validated action.v1 envelopes). See serverConfig.ts.
-const { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory } = configFromEnv(
-  process.env,
-);
+const {
+  auth,
+  allowedOrigins,
+  signToken,
+  signSession,
+  verifySession,
+  signReset,
+  verifyReset,
+  resetBaseUrl,
+  gateFactory,
+} = configFromEnv(process.env);
 
 const data = loadShippedData();
 // ARS-2: the starter blueprint set, validated against the shipped catalogs at boot
@@ -235,7 +243,9 @@ const identify: MatchApiDeps['identify'] = verifySession
       const header = request.headers.authorization;
       if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
       const verified = await verifySession(header.slice('Bearer '.length).trim());
-      return verified.ok ? verified.claim : null;
+      // Signature is not enough: re-check the session against the CURRENT password so a
+      // password reset revokes older sessions at the seat gate (SE-1.x).
+      return verified.ok ? liveSession(verified.claim, stores.userStore) : null;
     }
   : undefined;
 
@@ -354,6 +364,12 @@ const server = createMultiplayerServer({
         registerAuthApi(scope, {
           users: stores.userStore,
           signSession,
+          // Recovery (SE-1.x): mounts /auth/recover + /auth/reset only when RESET_BASE_URL
+          // is set. No mailer wired here → the default logs the reset link (a real SMTP/API
+          // transport is a `sendMail` the deployment injects when it has one).
+          ...(signReset && verifyReset && resetBaseUrl
+            ? { signReset, verifyReset, resetBaseUrl }
+            : {}),
           // ARS-2: every fresh account starts with the data-driven blueprint set —
           // "an empty arsenal" never exists. Idempotent end to end (deterministic
           // item ids + first-write-wins grant), so a crashed grant re-runs safely.

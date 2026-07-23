@@ -9,18 +9,13 @@ import { fleetPositionAt } from '../state/fleetPosition';
 import { distance } from '../state/route';
 import { applyDamageToSide, isHostile, ownFleet, removeIfWiped } from '../util/combat';
 import { effectiveStats } from '../util/loadout';
+import { cappedUnitStat } from '../util/stacks';
 
-/** A fleet's standoff firepower = Σ over its artillery units (count × attack).
- *  Only `artillery`-trait units fire at range; the rest are melee-only. */
+/** A fleet's standoff firepower = Σ over its artillery units (count × attack),
+ *  over at most COMBAT_UNIT_CAP guns — only `artillery`-trait units fire at range
+ *  (and only they spend the cap); the rest are melee-only. */
 function artilleryPower(fleet: Fleet, data: GameData): number {
-  let total = 0;
-  for (const s of fleet.units) {
-    const def = data.units[s.unit];
-    if (def && defHasTrait(def, 'artillery')) {
-      total += s.count * (effectiveStats(def, s, data).attack ?? 0);
-    }
-  }
-  return total;
+  return cappedUnitStat(fleet.units, data, 'attack', (def) => defHasTrait(def, 'artillery'));
 }
 
 /** A fleet's firing radius (map units) = the MAX `range` among its live artillery

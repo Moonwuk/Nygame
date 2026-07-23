@@ -52,6 +52,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # NETA2-mon: keep the per-match event JSONL (playtest-logs/) on a named volume so a
+    # container restart/redeploy doesn't wipe the record you'd read to see what went
+    # wrong. WORKDIR is /app, so the server writes /app/playtest-logs.
+    volumes:
+      - void-logs:/app/playtest-logs
     # The image bakes its own HEALTHCHECK (GET /health); compose inherits it.
     logging:
       driver: json-file
@@ -83,3 +88,4 @@ services:
 
 volumes:
   void-pgdata:
+  void-logs:

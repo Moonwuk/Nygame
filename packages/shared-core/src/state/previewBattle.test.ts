@@ -238,3 +238,30 @@ describe('damageFraction — the «ответный урон» share the Steward
     expect(hullPool(shielded, data)).toBe(100); // 2 × hp50 — shield state irrelevant
   });
 });
+
+describe('COMBAT_UNIT_CAP — only 10 units fire, the rest just soak', () => {
+  it('the 11th+ attacker adds no damage: 12 fighters finish exactly like 10, 9 lag behind', () => {
+    // 25 pacifists = 750 hull, zero return fire. Capped line = 10 × atk10 = 100/round.
+    const wall = stacks([['pacifist', 25]]);
+    const r12 = previewBattle(stacks([['fighter', 12]]), wall, data);
+    const r10 = previewBattle(stacks([['fighter', 10]]), wall, data);
+    const r9 = previewBattle(stacks([['fighter', 9]]), wall, data);
+    expect(r12.outcome).toBe('attacker');
+    expect(r12.roundsEst).toBe(Math.ceil(750 / 100)); // 8 — capped at ten guns
+    expect(r10.roundsEst).toBe(r12.roundsEst); // extras added nothing
+    expect(r9.roundsEst).toBeGreaterThan(r12.roundsEst); // a real gun less is slower
+  });
+
+  it('units beyond the cap still soak: a 12-strong wing loses a smaller hull share than a 10-strong one', () => {
+    // 1 guardian: 100 hull dies to the capped 100-dmg alpha in one round, its 20
+    // return fire lands on both wings alike — the bigger wing spreads the same
+    // absolute damage over a bigger hull pool.
+    const guard = stacks([['guardian', 1]]);
+    const w12 = previewBattle(stacks([['fighter', 12]]), guard, data);
+    const w10 = previewBattle(stacks([['fighter', 10]]), guard, data);
+    expect(w12.outcome).toBe('attacker');
+    expect(w12.roundsEst).toBe(1);
+    expect(w10.roundsEst).toBe(1);
+    expect(w12.attacker.damageFraction).toBeLessThan(w10.attacker.damageFraction);
+  });
+});

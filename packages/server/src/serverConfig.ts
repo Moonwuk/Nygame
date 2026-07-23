@@ -3,7 +3,9 @@ import { isValidActionPayload } from '@void/shared-core';
 import {
   hmacSecret,
   signJoinToken,
+  signResetToken,
   signSessionToken,
+  verifyResetToken,
   verifySessionToken,
   type JoinTokenVerifyConfig,
   type SessionTokenResult,
@@ -30,9 +32,17 @@ export interface ServerConfig {
   /** Mint a session token for an authenticated account (the /auth API). Present iff
    *  auth is configured — same secret, but a distinct `typ` + audience, so session and
    *  join tokens can never be replayed as each other. */
-  signSession?: (accountId: string, login: string) => Promise<string>;
+  signSession?: (accountId: string, login: string, pwfp: string) => Promise<string>;
   /** Verify a session token (the identity gate on /matches routes). Present iff auth. */
   verifySession?: (token: string) => Promise<SessionTokenResult>;
+  /** Mint a password-reset token (the /auth/recover endpoint). Same secret, a distinct
+   *  audience + typ, so it can't be replayed as a session/join token. Present iff auth. */
+  signReset?: (accountId: string, pwfp: string) => Promise<string>;
+  /** Verify a password-reset token (the /auth/reset endpoint). Present iff auth. */
+  verifyReset?: (token: string) => Promise<{ accountId: string; pwfp: string } | null>;
+  /** Origin the emailed reset link points at (`RESET_BASE_URL`, e.g. https://host). The
+   *  recover route only mounts when this is set — a link needs somewhere to point. */
+  resetBaseUrl?: string;
   /** Build a fresh per-match ActionGate. Present iff GATE is enabled. */
   gateFactory?: () => ActionGate;
 }
@@ -42,6 +52,8 @@ export interface ServerConfig {
 const JOIN_TOKEN_TTL_SEC = 15 * 60;
 /** Sessions are the "stay logged in" credential — days, not minutes. Env-tunable. */
 const SESSION_TTL_SEC_DEFAULT = 7 * 24 * 3600;
+/** Reset links are one-shot and time-boxed — a tight window bounds a leaked link. */
+const RESET_TOKEN_TTL_SEC = 15 * 60;
 
 export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
   const authSecret = env.AUTH_JWT_SECRET;
@@ -65,9 +77,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
   const sessionAudience = env.AUTH_SESSION_AUDIENCE ?? 'session';
   const sessionTtlSec = Number(env.SESSION_TTL_SEC ?? '') || SESSION_TTL_SEC_DEFAULT;
   const signSession = authSecret
-    ? (accountId: string, login: string): Promise<string> =>
+    ? (accountId: string, login: string, pwfp: string): Promise<string> =>
         signSessionToken(
-          { accountId, login },
+          { accountId, login, pwfp },
           { key: hmacSecret(authSecret), algorithm: 'HS256', issuer, audience: sessionAudience },
           { ttlSeconds: sessionTtlSec },
         )
@@ -82,6 +94,32 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
         })
     : undefined;
 
+  // Reset tokens: same key again, a THIRD distinct audience (+ the reset+jwt typ) so no
+  // token kind can pass for another. The recover route only mounts when RESET_BASE_URL is
+  // also set (the emailed link needs an origin to point the client at).
+  const resetAudience = env.AUTH_RESET_AUDIENCE ?? 'reset';
+  const signReset = authSecret
+    ? (accountId: string, pwfp: string): Promise<string> =>
+        signResetToken(
+          { accountId, pwfp },
+          { key: hmacSecret(authSecret), algorithm: 'HS256', issuer, audience: resetAudience },
+          { ttlSeconds: RESET_TOKEN_TTL_SEC },
+        )
+    : undefined;
+  const verifyReset = authSecret
+    ? async (token: string): Promise<{ accountId: string; pwfp: string } | null> => {
+        const r = await verifyResetToken(token, {
+          key: hmacSecret(authSecret),
+          algorithms: ['HS256'],
+          issuer,
+          audience: resetAudience,
+          maxTokenAgeSec: RESET_TOKEN_TTL_SEC,
+        });
+        return r.ok ? r.claim : null;
+      }
+    : undefined;
+  const resetBaseUrl = env.RESET_BASE_URL || undefined;
+
   const allowedOrigins = env.ALLOWED_ORIGINS
     ? env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
     : undefined;
@@ -92,5 +130,15 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
     ? (): ActionGate => new ActionGate({ payloadValidator: isValidActionPayload })
     : undefined;
 
-  return { auth, allowedOrigins, signToken, signSession, verifySession, gateFactory };
+  return {
+    auth,
+    allowedOrigins,
+    signToken,
+    signSession,
+    verifySession,
+    signReset,
+    verifyReset,
+    resetBaseUrl,
+    gateFactory,
+  };
 }

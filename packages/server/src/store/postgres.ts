@@ -16,6 +16,7 @@ import type {
   AvaSession,
   AvaSessionStore,
   AvaSide,
+  CommanderStore,
   CorpAuditEntry,
   CorpMembership,
   CorpRecord,
@@ -88,10 +89,15 @@ export async function migrate(pool: Pool): Promise<void> {
       id         text PRIMARY KEY,
       login      text NOT NULL,
       pass_hash  text NOT NULL,
+      email      text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    -- existing DBs predating recovery: add the optional recovery-email column in place
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
     -- logins are unique case-insensitively: Vasya and vasya are one account
     CREATE UNIQUE INDEX IF NOT EXISTS users_login_idx ON users (lower(login));
+    -- recovery emails are unique case-insensitively WHEN present (the reset lookup key)
+    CREATE UNIQUE INDEX IF NOT EXISTS users_email_idx ON users (lower(email)) WHERE email IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS corps (
       id         text PRIMARY KEY,
@@ -272,6 +278,17 @@ export async function migrate(pool: Pool): Promise<void> {
       pity        integer NOT NULL DEFAULT 0,
       shards      integer NOT NULL DEFAULT 0
     );
+    -- Commander progression (EC-*): lifetime XP per account, credited once per match.
+    -- commander_credits is the durable idempotency marker — a server restart that
+    -- re-observes an already-ended match inserts nothing, so XP is never double-paid.
+    CREATE TABLE IF NOT EXISTS commander_xp (
+      account_id  text PRIMARY KEY,
+      xp          bigint NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS commander_credits (
+      match_id     text PRIMARY KEY,
+      credited_at  timestamptz NOT NULL DEFAULT now()
+    );
   `);
 }
 
@@ -422,6 +439,62 @@ export class PostgresAccountStore implements AccountStore {
     );
     return Number(r.rows[0]?.n ?? 0);
   }
+
+  async seatedNicks(room: string): Promise<Array<{ playerId: PlayerId; nick: string }>> {
+    const r = await this.pool.query<{ player_id: string; nick: string }>(
+      `SELECT player_id, nick FROM seats WHERE room = $1`,
+      [room],
+    );
+    return r.rows.map((row) => ({ playerId: row.player_id as PlayerId, nick: row.nick }));
+  }
+}
+
+/** Durable commander XP (EC-*). `creditMatch` runs mark-then-increment in one
+ *  transaction; the `commander_credits` PK makes the mark the atomic idempotency
+ *  gate — a re-observed match end credits nothing a second time. */
+export class PostgresCommanderStore implements CommanderStore {
+  constructor(private readonly pool: Pool) {}
+
+  async creditMatch(
+    matchId: string,
+    rows: ReadonlyArray<{ accountId: string; xp: number }>,
+  ): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const claim = await client.query(
+        `INSERT INTO commander_credits (match_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+        [matchId],
+      );
+      if (claim.rowCount === 0) {
+        await client.query('ROLLBACK'); // already credited — a restart re-observed the end
+        return false;
+      }
+      for (const { accountId, xp } of rows) {
+        if (xp > 0)
+          await client.query(
+            `INSERT INTO commander_xp (account_id, xp) VALUES ($1, $2)
+             ON CONFLICT (account_id) DO UPDATE SET xp = commander_xp.xp + $2`,
+            [accountId, xp],
+          );
+      }
+      await client.query('COMMIT');
+      return true;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async xpOf(accountId: string): Promise<number> {
+    const r = await this.pool.query<{ xp: string }>(
+      `SELECT xp FROM commander_xp WHERE account_id = $1`,
+      [accountId],
+    );
+    return Number(r.rows[0]?.xp ?? 0);
+  }
 }
 
 export class PostgresUserStore implements UserStore {
@@ -430,30 +503,74 @@ export class PostgresUserStore implements UserStore {
   async createUser(
     login: string,
     passHash: string,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' }> {
+    email?: string,
+  ): Promise<
+    { ok: true; userId: string } | { ok: false; code: 'E_LOGIN_TAKEN' | 'E_EMAIL_TAKEN' }
+  > {
     const userId = randomUUID();
     try {
-      await this.pool.query(`INSERT INTO users (id, login, pass_hash) VALUES ($1, $2, $3)`, [
-        userId,
-        login,
-        passHash,
-      ]);
+      await this.pool.query(
+        `INSERT INTO users (id, login, pass_hash, email) VALUES ($1, $2, $3, $4)`,
+        [userId, login, passHash, email?.toLowerCase() ?? null],
+      );
       return { ok: true, userId };
-    } catch {
-      // The unique lower(login) index makes the INSERT the atomic claim; a violation
-      // (concurrent or pre-existing registration) is the one expected failure here.
-      return { ok: false, code: 'E_LOGIN_TAKEN' };
+    } catch (e) {
+      // A unique-index violation makes the INSERT the atomic claim. Which one tells the
+      // caller apart: login already taken vs. that recovery email already on another
+      // account (the constraint name is on the pg error). Any other cause is treated as a
+      // taken login too — fail-secure, no account is overwritten.
+      const constraint = (e as { constraint?: string }).constraint;
+      return { ok: false, code: constraint === 'users_email_idx' ? 'E_EMAIL_TAKEN' : 'E_LOGIN_TAKEN' };
     }
   }
 
+  // Each lookup is a FULLY-LITERAL query (no string interpolation into SQL — the WHERE
+  // clauses differ only by column, and are hardcoded here rather than passed in, so the
+  // `no-sql-string-interpolation` guard stays satisfied). All three share `rowToUser`.
   async findUser(login: string): Promise<UserRecord | null> {
-    const r = await this.pool.query<{ id: string; login: string; pass_hash: string }>(
-      `SELECT id, login, pass_hash FROM users WHERE lower(login) = lower($1)`,
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE lower(login) = lower($1)`,
       [login],
     );
-    const row = r.rows[0];
-    return row ? { userId: row.id, login: row.login, passHash: row.pass_hash } : null;
+    return rowToUser(r.rows[0]);
   }
+
+  async findUserByEmail(email: string): Promise<UserRecord | null> {
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE email IS NOT NULL AND lower(email) = lower($1)`,
+      [email],
+    );
+    return rowToUser(r.rows[0]);
+  }
+
+  async findById(userId: string): Promise<UserRecord | null> {
+    const r = await this.pool.query<UserRow>(
+      `SELECT id, login, pass_hash, email FROM users WHERE id = $1`,
+      [userId],
+    );
+    return rowToUser(r.rows[0]);
+  }
+
+  async setPassword(userId: string, passHash: string): Promise<void> {
+    await this.pool.query(`UPDATE users SET pass_hash = $2 WHERE id = $1`, [userId, passHash]);
+  }
+}
+
+interface UserRow {
+  id: string;
+  login: string;
+  pass_hash: string;
+  email: string | null;
+}
+
+function rowToUser(row: UserRow | undefined): UserRecord | null {
+  if (!row) return null;
+  return {
+    userId: row.id,
+    login: row.login,
+    passHash: row.pass_hash,
+    ...(row.email ? { email: row.email } : {}),
+  };
 }
 
 interface CorpMemberRow {

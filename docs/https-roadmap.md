@@ -27,13 +27,13 @@
 
 | Поверхность                              | TLS сейчас          | Чем обеспечен                                                                            |
 | ---------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
-| **Render** (`render.yaml`, Path D)       | ✅ `https`/`wss`    | TLS на крае Render; оверлей авто-подставляет same-origin `wss://` (`multiplayer.md:132`) |
-| **cloudflared / ngrok туннель** (Path C) | ✅ `wss`            | TLS на крае туннеля (`multiplayer.md:110-118`)                                           |
+| **Render** (`render.yaml`, Path D)       | ✅ `https`/`wss`    | TLS на крае Render; оверлей авто-подставляет same-origin `wss://` (`multiplayer.md:163`) |
+| **cloudflared / ngrok туннель** (Path C) | ✅ `wss`            | TLS на крае туннеля (`multiplayer.md:141-152`)                                           |
 | **VPS через `deploy/serve.sh`**          | ❌ `http`/`ws`      | `pnpm host` биндит `0.0.0.0:PORT` напрямую, без прокси                                   |
 | **`docker run -p 8788:8788`**            | ❌ `http`/`ws`      | `Dockerfile` слушает 8788 plain (`ENV PORT=8788`)                                        |
 | **LAN (Path A)**                         | ❌ `ws`             | прямой `ws://<LAN-IP>:8788`                                                              |
 | **APK debug (Path B)**                   | ❌ `ws` (cleartext) | `mobile/capacitor.config.json`: `androidScheme:"http"`, `cleartext:true`                 |
-| **Оверлей коннекта**                     | ✅ авто-upgrade     | на `https`-странице сам апгрейдит `ws://`→`wss://` (`multiplayer.md:193`)                |
+| **Оверлей коннекта**                     | ✅ авто-upgrade     | на `https`-странице сам апгрейдит `ws://`→`wss://` (`multiplayer.md:225`)                |
 | **Node-сервер**                          | ❌                  | Fastify на plain-HTTP (upgrade на `app.server`, `wsServer.ts`), `listen()` анонсирует `ws://` |
 
 **Вывод.** Управляемые/edge-поверхности (Render, туннель) **уже на HTTPS**. Гэп — self-hosted
@@ -126,7 +126,7 @@ Cloudflare Tunnel/mTLS край→origin (SE-1.3), чтобы origin не све
 
 ### HTTPS-4.1 · `wss` по умолчанию + блок mixed-content `[cli][sec]` ✅ (частично) / ⏳ — S → SE-7.1
 
-**Факт:** на `https`-странице оверлей авто-апгрейдит `ws://`→`wss://` (`multiplayer.md:193`).
+**Факт:** на `https`-странице оверлей авто-апгрейдит `ws://`→`wss://` (`multiplayer.md:225`).
 **Подзадачи:** закрепить тестом; явно блокировать `ws://` к не-`localhost` хосту с понятной ошибкой
 (вместо тихого mixed-content-блока браузера); CSP `connect-src 'self' wss://<домен>` (часть SE-7.1);
 плейсхолдер в `prototype/build.mjs` (инпут `#csrv`, ~1946) — `wss://…` первым.
@@ -202,7 +202,7 @@ PWA/secure-context на LAN — опциональный рецепт `mkcert` (
 - `packages/server/src/wsServer.ts` — Fastify слушает plain-HTTP (upgrade на `app.server`);
   `baseUrl()` host-header; анонс `ws://` в `listen()`; Origin-allowlist на upgrade уже есть
   (`rejectUpgrade` 403 + `ALLOWED_ORIGINS`). → HTTPS-1.1 (остаток)/1.2, HTTPS-4.1.
-- `Dockerfile:24` `ENV HOST=0.0.0.0`, `EXPOSE 8788` plain → за прокси (HTTPS-2.1).
+- `Dockerfile:71-73` `ENV HOST=0.0.0.0`, `EXPOSE 8788` plain → за прокси (HTTPS-2.1).
 - `deploy/serve.sh` — бинд `0.0.0.0` напрямую → `127.0.0.1` + прокси (HTTPS-2.1); + новый `deploy/Caddyfile`.
 - `render.yaml` — добавить комментарий про edge-TLS, health по https (HTTPS-3.1).
 - `mobile/capacitor.config.json:6-7` — `androidScheme:"http"`+`cleartext:true` → release без cleartext (HTTPS-5.1).

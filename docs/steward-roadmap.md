@@ -45,7 +45,7 @@
   учёный **«Куратор»** (`overseer`, ветка `command`). Учёный выбирается **до старта** в «Совете
   учёных» (совет из 2; консекрация при старте, GDD §5.2). `steward.delegate` отклоняет
   `E_STEWARD_LOCKED`, пока техно не изучено.
-- **Поза `defend`** (`STEWARD_POSTURES = ['defend']`): `aiOrders(state, seat, 'defend')` **пропускает
+- **Поза `defend`** (`STEWARD_POSTURES = ['defend', 'active_defend']`): `aiOrders(state, seat, 'defend')` **пропускает
   наступательную развёртку** (держит флоты дома), но строит / подкрепляет / торгует; отражение
   атак — автоматом в бою. netserver `runServerAI` **и** локальный `runAI` играют делегированное
   место по позе (не только пустые кресла).

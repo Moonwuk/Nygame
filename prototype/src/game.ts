@@ -441,7 +441,9 @@ export const data: GameData = parseGameData({
       stats: { attack: 16, defense: 14, speed: 40, hp: 60, cargoCapacity: 5 },
       line: 'front',
       signature: 4, // big warship — broadcasts
-      cost: { metal: 60, credits: 20 },
+      // ECON-7: modern warships need microelectronics — the hi-tech good gates a
+      // real fleet, so you must run fabricators to keep building (Bytro model).
+      cost: { metal: 60, credits: 20, microelectronics: 3 },
       buildTimeHours: 3,
       upkeep: { credits: 4 },
       slots: { weapon: 1, defense: 1, utility: 1 }, // the balanced warship: one of each bay
@@ -454,7 +456,7 @@ export const data: GameData = parseGameData({
       stats: { attack: 30, defense: 6, speed: 30, hp: 40, range: 240 },
       traits: ['artillery'],
       signature: 5, // huge siege platform — loudest
-      cost: { metal: 90, credits: 40 },
+      cost: { metal: 90, credits: 40, microelectronics: 4 }, // ECON-7: guided munitions
       buildTimeHours: 5,
       upkeep: { credits: 6 },
       slots: { weapon: 1, utility: 1 }, // a gun bay + a utility bay — a glass cannon
@@ -916,18 +918,72 @@ export const data: GameData = parseGameData({
     },
   },
   planetTypes: {
-    terran: { name: 'Terran', productionBonus: 0, defenseBonus: 0.1 },
-    barren: { name: 'Barren', productionBonus: -0.25, defenseBonus: 0 },
-    oceanic: { name: 'Oceanic', productionBonus: 0.15, defenseBonus: 0.05 },
-    volcanic: { name: 'Volcanic', productionBonus: 0.25, defenseBonus: -0.05 },
-    gas_giant: { name: 'Gas Giant', productionBonus: 0.35, defenseBonus: -0.15 },
-    crystalline: { name: 'Crystalline', productionBonus: 0.45, defenseBonus: -0.25 },
-    fortress_world: { name: 'Fortress World', productionBonus: -0.15, defenseBonus: 0.4 },
-    relic_world: { name: 'Relic World', productionBonus: 0.05, defenseBonus: 0 },
-    irradiated: { name: 'Irradiated', productionBonus: 0.2, defenseBonus: 0.15 },
-    ringworld: { name: 'Ringworld', productionBonus: 0.3, defenseBonus: 0.1 },
+    // ECON-7: каждый мир пассивно даёт 4 базовых ресурса (в час) с перекосом по типу
+    // (Bytro-модель провинций). Микроэлектроники в baseOutput НЕТ — она только из
+    // фабрикатора. productionBonus остаётся общим множителем богатства мира.
+    terran: {
+      name: 'Terran',
+      baseOutput: { food: 5, credits: 6, energy: 3, metal: 4 },
+      productionBonus: 0,
+      defenseBonus: 0.1,
+    },
+    barren: {
+      name: 'Barren',
+      baseOutput: { metal: 7, credits: 3, energy: 2, food: 1 },
+      productionBonus: -0.25,
+      defenseBonus: 0,
+    },
+    oceanic: {
+      name: 'Oceanic',
+      baseOutput: { food: 8, credits: 5, energy: 3, metal: 3 },
+      productionBonus: 0.15,
+      defenseBonus: 0.05,
+    },
+    volcanic: {
+      name: 'Volcanic',
+      baseOutput: { metal: 11, energy: 5, credits: 4, food: 1 },
+      productionBonus: 0.25,
+      defenseBonus: -0.05,
+    },
+    gas_giant: {
+      name: 'Gas Giant',
+      baseOutput: { energy: 8, credits: 6, metal: 4, food: 1 },
+      productionBonus: 0.35,
+      defenseBonus: -0.15,
+    },
+    crystalline: {
+      name: 'Crystalline',
+      baseOutput: { metal: 13, energy: 5, credits: 6, food: 1 },
+      productionBonus: 0.45,
+      defenseBonus: -0.25,
+    },
+    fortress_world: {
+      name: 'Fortress World',
+      baseOutput: { metal: 4, credits: 5, energy: 3, food: 2 },
+      productionBonus: -0.15,
+      defenseBonus: 0.4,
+    },
+    relic_world: {
+      name: 'Relic World',
+      baseOutput: { credits: 12, energy: 4, metal: 4, food: 3 },
+      productionBonus: 0.05,
+      defenseBonus: 0,
+    },
+    irradiated: {
+      name: 'Irradiated',
+      baseOutput: { energy: 6, metal: 8, credits: 4, food: 1 },
+      productionBonus: 0.2,
+      defenseBonus: 0.15,
+    },
+    ringworld: {
+      name: 'Ringworld',
+      baseOutput: { food: 5, credits: 8, energy: 5, metal: 6 },
+      productionBonus: 0.3,
+      defenseBonus: 0.1,
+    },
     dead_world: {
       name: 'Dead World',
+      baseOutput: { metal: 10, credits: 1, energy: 1 },
       productionBonus: 0,
       productionByResource: { metal: 0.3 },
       defenseBonus: 0,
@@ -1483,7 +1539,10 @@ function mergeStacks(base: UnitStack[], add: UnitStack[]): UnitStack[] {
 // fleet starved the economy. Now every inhabited world of yours levies a flat
 // civic tax; a Tax Office (one-time, no levels) boosts that world's whole credit
 // take. Hooks `economy.production`, so the core economy stays generic.
-export const TAX_PER_HOUR = 100; // base credits/h from the FIRST inhabited owned world
+// ECON-7: civic tax slashed from 100 → 20. Worlds now make credits PASSIVELY via
+// planetType.baseOutput (relic ~12/h, terran ~6/h …), so the flat capital tax is a
+// modest bonus, not the firehose that flooded the treasury (playtest §4a: +2.8k/day).
+export const TAX_PER_HOUR = 20; // base credits/h from the FIRST inhabited owned world
 export const TAX_OFFICE_BONUS = 0.25; // Tax Office: +25% to that world's credit income
 export const TAX_DIMINISH = 0.06; // civic tax per world tapers as an empire grows
 
@@ -1529,6 +1588,25 @@ export const taxModule: GameModule = {
         out.credits *= 1 + TAX_OFFICE_BONUS;
       }
       return out;
+    });
+  },
+};
+
+// --- ECON-1: голодная армия ---------------------------------------------------
+// Food in the owner's `arrears` (the economy module's unpaid-bill marker) → their
+// GROUND damage ×HUNGER_MULT. Ships run on credits, not rations — the orbital
+// phase is untouched. Pure read of state the economy already settles spanwise, so
+// determinism/replays are intact; the multiplier is a one-line balance knob.
+export const HUNGER_MULT = 0.75;
+export const hungerModule: GameModule = {
+  id: 'hunger',
+  version: '0.1.0',
+  setup(api) {
+    api.hook<number>('combat.damage', (damage, args, h) => {
+      const a = args as { phase?: string; attacker?: string | null };
+      if (a.phase !== 'ground' || typeof a.attacker !== 'string') return damage;
+      const striker = h.state.players[a.attacker];
+      return striker?.arrears?.includes('food') ? damage * HUNGER_MULT : damage;
     });
   },
 };
@@ -2342,6 +2420,31 @@ export function newGame(setup: SetupConfig = DEFAULT_SETUP): GameState {
   } as GameState;
 }
 
+/** ECON-6: почасовой экономический срез для пайплайна наблюдений хоста — казна /
+ *  чистый приток / arrears per player на мировом времени `state.time`. Чистая
+ *  функция состояния: кривые пишет JSONL хоста, headline-счётчики — агрегатор. */
+export function economySnapshot(state: GameState): {
+  kind: 'economy';
+  atTime: number;
+  players: Record<
+    string,
+    { resources: Record<string, number>; netPerHour: Record<string, number>; arrears: string[] }
+  >;
+} {
+  const players: Record<
+    string,
+    { resources: Record<string, number>; netPerHour: Record<string, number>; arrears: string[] }
+  > = {};
+  for (const [pid, pl] of Object.entries(state.players)) {
+    players[pid] = {
+      resources: { ...pl.resources },
+      netPerHour: netIncome(state, pid),
+      arrears: [...(pl.arrears ?? [])],
+    };
+  }
+  return { kind: 'economy', atTime: state.time, players };
+}
+
 /** Net per-hour income for a player: production from owned, un-bombarded worlds
  *  (brownout-dimmed like the core) minus unit/garrison AND building upkeep
  *  (daily ÷ 24). Drives the HUD's `+/h` deltas. */
@@ -2367,6 +2470,16 @@ export function netIncome(state: GameState, playerId: string): Record<string, nu
     // Credits are settled per-planet so the civic tax + Tax Office boost mirror the
     // core's economy.production pipeline (taxModule); metal accrues straight to `out`.
     let credits = 0;
+    // ECON-7: passive per-type base output, mirrored from the core's planetTypeModule
+    // (scaled by the world's richness incl. productionByResource; base credits routed
+    // through the tax accumulator so a Tax Office boosts them too).
+    const ptDef = p.planetType ? data.planetTypes[p.planetType] : undefined;
+    const ptByRes = ptDef?.productionByResource ?? {};
+    for (const res of Object.keys(ptDef?.baseOutput ?? {})) {
+      const v = (ptDef!.baseOutput[res] ?? 0) * mult * (1 + (ptByRes[res] ?? 0));
+      if (res === 'credits') credits += v;
+      else out[res] = (out[res] ?? 0) + v;
+    }
     for (const b of p.buildings) {
       const def = data.buildings[b.type];
       if (!def) continue;
@@ -2618,6 +2731,11 @@ export const botDiplomacyModule: GameModule = {
 // that embargoes you (soured favour, botEmbargoes) refuses to let you take its lots —
 // this is the diplomacy embargo tier finally biting.
 export const MARKET_GOODS = ['metal', 'food', 'energy', 'microelectronics']; // credits = currency
+// ECON-4: рыночная комиссия — доля суммы сделки СГОРАЕТ (не переходит никому):
+// первый настоящий сток кредитов в торговле + анти-спам книги. Платит получатель
+// кредитов, симметрично для обеих сторон книги; эскроу-возврат при отмене без
+// комиссии.
+export const MARKET_FEE = 0.05;
 export type MarketSide = 'sell' | 'buy';
 export interface MarketLot {
   id: string;
@@ -2702,15 +2820,17 @@ export const marketModule: GameModule = {
       const qty = Math.min(lot.amount, Math.floor(p.amount ?? lot.amount));
       if (!(qty > 0)) return h.reject('E_BAD_PAYLOAD');
       const credits = qty * lot.price;
+      // ECON-4: получатель кредитов получает net, комиссия сгорает.
+      const net = credits * (1 - MARKET_FEE);
       if (lot.side === 'sell') {
         if (!canAfford(taker.resources, { credits })) return h.reject('E_NO_FUNDS');
         payCost(taker.resources, { credits }); // taker buys the goods
         creditTreasury(h.state, action.playerId, lot.resource, qty);
-        creditTreasury(h.state, lot.owner, 'credits', credits);
+        creditTreasury(h.state, lot.owner, 'credits', net);
       } else {
         if (!canAfford(taker.resources, { [lot.resource]: qty })) return h.reject('E_NO_FUNDS');
         payCost(taker.resources, { [lot.resource]: qty }); // taker sells the goods
-        creditTreasury(h.state, action.playerId, 'credits', credits); // from the escrow
+        creditTreasury(h.state, action.playerId, 'credits', net); // from the escrow
         creditTreasury(h.state, lot.owner, lot.resource, qty);
       }
       lot.amount -= qty;
@@ -2723,6 +2843,7 @@ export const marketModule: GameModule = {
         resource: lot.resource,
         amount: qty,
         price: lot.price,
+        fee: credits - net,
       });
     });
 
@@ -3563,11 +3684,116 @@ export const forcedMarchModule: GameModule = {
   },
 };
 
+// --- платное мгновенное восстановление («золотой ремонт») ---------------------
+// Донатная кнопка Bytro-стиля, ненавязчивая: маленький чип в карточке флота.
+// Кредиты играют роль премиум-валюты до монетизации (как шпионаж 150c). Мгновенный
+// топ-ап КОРПУСА всех стеков (корабли + десант) где угодно — кроме боя; щит регенит
+// бесплатно сам, медленный портовый ремонт (shipRepair) и план ECON-3 (metal в
+// доке) остаются как были.
+export const INSTANT_REPAIR_CREDITS_PER_HP = 1;
+
+/** Недостающий корпус флота (корабли + десант), по эффективному hp с фитингами. */
+export function missingHull(f: Fleet, data: GameData): number {
+  let missing = 0;
+  for (const stack of [...f.units, ...(f.landing ?? [])]) {
+    if (stack.count <= 0 || stack.hp === undefined) continue;
+    const def = data.units[stack.unit];
+    if (!def) continue;
+    const per = effectiveStats(def, stack, data).hp ?? 0;
+    const full = stack.count * per;
+    missing += Math.max(0, full - Math.min(stack.hp, full));
+  }
+  return missing;
+}
+
+/** Цена мгновенного ремонта в кредитах (0 — чинить нечего) — одна формула на
+ *  сервер и кнопку клиента, чтобы ценник в UI не расходился с гейтом. */
+export function instantRepairCost(f: Fleet, data: GameData): number {
+  return Math.ceil(missingHull(f, data) * INSTANT_REPAIR_CREDITS_PER_HP);
+}
+
+export const instantRepairModule: GameModule = {
+  id: 'instant-repair',
+  version: '0.1.0',
+  setup(api) {
+    api.onAction('fleet.instantRepair', (action, h) => {
+      const p = action.payload as { fleetId?: unknown };
+      if (typeof p?.fleetId !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const f = h.state.fleets[p.fleetId];
+      // Absent OR not-yours → one opaque code (A06 — no fleet-existence probing).
+      if (!f || f.owner !== action.playerId) return h.reject('E_NO_FLEET');
+      if (f.battleId) return h.reject('E_IN_BATTLE');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      const hull = missingHull(f, h.ctx.data);
+      if (hull <= 0) return h.reject('E_NOTHING_TO_REPAIR');
+      const credits = Math.ceil(hull * INSTANT_REPAIR_CREDITS_PER_HP);
+      if (!canAfford(player.resources, { credits })) return h.reject('E_NO_FUNDS');
+      payCost(player.resources, { credits });
+      for (const stack of [...f.units, ...(f.landing ?? [])]) delete stack.hp;
+      h.emit('fleet.instantRepaired', { fleetId: f.id, owner: f.owner, credits, hull });
+    });
+  },
+};
+
+// --- ECON-3: экспресс-ремонт за металл ----------------------------------------
+// Сток металла в духе Bytro: экспресс-ремонт за METAL у своего дока — дешёвая
+// альтернатива платному мгновенному ремонту (за кредиты) и быстрая — бесплатному
+// портовому (shipRepair 5–10%/ч остаётся). Металл тратится на латание корпуса,
+// а не копится мёртвым грузом.
+export const REPAIR_HP_PER_METAL = 2;
+
+/** Цена экспресс-ремонта в metal (0 — чинить нечего) — одна формула на сервер и
+ *  кнопку клиента. */
+export function dockRepairCost(f: Fleet, data: GameData): number {
+  return Math.ceil(missingHull(f, data) / REPAIR_HP_PER_METAL);
+}
+
+/** Есть ли у флота свой док: стоит (не летит) над СВОИМ миром с живым зданием,
+ *  дающим `shipRepair > 0` (spaceport/shipyard). Та же проверка — в кнопке UI. */
+export function fleetAtOwnDock(f: Fleet, state: GameState, data: GameData): boolean {
+  if (f.movement || !f.location) return false;
+  const planet = state.planets[f.location];
+  if (!planet || planet.owner !== f.owner) return false;
+  return planet.buildings.some((b) => {
+    if (b.hp <= 0) return false;
+    const def = data.buildings[b.type];
+    return !!def && buildingLevel(def, b.level).shipRepair > 0;
+  });
+}
+
+export const econScrewsModule: GameModule = {
+  id: 'econ-screws',
+  version: '0.1.0',
+  setup(api) {
+    // Экспресс-ремонт: мгновенный топ-ап корпуса за metal у своего дока.
+    api.onAction('fleet.repair', (action, h) => {
+      const p = action.payload as { fleetId?: unknown };
+      if (typeof p?.fleetId !== 'string') return h.reject('E_BAD_PAYLOAD');
+      const f = h.state.fleets[p.fleetId];
+      // Absent OR not-yours → one opaque code (A06 — no fleet-existence probing).
+      if (!f || f.owner !== action.playerId) return h.reject('E_NO_FLEET');
+      if (f.battleId) return h.reject('E_IN_BATTLE');
+      if (!fleetAtOwnDock(f, h.state, h.ctx.data)) return h.reject('E_NO_DOCK');
+      const player = h.state.players[action.playerId];
+      if (!player) return h.reject('E_NO_PLAYER');
+      const hull = missingHull(f, h.ctx.data);
+      if (hull <= 0) return h.reject('E_NOTHING_TO_REPAIR');
+      const metal = Math.ceil(hull / REPAIR_HP_PER_METAL);
+      if (!canAfford(player.resources, { metal })) return h.reject('E_NO_FUNDS');
+      payCost(player.resources, { metal });
+      for (const stack of [...f.units, ...(f.landing ?? [])]) delete stack.hp;
+      h.emit('fleet.repaired', { fleetId: f.id, owner: f.owner, metal, hull });
+    });
+  },
+};
+
 export const MODULES: GameModule[] = [
   sectorModule,
   planetTypeModule,
   taxModule, // civic tax on inhabited worlds (hooks economy.production, after planetType)
   factionModule, // H3: чисто пассивные бонусы дома (production / fleet.speed / combat.damage)
+  hungerModule, // ECON-1: food в arrears → наземный урон ×0.75 (корабли едят кредиты)
   economyModule,
   movementModule,
   heroModule, // projection hero: fleet combat aura (+5%) + death/respawn
@@ -3595,6 +3821,8 @@ export const MODULES: GameModule[] = [
   capitalModule, // designatable capital (hero respawn / module re-fit anchor)
   standingOrdersModule, // CC-2/CC-4 standing orders (auto-storm / дежурный вылет), server-driven
   forcedMarchModule, // BOOST-1 форс-марш: +50% скорости за 5% max-HP износа в час хода
+  instantRepairModule, // платный мгновенный ремонт корпуса (кредиты как премиум-валюта)
+  econScrewsModule, // ECON-3: экспресс-ремонт корпуса за metal у своего дока
   effectsModule, // EFX-1: интерпретатор data.events (trigger→effect); инертен, пока events: {} пуст
 ];
 
@@ -4227,6 +4455,12 @@ export const orderChain = (playerId: string, fleetId: string, steps: ChainStep[]
 /** BOOST-1: toggle форс-марш on an owned fleet (+50% speed, hull wear in transit). */
 export const forceMarchFleet = (playerId: string, fleetId: string, on: boolean) =>
   act(playerId, 'fleet.forcemarch', { fleetId, on });
+/** Платный мгновенный ремонт корпуса всего флота (цена — `instantRepairCost`). */
+export const instantRepairFleet = (playerId: string, fleetId: string) =>
+  act(playerId, 'fleet.instantRepair', { fleetId });
+/** ECON-3а: экспресс-ремонт за metal у своего дока (цена — `dockRepairCost`). */
+export const repairFleet = (playerId: string, fleetId: string) =>
+  act(playerId, 'fleet.repair', { fleetId });
 /** The chain driver's runtime stamp: consumed head / armed wait deadline. */
 export const chainStamp = (
   playerId: string,
@@ -4896,7 +5130,10 @@ export function aiOrders(
       const cost = data.buildings[b]?.cost ?? {};
       return Object.keys(cost).every((r) => (pl.resources[r] ?? 0) >= (cost[r] ?? 0) + 60);
     };
-    for (const b of ['refinery', 'tax_office'] as const) {
+    // ECON-7: fabricator joins the chain — microelectronics gates warships now
+    // (cruiser/siege cost micro), so a bot without a fab eventually can't build a
+    // fleet. Built once the credit/tax engine is up; keeps micro produced AND spent.
+    for (const b of ['refinery', 'tax_office', 'fabricator'] as const) {
       if (has(b)) continue;
       if (affordable(b) && !pendingBuild(base.id, b)) out.push(buildBuilding(ai, base.id, b));
       break; // one link at a time — wait out the current one either way
@@ -4915,7 +5152,8 @@ export function aiOrders(
     if (
       aiFleets < (warFooting ? 8 : 4) &&
       (pl.resources.metal ?? 0) > 220 &&
-      (pl.resources.credits ?? 0) > 120
+      (pl.resources.credits ?? 0) > 120 &&
+      (pl.resources.microelectronics ?? 0) >= 3 // ECON-7: warships need the hi-tech good
     ) {
       out.push(buildUnit(ai, base.id, 'cruiser', 1));
     }

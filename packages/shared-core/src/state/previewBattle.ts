@@ -1,7 +1,7 @@
 import type { UnitStack } from './gameState';
 import type { GameData } from '../data/schemas';
 import { damageUnits, MAX_COMBAT_ROUNDS, stackHull } from '../util/combat';
-import { sumUnitStat } from '../util/stacks';
+import { cappedUnitStat } from '../util/stacks';
 import { effectiveStats } from '../util/loadout';
 import { deepClone } from '../util/clone';
 
@@ -114,8 +114,10 @@ export function previewBattle(
       stalemate = true;
       break;
     }
-    const toDefender = sumUnitStat(a, data, 'attack');
-    const toAttacker = sumUnitStat(d, data, 'defense');
+    // Same line cap as the live sideDamage: only the COMBAT_UNIT_CAP strongest
+    // units fire, everyone behind them only soaks (parity is test-enforced).
+    const toDefender = cappedUnitStat(a, data, 'attack');
+    const toAttacker = cappedUnitStat(d, data, 'defense');
     d = damageUnits(d, toDefender, data).survivors;
     a = damageUnits(a, toAttacker, data).survivors;
   }

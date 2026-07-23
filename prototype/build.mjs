@@ -157,6 +157,14 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 #cmdbar button.on{background:rgba(53,214,230,.18);border-color:var(--cyan);}
 #cmdbar button.danger{color:var(--red);border-color:#7a2a22;}
 #cmdbar button.danger:hover:not(:disabled){background:rgba(255,90,77,.12);box-shadow:0 0 10px rgba(255,90,77,.3);}
+/* 🔥 режим огня: поповер-меню над командным рядом (одна кнопка → выбор режима) */
+#cmdbar .cmdpop{position:absolute;bottom:calc(100% + 8px);right:0;display:flex;flex-direction:column;gap:4px;
+  padding:6px;background:rgba(3,12,16,.94);border:1px solid var(--line-hi);border-radius:3px;
+  box-shadow:0 0 18px rgba(40,200,210,.18);min-width:230px;}
+#cmdbar .cmdpop button{flex-direction:row;justify-content:flex-start;gap:8px;height:auto;min-width:0;
+  padding:7px 10px;text-align:left;}
+#cmdbar .cmdpop button b{font-size:11px;letter-spacing:.5px;white-space:nowrap;}
+#cmdbar .cmdpop button span{font-size:9px;color:var(--dim);letter-spacing:.3px;text-transform:none;}
 /* panel is glued to the bottom edge — lift the fleet command bar above it (mobile overrides below) */
 body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 
@@ -169,6 +177,39 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 .ptile:active{background:rgba(53,214,230,.24);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
+/* Bytro-карточка: SVG-силуэт в тайле + мини-бар корпуса стека */
+.ptile .pt-ic .uglyph{display:block;}
+.ptile .pt-hp{width:36px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden;}
+.ptile .pt-hp i{display:block;height:100%;background:#3ad17a;}
+.ptile .pt-hp.low i{background:#ff5a4d;}
+/* шапочный ХП-бар армии + ненавязчивый золотой чип платного ремонта */
+.hullrow{display:flex;align-items:center;gap:7px;}
+.hullrow .hico{opacity:.8;flex:0 0 auto;}
+.hullrow .hbar{flex:1;height:7px;background:rgba(255,255,255,.09);border:1px solid var(--line);overflow:hidden;}
+.hullrow .hbar i{display:block;height:100%;background:#3ad17a;}
+.hullrow .hbar.low i{background:#ff5a4d;}
+.hullrow .hbar.sh i{background:#35d6e6;}
+.hullrow b{flex:0 0 auto;font-size:11px;}
+.chip-gold{flex:0 0 auto;padding:3px 8px;font-size:10px;cursor:pointer;color:#ffd76a;
+  background:rgba(255,215,106,.08);border:1px solid rgba(255,215,106,.45);border-radius:4px;white-space:nowrap;}
+.chip-gold:hover{background:rgba(255,215,106,.18);box-shadow:0 0 8px rgba(255,215,106,.25);}
+/* ECON-4: net-подпись «→ N ¤» в биде книги (получатель кредитов платит комиссию) */
+.mk-net{color:var(--dim);font-size:10px;margin-left:6px;}
+/* ECON-3а: экспресс-ремонт за металл у дока — «обычная» пара к золотому чипу */
+.chip-metal{flex:0 0 auto;padding:3px 8px;font-size:10px;cursor:pointer;color:var(--cyan);
+  background:rgba(53,214,230,.07);border:1px solid rgba(53,214,230,.45);border-radius:4px;white-space:nowrap;}
+.chip-metal:hover{background:rgba(53,214,230,.16);box-shadow:0 0 8px rgba(53,214,230,.25);}
+/* тап по имени армии (заголовок карточки → сводка) */
+.ptitle-btn{background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:left;
+  color:var(--ink);font:inherit;font-weight:700;letter-spacing:inherit;}
+.ptitle-btn:hover{color:var(--cyan);}
+/* пресеты палитры соперников в настройках */
+.set-pals{flex-wrap:wrap;}
+.set-pal{padding:5px 10px;font-size:11px;cursor:pointer;color:var(--dim);
+  background:rgba(53,214,230,.05);border:1px solid var(--line-hi);border-radius:4px;}
+.set-pal.on{color:var(--cyan);border-color:var(--cyan);background:rgba(53,214,230,.14);}
+.set-ctl input[type=color]{width:42px;height:26px;padding:0;border:1px solid var(--line-hi);
+  border-radius:4px;background:none;cursor:pointer;}
 /* mini tile (ground garrison): a nameless icon·count chip — hover/tap dossier names it */
 .ptile.mini{flex-direction:row;gap:6px;min-width:0;min-height:0;padding:7px 11px;}
 .ptile.mini .pt-c{font-size:12px;color:var(--ink);font-weight:700;}
@@ -1232,9 +1273,10 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   body.sheet-open #cmdbar{bottom:calc(50vh + 8px);}
 }
 /* connect overlay — entry screen (single-player vs join a live session) */
+/* Identity is its OWN page, not an overlay: an OPAQUE full-screen backdrop so the live
+   map/skirmish never shows through behind the welcome / registration / browser cards. */
 #connect{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
-  padding:20px;background:radial-gradient(120% 100% at 50% 30%,rgba(4,20,28,.92),rgba(1,4,10,.97));
-  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}
+  padding:20px;background:radial-gradient(125% 105% at 50% 38%,#04141c 0%,#02080e 58%,#01040a 100%);}
 #connect .cbox{width:min(520px,94vw);background:var(--glass);border:1px solid var(--line-hi);
   border-radius:12px;padding:22px 20px;box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 0 1px rgba(53,214,230,.06);}
 #connect .ctitle{display:flex;align-items:center;gap:10px;font-size:18px;letter-spacing:3px;color:var(--cyan);}
@@ -1256,6 +1298,9 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #connect .cwlogin input:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(53,214,230,.2);}
 #connect .cwlogin .cbtn{flex:0 0 auto;min-width:92px;}
 #connect .cstat{margin-top:14px;min-height:16px;font-size:12px;color:var(--amber);text-align:center;}
+#connect .clink{display:block;width:100%;margin-top:14px;padding:4px;background:none;border:none;cursor:pointer;
+  color:var(--cyan-dim);font:12px ui-monospace,monospace;letter-spacing:.5px;text-align:center;}
+#connect .clink:hover{color:var(--cyan);text-decoration:underline;}
 #connect .mtabs{display:flex;gap:6px;margin-top:16px;}
 #connect .mtab{flex:1;padding:8px 6px;border-radius:7px;border:1px solid var(--line-hi);background:transparent;
   color:var(--dim);font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;}
@@ -1980,6 +2025,7 @@ const page = (js) => `<!doctype html>
           <div class="wm">VOID DOMINION</div>
           <div class="wtag" data-i18n>Грань пустоты</div>
         </div>
+        <p class="csub" data-i18n>Добро пожаловать, командир. Флот ждёт приказа.</p>
         <button id="cnew" class="cnew" type="button" data-i18n>Новый командир</button>
         <div class="cdiv" data-i18n>войти через</div>
         <div class="csocial">
@@ -1993,6 +2039,54 @@ const page = (js) => `<!doctype html>
         <div id="cwlogin" class="cwlogin" style="display:none">
           <input id="cwnick" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="24" placeholder="позывной" data-i18n-ph>
           <button id="cwgo" class="cbtn" type="button" data-i18n>Войти</button>
+        </div>
+        <div id="cwpassrow" class="cwlogin" style="display:none">
+          <input id="cwpass" type="password" autocomplete="new-password" maxlength="128" placeholder="пароль (аккаунт создастся сам)" data-i18n-ph>
+        </div>
+      </div>
+      <div id="cregister" style="display:none">
+        <button id="crback" class="cback" type="button" data-i18n>‹ назад</button>
+        <div class="ctitle"><span class="dia"></span><b data-i18n>Новый командир</b></div>
+        <p class="csub" data-i18n>Придумай позывной и пароль — так создаётся аккаунт.</p>
+        <label class="cfield"><span data-i18n>Имя командира</span>
+          <input id="crnick" type="text" autocapitalize="off" autocomplete="username" spellcheck="false" maxlength="24" placeholder="позывной" data-i18n-ph>
+        </label>
+        <label class="cfield"><span data-i18n>Почта (для восстановления)</span>
+          <input id="crmail" type="email" autocapitalize="off" autocomplete="email" spellcheck="false" maxlength="254" placeholder="you@mail.com">
+        </label>
+        <label class="cfield"><span data-i18n>Пароль</span>
+          <input id="crpass" type="password" autocomplete="new-password" maxlength="128" placeholder="минимум 8 символов" data-i18n-ph>
+        </label>
+        <label class="cfield"><span data-i18n>Повтор пароля</span>
+          <input id="crpass2" type="password" autocomplete="new-password" maxlength="128" placeholder="ещё раз" data-i18n-ph>
+        </label>
+        <div class="crow">
+          <button id="crgo" class="cbtn" type="button" data-i18n>Создать командира</button>
+        </div>
+        <button id="crrecover" class="clink" type="button" data-i18n>Восстановить доступ</button>
+      </div>
+      <div id="crecover" style="display:none">
+        <button id="crecback" class="cback" type="button" data-i18n>‹ назад</button>
+        <div class="ctitle"><span class="dia"></span><b data-i18n>Восстановление доступа</b></div>
+        <p class="csub" data-i18n>Укажи почту аккаунта — пришлём ссылку для сброса пароля.</p>
+        <label class="cfield"><span data-i18n>Почта</span>
+          <input id="crecmail" type="email" autocapitalize="off" autocomplete="email" spellcheck="false" maxlength="254" placeholder="you@mail.com">
+        </label>
+        <div class="crow">
+          <button id="crecgo" class="cbtn" type="button" data-i18n>Отправить ссылку</button>
+        </div>
+      </div>
+      <div id="creset" style="display:none">
+        <div class="ctitle"><span class="dia"></span><b data-i18n>Новый пароль</b></div>
+        <p class="csub" data-i18n>Придумай новый пароль для входа.</p>
+        <label class="cfield"><span data-i18n>Пароль</span>
+          <input id="cresetpass" type="password" autocomplete="new-password" maxlength="128" placeholder="минимум 8 символов" data-i18n-ph>
+        </label>
+        <label class="cfield"><span data-i18n>Повтор пароля</span>
+          <input id="cresetpass2" type="password" autocomplete="new-password" maxlength="128" placeholder="ещё раз" data-i18n-ph>
+        </label>
+        <div class="crow">
+          <button id="cresetgo" class="cbtn" type="button" data-i18n>Сменить пароль</button>
         </div>
       </div>
       <div id="cbrowse" style="display:none">

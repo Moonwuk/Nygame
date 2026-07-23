@@ -53,6 +53,8 @@ const CLIENT_ACTION_TYPES = [
   'order.scramble',
   'order.chain',
   'fleet.forcemarch',
+  'fleet.instantRepair',
+  'fleet.repair',
 ];
 
 describe('SV-1.2 · action payload schemas', () => {
@@ -122,6 +124,8 @@ describe('SV-1.2 · action payload schemas', () => {
       ['order.auto', { fleetId: 'f1', on: true }],
       ['order.scramble', { fleetId: 'f1', on: false }],
       ['fleet.forcemarch', { fleetId: 'f1', on: true }],
+      ['fleet.instantRepair', { fleetId: 'f1' }],
+      ['fleet.repair', { fleetId: 'f1' }],
       ['order.chain', { fleetId: 'f1', steps: [] }], // [] = cancel the plan
       [
         'order.chain',
@@ -155,6 +159,7 @@ describe('SV-1.2 · action payload schemas', () => {
       ['fleet.barrage', { fleetId: 'f1', targetId: 7 }], // target neither an id nor null
       ['fleet.barrageMode', { fleetId: 'f1', mode: 'berserk' }], // not a known ROE mode
       ['fleet.retreat', {}], // missing fleetId
+      ['fleet.repair', {}], // missing fleetId
       ['order.chain', { fleetId: 'f1' }], // missing steps
       ['order.chain', { fleetId: 'f1', steps: [{ kind: 'warp' }] }], // unknown step kind
       ['order.chain', { fleetId: 'f1', steps: [{ kind: 'wait', hours: 0 }] }], // no zero waits
@@ -192,7 +197,9 @@ describe('SV-1.2 · action payload schemas', () => {
       ['espionage.spy', { target: 'p2', kind: 'pings' }], // not a stealable kind (yet)
     ];
     for (const [type, payload] of bad) {
-      expect(isValidActionPayload(type, payload), `${type}: ${JSON.stringify(payload)}`).toBe(false);
+      expect(isValidActionPayload(type, payload), `${type}: ${JSON.stringify(payload)}`).toBe(
+        false,
+      );
     }
   });
 
