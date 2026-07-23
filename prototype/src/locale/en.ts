@@ -565,6 +565,15 @@ export const en: Record<string, string> = {
   Эскадрилья: 'Flight',
   Эскадра: 'Squadron',
   Армада: 'Armada',
+  // Карточка статистики мира (тап по имени планеты)
+  'Сводка мира': 'World summary',
+  Обозначение: 'Designation',
+  'Вид / тип / местность': 'Kind / type / terrain',
+  'Базовый выход/ч': 'Base output/h',
+  '— перекос типа мира': '— world-type lean',
+  'произв.': 'prod.',
+  'Бонусы типа': 'Type bonuses',
+  эскадрилий: 'squadrons',
   // 🔥 режим огня артиллерии — кнопка в командном ряду + пункты меню
   'Режим огня': 'Fire mode',
   'не стреляет': 'holds fire',

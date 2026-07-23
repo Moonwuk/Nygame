@@ -117,6 +117,8 @@ import {
   unitSizeClass,
 } from './unitGlyphs';
 import { fleetCallsign, fleetKindKey } from './fleetName';
+import { planetName } from './planetName';
+import { provinceScore } from '../../packages/shared-core/src/state/sectorKind';
 import { OFFICERS, GROUND_ROSTER } from './groundcombat';
 import { DEFAULT_HEROES, type HeroLoadout } from './heroes';
 import { DEFAULT_SHIP_LOADOUTS, type ShipLoadout } from './ships';
@@ -715,6 +717,9 @@ let planetTab: PlanetTab = 'buildings';
 // Bytro-карточка: тап по имени флота открывает сводку армии — какой флот сейчас
 // в режиме сводки (другой флот в панели → обычная карточка сама собой).
 let fleetInfoFor: string | null = null;
+// Тап по имени МИРА открывает карточку статистики планеты (какой мир сейчас в
+// режиме сводки; другой мир в панели → обычная карточка сама собой).
+let planetInfoFor: string | null = null;
 let mobTplIdx = 0; // which division template the mobilisation panel is assembling
 const buildQueues: Record<string, PlanetBuildQueue> = {};
 const logLines: string[] = [];
@@ -5540,6 +5545,72 @@ function unknownPlanetHtml(p: Planet): string {
 }
 
 /** Side-panel: a known world — ownership header + ground/ships/squadron/buildings tabs. */
+/** Карточка статистики мира (тап по имени планеты) — полная сводка: обозначение,
+ *  владелец, вид/тип/местность, пассивный выход по ресурсам (ECON-7 перекос),
+ *  бонусы типа, гарнизон, постройки, очки победы, флоты на орбите. */
+function planetSummaryHtml(p: Planet): string {
+  const rows: string[] = [];
+  const pt = p.planetType ? data.planetTypes[p.planetType] : undefined;
+  const ptName = tData(pt?.name ?? p.planetType ?? '—');
+  const kindName = tData(SECTOR_TYPES[SECTOR_OF[p.id]]?.name ?? SECTOR_OF[p.id] ?? '—');
+  const sec = tData(data.sectors[p.terrain ?? '']?.name ?? p.terrain ?? '—');
+  const ground = p.garrison.filter((st) => isGround(st.unit));
+  const ships = p.garrison.filter((st) => isShip(st.unit));
+  const wing = p.garrison.filter((st) => isSquadron(st.unit));
+  rows.push(`<div class="row">${t('Обозначение')}: <b>${esc(p.id)}</b></div>`);
+  rows.push(
+    `<div class="row">${t('Владелец')}: <b style="color:${ownerColor(p.owner)}">${p.owner ? esc(NAME[p.owner] ?? p.owner) : t('Нейтрал')}</b></div>`,
+  );
+  rows.push(
+    `<div class="row">${t('Вид / тип / местность')}: <b>${esc(kindName)}</b> · ${esc(ptName)} · ${esc(sec)}</div>`,
+  );
+  // ECON-7: пассивный базовый выход мира по ресурсам — перекос типа планеты.
+  const base = (pt?.baseOutput ?? {}) as Record<string, number>;
+  const baseStr = ['metal', 'credits', 'food', 'energy']
+    .filter((r) => (base[r] ?? 0) > 0)
+    .map((r) => `${TECH_CUR[r] ?? tData(r)} ${base[r]}`)
+    .join(' · ');
+  if (baseStr)
+    rows.push(
+      `<div class="row">${t('Базовый выход/ч')}: <b>${baseStr}</b> <span class="dim">${t('— перекос типа мира')}</span></div>`,
+    );
+  const pctf = (n: number) => (n >= 0 ? '+' : '') + Math.round(n * 100) + '%';
+  const bonus: string[] = [];
+  if (pt && pt.productionBonus !== 0) bonus.push(`${t('произв.')} ${pctf(pt.productionBonus)}`);
+  if (pt && (pt.defenseBonus ?? 0) !== 0)
+    bonus.push(`${t('оборона')} ${pctf(pt.defenseBonus ?? 0)}`);
+  if (bonus.length)
+    rows.push(`<div class="row">${t('Бонусы типа')}: <b>${bonus.join(' · ')}</b></div>`);
+  rows.push(
+    `<div class="row">⚔ ${t('Гарнизон')}: <b>${sumUnits(ground)}</b> ${t('наземных')} · <b>${sumUnits(ships)}</b> ${t('кораблей')}${sumUnits(wing) ? ` · <b>${sumUnits(wing)}</b> ${t('эскадрилий')}` : ''}</div>`,
+  );
+  const blist =
+    p.buildings
+      .map(
+        (b) =>
+          `${BUILD_ICON[b.type] ?? '▣'} ${buildingName(b.type)}${b.level > 1 ? ' L' + b.level : ''}`,
+      )
+      .join(', ') || t('нет');
+  rows.push(`<div class="row">▣ ${t('Постройки')} (${p.buildings.length}): <b>${blist}</b></div>`);
+  rows.push(
+    `<div class="row">✦ ${t('Очки победы')}: <b>${Math.round(provinceScore(data, p))}</b></div>`,
+  );
+  const here = Object.values(s.fleets).filter((f) => f.location === p.id);
+  if (here.length) {
+    const fShips = here.reduce((n, f) => n + sumUnits(f.units), 0);
+    rows.push(
+      `<div class="row">▲ ${t('Флоты на орбите')}: <b>${here.length}</b> <span class="dim">(${t('{n} кораблей', { n: fShips })})</span></div>`,
+    );
+  }
+  if (p.owner === ME && capitalOf(s, ME) === p.id)
+    rows.push(`<div class="row"><b style="color:var(--grn)">★ ${t('Столица')}</b></div>`);
+  return (
+    `<div class="sec">${t('Сводка мира')}</div>` +
+    rows.join('') +
+    `<div class="row">${btn('planetinfo', '', t('‹ Назад к карточке'), true)}</div>`
+  );
+}
+
 function planetPanelHtml(p: Planet): string {
   const mine = p.owner === ME;
   const sec = tData(data.sectors[p.terrain ?? '']?.name ?? p.terrain ?? '—');
@@ -5552,12 +5623,18 @@ function planetPanelHtml(p: Planet): string {
   const wing = p.garrison.filter((st) => isSquadron(st.unit));
   const gcount = sumUnits(p.garrison);
   const here = Object.values(s.fleets).filter((f) => f.location === p.id);
+  // Bytro-стиль: у мира авто-имя (тап → карточка статистики); координата (grid id)
+  // остаётся отдельным обозначением в подзаголовке.
+  const header = cardHeader(
+    ownerColor(p.owner),
+    planetName(p.id),
+    `${esc(p.id)} · ${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
+    'planetinfo',
+  );
+  // Тап по имени открыл сводку мира — панель целиком уступает ей место.
+  if (planetInfoFor === p.id) return header + planetSummaryHtml(p);
   let h =
-    cardHeader(
-      ownerColor(p.owner),
-      p.id,
-      `${p.owner ? NAME[p.owner] : t('Нейтрал')} · ${kindName} · ${ptName} · ${sec}`,
-    ) +
+    header +
     `<div class="pstats"><span data-desc="stat:garrison">⚔ ${gcount} <span class="pl">${t('гарнизон')}</span></span><span data-desc="stat:ground">${unitIcon('heavy_infantry')} ${sumUnits(ground)} <span class="pl">${t('наземных')}</span></span><span data-desc="stat:gships">${unitIcon('cruiser')} ${sumUnits(ships)} <span class="pl">${t('кораблей')}</span></span><span data-desc="stat:pbuild">▣ ${p.buildings.length} <span class="pl">${t('построек')}</span></span></div>`;
   // ECON-2: блэкаут — неоплаченная энергия глушит радары и ПВО этого владельца вдвое.
   if (mine && (s.players[ME]?.arrears ?? []).includes('energy')) {
@@ -7488,6 +7565,9 @@ side.addEventListener('click', (ev) => {
   } else if (act === 'fleetinfo') {
     // Тап по имени армии: карточка ⇄ сводка (для текущего выбранного флота).
     if (selFleet) fleetInfoFor = fleetInfoFor === selFleet ? null : selFleet;
+  } else if (act === 'planetinfo') {
+    // Тап по имени мира: карточка ⇄ сводка статистики (для выбранной планеты).
+    if (selPlanet) planetInfoFor = planetInfoFor === selPlanet ? null : selPlanet;
   } else if (act === 'launchsquad') {
     // Split the squadron stack off into its own fast strike fleet (SQ-1.1).
     const f = selFleet ? s.fleets[selFleet] : undefined;
