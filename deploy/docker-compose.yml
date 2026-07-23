@@ -49,6 +49,16 @@ services:
       MATCHES: ${MATCHES:-1}
       # Durable matches: snapshots to the postgres service over the compose network.
       DATABASE_URL: postgres://void:${POSTGRES_PASSWORD:-void}@postgres:5432/void
+      # TLS / wss (RS-5.1): point BOTH at PEM files mounted under ./certs (see the
+      # `certs` volume below and deploy/README.md for issuing a Let's Encrypt cert) and
+      # the server serves wss:// in-process — no reverse proxy needed. Unset ⇒ plain ws
+      # (a proxy like Nginx/Caddy may terminate TLS upstream instead — setup-proxy.sh).
+      # Setting only one of the two is a boot error (fail-secure — no silent cleartext).
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      # Behind a TLS-terminating proxy instead, set TRUST_PROXY=1 so per-IP rate limits
+      # see the real client, not the proxy.
+      TRUST_PROXY: ${TRUST_PROXY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,6 +67,10 @@ services:
     # wrong. WORKDIR is /app, so the server writes /app/playtest-logs.
     volumes:
       - void-logs:/app/playtest-logs
+      # TLS certs (RS-5.1): host ./certs → /certs (read-only). Drop a Let's Encrypt
+      # privkey.pem + fullchain.pem here and set TLS_KEY_FILE=/certs/privkey.pem
+      # TLS_CERT_FILE=/certs/fullchain.pem above. Harmless (empty) when TLS is off.
+      - ./certs:/certs:ro
     # The image bakes its own HEALTHCHECK (GET /health); compose inherits it.
     logging:
       driver: json-file

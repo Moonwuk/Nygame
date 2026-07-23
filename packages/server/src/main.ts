@@ -9,7 +9,7 @@ import {
 } from './scenario';
 import { arsenalSnapshotOf, grantStarterArsenal } from './arsenal';
 import { awardMatchDrops, salvageFromEvents } from './dropRoller';
-import { createMultiplayerServer } from './wsServer';
+import { createMultiplayerServer, tlsFromEnv } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
 import { createMatchLoader } from './serverWiring';
@@ -344,6 +344,9 @@ const server = createMultiplayerServer({
   // Behind a TLS-terminating proxy (Caddy), set TRUST_PROXY=1 so request.ip (and the
   // auth API's per-IP rate limit) sees the client, not the proxy.
   trustProxy: process.env.TRUST_PROXY === '1',
+  // RS-5.1: native TLS — set TLS_KEY_FILE+TLS_CERT_FILE to serve wss:// in-process (no
+  // proxy needed). Unset ⇒ undefined ⇒ plain ws (a proxy may still terminate upstream).
+  tls: tlsFromEnv(process.env),
   // /ready is red while the durable store is unreachable, so a load balancer stops
   // routing new traffic without failing liveness (/health).
   ready: () => stores.store.ping?.() ?? Promise.resolve(true),

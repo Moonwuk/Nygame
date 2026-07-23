@@ -98,6 +98,46 @@ sudo bash deploy/setup-proxy.sh
 - Внутренний IP: `192.168.1.7`
 - Внутренний порт: `8788 TCP`
 
+## 🔒 TLS / wss (RS-5.1)
+
+Клиент сам выбирает `wss://`, когда страница открыта по `https` — нужно лишь дать
+серверу TLS. Два пути:
+
+### Нативный TLS (в самом сервере, без прокси)
+
+Сервер слушает `wss://` сам, если заданы `TLS_KEY_FILE` + `TLS_CERT_FILE` (оба — или
+ни одного; половинчатая настройка = ошибка старта, fail-secure, не тихий cleartext).
+
+```bash
+# 1) Выпустить сертификат на свой домен (пример — certbot standalone, порт 80 свободен):
+sudo certbot certonly --standalone -d play.example.com
+
+# 2) Положить цепочку в ./certs рядом с docker-compose.yml (монтируется в /certs :ro):
+mkdir -p deploy/certs
+sudo cp /etc/letsencrypt/live/play.example.com/privkey.pem   deploy/certs/
+sudo cp /etc/letsencrypt/live/play.example.com/fullchain.pem deploy/certs/
+
+# 3) Включить TLS и поднять стек:
+cd deploy
+TLS_KEY_FILE=/certs/privkey.pem TLS_CERT_FILE=/certs/fullchain.pem \
+  docker compose up -d --build
+```
+
+Теперь транспорт зашифрован end-to-end (`wss://play.example.com:8788/...`). Продление:
+`certbot renew` → повторный `cp` в `deploy/certs` → `docker compose restart server` (в cron).
+
+### Реверс-прокси терминирует TLS (альтернатива)
+
+Nginx/Caddy/Traefik перед сервером (`deploy/setup-proxy.sh` — заготовка Nginx под
+WebSocket-upgrade; добавь `listen 443 ssl`, пути к сертам и редирект `80→443`). При
+этом на сервере **не** ставь `TLS_*`, а поставь `TRUST_PROXY=1`, чтобы per-IP лимиты
+видели реального клиента, а не прокси.
+
+> **Стор-сборка (RS-1.2, `rustore-release-roadmap.md`):** для RuStore-APK финальная
+> сборка обязана ходить только по `https/wss` — `cleartext:false` +
+> `androidScheme:'https'` в capacitor-конфиге стор-профиля; dev/LAN-сборка остаётся на
+> `ws://` для локальных тестов.
+
 ## 📚 Документация
 
 | Файл | Для кого | Время |
@@ -196,7 +236,7 @@ bash deploy/serve.sh
 ## 📊 Известные границы
 
 - **Один процесс**: мульти-процессное масштабирование (pg-boss) — будущий этап
-- **TLS**: вешай реверс-прокси (Nginx/Traefik/Caddy) перед `8788` — приложение слушает HTTP
+- **TLS**: нативно — `TLS_KEY_FILE`/`TLS_CERT_FILE` → сервер слушает `wss://` сам (RS-5.1); либо реверс-прокси (Nginx/Traefik/Caddy) перед `8788`. См. раздел «TLS / wss» выше.
 - **Один хост**: отказоустойчивость = автоперезапуск + durable-резюме (не горячий резерв)
 
 ## 📞 Помощь и дальнейшее

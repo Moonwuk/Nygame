@@ -20,6 +20,7 @@ import {
   MatchRegistry,
   MetricsAggregator,
   createMultiplayerServer,
+  tlsFromEnv,
   registerBrowserApi,
   registerMatchApi,
   startClockDriver,
@@ -580,6 +581,9 @@ const server = createMultiplayerServer({
   // схлопывается в один bucket. Зеркалит packages/server/src/main.ts.
   ...(authCfg.allowedOrigins ? { allowedOrigins: authCfg.allowedOrigins } : {}),
   trustProxy: process.env.TRUST_PROXY === '1',
+  // RS-5.1: native TLS — TLS_KEY_FILE+TLS_CERT_FILE ⇒ this host serves wss:// itself (no
+  // nginx needed for a single-node playtest). Unset ⇒ plain ws (proxy may terminate TLS).
+  tls: tlsFromEnv(),
   // Entry window (SES-2.3): the transport refuses a FIRST-time nick once the session's
   // window has closed (a returning seat-holder always reconnects). Same window the
   // browser feed uses to keep a closed session out of «Доступные». (In AUTH mode the

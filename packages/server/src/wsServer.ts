@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Duplex } from 'node:stream';
@@ -67,6 +68,12 @@ export interface MultiplayerServerOptions {
    *  SV-2.4), after `/health` and `/ready`. Keeps this transport module generic — the
    *  routes and their dependencies live with the caller. */
   httpRoutes?: (app: FastifyInstance) => void;
+  /** Native TLS termination (RS-5.1). When set, the HTTP server is created as an
+   *  `https.Server` (Fastify `https` option) and `listen()` returns a `wss://` URL — the
+   *  single-node path to encrypted transport with no reverse proxy in front. Absent ⇒
+   *  plain `ws://` (a proxy like Nginx/Caddy may still terminate TLS upstream — see
+   *  `deploy/setup-proxy.sh`). Values are the PEM key/cert as Node's TLS layer accepts. */
+  tls?: { key: string | Buffer; cert: string | Buffer };
   /** Behind a reverse proxy (Caddy/Nginx terminating TLS), trust `X-Forwarded-For` so
    *  `request.ip` is the CLIENT address, not the proxy's — without this the auth API's
    *  per-IP rate limit would throttle every player behind the proxy as one bucket.
@@ -110,6 +117,23 @@ function ticketMatches(presented: string, storedHash: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Read a native-TLS key/cert pair from the environment (RS-5.1). Returns the PEM
+ *  buffers when BOTH `TLS_KEY_FILE` and `TLS_CERT_FILE` point at readable files, else
+ *  `undefined` (⇒ plain `ws`, or TLS terminated by a proxy upstream). A PARTIAL config
+ *  (only one of the two) throws — a half-configured TLS is a deploy error, not a silent
+ *  downgrade to cleartext (fail-secure). Pass the result straight to the `tls` option. */
+export function tlsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): { key: Buffer; cert: Buffer } | undefined {
+  const keyFile = env.TLS_KEY_FILE?.trim();
+  const certFile = env.TLS_CERT_FILE?.trim();
+  if (!keyFile && !certFile) return undefined;
+  if (!keyFile || !certFile) {
+    throw new Error('TLS misconfigured: set BOTH TLS_KEY_FILE and TLS_CERT_FILE (or neither)');
+  }
+  return { key: readFileSync(keyFile), cert: readFileSync(certFile) };
+}
+
 export function createMultiplayerServer(
   options: MultiplayerServerOptions,
 ): MultiplayerServerHandle {
@@ -138,6 +162,12 @@ export function createMultiplayerServer(
     logger: options.logger ?? false,
     disableRequestLogging: true,
     trustProxy: options.trustProxy ?? false,
+    // RS-5.1: native TLS — with a key/cert Fastify builds an https.Server (checked at
+    // runtime); the `ws` upgrade rides `app.server` byte-identically, so the socket is
+    // wss end-to-end. Absent ⇒ plain http/ws (a proxy may still terminate TLS upstream).
+    // The spread keeps `app` a single FastifyInstance type; https.Server ⊆ http.Server,
+    // so `httpServer: app.server` stays sound.
+    ...(options.tls ? { https: options.tls } : {}),
   });
 
   // Fail-secure (invariant #4): a route handler that throws/rejects (e.g. a store fault in
@@ -455,8 +485,11 @@ export function createMultiplayerServer(
       // `/<matchId>`.
       const ids = registry.ids();
       const suffix = ids.length === 1 ? `${pathPrefix}/${ids[0]}` : pathPrefix;
-      app.log.info({ host, port: boundPort, matches: ids.length }, 'server listening');
-      return `ws://${host}:${boundPort}${suffix}`;
+      app.log.info(
+        { host, port: boundPort, matches: ids.length, tls: !!options.tls },
+        'server listening',
+      );
+      return `${options.tls ? 'wss' : 'ws'}://${host}:${boundPort}${suffix}`;
     },
     close: async () => {
       draining = true; // /ready now reports 503 so a load balancer drains us first
