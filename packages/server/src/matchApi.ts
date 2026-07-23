@@ -28,9 +28,11 @@ export interface JoinResult {
 }
 
 /** A stable failure from `join`, mapped to an HTTP status by the route. `E_NOT_ROSTERED`
- *  is the AvA path (AVA-7): the match is an AvA session and the caller is not on its roster. */
+ *  is the AvA path (AVA-7): the match is an AvA session and the caller is not on its roster.
+ *  `E_ENTRY_CLOSED` is the SES-2.3 entry window: a login that does not already hold a seat is
+ *  refused once the window has closed (the join impl checks `seatOf` before assigning a chair). */
 export type JoinFailure = {
-  error: 'E_NO_MATCH' | 'E_MATCH_FULL' | 'E_AUTH_DISABLED' | 'E_NOT_ROSTERED';
+  error: 'E_NO_MATCH' | 'E_MATCH_FULL' | 'E_AUTH_DISABLED' | 'E_NOT_ROSTERED' | 'E_ENTRY_CLOSED';
 };
 
 /** An authenticated caller, as resolved by the `identify` hook. */
@@ -40,8 +42,10 @@ export interface Identity {
 }
 
 export interface MatchApiDeps {
-  /** Seed + persist a new match; returns its id and seat player ids. */
-  createMatch(): Promise<CreatedMatch>;
+  /** Seed + persist a new match; returns its id and seat player ids. Optional: when absent
+   *  the `POST /matches` route is not registered — a host that only seeds matches out of band
+   *  (e.g. the playtest netserver) exposes join without a public create. */
+  createMatch?(): Promise<CreatedMatch>;
   /** Resolve `nick` to a seat in `matchId` and mint its join token, or a stable failure:
    *  the match does not exist, every seat is taken, or token auth is not configured.
    *  `accountId` is stamped into the join token when the caller is authenticated. */
@@ -60,6 +64,7 @@ const STATUS: Record<JoinFailure['error'], number> = {
   E_NO_MATCH: 404,
   E_MATCH_FULL: 409,
   E_NOT_ROSTERED: 403,
+  E_ENTRY_CLOSED: 403,
   E_AUTH_DISABLED: 501,
 };
 
@@ -83,17 +88,22 @@ export function registerMatchApi(app: FastifyInstance, deps: MatchApiDeps): void
     maxIps: RATE_MAX_IPS,
   });
 
-  app.post('/matches', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (rateLimited(request.ip)) {
-      void reply.code(429);
-      return { error: 'E_RATE_LIMIT' as const };
-    }
-    if (identify && !(await identify(request))) {
-      void reply.code(401);
-      return { error: 'E_AUTH' as const };
-    }
-    return deps.createMatch();
-  });
+  // Only mounted when the host seeds matches through the API. A host that seeds out of
+  // band (netserver) omits `createMatch` and gets the join route alone.
+  const createMatch = deps.createMatch;
+  if (createMatch) {
+    app.post('/matches', async (request: FastifyRequest, reply: FastifyReply) => {
+      if (rateLimited(request.ip)) {
+        void reply.code(429);
+        return { error: 'E_RATE_LIMIT' as const };
+      }
+      if (identify && !(await identify(request))) {
+        void reply.code(401);
+        return { error: 'E_AUTH' as const };
+      }
+      return createMatch();
+    });
+  }
 
   app.get('/matches/:id/join', async (request: FastifyRequest, reply: FastifyReply) => {
     if (rateLimited(request.ip)) {

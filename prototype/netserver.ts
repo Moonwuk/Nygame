@@ -21,6 +21,7 @@ import {
   MetricsAggregator,
   createMultiplayerServer,
   registerBrowserApi,
+  registerMatchApi,
   startClockDriver,
   HEARTBEAT_MS,
   type ClockDriverHandle,
@@ -616,48 +617,40 @@ const server = createMultiplayerServer({
             }
           : {}),
       });
-      // Exchange a session for a seat + short-lived join token (SES-2.5). The seat
-      // belongs to the SESSION's login (nobody joins as somebody else); the entry
-      // window (SES-2.3) gates a FIRST-time claim exactly like the nick path — the
-      // non-assigning seatOf runs BEFORE resolveSeat, so a refused newcomer never
-      // burns a chair; a seated login reconnects at any time.
-      app.get('/matches/:id/join', async (request, reply) => {
-        const header = request.headers.authorization;
-        const bearer =
-          typeof header === 'string' && header.startsWith('Bearer ')
-            ? header.slice('Bearer '.length).trim()
-            : null;
-        const who = bearer ? await authCfg.verifySession!(bearer) : null;
-        // Signature + freshness: re-check the session against the current password so a
+      // Seat + short-lived join token (SES-2.5) through the SHARED match API, so the
+      // handshake — per-IP rate-limit, identity gate, error→status mapping — lives in ONE
+      // place with the production host (NETA2-7). netserver seeds matches out of band, so it
+      // omits `createMatch` (no public `POST /matches`) and wires only join + identity.
+      registerMatchApi(app, {
+        // Identity = a signature-valid session, RE-CHECKED against the current password: a
         // reset revokes older sessions before they can claim/reclaim a seat (SE-1.x).
-        const live = who?.ok ? await liveSession(who.claim, userStore) : null;
-        if (!live) {
-          void reply.code(401);
-          return { error: 'E_AUTH' as const };
-        }
-        const { id } = request.params as { id: string };
-        const room = registry.get(id);
-        if (!room) {
-          void reply.code(404);
-          return { error: 'E_NO_MATCH' as const };
-        }
-        const login = live.login;
-        const held = await accountStore.seatOf(id, login);
-        if (!held && !registry.entryOpen(id)) {
-          void reply.code(403);
-          return { error: 'E_ENTRY_CLOSED' as const };
-        }
-        const seat = held
-          ? { playerId: held }
-          : await accountStore.resolveSeat(id, login, Object.keys(room.state.players));
-        if (!seat) {
-          void reply.code(409);
-          return { error: 'E_MATCH_FULL' as const };
-        }
-        return {
-          playerId: seat.playerId,
-          token: await authCfg.signToken!(id, seat.playerId, live.accountId),
-        };
+        identify: async (request) => {
+          const header = request.headers.authorization;
+          const bearer =
+            typeof header === 'string' && header.startsWith('Bearer ')
+              ? header.slice('Bearer '.length).trim()
+              : null;
+          const who = bearer ? await authCfg.verifySession!(bearer) : null;
+          return who?.ok ? liveSession(who.claim, userStore) : null;
+        },
+        // The seat belongs to the session's login (nobody joins as someone else). Entry
+        // window (SES-2.3): a login that does NOT already hold a seat is a first-time claim —
+        // refuse it once the window closed, BEFORE resolveSeat assigns a chair (a refused
+        // newcomer never burns a chair); a seated login reconnects any time.
+        join: async (id, login, accountId) => {
+          const room = registry.get(id);
+          if (!room) return { error: 'E_NO_MATCH' as const };
+          const held = await accountStore.seatOf(id, login);
+          if (!held && !registry.entryOpen(id)) return { error: 'E_ENTRY_CLOSED' as const };
+          const seat = held
+            ? { playerId: held }
+            : await accountStore.resolveSeat(id, login, Object.keys(room.state.players));
+          if (!seat) return { error: 'E_MATCH_FULL' as const };
+          return {
+            playerId: seat.playerId,
+            token: await authCfg.signToken!(id, seat.playerId, accountId),
+          };
+        },
       });
       // Commander progression (EC-*): the session reads its own durable lifetime XP.
       // The client turns `xp` into a level/points locally (prototype meta.ts), so the

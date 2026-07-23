@@ -1407,10 +1407,15 @@ requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psion
   перешёл на `startClockDriver` и удалил свой inline-драйвер (~110 строк) — один шедулер на
   оба хоста. Тесты: 12 (арм-логика на stub-комнате — бьётся/идлит/кэп/`progressed`/стоп по
   уходу последнего пира; сквозной — свежий watched dev-матч крутит часы без действий игрока).
-- **NETA2-7** ⏳ `[srv]` **Один джойн-хендшейк**. netserver переиспользует `registerMatchApi`
-  (с параметром окна входа) вместо hand-rolled `GET /matches/:id/join` — оба разошлись на
-  rate-limit и окне входа (security-sensitive). **Готово, когда:** seat-resolution + join-token
-  в одном месте, оба хоста с rate-limit и окном входа; тест.
+- **NETA2-7** ✅ `[srv]` **Один джойн-хендшейк**. netserver переиспользует `registerMatchApi`
+  вместо hand-rolled `GET /matches/:id/join` — теперь **per-IP rate-limit** (30/мин, которого
+  inline-роут НЕ имел), identity-гейт и error→status-маппинг в одном месте с боевым хостом.
+  `createMatch` сделан **опциональным** (netserver сеет матчи вне API → `POST /matches` не
+  монтируется). Окно входа (SES-2.3) осталось в netserver-`join`-депе как `E_ENTRY_CLOSED`,
+  чтобы сохранить порядок `E_NO_MATCH`→`E_ENTRY_CLOSED`→`E_MATCH_FULL` (боевой `join` AvA-осведомлён,
+  своего окна входа не имеет). Тесты: matchApi (`E_ENTRY_CLOSED`/`E_NOT_ROSTERED`→403,
+  createMatch-опционален → `POST /matches` 404 + join жив); живой прогон netserver — session-join
+  200, ghost 404, no-auth 401, `POST /matches` 404, реконнект 200.
 - **NETA2-8** 🔒(тесты) `[srv]` **Единое apply-ядро**. `applyAndBroadcast` (sync) и
   `commitApply` (durable) — две реализации одной оркестрации (advance→apply→reject-advanced→
   success→observeEnd→timing); dedup-фронт строен вчетверо. Извлечь общее ядро,

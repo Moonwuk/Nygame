@@ -51,6 +51,8 @@ describe('SV-2.4 · match API', () => {
     const cases: Array<[JoinFailure['error'], number]> = [
       ['E_NO_MATCH', 404],
       ['E_MATCH_FULL', 409],
+      ['E_NOT_ROSTERED', 403],
+      ['E_ENTRY_CLOSED', 403],
       ['E_AUTH_DISABLED', 501],
     ];
     for (const [error, status] of cases) {
@@ -63,6 +65,18 @@ describe('SV-2.4 · match API', () => {
       expect(res.json()).toEqual({ error });
       await app.close();
     }
+  });
+
+  it('omitting createMatch leaves POST /matches unmounted, but join still serves', async () => {
+    // A host that seeds matches out of band (netserver, NETA2-7) exposes join alone.
+    const app = appWith({
+      join: (matchId, nick) => Promise.resolve({ playerId: 'green', token: `tok:${matchId}:${nick}` }),
+    });
+    expect((await app.inject({ method: 'POST', url: '/matches' })).statusCode).toBe(404); // not mounted
+    const res = await app.inject({ method: 'GET', url: '/matches/m/join?nick=a' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ playerId: 'green', token: 'tok:m:a' });
+    await app.close();
   });
 
   it('rate-limits create+join per IP over a shared window (429 past the cap)', async () => {

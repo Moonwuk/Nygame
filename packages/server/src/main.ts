@@ -13,7 +13,12 @@ import { createMultiplayerServer } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
 import { configFromEnv } from './serverConfig';
 import { createMatchLoader } from './serverWiring';
-import { registerMatchApi, registerOpenMatchesFeed, type MatchApiDeps } from './matchApi';
+import {
+  registerMatchApi,
+  registerOpenMatchesFeed,
+  type MatchApiDeps,
+  type CreatedMatch,
+} from './matchApi';
 import { registerAuthApi, liveSession } from './authApi';
 import { registerCorpApi } from './corpApi';
 import { CorpService } from './corpService';
@@ -249,15 +254,18 @@ const identify: MatchApiDeps['identify'] = verifySession
     }
   : undefined;
 
+// Named so the match factory (below) can invoke it directly — `MatchApiDeps.createMatch` is
+// optional (a host may seed out of band), so the deps field alone reads as possibly-undefined.
+const createMatch = async (): Promise<CreatedMatch> => {
+  if (matchCount >= MAX_MATCHES) throw new Error('match capacity reached'); // → 500, bounded
+  const matchId = `m-${randomUUID()}`;
+  const seed = createDevMatch(data, { id: matchId, time: Date.now() });
+  await stores.store.save(snapshotOf(seed));
+  matchCount += 1;
+  return { matchId, seats: Object.keys(seed.state.players) };
+};
 const matchApi: MatchApiDeps = {
-  createMatch: async () => {
-    if (matchCount >= MAX_MATCHES) throw new Error('match capacity reached'); // → 500, bounded
-    const matchId = `m-${randomUUID()}`;
-    const seed = createDevMatch(data, { id: matchId, time: Date.now() });
-    await stores.store.save(snapshotOf(seed));
-    matchCount += 1;
-    return { matchId, seats: Object.keys(seed.state.players) };
-  },
+  createMatch,
   join: async (matchId, nick, accountId) => {
     const snap = await stores.store.load(matchId);
     if (!snap) return { error: 'E_NO_MATCH' };
@@ -319,7 +327,7 @@ const keeper =
         listOngoing: () => stores.store.ongoingMatchIds(),
         occupiedSeats: (id) => accountStore.occupiedSeats(id),
         create: async () => {
-          await matchApi.createMatch();
+          await createMatch();
         },
         onError: (err) =>
           process.stderr.write(
