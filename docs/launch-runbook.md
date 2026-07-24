@@ -112,5 +112,8 @@ TIME_SCALE=200 HOST=0.0.0.0 PORT=8788 pnpm host
 
 Аккаунты (SES-2.5), action-gate (`GATE=1`, REL-4) и мульти-матчи (`MATCHES`, до 16 сессий
 в процессе) на прототип-пути уже сделаны. Осталось до «публичного сервера»:
-1. `deploy/Caddyfile` + домен (HTTPS-2.1/2.2), гейт публичности HTTPS-7.1.
+1. ✅ `deploy/Caddyfile` + TLS-оверлей (`deploy/docker-compose.tls.yml`) — HTTPS-2.1/2.2:
+   Caddy авто-Let's Encrypt перед сервером, сервер на loopback (`SERVER_BIND=127.0.0.1`),
+   рецепт в `deploy/README.md`. Осталось при деплое: домен + DNS (A/AAAA), приёмка HTTPS-7.1
+   (нет plaintext, HSTS, testssl-A).
 2. Бэкапы Postgres + секреты (SE-2.1, SE-3.4).

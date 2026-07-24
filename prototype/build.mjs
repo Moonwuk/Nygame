@@ -142,6 +142,10 @@ body.sheet-open #speedbar{bottom:calc(34vh + 12px);}
 .spd .spddiv{width:1px;height:18px;background:var(--line-hi);margin:0 2px;}
 .spd .spdmini{min-width:26px;font-size:10px;opacity:.9;}
 .spd .sep{width:1px;height:18px;background:var(--line-hi);margin:0 4px;flex:0 0 auto;}
+/* speed-multiplier sets: mobile keeps the legacy chips, PC swaps in 1/30/60/120. The
+   wrappers are display:contents so their buttons flow in the speedbar flex row. */
+.spd .spd-mult-legacy{display:contents;}
+.spd .spd-mult-pc{display:none;}
 #cmdbar{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:26;display:none;align-items:center;
   gap:6px;padding:6px 8px;background:rgba(3,12,16,.88);border:1px solid var(--line-hi);border-radius:3px;
   box-shadow:0 0 22px rgba(40,200,210,.14);}
@@ -175,6 +179,10 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
   padding:6px 7px;cursor:pointer;background:rgba(53,214,230,.05);border:1px solid var(--line-hi);border-radius:5px;color:var(--cyan);}
 .ptile:hover{border-color:var(--cyan);background:rgba(53,214,230,.14);box-shadow:0 0 8px rgba(53,214,230,.25);}
 .ptile:active{background:rgba(53,214,230,.24);}
+/* committed one-per-planet building — dimmed, non-ordering (still hover-describes) */
+.ptile.locked{opacity:.4;cursor:not-allowed;background:rgba(120,140,150,.05);border-color:var(--line);color:var(--dim);}
+.ptile.locked:hover{border-color:var(--line);background:rgba(120,140,150,.08);box-shadow:none;}
+.ptile.locked .pt-ic{color:var(--dim);}
 .ptile .pt-ic{font-size:18px;line-height:1;}
 .ptile .pt-c{font-size:9px;color:var(--dim);letter-spacing:.3px;white-space:nowrap;}
 /* Bytro-карточка: SVG-силуэт в тайле + мини-бар корпуса стека */
@@ -625,6 +633,10 @@ body.sheet-open #cmdbar{bottom:calc(34vh + 12px);}
 #rail .badge{position:absolute;right:5px;top:4px;min-width:15px;height:15px;border-radius:8px;
   background:var(--red);color:#180605;font:700 9px/15px ui-monospace,monospace;text-align:center;
   box-shadow:0 0 8px rgba(255,90,77,.7);}
+/* settings/leave-session rail tools are a PC addition — hidden on phones (the PC
+   media block below turns them on), so the mobile rail stays exactly as it was.
+   Double-id selector: must outweigh the phone query's "#railtools button". */
+#railtools #rail-settings,#railtools #rail-exit{display:none;}
 
 #side{position:fixed;left:58px;right:14px;bottom:0;top:auto;width:auto;max-height:34vh;overflow:hidden;z-index:20;
   display:none;align-items:stretch;padding:0;background:rgba(3,14,18,.6);border:1px solid var(--line-hi);
@@ -1873,6 +1885,12 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
   #testmode .tmbox{width:min(620px,64vw);max-height:61vh;}
   #emblempick .ep-box{width:min(340px,61vw);}
   #corp .corpbox{width:53.4vw;max-height:61vh;}
+  #railtools #rail-settings,#railtools #rail-exit{display:grid;}
+  /* speedbar on PC: exit (⌂) lives in the rail and ▶▶ is dropped; the multiplier set
+     swaps to 1/30/60/120. (The whole bar's show/hide rides the dev toggle in main.ts.) */
+  .spd .spd-pc-hide{display:none;}
+  .spd .spd-mult-legacy{display:none;}
+  .spd .spd-mult-pc{display:contents;}
   /* base (portrait) bottom-sheet panel + the bars it lifts */
   #side{max-height:22.5vh;}
   body.sheet-open #cmdbar,body.sheet-open #speedbar{bottom:calc(22.5vh + 12px);}
@@ -1993,9 +2011,12 @@ const page = (js) => `<!doctype html>
 <aside id="side"></aside>
 <div id="toasts"></div>
 <div id="speedbar" class="spd">
-  <!--dev-only--><button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" data-speed="3">▶▶</button><span class="spddiv"></span><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button><button class="spdmini" data-mult="100">×100</button>
-  <span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" data-i18n-title style="display:none">⟳</button>
-  <span class="sep"></span><!--/dev-only--><button id="tomenu" title="Выход в меню" data-i18n-title>⌂</button>
+  <!-- time controls. PC: shown only via the developer «speed control» toggle (whole
+       bar hidden otherwise); ⌂/▶▶ are PC-hidden (exit lives in the rail). Mobile is
+       frozen: keeps ⌂/▶▶ and the legacy ×1/×10/×50/×100 chips; PC swaps in 1/30/60/120
+       (data-mult = real wall-clock multiplier: 1800=½h·s, 3600=1h·s, 7200=2h·s). -->
+  <span id="spd-ctl"><button id="spd-pause" data-speed="0">‖</button><button id="spd-play" data-speed="1" class="on">▶</button><button id="spd-fast" class="spd-pc-hide" data-speed="3">▶▶</button><span class="spddiv"></span><span class="spd-mult-legacy"><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>×1</button><button class="spdmini" data-mult="10">×10</button><button class="spdmini" data-mult="50">×50</button><button class="spdmini" data-mult="100">×100</button></span><span class="spd-mult-pc"><button class="spdmini" data-mult="1" title="реальное время" data-i18n-title>1×</button><button class="spdmini" data-mult="1800" title="полчаса в секунду" data-i18n-title>30×</button><button class="spdmini" data-mult="3600" title="час в секунду" data-i18n-title>60×</button><button class="spdmini" data-mult="7200" title="два часа в секунду" data-i18n-title>120×</button></span><span class="sep"></span></span>
+  <!--dev-only--><span class="sep" id="restart-sep" style="display:none"></span><button id="restart" title="Перезапуск — к выбору ботов" data-i18n-title style="display:none">⟳</button><span class="sep"></span><!--/dev-only--><button id="tomenu" class="spd-pc-hide" title="Выход в меню" data-i18n-title>⌂</button>
 </div>
 <div id="cmdbar"></div>
 <div id="codex"></div>
@@ -2154,7 +2175,7 @@ const page = (js) => `<!doctype html>
   <div class="hub-body">
     <div class="hub-panel" id="hp-home">
       <button id="hub-play" class="hub-play" type="button" data-i18n>ИГРАТЬ СЕЙЧАС</button>
-      <!--dev-only--><button id="hub-solo" class="hub-solo" type="button" data-i18n>Одиночная игра</button><!--/dev-only-->
+      <button id="hub-solo" class="hub-solo" type="button" data-i18n>Одиночная игра</button>
       <!-- ONB-0 first-run offer: shown only to a not-yet-onboarded commander -->
       <div class="hub-card ob-nudge" id="onboard-nudge" style="display:none">
         <div class="hc-ic">◎</div>

@@ -137,6 +137,32 @@ WebSocket-upgrade; добавь `listen 443 ssl`, пути к сертам и р
 > сборка обязана ходить только по `https/wss` — `cleartext:false` +
 > `androidScheme:'https'` в capacitor-конфиге стор-профиля; dev/LAN-сборка остаётся на
 > `ws://` для локальных тестов.
+### 🔒 Публичный HTTPS / WSS через Caddy (HTTPS-2.1)
+
+Для постоянного публичного сервера с настоящим TLS (а не туннелем) — Caddy перед
+игровым сервером: авто-сертификат Let's Encrypt, авто-продление, `http→https`,
+прозрачный `wss`. Игровой сервер при этом **не торчит наружу** (только Caddy на `:443`).
+
+**Предусловие:** домен, чья DNS-запись `A`/`AAAA` указывает на этот хост (Caddy
+подтверждает владение через `:80`/`:443`, прежде чем получить сертификат).
+
+```bash
+cd deploy
+DOMAIN=play.example.com SERVER_BIND=127.0.0.1 \
+  docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+```
+
+- `DOMAIN` — публичный хостнейм (Caddy выпустит и будет продлевать сертификат сам).
+- `SERVER_BIND=127.0.0.1` — плоский порт сервера слушает только loopback; Caddy ходит
+  к нему по compose-сети (`server:8788`), наружу открыт лишь `:443`.
+- Сертификаты живут в volume `caddy-data` — переживают рестарт/редеплой (без
+  повторных обращений к Let's Encrypt и его rate-limit'ам).
+- Проверка: `https://<домен>/health` отвечает `{"ok":true}`, клиент подключается по
+  `wss://<домен>/matches/…`. Прямой `:8788` снаружи недоступен.
+
+Отладка без реального домена — см. комментарии в `deploy/Caddyfile` (`tls internal` /
+ACME-staging). Managed-край (Render/Cloudflare-туннель) уже даёт HTTPS без Caddy —
+см. `docs/https-roadmap.md`.
 
 ## 📚 Документация
 

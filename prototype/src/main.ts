@@ -837,6 +837,8 @@ const bannerEl = $('banner');
 let lastBannerHtml = ''; // dirty-check so the banner's restart button isn't recreated each frame
 const restartBtn = $('restart'); // speedbar restart (shown in the no-bots solo sandbox)
 const restartSep = $('restart-sep');
+const spdCtl = $('spd-ctl'); // speedbar time-control group
+const speedbarEl = $('speedbar');
 const alertBadge = $('alertbadge');
 const cmdbar = $('cmdbar');
 const splitdlg = $('splitdlg');
@@ -1015,6 +1017,22 @@ function setCompactPanel(v: boolean): void {
   applyCompactPanel();
   try {
     localStorage.setItem('void.compactPanel', v ? '1' : '0');
+  } catch {
+    /* private-mode / storage-full: keep the in-memory value, just don't persist */
+  }
+}
+// Developer setting (PC): show the speedbar time controls (pause + speed multipliers).
+// Off for a normal player — the world runs at its launch pace, real-time-async; a dev
+// flips it on to pause / accelerate for testing. Defaults on in the dev client so its
+// long-standing speedbar stays; off in the player build. Client-only (localStorage).
+let devSpeedControl = ((): boolean => {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('void.devSpeed') : null;
+  return raw === null ? !__PLAYER_BUILD__ : raw === '1';
+})();
+function setDevSpeedControl(v: boolean): void {
+  devSpeedControl = v;
+  try {
+    localStorage.setItem('void.devSpeed', v ? '1' : '0');
   } catch {
     /* private-mode / storage-full: keep the in-memory value, just don't persist */
   }
@@ -1834,7 +1852,15 @@ function fleetAnchor(f: Fleet): { x: number; y: number; ang: number } | null {
 }
 // ONB-5: a structured, bounded mirror of the event log — feeds the return digest.
 const eventLog: RecapEvent[] = [];
+let lastNoteMsg = '';
+let lastNoteAtMs = 0;
 function note(msg: string, at?: string) {
+  // Dedupe guard: an order loop re-rejecting every frame must not machine-gun the
+  // same toast/log line — an identical message within 2s (real time) is dropped.
+  const nowMs = Date.now();
+  if (msg === lastNoteMsg && nowMs - lastNoteAtMs < 2000) return;
+  lastNoteMsg = msg;
+  lastNoteAtMs = nowMs;
   const d = floor(s.time / DAY) + 1;
   const h = floor((s.time % DAY) / HOUR);
   logLines.push(`D${d} ${String(h).padStart(2, '0')}h · ${msg}`);
@@ -2269,6 +2295,7 @@ const ERR_RU: Record<string, string> = {
   E_ALREADY_FITTED: 'фиттинг уже установлен',
   E_NO_SLOTS: 'слоты фиттингов заняты',
   E_NOT_DESTRUCTIBLE: 'этот мир нельзя уничтожить',
+  E_NO_TROOPS: 'мир защищён — для штурма нужен десант на борту',
   E_INTERNAL: 'внутренняя ошибка',
 };
 function errText(code: string): string {
@@ -2611,15 +2638,33 @@ function tryAssaultGroup(fleetIds: string[], destId: string): void {
   }
   dispatchAssault(movers, destId);
 }
+/** A defended world can only be stormed with landing troops aboard — pressing the
+ *  assault anyway just spams E_NO_TROOPS rejections. */
+function assaultNeedsTroops(f: Fleet, planetId: string): boolean {
+  const defended = (s.planets[planetId]?.garrison ?? []).some((u) => u.count > 0);
+  return defended && !(f.landing ?? []).some((u) => u.count > 0);
+}
 function dispatchAssault(fleetIds: string[], destId: string): void {
+  let warnedNoTroops = false;
   for (const id of fleetIds) {
     const f = s.fleets[id];
     if (!f) continue;
     if (f.location === destId && !f.movement) {
+      if (assaultNeedsTroops(f, destId)) {
+        if (!warnedNoTroops) {
+          warnedNoTroops = true;
+          note(t('⚔ штурм невозможен: на борту нет десанта, а мир защищён — погрузите войска'), destId);
+        }
+        continue;
+      }
       // already parked at the target — storm right away (orbit first if needed)
       if (f.orbit !== 'near') playerOrder(orbitFleet(ME, id, 'near'));
       playerOrder(assaultFleet(ME, id));
     } else {
+      if (!warnedNoTroops && assaultNeedsTroops(f, destId)) {
+        warnedNoTroops = true;
+        note(t('⚔ внимание: на борту нет десанта — защищённый мир штурмом не взять'), destId);
+      }
       playerOrder(moveFleet(ME, id, destId));
       assaultOnArrival.set(id, destId);
     }
@@ -2647,6 +2692,12 @@ function pumpAssaultOrders(): void {
     const here = s.planets[destId];
     if (!here || here.owner === ME || here.owner == null) {
       assaultOnArrival.delete(id); // captured meanwhile / emptied — nothing to storm
+      continue;
+    }
+    if (assaultNeedsTroops(f, destId)) {
+      // one clear message instead of an E_NO_TROOPS rejection loop
+      note(t('⚔ штурм невозможен: на борту нет десанта, а мир защищён — погрузите войска'), destId);
+      assaultOnArrival.delete(id);
       continue;
     }
     if (f.orbit !== 'near') playerOrder(orbitFleet(ME, id, 'near'));
@@ -3194,6 +3245,9 @@ function autoEngage() {
       (g) => g.owner !== f.owner && g.location === f.location && g.units.some((u) => u.count > 0),
     );
     if (enemyHere) continue; // let the auto orbital battle settle first
+    // A defended world + no landing troops = the assault can only be rejected
+    // (E_NO_TROOPS) — skip instead of re-pressing it every frame (toast spam).
+    if (here.garrison.some((u) => u.count > 0) && !(f.landing ?? []).some((u) => u.count > 0)) continue;
     // Player fleets go through playerOrder (server-authoritative in net play); AI applies locally.
     const issue = (a: Action) => (mine ? playerOrder(a) : apply(order(s, a, s.time)));
     if (f.orbit !== 'near') issue(orbitFleet(f.owner, f.id, 'near'));
@@ -5087,6 +5141,11 @@ function conveyorHtml(planetId: string, lane: BuildLane): string {
     html += `<div class="current" data-desc="c:${planetId}:${lane}:active:${active.seq}"><span>${t('СЕЙЧАС')}</span><b>${constructionLabel(active.payload)}</b><em class="conv-time" data-at="${active.at}">—</em>`;
     html += `<button class="conv-cancel" data-act="cancelbuild" data-arg="${active.seq}" title="${t('Отменить — вернёт часть ресурсов и поставит на паузу')}">✕</button></div>`;
     html += `<div class="bar"><i class="conv-fill" data-at="${active.at}" data-dur="${dur}" style="width:0%"></i></div>`;
+  } else if (pcUi() && queued[0] && !canStartQueued(planetId, queued[0])) {
+    // The queue is NOT stuck — its head simply can't be paid yet. Say so, with the
+    // price, instead of an idle line that reads like a broken conveyor.
+    html += `<div class="current idle"><b>⏳ ${t('Ждёт ресурсы: {c}', { c: cost(buildCost(planetId, queued[0])) })}</b></div>`;
+    html += `<div class="bar"><i style="width:0%"></i></div>`;
   } else if (compactUi()) {
     html += `<div class="current idle"><b>${t('Ожидание заказов')}</b></div>`;
     html += `<div class="bar"><i style="width:0%"></i></div>`;
@@ -5126,6 +5185,10 @@ function buildButtons(_planetId: string, ids: string[], kind: 'building' | 'unit
         id,
         cost(kind === 'unit' ? data.units[id]?.cost : data.buildings[id]?.cost),
         true,
+        // Buildings are one-per-planet — grey out a committed (queued/building/paused)
+        // one so a second order can't be placed. PC only (the mobile build UI is frozen
+        // in this chat); units stack freely so they're never locked.
+        kind === 'building' && pcUi() && !NET ? (buildingLocked(_planetId, id) ?? undefined) : undefined,
       ),
     )
     .join('');
@@ -5767,7 +5830,7 @@ function planetPanelHtml(p: Planet): string {
     }
     if (!pcUi()) {
       cols.push(
-        `<div class="hint">${t('Наземные части обороняют миры; грузятся на флот из панели флота.')}</div>`,
+        `<div class="hint">${t('Наземные части обороняют ваши миры. Их можно погрузить на флот для захвата вражеских миров.')}</div>`,
       );
     }
   } else if (planetTab === 'ships') {
@@ -5797,7 +5860,7 @@ function planetPanelHtml(p: Planet): string {
     if (!pcUi()) {
       // PC carries this in the ФЛОТ tab's hover dossier ('tab:ships')
       cols.push(
-        `<div class="hint">${t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.')}</div>`,
+        `<div class="hint">${t('Флот -ваше оружие и защита. Здесь вы можете заказывать корабли для пополнения флота.')}</div>`,
       );
     }
   } else if (planetTab === 'squadron') {
@@ -5823,7 +5886,7 @@ function planetPanelHtml(p: Planet): string {
       `<div class="sec">${t('Строительный конвейер')}</div>` +
         (mine
           ? conveyorHtml(p.id, 'buildings')
-          : `<div class="row dim">${t('строительная телеметрия врага недоступна')}</div>`),
+          : `<div class="row dim">${t('Строительная телеметрия врага недоступна')}</div>`),
     );
     let blds = `<div class="sec">${t('Здания')}</div>`;
     if (p.buildings.length === 0) blds += `<div class="row dim">${t('нет')}</div>`;
@@ -5895,33 +5958,22 @@ function buildingDossier(id: string, level: number): Dossier | null {
     case 'mine':
       return {
         name,
-        body: t(
-          'Буровая платформа, вгрызающаяся в рудное тело планеты. Добывает {m} металла в час. Каждый новый горизонт вскрывает более плотную жилу — выработка растёт в полтора раза, и из этого металла куётся весь флот.',
-          { m: hl(metal) },
-        ),
+        body: t('Буровая платформа вгрызается в планету и добывает {m}⬢ в час. Улучшение позволяет копать глубже, чтобы добраться до самых богатых жил. Основа для строительства флота.', { m: hl(metal) }),
       };
     case 'refinery':
       return {
         name,
-        body: t(
-          'Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c} в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.',
-          { c: hl(credits) },
-        ),
+        body: t('Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c}¤ в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.', { c: hl(credits) }),
       };
     case 'barracks':
       return {
         name,
-        body: t(
-          'Гарнизонный учебный лагерь. Куёт наземные подразделения и держит планетарную оборону в тонусе. Мир без казарм беззащитен перед первой же десантной волной.',
-        ),
+        body: t('Казармы нужны для защиты вашего мира от захватчиков. Тут живут ваши доблестные защитники.'),
       };
     case 'radar':
       return {
         name,
-        body: t(
-          'Сеть глубокого сканирования. Просвечивает пустоту в радиусе {r} и ловит чужие сигнатуры задолго до того, как они выйдут на дистанцию удара. Апгрейд раздвигает горизонт обнаружения.',
-          { r: hl(lv.radarRange ?? 0) },
-        ),
+        body: t('Комплекс радаров просвечивает пространство вокруг вашего мира и ловит вражеские сигнатуры задолго до того, как они посмеют на вас напасть. Улучшения обеспечивают большее покрытие.', { r: hl(lv.radarRange ?? 0) }),
       };
     case 'fort':
       return {
@@ -5934,58 +5986,37 @@ function buildingDossier(id: string, level: number): Dossier | null {
     case 'starfort':
       return {
         name,
-        body: t(
-          'Автономная крепость, вмороженная в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.',
-          { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) },
-        ),
+        body: t('Автономная крепость, возведённая в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО', { d: hl(pct(lv.defenseBonus ?? 0)), hp: hl(lv.hp) }),
       };
     case 'orbital_aa':
       return {
         name,
-        body: t(
-          'Стационарная зенитная батарея — неподвижное сооружение, {dmg} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.',
-          { dmg: hl(lv.aaDamage ?? 0) },
-        ),
+        body: t('Стационарная зенитная батарея защищает воздушное пространство вашего мира и наносит {dmg} урона в час по кораблям на орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.', { dmg: hl(lv.aaDamage ?? 0) }),
       };
     case 'metal_station':
       return {
         name,
-        body: t(
-          'Добывающая платформа, вгрызающаяся в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m} металла в час, и каждый новый ярус наращивает поток. Единственная причина держать выжженное пепелище под флагом.',
-          { m: hl(metal) },
-        ),
+        body: t('Добывающая платформа, вгрызается в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m}⬢ в час. Улучшение увеличивает добычу.', { m: hl(metal) }),
       };
     case 'tax_office':
       return {
         name,
-        body: t(
-          'Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}. Возводится один раз — бюрократию не масштабируют, её терпят.',
-          { b: hl(pct(TAX_OFFICE_BONUS)) },
-        ),
+        body: t('Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}.', { b: hl(pct(TAX_OFFICE_BONUS)) }),
       };
     case 'farm':
       return {
         name,
-        body: t(
-          'Ярусы гидропонных оранжерей под спектральными лампами: {f} пищи в час. Пехота, танкисты и рабочие фабрик едят каждый день — армия без ферм тратит запасы, а не пополняет их.',
-          { f: hl(lv.produces.food ?? 0) },
-        ),
+        body: t('Ярусы гидропонных оранжерей под спектральными лампами позволяют вашим подопечным питаться, ведь голод беспощаден. Выращивает {f}❖ в час. Ваши рабочие и воины едят каждый день, было бы глупо проиграть сражение из-за голодного обморока.', { f: hl(lv.produces.food ?? 0) }),
       };
     case 'power_plant':
       return {
         name,
-        body: t(
-          'Термоядерный реактор планетарной сети: {e} энергии в час. Энергия — кровь застройки: перерабатывающие комплексы, радары, ПКО и фабрики тянут ток каждый день, а при дефиците проседают до половины мощности.',
-          { e: hl(lv.produces.energy ?? 0) },
-        ),
+        body: t('Термоядерный реактор питает энергией ваши миры, он производит {e}↯ в час. Энергия — кровь ваших построек, ведь они работают не на волшебстве. При дефиците всё проседает до половины мощности.', { e: hl(lv.produces.energy ?? 0) }),
       };
     case 'fabricator':
       return {
         name,
-        body: t(
-          'Чистые цеха литографии: {m} микроэлектроники в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.',
-          { m: hl(lv.produces.microelectronics ?? 0) },
-        ),
+        body: t('Чистые цеха литографии печатают {m}▦ в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.', { m: hl(lv.produces.microelectronics ?? 0) }),
       };
     default:
       return { name, body: t('Планетарное сооружение.') };
@@ -6192,13 +6223,13 @@ function objDossier(key: string): Dossier | null {
     // The ЗЕМЛЯ tab's hover dossier — carries what used to be the tab's bottom hint.
     return {
       name: t('Земля'),
-      body: t('Наземные части обороняют миры; грузятся на флот из панели флота.'),
+      body: t('Наземные части обороняют ваши миры. Их можно погрузить на флот для захвата вражеских миров.'),
     };
   }
   if (key === 'tab:ships') {
     return {
       name: t('Флот'),
-      body: t('Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.'),
+      body: t('Флот -ваше оружие и защита. Здесь вы можете заказывать корабли для пополнения флота.'),
     };
   }
   if (key === 'tab:squadron') {
@@ -6951,16 +6982,37 @@ function scrollFeedToEnd(): void {
 /** A compact codex tile (icon + a one-line label) that opens the full info panel on
  *  tap. `label` is the build cost for buildables, or ×count for a fleet's ships. The
  *  tiles live in context — building tiles in the build menu, ship tiles in the fleet
- *  panel — not in a global HUD strip. The LOCALIZED name rides both the desktop
- *  `title` (hover tooltip) and `data-name` — the mobile long-press bubble reads it. */
-function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false): string {
+ *  panel — not in a global HUD strip. Identification is the game tooltip only: the
+ *  PC cursor dossier (#objtip, via data-desc) and the mobile long-press bubble
+ *  (data-name). No native `title` — it duplicated #objtip as a second, uglier popup. */
+/** A building is one-per-planet (the reducer grows it via upgrade, never a 2nd copy).
+ *  Returns why a fresh build order would be refused — so the build tile can grey out
+ *  the moment it's committed (built / building / queued / paused), instead of taking
+ *  the order and only rejecting it when the queue reaches it. `null` = orderable. */
+function buildingLocked(planetId: string, id: string): 'built' | 'queued' | null {
+  const p = s.planets[planetId];
+  if (!p) return null;
+  if (p.buildings.some((b) => b.type === id)) return 'built';
+  if (queueOf(planetId).buildings.some((q) => q.kind === 'building' && q.id === id)) return 'queued';
+  const act = activeConstruction(planetId, 'buildings');
+  if (act && act.payload.kind === 'building' && act.payload.building === id) return 'queued';
+  if (p.pausedConstruction?.some((s) => s.kind === 'building' && s.building === id)) return 'queued';
+  return null;
+}
+function codexTile(kind: 'b' | 'u', id: string, label: string, orderable = false, lockedFor?: string): string {
   if (!(kind === 'b' ? data.buildings[id] : data.units[id])) return '';
   const icon = kind === 'b' ? (BUILD_ICON[id] ?? '▣') : unitIcon(id);
   const name = kind === 'b' ? buildingName(id) : (unitDossier(id)?.name ?? displayUnit(id));
+  if (lockedFor) {
+    // Committed already — a dim, non-ordering tile. Keeps data-desc (hover dossier),
+    // drops data-codex/data-buildorder so neither left- nor right-click builds again.
+    const mark = lockedFor === 'built' ? '✓' : '⏳';
+    return `<button class="ptile locked" data-desc="${kind}:${id}" data-name="${esc(name)}"><span class="pt-ic">${icon}</span><span class="pt-c">${mark} ${esc(label)}</span></button>`;
+  }
   // Build-menu tiles carry the enqueue order (PC right-click = build w/o the codex
   // confirmation); composition/garrison tiles don't — right-click is inert there.
   const order = orderable ? ` data-buildorder="${kind === 'u' ? 'unit' : 'building'}:${id}"` : '';
-  return `<button class="ptile" data-codex="${kind}:${id}" data-desc="${kind}:${id}"${order} data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
+  return `<button class="ptile" data-codex="${kind}:${id}" data-desc="${kind}:${id}"${order} data-name="${esc(name)}"><span class="pt-ic">${icon}</span><span class="pt-c">${esc(label)}</span></button>`;
 }
 /** Ground-garrison tiles (the ЗЕМЛЯ tab): one flowing row of icon·count chips — no
  *  names; the hover dossier (PC) / tap dossier (touch) carries the identification. */
@@ -6969,7 +7021,7 @@ function garrisonTilesHtml(stacks: Array<{ unit: string; count: number }>): stri
     .filter((u) => u.count > 0)
     .map((u) => {
       const name = unitDossier(u.unit)?.name ?? displayUnit(u.unit);
-      return `<button class="ptile mini" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}" title="${esc(name)} — ${t('тап — полное досье')}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}</span></button>`;
+      return `<button class="ptile mini" data-codex="u:${esc(u.unit)}" data-desc="u:${esc(u.unit)}" data-name="${esc(name)}"><span class="pt-ic">${unitIcon(u.unit)}</span><span class="pt-c">${u.count}</span></button>`;
     })
     .join('');
   return tiles ? `<div class="ptiles">${tiles}</div>` : `<div class="row dim">${t('нет')}</div>`;
@@ -7707,9 +7759,11 @@ side.addEventListener('contextmenu', (ev) => {
   const p = s.planets[selPlanet];
   if (!p || p.owner !== ME) return;
   if (kind === 'building') {
-    // mirror codexBuildBtn's gates: the sector must allow it, one copy per world
+    // mirror codexBuildBtn's gates: the sector must allow it, one copy per world —
+    // AND already-committed (built/building/queued/paused), to stop a fast double
+    // right-click from queueing a second copy before the tile re-renders locked.
     const buildable = (SECTOR_TYPES[SECTOR_OF[p.id]]?.allowedBuildings ?? BUILDABLE).includes(id);
-    if (!buildable || p.buildings.some((b) => b.type === id)) return;
+    if (!buildable || buildingLocked(p.id, id)) return;
   }
   enqueueBuild(selPlanet, { kind: kind as BuildKind, id, count: 1 });
   lastPanelHtml = '';
@@ -8040,7 +8094,25 @@ function selectAt(mx: number, my: number) {
       return;
     }
   }
-  if (!aiming) {
+  // Move armed → send the selected fleet(s) to the tapped world (or the nearest lane
+  // point if no world is hit). A route crossing a player you're at peace with stages a
+  // war prompt instead of dispatching.
+  if (aiming) {
+    const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
+    if (n) tryMoveGroup(selectedFleetIds(), n.id);
+    else {
+      const lane = nearestLanePoint(mx, my);
+      if (lane) tryMoveEdgeGroup(selectedFleetIds(), { from: lane.from, to: lane.to, t: lane.t });
+    }
+    aiming = false;
+    lastPanelHtml = '';
+    return;
+  }
+  // Plain tap = selection.
+  const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
+  if (!pcUi()) {
+    // Mobile (frozen in this chat): the original fleet-first behaviour — nearest own
+    // fleet under the tap, else the world, else clear.
     const mine = nearestHit(
       Object.values(s.fleets).filter((f) => f.owner === ME),
       fleetAnchor,
@@ -8054,39 +8126,53 @@ function selectAt(mx: number, my: number) {
       else setFleetSelection([mine.id]); // (clears any selected planet)
       return;
     }
-  }
-  {
-    const n = nearestHit(MAP, (nn) => world(nn), mx, my, rNode);
     if (n) {
-      if (aiming) {
-        // Move armed → send the selected fleet(s) here; they route along the lanes to
-        // this world and stop. Keep them selected for follow-up orders. A route through
-        // a player you're at peace with stages a war prompt instead of dispatching.
-        tryMoveGroup(selectedFleetIds(), n.id);
-        aiming = false;
-        lastPanelHtml = '';
-        return;
-      }
-      // plain tap → select the planet (mutually exclusive with a fleet)
       selPlanet = n.id;
       selFleet = null;
       selFleets = new Set();
       lastPanelHtml = '';
       return;
     }
-  }
-  // Move armed but no node hit → if the tap landed on a road, march there: the
-  // army routes to that lane and parks at the exact point (Bytro continuous order).
-  if (aiming) {
-    const lane = nearestLanePoint(mx, my);
-    if (lane) {
-      tryMoveEdgeGroup(selectedFleetIds(), { from: lane.from, to: lane.to, t: lane.t });
-    }
-    aiming = false;
-    lastPanelHtml = '';
+    clearSelection();
     return;
   }
-  clearSelection();
+  // PC — RimWorld-style cycling: gather EVERY selectable object under the tap — your
+  // fleets (nearest first), then the world beneath them — and each repeat tap on the
+  // same spot advances to the next. So a fleet parked on its home world (or a stack of
+  // fleets on one orbit) no longer permanently masks the world / the fleets below it.
+  const fleetHits = Object.values(s.fleets)
+    .filter((f) => f.owner === ME)
+    .map((f) => {
+      const a = fleetAnchor(f);
+      return a ? { id: f.id, d: Math.hypot(mx - a.x, my - a.y) } : null;
+    })
+    .filter((h): h is { id: string; d: number } => !!h && h.d < rFleet)
+    .sort((a, b) => a.d - b.d);
+  if (additive) {
+    // Ctrl/⌘ → extend the fleet group with the nearest fleet under the tap (no cycling).
+    if (fleetHits[0]) toggleFleetInSelection(fleetHits[0].id);
+    return;
+  }
+  const cands: string[] = fleetHits.map((h) => 'f:' + h.id);
+  if (n) cands.push('p:' + n.id);
+  if (cands.length === 0) {
+    clearSelection();
+    return;
+  }
+  // Advance from whatever is selected now: a repeat tap on the same cluster steps to
+  // the next candidate; a tap on a fresh spot (current selection not in the cluster)
+  // starts at the topmost (index 0). One candidate → tapping it just keeps it selected.
+  const curKey = selFleet ? 'f:' + selFleet : selPlanet ? 'p:' + selPlanet : null;
+  const at = curKey ? cands.indexOf(curKey) : -1;
+  const pick = cands[(at + 1) % cands.length]!;
+  if (pick.startsWith('f:')) {
+    setFleetSelection([pick.slice(2)]); // (clears any selected planet)
+  } else {
+    selPlanet = pick.slice(2);
+    selFleet = null;
+    selFleets = new Set();
+    lastPanelHtml = '';
+  }
 }
 
 // --- camera control: drag-pan, pinch-zoom, wheel-zoom, tap-select ------------
@@ -10362,13 +10448,13 @@ function openReset(token: string): void {
 
 // hub interactions
 $('hub-play').addEventListener('click', () => hubTab('games'));
-// Single-player entry — dev client only (the player build strips the tile + this hook).
-if (!__PLAYER_BUILD__) {
-  $('hub-solo').addEventListener('click', () => {
-    showHub(false);
-    openSetup('hub');
-  });
-}
+// Single-player entry from the hub home — offline skirmish vs bots (both builds).
+$('hub-solo').addEventListener('click', () => {
+  userClosed = true; // intentional leave → don't auto-reconnect to a server
+  NET = false;
+  showHub(false);
+  openSetup('hub');
+});
 $('hub-msg').addEventListener('click', () => {
   hubNote.textContent = t('Сообщения — скоро');
 });
@@ -10452,6 +10538,14 @@ function renderSettings(): void {
     `<div class="set-lbl">${t('Звёздный фон')}<span class="set-sub">${t('дрейфующие туманности и звёзды на фоне — выключите для плоского фона')}</span></div>` +
     `<div class="set-ctl"><label class="set-switch"><input id="set-starfield" type="checkbox"${starfield ? ' checked' : ''} aria-label="${t('Звёздный фон')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-starfield-val" class="set-val">${starfield ? t('вкл') : t('выкл')}</span></div>` +
     `</div>` +
+    // Developer section (PC only) — tools a normal player doesn't need.
+    (pcUi()
+      ? `<div class="pc-sec">${t('Для разработчиков')}</div>` +
+        `<div class="set-row">` +
+        `<div class="set-lbl">${t('Управление скоростью')}<span class="set-sub">${t('панель времени в матче — пауза и множители ускорения (1× — реальное время)')}</span></div>` +
+        `<div class="set-ctl"><label class="set-switch"><input id="set-devspeed" type="checkbox"${devSpeedControl ? ' checked' : ''} aria-label="${t('Управление скоростью')}"><span class="sw-track"></span><span class="sw-knob"></span></label><span id="set-devspeed-val" class="set-val">${devSpeedControl ? t('вкл') : t('выкл')}</span></div>` +
+        `</div>`
+      : '') +
     `<button class="pc-close" id="set-close" type="button">${t('ГОТОВО')}</button>` +
     `</div>`;
   const slider = document.getElementById('set-sweep') as HTMLInputElement | null;
@@ -10483,6 +10577,12 @@ function renderSettings(): void {
   star?.addEventListener('change', () => {
     setStarfield(star.checked);
     if (starVal) starVal.textContent = star.checked ? t('вкл') : t('выкл');
+  });
+  const devspd = document.getElementById('set-devspeed') as HTMLInputElement | null;
+  const devspdVal = document.getElementById('set-devspeed-val');
+  devspd?.addEventListener('change', () => {
+    setDevSpeedControl(devspd.checked);
+    if (devspdVal) devspdVal.textContent = devspd.checked ? t('вкл') : t('выкл');
   });
   // Цвета сторон: живые инпуты + пресеты палитры соперников. Карта красится на
   // следующем кадре сама (ownerColor читается при отрисовке), панель — при
@@ -10832,12 +10932,6 @@ sciWin.addEventListener('click', (e) => {
 });
 
 function openSetup(from: 'welcome' | 'hub' = 'welcome'): void {
-  // Player build: no single-player — every entry point is stripped, but if a stray
-  // path still lands here (e.g. a future rematch hook), fail safe into the hub.
-  if (__PLAYER_BUILD__) {
-    openHub();
-    return;
-  }
   setupReturn = from;
   setupSlots = freshSetupSlots();
   setupTeams = false; // a fresh setup opens on the classic free-for-all
@@ -11667,15 +11761,15 @@ function renderMatches(): void {
   // client offers the path that ALWAYS works — a solo skirmish offline. The player
   // build has no single-player, so it states the situation honestly instead.
   const soloCard = (msg: string): void => {
-    if (__PLAYER_BUILD__) {
-      el.innerHTML = `<div class="mempty">${msg}</div>`;
-      return;
-    }
     el.innerHTML =
       `<div class="mempty">${msg}</div>` +
       `<div class="msolo"><button class="mbtn" id="msolo-go">▶ ${t('Одиночный режим')}</button>` +
       `<div class="msolo-sub">${t('Сервер не нужен — свободные места займут боты.')}</div></div>`;
-    document.getElementById('msolo-go')?.addEventListener('click', () => openSetup('hub'));
+    document.getElementById('msolo-go')?.addEventListener('click', () => {
+      userClosed = true;
+      NET = false;
+      openSetup('hub');
+    });
   };
   if (!matchLists) {
     soloCard(
@@ -12242,6 +12336,18 @@ function frame(nowReal: number) {
     const soloNoBots = !NET && AI_PLAYERS.size === 0;
     restartBtn.style.display = soloNoBots ? '' : 'none';
     restartSep.style.display = soloNoBots ? '' : 'none';
+  }
+  // Speedbar time controls. PC: gated by the developer «speed control» toggle — off
+  // for a normal player, so the whole bar (its ⌂/▶▶ are PC-hidden in CSS) disappears.
+  // Mobile is frozen: the exit ⌂ lives in the bar there (the rail exit is PC-only), so
+  // the bar always shows and the controls follow the old solo/NET rule.
+  const showSpdCtl = pcUi() ? devSpeedControl : !NET || !__PLAYER_BUILD__;
+  if (spdCtl && spdCtl.style.display !== (showSpdCtl ? '' : 'none')) {
+    spdCtl.style.display = showSpdCtl ? '' : 'none';
+  }
+  const showBar = pcUi() ? devSpeedControl : true;
+  if (speedbarEl && speedbarEl.style.display !== (showBar ? '' : 'none')) {
+    speedbarEl.style.display = showBar ? '' : 'none';
   }
   // Keep the tech window live while open (research progress bar / eta), throttled.
   if (techWin.classList.contains('show') && nowReal - lastTechAt > 500) {

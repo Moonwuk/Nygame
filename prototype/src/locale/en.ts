@@ -230,8 +230,8 @@ export const en: Record<string, string> = {
   АТК: 'ATK',
   Авиагруппа: 'Air wing',
   'Авиагруппа в гарнизоне': 'Air wing in garrison',
-  'Автономная крепость, вмороженная в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО — взять его можно только штурмом.':
-    'A standalone fortress frozen into an asteroid field: {d} to defense and {hp} structure HP. Turns a faceless crossroads into a fortified node with orbit and AA — it can only be taken by assault.',
+  'Автономная крепость, возведённая в астероидное поле: {d} к обороне и {hp} прочности. Превращает безликий перекрёсток в укреплённый узел с орбитой и ПКО':
+    'A standalone fortress raised in an asteroid field: {d} to defense and {hp} structure HP. Turns a faceless crossroads into a fortified node with orbit and AA.',
   Агрес: 'Aggr',
   'Артиллерия — режим огня': 'Artillery — rules of engagement',
   Атака: 'Attack',
@@ -242,8 +242,8 @@ export const en: Record<string, string> = {
     "The commander's own combat projection — a flagship leading the home fleet: {a} attack and {hp} hull. But that's not what matters: its presence holds the squadron together, granting {b} attack/defense to every ship nearby. If it falls, the commander loses their projection until it's rebuilt at the home world.",
   'Боевой счёт': 'War record',
   'Боты не вступают в коалиции': 'Bots do not join coalitions',
-  'Буровая платформа, вгрызающаяся в рудное тело планеты. Добывает {m} металла в час. Каждый новый горизонт вскрывает более плотную жилу — выработка растёт в полтора раза, и из этого металла куётся весь флот.':
-    "A drilling rig gnawing into the world's ore body. Mines {m} metal per hour. Each new tier taps a denser vein — output grows by half again, and this metal forges the whole fleet.",
+  'Буровая платформа вгрызается в планету и добывает {m}⬢ в час. Улучшение позволяет копать глубже, чтобы добраться до самых богатых жил. Основа для строительства флота.':
+    'A drilling rig gnaws into the planet, mining {m}⬢ per hour. Upgrades dig deeper to reach the richest veins. The foundation for building your fleet.',
   'В ЛС игроку': "To a player's DM",
   'В архив': 'Archive',
   'В казне': 'In the treasury',
@@ -285,8 +285,8 @@ export const en: Record<string, string> = {
   'Выбрать →': 'Select →',
   Выставить: 'List',
   'Гарнизон на момент скана': 'Garrison when scanned',
-  'Гарнизонный учебный лагерь. Куёт наземные подразделения и держит планетарную оборону в тонусе. Мир без казарм беззащитен перед первой же десантной волной.':
-    "A garrison training camp. Raises ground units and keeps the planet's defense sharp. A world without barracks falls to the first landing wave.",
+  'Казармы нужны для защиты вашего мира от захватчиков. Тут живут ваши доблестные защитники.':
+    'Barracks defend your world from invaders. Home to your valiant defenders.',
   Глобальный: 'Global',
   Дальность: 'Range',
   'Дежурный режим': 'Standing order',
@@ -313,8 +313,8 @@ export const en: Record<string, string> = {
   'Дивизия строится по шаблону из меню. На своём мире +1 HP/юнит/день; полностью выбитая исчезает.':
     'A division is mobilized from a template. On your own world it heals +1 HP/unit/day; wiped out, it disappears.',
   Дипломатия: 'Diplomacy',
-  'Добывающая платформа, вгрызающаяся в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m} металла в час, и каждый новый ярус наращивает поток. Единственная причина держать выжженное пепелище под флагом.':
-    "A mining rig gnawing into a dead world's scorched crust. Where annihilation burned away all life, raw metal ore lies exposed — the station pumps {m} metal per hour, and each new tier widens the flow. The only reason to hold the ash under your flag.",
+  'Добывающая платформа, вгрызается в спёкшуюся кору мёртвого мира. Там, где аннигиляция выжгла всё живое, обнажилась чистая металлическая руда — станция качает {m}⬢ в час. Улучшение увеличивает добычу.':
+    "A mining rig gnawing into a dead world's scorched crust. Where annihilation burned away all life, raw metal ore lies exposed — the station pumps {m}⬢ per hour. Upgrades raise the yield.",
   'Ещё раз «Назад» — выход': 'Press Back again to exit',
   'Ждём, пока хост начнёт…': 'Waiting for the host to start…',
   ЗАКРЫТЬ: 'CLOSE',
@@ -389,11 +389,11 @@ export const en: Record<string, string> = {
     'Press "Move" and tap a destination — every selected fleet routes there and stops. "Merge" fuses the group into one fleet (distant ones fly in first). Shift- or Ctrl/⌘-click a fleet to add it to the group; Shift-drag empty space to box-select several.',
   'Наземная армия ⇄ гарнизон': 'Ground army ⇄ garrison',
   'Наземные части': 'Ground units',
-  'Наземные части обороняют миры; грузятся на флот из панели флота.':
-    'Ground units defend worlds and load onto fleets from the fleet panel.',
+  'Наземные части обороняют ваши миры. Их можно погрузить на флот для захвата вражеских миров.':
+    'Ground units defend your worlds. Load them onto a fleet to capture enemy worlds.',
   'Наземный конвейер': 'Ground conveyor',
-  'Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}. Возводится один раз — бюрократию не масштабируют, её терпят.':
-    "An imperial-style tax office: produces nothing itself, but registers the world's population and lifts its credit take by {b}. Built once — bureaucracy isn't scaled, it's tolerated.",
+  'Налоговая управа имперского образца: сама ничего не добывает, но ставит на учёт население мира и поднимает его кредитный сбор на {b}.':
+    "An imperial-style tax office: produces nothing itself, but registers the world's population and lifts its credit take by {b}.",
   'Напишите первое сообщение.': 'Write the first message.',
   Настройки: 'Settings',
   'Не исследовано — вне сенсоров и радаров. Содержимое неизвестно.':
@@ -413,6 +413,21 @@ export const en: Record<string, string> = {
   ДА: 'YES',
   НЕТ: 'NO',
   '⚔ выберите чужой мир для штурма': "⚔ pick someone else's world to storm",
+  '⚔ штурм невозможен: на борту нет десанта, а мир защищён — погрузите войска':
+    '⚔ assault impossible: no landing force aboard and the world is defended — load troops',
+  '⚔ внимание: на борту нет десанта — защищённый мир штурмом не взять':
+    '⚔ warning: no landing force aboard — a defended world cannot be stormed',
+  'мир защищён — для штурма нужен десант на борту': 'the world is defended — an assault needs troops aboard',
+  'Ждёт ресурсы: {c}': 'Waiting for resources: {c}',
+  'уже построено': 'already built',
+  'уже в очереди': 'already queued',
+  'Для разработчиков': 'For developers',
+  'Управление скоростью': 'Speed control',
+  'панель времени в матче — пауза и множители ускорения (1× — реальное время)':
+    'the in-match time bar — pause and speed multipliers (1× is real time)',
+  'полчаса в секунду': 'half an hour per second',
+  'час в секунду': 'an hour per second',
+  'два часа в секунду': 'two hours per second',
   '⚔ штурмовать можно только чужой мир': "⚔ only someone else's world can be stormed",
   'Корабли: {s} · Десант: {tr}': 'Ships: {s} · Landing: {tr}',
   'Авто-штурм': 'Auto-storm',
@@ -463,16 +478,16 @@ export const en: Record<string, string> = {
     "Passive — never fires. Return — only after taking damage. Standard — at those you're at war with. Aggressive — at anyone except a pact/alliance.",
   'Пассивные бонусы': 'Passive bonuses',
   'Переподключение не удалось — войди заново': 'Reconnect failed — sign in again',
-  'Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c} в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.':
-    'A refining complex turning ore and logistics into liquid credits — {c} per hour. Fuel for imperial bureaucracy, shipyards and mercenary squadrons.',
+  'Перерабатывающий комплекс, превращающий руду и логистику в ликвидные кредиты — {c}¤ в час. Топливо для имперской бюрократии, верфей и наёмных эскадр.':
+    'A refining complex turning ore and logistics into liquid credits — {c}¤ per hour. Fuel for imperial bureaucracy, shipyards and mercenary squadrons.',
   Пинг: 'Ping',
   'Планетарное сооружение.': 'A planetary structure.',
   'Под фильтр никто не подходит.': 'Nobody matches the filter.',
   Подтвердить: 'Confirm',
   'Покинуть сессию': 'Leave session',
   Покупка: 'Buy',
-  'Построенные корабли сперва встают в гарнизон; запуск создаёт мобильный флот.':
-    'Built spacecraft join the garrison first; launch creates a mobile fleet.',
+  'Флот -ваше оружие и защита. Здесь вы можете заказывать корабли для пополнения флота.':
+    'The fleet is your weapon and shield. Order ships here to reinforce it.',
   'Построить здесь': 'Build here',
   'Наведи на объект слева — здесь появится его досье.':
     'Hover an object on the left — its dossier appears here.',
@@ -513,8 +528,8 @@ export const en: Record<string, string> = {
   Свернуть: 'Collapse',
   'Сервер не нужен — свободные места займут боты.': 'No server needed — bots fill the open seats.',
   Сессия: 'Session',
-  'Сеть глубокого сканирования. Просвечивает пустоту в радиусе {r} и ловит чужие сигнатуры задолго до того, как они выйдут на дистанцию удара. Апгрейд раздвигает горизонт обнаружения.':
-    'A deep-scan network. Sees through the void within radius {r} and catches enemy signatures long before they close to strike range. Upgrading pushes the detection horizon out.',
+  'Комплекс радаров просвечивает пространство вокруг вашего мира и ловит вражеские сигнатуры задолго до того, как они посмеют на вас напасть. Улучшения обеспечивают большее покрытие.':
+    'A radar complex sees through the space around your world and catches enemy signatures long before they dare attack. Upgrades widen the coverage.',
   Скор: 'Spd',
   Скорость: 'Speed',
   Слить: 'Merge',
@@ -534,8 +549,8 @@ export const en: Record<string, string> = {
   'Сообщения — скоро': 'Messages — coming soon',
   'Сорт.': 'Sort',
   Станд: 'Std',
-  'Стационарная зенитная батарея — неподвижное сооружение, {dmg} урона в час по кораблям на низкой орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.':
-    "A stationary anti-air battery — an immobile emplacement dealing {dmg} damage per hour to ships in low orbit. A nightmare for bombers hanging over the world and for raiding squadrons. Doesn't block capture (that's ground defense's job) — it just mows down the fleet overhead.",
+  'Стационарная зенитная батарея защищает воздушное пространство вашего мира и наносит {dmg} урона в час по кораблям на орбите. Кошмар для бомбардировщиков, повисших над планетой, и для налетающих эскадрилий. Захват мира не блокирует — это дело наземной обороны; батарея лишь выкашивает флот над головой.':
+    "A stationary anti-air battery guards your world's airspace, dealing {dmg} damage per hour to ships in orbit. A nightmare for bombers hanging over the world and for raiding squadrons. Doesn't block capture (that's ground defense's job) — it just mows down the fleet overhead.",
   Стоимость: 'Cost',
   'Стоит на трассе — нажмите «Курс», чтобы идти дальше (маршрут отсюда).':
     'Parked on a lane — press Move to march on (it routes from here).',
@@ -890,7 +905,7 @@ export const en: Record<string, string> = {
   'со своим радарным дозором': 'running its own radar picket',
   спокойно: 'quiet',
   'статы — превью; бой их читает скоро': 'stats — preview; combat will read them soon',
-  'строительная телеметрия врага недоступна': 'enemy construction telemetry unavailable',
+  'Строительная телеметрия врага недоступна': 'Enemy construction telemetry unavailable',
   'тап сюда — убрать': 'tap here to remove',
   'тапни слот героя': 'tap a hero slot',
   'тапни слот корпуса': 'tap a hull slot',
@@ -1125,12 +1140,12 @@ export const en: Record<string, string> = {
   '{ic} {name}: {stock} в казне · {flow}/ч (производство минус содержание войск и зданий)':
     '{ic} {name}: {stock} in the treasury · {flow}/h (production minus army and building upkeep)',
   '⚠ ДЕФИЦИТ — здания-потребители работают на 50%': '⚠ SHORTAGE — consuming buildings run at 50%',
-  'Ярусы гидропонных оранжерей под спектральными лампами: {f} пищи в час. Пехота, танкисты и рабочие фабрик едят каждый день — армия без ферм тратит запасы, а не пополняет их.':
-    'Tiers of hydroponic greenhouses under spectral lamps: {f} food per hour. Infantry, tank crews and fab workers eat every day — an army without farms drains its stores instead of refilling them.',
-  'Термоядерный реактор планетарной сети: {e} энергии в час. Энергия — кровь застройки: перерабатывающие комплексы, радары, ПКО и фабрики тянут ток каждый день, а при дефиците проседают до половины мощности.':
-    'A fusion reactor on the planetary grid: {e} energy per hour. Energy is the lifeblood of your buildings: refineries, radars, AA and fabs draw current every day — and brown out to half output when it runs short.',
-  'Чистые цеха литографии: {m} микроэлектроники в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.':
-    'Clean lithography halls: {m} microelectronics per hour. Hungry for power and people, but its output guides strike wings and unlocks siege doctrines. Upgrades pay for themselves in their own product.',
+  'Ярусы гидропонных оранжерей под спектральными лампами позволяют вашим подопечным питаться, ведь голод беспощаден. Выращивает {f}❖ в час. Ваши рабочие и воины едят каждый день, было бы глупо проиграть сражение из-за голодного обморока.':
+    'Tiers of hydroponic greenhouses under spectral lamps feed those in your care — hunger is merciless. Grows {f}❖ per hour. Your workers and soldiers eat every day; it would be foolish to lose a battle to a hungry faint.',
+  'Термоядерный реактор питает энергией ваши миры, он производит {e}↯ в час. Энергия — кровь ваших построек, ведь они работают не на волшебстве. При дефиците всё проседает до половины мощности.':
+    "A fusion reactor powers your worlds, producing {e}↯ per hour. Energy is the lifeblood of your buildings — they don't run on magic. When it runs short, everything browns out to half output.",
+  'Чистые цеха литографии печатают {m}▦ в час. Прожорлива к энергии и людям, зато её продукция ведёт эскадрильи и открывает осадные доктрины. Апгрейды окупаются собственной продукцией.':
+    'Clean lithography halls print {m}▦ per hour. Hungry for power and people, but its output guides strike wings and unlocks siege doctrines. Upgrades pay for themselves in their own product.',
   'Сборка дивизии': 'Division assembly',
   'Влияние на характеристики': 'Effect on characteristics',
   '⚔ Урон в атаке': '⚔ Attack damage',
