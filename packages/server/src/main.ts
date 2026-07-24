@@ -11,7 +11,7 @@ import { arsenalSnapshotOf, grantStarterArsenal } from './arsenal';
 import { awardMatchDrops, salvageFromEvents } from './dropRoller';
 import { createMultiplayerServer, tlsFromEnv } from './wsServer';
 import { createStores, snapshotOf } from './persistence';
-import { configFromEnv } from './serverConfig';
+import { checkProductionReadiness, configFromEnv } from './serverConfig';
 import { createMatchLoader } from './serverWiring';
 import {
   registerMatchApi,
@@ -55,6 +55,10 @@ import { LazyRoomRegistry } from './roomRegistry';
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8787);
 const bootTime = Date.now();
+// REL-5: nick's first join mints a secret seat ticket (only its hash is stored); every
+// later join for that nick must present it, so `?player=` alone can't steal a taken seat.
+// Ported from the prototype netserver (netserver.ts) — wasn't wired here yet (MP-1 audit).
+const SEAT_LOCK = process.env.SEAT_LOCK === '1' || process.env.SEAT_LOCK === 'true';
 
 // Security composition from the environment (all switches OFF by default → dev harness):
 // AUTH_JWT_SECRET (authenticated handshake + token minting + login/password accounts),
@@ -70,6 +74,18 @@ const {
   resetBaseUrl,
   gateFactory,
 } = configFromEnv(process.env);
+
+// MP-1: secure-by-default launch guard. `PROD=1` refuses to boot at all — not just log a
+// warning — unless auth+gate+TLS+seat-lock are ALL explicitly on. `PROD` unset is the
+// existing dev harness, untouched (opt-in only, see serverConfig.ts).
+const readiness = checkProductionReadiness(process.env);
+if (!readiness.ok) {
+  process.stderr.write(
+    `PROD=1 refuses to start: missing ${readiness.missing.join(', ')}. ` +
+      'Set every release-posture switch, or unset PROD for the dev harness.\n',
+  );
+  process.exit(1);
+}
 
 const data = loadShippedData();
 // ARS-2: the starter blueprint set, validated against the shipped catalogs at boot
@@ -353,6 +369,7 @@ const server = createMultiplayerServer({
   auth,
   allowedOrigins,
   accountStore, // dev ?nick= WS login (when auth is off)
+  seatLock: SEAT_LOCK, // REL-5: nick+ticket identity; `?player=` alone is refused when on
   httpRoutes: (app) => {
     // The open-matches feed is PUBLIC and read-only — browsing joinable matches precedes
     // login and works with or without auth. Joining still needs a session (SE-1.x).
@@ -462,6 +479,7 @@ process.stdout.write(
     `  factory: ${keeper ? `keeps ${OPEN_MATCHES} open match(es) available · GET ${httpUrl}/matches/open` : 'off (OPEN_MATCHES=0)'}`,
     `  auth   : ${auth ? 'on (join token required — connect with ?token=<jwt>)' : 'off (insecure dev ?player=/?nick=)'}`,
     `  gate   : ${gateFactory ? 'ON (clients MUST send action.v1 envelopes echoing welcome.sessionId)' : 'off (bare actions)'}`,
+    `  seats  : ${SEAT_LOCK ? 'locked (nick+ticket identity; a taken seat refuses a bare ?player=)' : 'open — any nick takes any free seat (set SEAT_LOCK=1 for the release posture)'}`,
     `  health : ${httpUrl}/health`,
     ...(auth
       ? [

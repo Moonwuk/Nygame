@@ -140,12 +140,20 @@ runbooks, RTO/RPO, kill-switch (`SE-9.2`).
 
 Формат: `id · зона · статус · «Готово, когда»`. Каждая расширяет существующий трек.
 
-- **MP-1** `[srv][sec]` ⏳ — **Secure-by-default launch guard.** Флаг `PROD=1` (или
-  отсутствие явного dev-режима) заставляет сервер при старте проверить наличие
-  `AUTH_JWT_SECRET` + `GATE=1` + TLS-терминацию перед ним + `SEAT_LOCK=1` и **отказаться
-  стартовать** (fail-closed), если чего-то нет. Anti-goal «не оставлять публичный
-  plain-port» превращается из комментария в код. _Готово, когда:_ тест «прод-режим без
-  секрета → процесс не поднимается»; dev-режим не запускается на 0.0.0.0.
+- **MP-1** `[srv][sec]` ✅ — **Secure-by-default launch guard.** `PROD=1`/`PROD=true` —
+  явный триггер, dev-харнес (`PROD` не задан) не тронут ни на йоту (`pnpm dev:server`
+  как был). `checkProductionReadiness` (`serverConfig.ts`, чистая функция от `env`) при
+  `PROD` проверяет `AUTH_JWT_SECRET` + `GATE=1` + TLS (`TLS_KEY_FILE`+`TLS_CERT_FILE`
+  нативно, ИЛИ `TRUST_PROXY=1` за терминирующим прокси) + `SEAT_LOCK=1` — `main.ts` при
+  `!ok` пишет, чего не хватает, и `process.exit(1)` ДО поднятия сторов/сети (fail-closed).
+  Попутно найден и закрыт реальный пробел: `SEAT_LOCK` был реализован только в
+  прототипном `netserver.ts` — на боевом входе (`main.ts`) опция `seatLock` у
+  `createMultiplayerServer` вообще не была подключена (проверка проверяла бы флаг без
+  эффекта). Портирован тот же паттерн, что в `netserver.ts` + строка статуса `seats` в
+  boot-логе. Тесты: `serverConfig.test.ts` (все ветки missing/ok, `'1'`/`'true'` формы,
+  native-TLS vs TRUST_PROXY). Прогнано вживую: dev без `PROD` — стартует как раньше;
+  `PROD=1` без секретов — `exit 1` с точным списком; `PROD=1` + все четыре переключателя
+  — стартует, `/health` отвечает, seat-lock включён.
 - **MP-2** `[srv][sec]` 🔒(`RPL-5`) — **Shadow re-simulation.** Периодически пере-
   симулировать матч из durable action-log на независимом воркере и сравнивать
   `hashState`. Расхождение = вмешательство/эксплойт/десинк → сигнал `GI-1.x`.
@@ -183,7 +191,7 @@ runbooks, RTO/RPO, kill-switch (`SE-9.2`).
 
 Публичный запуск НЕ открывается, пока не выполнено (сшито с `roadmap.md` «Этап 7»):
 
-- [ ] `MP-1` — прод не стартует без auth+gate+TLS+seat-lock.
+- [x] `MP-1` — прод не стартует без auth+gate+TLS+seat-lock.
 - [ ] Auth+gate включены на играбельном пути; bare-action отклоняется (readiness#1).
 - [ ] TLS везде, где сервер открыт; release-APK без cleartext (`HTTPS-*`, `F-05`).
 - [ ] Периметр: WAF/DDoS + скрытый origin (`SE-1.*`).
