@@ -13036,7 +13036,30 @@ function tgStepLabel(st: ChainStep, target: string): string {
   if (st.kind === 'move') return st.to === target ? '✈' : `✈ ${st.to}`;
   if (st.kind === 'assault') return '⚔';
   if (st.kind === 'strike') return t('🎯{n}ч', { n: st.hours });
+  if (st.kind === 'ability') {
+    const nm = tData(data.heroAbilities[st.abilityId]?.name ?? st.abilityId);
+    return st.target && st.target !== target ? `★ ${nm} → ${st.target}` : `★ ${nm}`;
+  }
   return '🎯';
+}
+/** Castable hero abilities of the first hero commanding one of `fleetIds`, rendered as
+ *  composer buttons that append an `ability` chain step (CC-1 × HERO-4). Spawn-markers
+ *  and engine-less types are skipped (same rule as the hero window); a live cooldown
+ *  disables the button. Empty string when no hero rides these fleets. */
+function tgHeroAbilityButtons(fleetIds: string[], full: boolean): string {
+  const hero = Object.values(s.heroes ?? {}).find(
+    (h) => h.alive !== false && h.fleetId !== undefined && fleetIds.includes(h.fleetId),
+  );
+  if (!hero) return '';
+  let html = '';
+  for (const ab of hero.abilities ?? []) {
+    const ad = ab !== null ? data.heroAbilities[ab] : undefined;
+    if (!ad || !HERO_CASTABLE.has(ad.type)) continue;
+    const cdLeft = Math.max(0, (hero.cooldowns?.[heroCdKey(ad.type)] ?? 0) - s.time);
+    const badge = cdLeft > 0 ? ` ${t('КД {h}', { h: fmtHrs(cdLeft / HOUR) })}` : '';
+    html += `<button data-tgab="${ab}" ${full || cdLeft > 0 ? 'disabled' : ''}>★ ${esc(tData(ad.name))}${badge}</button>`;
+  }
+  return html;
 }
 /** Open the composer for `target`, editing the FIRST chained fleet's plan (or a
  *  fresh one). `fleetIds` — who the plan will be sent to (all owned, alive). */
@@ -13085,6 +13108,7 @@ function renderTgtEditor(reposition = false): void {
     `<button data-tg="assault" ${full ? 'disabled' : ''}>⚔ ${t('Штурм')}</button>` +
     `<button data-tg="barrage" ${full ? 'disabled' : ''}>🎯 ${t('Огонь')}</button>` +
     `<button data-tg="home" ${full || !nearestOwnWorld(tgtEditor.target) ? 'disabled' : ''}>⌂ ${t('Домой')}</button>` +
+    tgHeroAbilityButtons(tgtEditor.fleetIds, full) +
     `</div>` +
     `<div class="tg-act">` +
     `<button data-tg="send" ${st.length ? '' : 'disabled'}>✓ ${t('Отправить')}</button>` +
@@ -13114,6 +13138,15 @@ document.getElementById('tgted')?.addEventListener('click', (ev) => {
   }
   const act = btn.dataset.tg;
   const st = tgtEditor.steps;
+  if (btn.dataset.tgab) {
+    // A hero ability queued as a chain step: ranged casts carry the composer's target
+    // world; self/aura casts (range 0) carry none. The core re-gates it at execution.
+    const ab = btn.dataset.tgab;
+    const ranged = (data.heroAbilities[ab]?.range ?? 0) > 0;
+    st.push({ kind: 'ability', abilityId: ab, ...(ranged ? { target: tgtEditor.target } : {}) });
+    renderTgtEditor();
+    return;
+  }
   if (act === 'wait') {
     const last = st[st.length - 1];
     if (last?.kind === 'wait') last.hours = Math.min(24 * 14, last.hours + 1);
