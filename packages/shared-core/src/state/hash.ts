@@ -1,6 +1,18 @@
 import type { GameState } from './gameState';
 
 /**
+ * Canonical, deterministic digest of ANY JSON-serializable value — order-
+ * independent (object keys are sorted, so two logically-equal values with
+ * differently-ordered keys hash the same), pure, and platform-stable (no
+ * `Date`, no `Math.random`, no Node built-ins, only integer ops — identical
+ * on the server and in the browser). Not cryptographic; it is a fingerprint
+ * for detecting divergence/tampering, not a security signature.
+ */
+export function hashJson(value: unknown): string {
+  return digest(stableStringify(value));
+}
+
+/**
  * Canonical, deterministic digest of a {@link GameState} — the primitive for
  * desync detection: the server and a client compare `hashState(...)`, and a
  * mismatch means their worlds diverged (force a full resync + alert). This makes
@@ -12,12 +24,9 @@ import type { GameState } from './gameState';
  * state by `applyDelta`, which need not preserve key order. So keys are sorted
  * before hashing. Array order is preserved (it is semantically meaningful in the
  * state: schedule order, garrison stacks, lanes, …).
- *
- * Pure and platform-stable: no `Date`, no `Math.random`, no Node built-ins, only
- * integer ops — it runs identically on the server and in the browser.
  */
 export function hashState(state: GameState): string {
-  return digest(stableStringify(state));
+  return hashJson(state);
 }
 
 /**

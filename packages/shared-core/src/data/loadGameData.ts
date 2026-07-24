@@ -11,6 +11,7 @@
  */
 import { parseGameData } from './schemas';
 import type { GameData } from './schemas';
+import { hashJson } from '../state/hash';
 
 /** Reads and parses `data/<name>` (e.g. `readJson('units.json')`). */
 export type JsonReader = (name: string) => unknown;
@@ -44,4 +45,22 @@ export function composeGameDataBundle(readJson: JsonReader): Record<string, unkn
 /** Compose **and** validate the shipped bundle (A05/A08 — validate before use). */
 export function loadGameData(readJson: JsonReader): GameData {
   return parseGameData(composeGameDataBundle(readJson));
+}
+
+/**
+ * MP-4: a deterministic content-integrity fingerprint of the VALIDATED bundle
+ * (`hashJson`, the same order-independent primitive `hashState` uses) — hashing
+ * the parsed `GameData` rather than the raw JSON fragments means two rule sets
+ * that are semantically identical (e.g. a field omitted vs. written out at its
+ * schema default) hash the same, which is correct: they ARE the same rules.
+ *
+ * A match stamps this at creation (`GameVersion.dataHash`, `buildStateFromMap`/
+ * `createDevMatch`) and it rides along through persistence; loading a match back
+ * re-hashes the currently-deployed bundle and compares — a mismatch means
+ * `data/*.json` was swapped out from under a live match ("подмена бандла меняет
+ * правила"), and the load is refused rather than silently running different
+ * rules than the match started with.
+ */
+export function hashGameDataBundle(data: GameData): string {
+  return hashJson(data);
 }

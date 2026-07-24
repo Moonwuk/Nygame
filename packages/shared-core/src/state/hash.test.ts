@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type GameState, type Planet, type Player } from './gameState';
 import { applyDelta, diffState } from './delta';
-import { hashState } from './hash';
+import { hashJson, hashState } from './hash';
 
 function player(id: string): Player {
   return {
@@ -86,5 +86,31 @@ describe('hashState', () => {
 
   it('is deterministic (same input → same digest)', () => {
     expect(hashState(fixtureState())).toBe(hashState(fixtureState()));
+  });
+});
+
+// MP-4 uses this generic primitive directly (hashGameDataBundle, data/loadGameData.ts) —
+// hashState is now just hashJson(state), so these pin the primitive on its own terms.
+describe('hashJson', () => {
+  it('is deterministic (same input → same digest)', () => {
+    const value = { units: { frigate: { hp: 10 } }, resources: ['credits', 'metal'] };
+    expect(hashJson(value)).toBe(hashJson(value));
+  });
+
+  it('is independent of object key order', () => {
+    const a = { units: { frigate: { hp: 10, attack: 5 } }, version: '1' };
+    const b = { version: '1', units: { frigate: { attack: 5, hp: 10 } } };
+    expect(hashJson(a)).toBe(hashJson(b));
+  });
+
+  it('changes when any field changes', () => {
+    const a = { units: { frigate: { hp: 10 } } };
+    const b = { units: { frigate: { hp: 11 } } };
+    expect(hashJson(a)).not.toBe(hashJson(b));
+  });
+
+  it('agrees with hashState on a GameState value (same primitive)', () => {
+    const state = fixtureState();
+    expect(hashJson(state)).toBe(hashState(state));
   });
 });

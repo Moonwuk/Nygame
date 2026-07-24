@@ -12,6 +12,7 @@ import {
   diplomacyModule,
   economyModule,
   factionModule,
+  hashGameDataBundle,
   heroModule,
   interceptModule,
   marketModule,
@@ -213,7 +214,7 @@ export function createDevMatch(data: GameData, options: DevMatchOptions = {}): M
   const ids = options.players ?? ['green', 'red'];
   const base = createInitialState({
     seed: 'dev-match',
-    version: { data: data.version, manifest: '1' },
+    version: { data: data.version, manifest: '1', dataHash: hashGameDataBundle(data) },
     time: options.time ?? 0,
   });
   const players: Record<string, Player> = {};

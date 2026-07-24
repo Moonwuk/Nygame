@@ -142,3 +142,36 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ServerConfig {
     gateFactory,
   };
 }
+
+/** MP-1 secure-by-default launch guard result: `ok` when either `PROD` is unset (dev
+ *  harness, untouched) or every release-posture switch is on; `missing` names what a
+ *  `PROD=1` boot is refusing to start without (empty when `ok`). */
+export interface ProdReadiness {
+  ok: boolean;
+  missing: string[];
+}
+
+/**
+ * MP-1: turn the "never leave a public plain port" anti-goal into an enforced check
+ * instead of a comment. When `PROD=1`/`PROD=true`, a boot MUST have auth, the action
+ * gate, TLS (native or a terminating reverse proxy), and the seat lock all explicitly
+ * on — anything missing is reported so `main.ts` can refuse to start (fail-closed).
+ * `PROD` unset is the existing insecure dev harness, completely untouched: this is
+ * opt-in, not a change to any default `pnpm dev:server` invocation.
+ */
+export function checkProductionReadiness(env: NodeJS.ProcessEnv): ProdReadiness {
+  const prod = env.PROD === '1' || env.PROD === 'true';
+  if (!prod) return { ok: true, missing: [] };
+
+  const missing: string[] = [];
+  if (!env.AUTH_JWT_SECRET) missing.push('AUTH_JWT_SECRET');
+  if (!(env.GATE === '1' || env.GATE === 'true')) missing.push('GATE=1');
+  const tlsNative = Boolean(env.TLS_KEY_FILE && env.TLS_CERT_FILE);
+  const tlsProxy = env.TRUST_PROXY === '1';
+  if (!tlsNative && !tlsProxy) {
+    missing.push('TLS (TLS_KEY_FILE+TLS_CERT_FILE for native TLS, or TRUST_PROXY=1 behind a TLS-terminating proxy)');
+  }
+  if (!(env.SEAT_LOCK === '1' || env.SEAT_LOCK === 'true')) missing.push('SEAT_LOCK=1');
+
+  return { ok: missing.length === 0, missing };
+}
