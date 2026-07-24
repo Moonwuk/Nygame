@@ -453,6 +453,14 @@ export interface GameVersion {
   data: string;
   /** Module-manifest version. */
   manifest: string;
+  /** MP-4: content-integrity fingerprint of the game-data bundle this match was
+   *  created with (`hashGameDataBundle`, `data/loadGameData.ts`) — deterministic,
+   *  non-cryptographic. Stamped once at creation and persisted verbatim; a match
+   *  LOADER re-hashes the currently-deployed bundle and refuses to resume on a
+   *  mismatch ("подмена бандла меняет правила"). Optional: snapshots persisted
+   *  before this field existed carry none and skip the check (graceful
+   *  degradation, not a crash — matches the module system's own discipline). */
+  dataHash?: string;
 }
 
 export interface GameState {

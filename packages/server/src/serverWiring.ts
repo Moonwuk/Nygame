@@ -1,5 +1,5 @@
 import type { ActionGate } from '@void/action-layer';
-import type { DomainEvent, GameData, PlayerReward } from '@void/shared-core';
+import { hashGameDataBundle, type DomainEvent, type GameData, type PlayerReward } from '@void/shared-core';
 import { createDevMatch } from './scenario';
 import { startClockDriver, HEARTBEAT_MS, type ClockDriverHandle } from './clockDriver';
 import { snapshotOf, type Stores } from './persistence';
@@ -22,6 +22,11 @@ export interface MatchLoaderDeps {
   now?: () => number;
   /** Stall reporter — a same-instant scheduling loop wedged the world clock. */
   onStall?: (matchId: string) => void;
+  /** MP-4 integrity-check reporter — the persisted match's `version.dataHash`
+   *  doesn't match the currently-deployed game-data bundle (`data/*.json` was
+   *  swapped out from under it). The load is refused either way; this is purely
+   *  for operator visibility (defaults to a stderr line, see below). */
+  onIntegrityFailure?: (matchId: string) => void;
   /** Optional per-match extras, resolved before the room is built. main.ts uses
    *  this for the AvA wiring (AVA-8): on an AvA session, PLAYER diplomacy is
    *  refused at the wire (the orchestrator owns the stances) and the match end
@@ -54,9 +59,26 @@ export interface MatchExtras {
 export function createMatchLoader(deps: MatchLoaderDeps): (matchId: string) => Promise<LoadedMatch | null> {
   const { stores, data } = deps;
   const now = deps.now ?? ((): number => Date.now());
+  // MP-4: computed once (the bundle doesn't change while the process is up), not per load.
+  const expectedDataHash = hashGameDataBundle(data);
   return async (matchId: string): Promise<LoadedMatch | null> => {
     const snap = await stores.store.load(matchId);
     if (!snap) return null;
+    // MP-4: the match pinned the game-data bundle's hash at creation — a mismatch means
+    // data/*.json was swapped out from under a LIVE match (accidental drift or tampering,
+    // "подмена бандла меняет правила"). Fail-secure: refuse to resume rather than run it
+    // under different rules than it started with. Snapshots with no pinned hash (persisted
+    // before MP-4) skip the check — graceful degradation, not a crash.
+    const pinnedHash = snap.state.version.dataHash;
+    if (pinnedHash && pinnedHash !== expectedDataHash) {
+      deps.onIntegrityFailure?.(matchId);
+      process.stderr.write(
+        `match ${matchId}: game-data integrity check failed — the deployed data/*.json ` +
+          `bundle no longer matches the hash this match was created with (pinned ` +
+          `${pinnedHash}, deployed ${expectedDataHash}). Refusing to load.\n`,
+      );
+      return null;
+    }
     const initialReceipts = await stores.receiptStore.loadAll(matchId);
     const extras = (await deps.matchExtras?.(matchId)) ?? null;
 

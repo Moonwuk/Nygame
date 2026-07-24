@@ -110,7 +110,7 @@ export type {
   SignatureContact,
   SignatureSize,
 } from './state/visibility';
-export { hashState } from './state/hash';
+export { hashJson, hashState } from './state/hash';
 
 // Deterministic replay (RPL-1): self-contained log + pure runner — the CI harness
 // and the future audit tooling (GI-1.3) both build on this.
@@ -257,7 +257,12 @@ export {
   type RewardsDef,
   type ResearchBoostDef,
 } from './data/schemas';
-export { composeGameDataBundle, loadGameData, type JsonReader } from './data/loadGameData';
+export {
+  composeGameDataBundle,
+  hashGameDataBundle,
+  loadGameData,
+  type JsonReader,
+} from './data/loadGameData';
 
 // Utilities
 export { deepClone, deepFreeze } from './util/clone';

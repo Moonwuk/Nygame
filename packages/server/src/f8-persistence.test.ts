@@ -197,3 +197,55 @@ describe('F8 · the real loader wiring (serverWiring.createMatchLoader)', () => 
     await resumed.dispose();
   });
 });
+
+describe('MP-4 · game-data integrity check on load', () => {
+  it('loads normally when the pinned hash matches the deployed bundle', async () => {
+    const store = new MemoryMatchStore();
+    const receiptStore = new MemoryReceiptStore();
+    const seed = createDevMatch(data, { now: () => 1000, time: 1000 });
+    expect(seed.state.version.dataHash).toBeTruthy(); // stamped at creation
+
+    await store.save(snapshotOf(seed));
+    const load = createMatchLoader({ stores: { store, receiptStore }, data, now: () => 1000 });
+    const loaded = await load(MATCH);
+    expect(loaded).not.toBeNull();
+    await loaded?.dispose();
+  });
+
+  it('refuses to load when the pinned hash does not match the deployed bundle', async () => {
+    const store = new MemoryMatchStore();
+    const receiptStore = new MemoryReceiptStore();
+    const seed = createDevMatch(data, { now: () => 1000, time: 1000 });
+    const snap = snapshotOf(seed);
+    await store.save({
+      ...snap,
+      state: { ...snap.state, version: { ...snap.state.version, dataHash: 'tampered-hash' } },
+    });
+
+    let flagged: string | undefined;
+    const load = createMatchLoader({
+      stores: { store, receiptStore },
+      data,
+      now: () => 1000,
+      onIntegrityFailure: (matchId) => {
+        flagged = matchId;
+      },
+    });
+    expect(await load(MATCH)).toBeNull(); // refused, not a crash
+    expect(flagged).toBe(MATCH);
+  });
+
+  it('degrades gracefully for a pre-MP-4 snapshot carrying no pinned hash', async () => {
+    const store = new MemoryMatchStore();
+    const receiptStore = new MemoryReceiptStore();
+    const seed = createDevMatch(data, { now: () => 1000, time: 1000 });
+    const snap = snapshotOf(seed);
+    const { dataHash: _drop, ...versionWithoutHash } = snap.state.version;
+    await store.save({ ...snap, state: { ...snap.state, version: versionWithoutHash } });
+
+    const load = createMatchLoader({ stores: { store, receiptStore }, data, now: () => 1000 });
+    const loaded = await load(MATCH);
+    expect(loaded).not.toBeNull(); // no pinned hash → nothing to compare, not refused
+    await loaded?.dispose();
+  });
+});

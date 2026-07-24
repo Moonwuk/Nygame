@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { GameData } from '../data/schemas';
-import { loadGameData } from '../data/loadGameData';
+import { hashGameDataBundle, loadGameData } from '../data/loadGameData';
 import { avaShape, parseMatchMap, type MatchMap } from '../data/mapSchema';
 import { buildStateFromMap, validateMatchMap } from './buildFromMap';
 
@@ -58,6 +58,11 @@ describe('buildStateFromMap (map-roadmap.md M1.2)', () => {
 
   it('is deterministic — same map+data → identical state', () => {
     expect(buildStateFromMap(exampleMap(), data)).toEqual(buildStateFromMap(exampleMap(), data));
+  });
+
+  it('stamps version.dataHash with the deployed bundle\'s fingerprint (MP-4)', () => {
+    const state = buildStateFromMap(exampleMap(), data);
+    expect(state.version.dataHash).toBe(hashGameDataBundle(data));
   });
 });
 

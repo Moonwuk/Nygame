@@ -1,5 +1,6 @@
 import type { GameData } from '../data/schemas';
 import { buildingLevel } from '../data/schemas';
+import { hashGameDataBundle } from '../data/loadGameData';
 import { avaShape, type MatchMap } from '../data/mapSchema';
 import {
   createInitialState,
@@ -249,7 +250,7 @@ export function buildStateFromMap(map: MatchMap, data: GameData, options: BuildF
 
   const base = createInitialState({
     seed: map.seed,
-    version: { data: data.version, manifest: options.manifest ?? '1' },
+    version: { data: data.version, manifest: options.manifest ?? '1', dataHash: hashGameDataBundle(data) },
     time: options.time ?? map.time,
   });
 
