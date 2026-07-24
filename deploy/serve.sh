@@ -21,6 +21,9 @@ fi
 # trailing \r that corrupts the port or silently breaks the token'd git pull.
 strip() { printf '%s' "${1//[$'\r\n']/}"; }
 PORT="$(strip "${PORT:-8788}")"
+# Bind address. Default 0.0.0.0 (LAN/quick path). Behind a TLS reverse-proxy (Caddy,
+# HTTPS-2.1) set HOST=127.0.0.1 so the plain port isn't reachable from the internet.
+HOST="$(strip "${HOST:-0.0.0.0}")"
 SESSION="$(strip "${SESSION:-void}")"
 GIT_TOKEN="$(strip "${GIT_TOKEN:-}")"
 
@@ -52,7 +55,7 @@ pnpm install
 # (Re)start: kill any old session, then launch `pnpm host` (builds the HTML + runs
 # the server on 0.0.0.0) detached so it keeps running after you log out.
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-tmux new-session -d -s "$SESSION" "PORT=$PORT HOST=0.0.0.0 pnpm host"
+tmux new-session -d -s "$SESSION" "PORT=$PORT HOST=$HOST pnpm host"
 
 # `tmux new-session -d` returns 0 the instant the session starts — it says nothing
 # about whether the server actually bound. Poll /health so we report the truth.
