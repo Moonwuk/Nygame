@@ -3993,9 +3993,11 @@ export function fleetIdle(fleet: Fleet): boolean {
 
 /** One CC-1 chain step. `move` — fly to a world; `wait` — hold N game-hours
  *  (Задержка); `assault` — storm the world under the fleet (entering orbit first if
- *  needed); `barrage` — focus artillery standoff fire (null = nearest hostile).
+ *  needed); `barrage` — focus artillery standoff fire (null = nearest hostile);
+ *  `ability` — the hero commanding the fleet casts a skill (HERO-4).
  *  A step runs when the fleet is FREE, so «прийти и открыть огонь» = [move, barrage]
- *  and a waypoint route (Точка+) is just several move steps. */
+ *  and «дойти и открыть Коридор» = [move, ability] — a waypoint route (Точка+) is
+ *  just several move steps. */
 export type ChainStep =
   | { kind: 'move'; to: string }
   | { kind: 'wait'; hours: number }
@@ -4004,7 +4006,11 @@ export type ChainStep =
   // A FIRE WINDOW: focus artillery standoff fire (null = auto-target) for `hours`
   // game-hours, then cease and move on. Artillery damage is continuous
   // (`power × hours`, artillery.ts) — hours ARE the honest count of «ударов».
-  | { kind: 'strike'; target: string | null; hours: number };
+  | { kind: 'strike'; target: string | null; hours: number }
+  // A HERO ABILITY (HERO-4) cast as a step: the fleet's hero casts `abilityId` when
+  // the fleet is free (`target` — a world for ranged casts). The core `hero.ability`
+  // re-gates everything; the driver holds only while the ability is on cooldown.
+  | { kind: 'ability'; abilityId: string; target?: string | null };
 /** A fleet's queued chain: the remaining steps + the deadline of the ARMED head
  *  `wait` step (stamped by the driver; absent while the head is not a ticking wait). */
 export interface FleetChain {
@@ -4022,7 +4028,13 @@ export function validateChainSteps(raw: unknown, state: GameState): ChainStep[] 
   if (!Array.isArray(raw) || raw.length > MAX_CHAIN_STEPS) return null;
   const out: ChainStep[] = [];
   for (const item of raw) {
-    const step = item as { kind?: unknown; to?: unknown; hours?: unknown; target?: unknown } | null;
+    const step = item as {
+      kind?: unknown;
+      to?: unknown;
+      hours?: unknown;
+      target?: unknown;
+      abilityId?: unknown;
+    } | null;
     if (!step || typeof step !== 'object') return null;
     if (step.kind === 'move') {
       if (typeof step.to !== 'string' || !state.planets[step.to]) return null;
@@ -4052,6 +4064,18 @@ export function validateChainSteps(raw: unknown, state: GameState): ChainStep[] 
         kind: 'strike',
         target: typeof step.target === 'string' ? step.target : null,
         hours: h,
+      });
+    } else if (step.kind === 'ability') {
+      // The ability must exist in the catalog (like `move` checks the world); the core
+      // re-checks the fleet's hero actually carries it. `target` — optional world (ranged).
+      if (typeof step.abilityId !== 'string' || !data.heroAbilities[step.abilityId]) return null;
+      if (step.target !== null && step.target !== undefined && typeof step.target !== 'string') {
+        return null;
+      }
+      out.push({
+        kind: 'ability',
+        abilityId: step.abilityId,
+        ...(typeof step.target === 'string' ? { target: step.target } : {}),
       });
     } else {
       return null;
@@ -4259,6 +4283,29 @@ export function serverAutoAssaultActions(
   return out;
 }
 
+/** The cooldown-ledger key an ability occupies — mirrors the core heroModule's
+ *  `cooldownKey` so the chain driver reads the SAME slot the cast writes. */
+function abilityCooldownKey(type: string): string {
+  return type === 'temp_lane' ? 'path' : type === 'annihilate' ? 'annihilate' : `fx:${type}`;
+}
+/** Is `hero`'s `abilityId` still cooling down at `now`? An unknown ability id is NOT
+ *  held (the core rejects it and the step is consumed — never a permanent deadlock). */
+function abilityOnCooldown(hero: Hero, abilityId: string, now: number): boolean {
+  const def = data.heroAbilities[abilityId];
+  if (!def) return false;
+  return ((hero.cooldowns ?? {})[abilityCooldownKey(def.type)] ?? 0) > now;
+}
+/** The living hero commanding this fleet (its ship), if any. Sorted-id lookup keeps it
+ *  deterministic across hosts (JSONB scrambles object key order — BF-13). */
+function heroCommandingFleet(state: GameState, fleetId: string): Hero | undefined {
+  const heroes = state.heroes ?? {};
+  for (const id of Object.keys(heroes).sort()) {
+    const h = heroes[id]!;
+    if (h.fleetId === fleetId && h.alive !== false) return h;
+  }
+  return undefined;
+}
+
 /** One tick of the CC-1 chain driver: for every chained fleet that is FREE (not in
  *  transit, not in battle), resolve the head step into the orders to issue plus the
  *  `chain.stamp` patch ([] steps = chain done → cleared). Consume-on-issue: a step
@@ -4339,6 +4386,24 @@ export function serverChainActions(
           fleetId: fid,
           owner: f.owner,
           actions: [barrageFleet(f.owner, fid, null)],
+          patch: { steps: rest },
+        });
+      }
+    } else if (head.kind === 'ability') {
+      // A hero ability queued as a step (CC-1 × HERO-4): the hero commanding THIS fleet
+      // casts it once the fleet is free. Consume-on-issue like move/assault — the core
+      // `hero.ability` re-gates ownership/liveness/equipment/range/cost, so a step it
+      // rejects is skipped, not retried. The ONE hold is a live cooldown (a transient
+      // that always clears): «дойти и открыть Коридор» waits the cooldown out instead of
+      // wasting the cast. No hero on the fleet ⇒ drop the stale step (no action).
+      const hero = heroCommandingFleet(state, fid);
+      if (hero === undefined || !abilityOnCooldown(hero, head.abilityId, now)) {
+        out.push({
+          fleetId: fid,
+          owner: f.owner,
+          actions: hero
+            ? [castHeroAbility(f.owner, hero.id, head.abilityId, head.target ?? undefined)]
+            : [],
           patch: { steps: rest },
         });
       }

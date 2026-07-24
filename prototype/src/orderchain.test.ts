@@ -10,6 +10,7 @@ import type {
   Context,
   Fleet,
   GameState,
+  Hero,
   Planet,
 } from '../../packages/shared-core/src/index';
 import {
@@ -121,6 +122,9 @@ describe('order.chain — setting the plan (fail-secure)', () => {
       [{ kind: 'barrage', target: 42 }],
       [{ kind: 'strike', target: null, hours: 0 }],
       [{ kind: 'strike', target: 42, hours: 2 }],
+      [{ kind: 'ability', abilityId: 42 }],
+      [{ kind: 'ability', abilityId: 'no_such_ability' }],
+      [{ kind: 'ability', abilityId: 'corridor', target: 42 }],
       [{ kind: 'selfdestruct' }],
       Array.from({ length: MAX_CHAIN_STEPS + 1 }, () => ({ kind: 'assault' })),
     ];
@@ -266,10 +270,47 @@ describe('serverChainActions — the pure driver core', () => {
     expect(serverChainActions(s, 0).map((c) => c.fleetId)).toEqual(['Q', 'Z']);
   });
 
+  it('ability: the fleet hero casts when free, holds on cooldown, drops when heroless', () => {
+    const heroFleet = (over: Partial<Hero> = {}): ChState => {
+      const s = stateWith([fleet('F')]) as ChState;
+      s.heroes = {
+        h1: { id: 'h1', owner: 'green', fleetId: 'F', alive: true, location: 'A', ...over } as Hero,
+      };
+      s.orders = { F: { steps: [{ kind: 'ability', abilityId: 'corridor', target: 'B' }] } };
+      return s;
+    };
+    // free + off cooldown → the commanding hero casts, step consumed
+    const cast = serverChainActions(heroFleet(), 0);
+    expect(cast[0]?.actions.map((a) => a.type)).toEqual(['hero.ability']);
+    expect(cast[0]?.actions[0]?.payload).toEqual({
+      heroId: 'h1',
+      abilityId: 'corridor',
+      target: 'B',
+    });
+    expect(cast[0]?.patch).toEqual({ steps: [] });
+    // on cooldown (temp_lane → the 'path' ledger slot) → held, fleet omitted this tick
+    expect(serverChainActions(heroFleet({ cooldowns: { path: 5 * HOUR } }), 0)).toEqual([]);
+    // no living hero commands the fleet → drop the stale step, issue nothing
+    const heroless = stateWith([fleet('F')]) as ChState;
+    heroless.orders = { F: { steps: [{ kind: 'ability', abilityId: 'corridor', target: 'B' }] } };
+    const dropped = serverChainActions(heroless, 0);
+    expect(dropped[0]?.actions).toEqual([]);
+    expect(dropped[0]?.patch).toEqual({ steps: [] });
+  });
+
   it('validateChainSteps is the single gate both actions share', () => {
     const s = stateWith([fleet('F')]);
     expect(validateChainSteps([{ kind: 'move', to: 'B' }], s)).toEqual([{ kind: 'move', to: 'B' }]);
     expect(validateChainSteps([{ kind: 'move', to: 'GHOST' }], s)).toBeNull();
+    // ability: a catalog id is kept (+ optional target, smuggled keys stripped);
+    // an unknown ability id is garbage — the same gate as an unknown world.
+    expect(validateChainSteps([{ kind: 'ability', abilityId: 'corridor' }], s)).toEqual([
+      { kind: 'ability', abilityId: 'corridor' },
+    ]);
+    expect(
+      validateChainSteps([{ kind: 'ability', abilityId: 'corridor', target: 'B', hack: 1 }], s),
+    ).toEqual([{ kind: 'ability', abilityId: 'corridor', target: 'B' }]);
+    expect(validateChainSteps([{ kind: 'ability', abilityId: 'ghost_skill' }], s)).toBeNull();
   });
 });
 
