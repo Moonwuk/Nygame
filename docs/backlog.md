@@ -1339,6 +1339,24 @@ requires[], cost, grants{ability?|passive?}}`; ветки **transhuman**/**psion
   (нет Docker/сети до Fulcio в этой сессии — синтаксис/переменные окружения
   стандартные для Sigstore-в-GH-Actions, но CI-прогон первым подтвердит).
 - **SEC-8** 🔒(Этап 7) Полный проход **OWASP Top 10 2021** по чек-листу + threat model.
+- **SEC-9** ✅ Ремедиация Code Scanning (dashboard-триаж 2026-07-24): CodeQL-варнинги
+  9→2 живым ре-сканом ветки. Погашены ReDoS `js/polynomial-redos` (`authApi.ts` —
+  `resetBaseUrl.replace(/\/+$/,'')` → линейная посимвольная обрезка + тест) и DOM-XSS
+  `js/xss-through-dom` ×6 (`prototype/` — цвета сторон `youColor`/`neutralColor` через
+  `safeHexColor` validating-guard, который taint-анализ признаёт санитайзером;
+  свободный текст уже под `esc()`). Добавлен корневой `SECURITY.md` (приватное
+  раскрытие → Scorecard `SecurityPolicyID`). Остаток — 2 `js/missing-rate-limiting` =
+  подтверждённый false-positive (кастомный `slidingWindowIpLimiter` не моделируется
+  CodeQL) → dismiss в Security UI (API-токен интеграции без scope `security_events`).
+
+> **Зонтичный план** над треками SEC/SD/SE/GI — `security-master-plan.md`: north star
+> «безопасное — единственно возможное», сквозная модель угроз (приложение + игра),
+> тир-план (Tier 0–4, сшит с бирками) и гейт «secure-enough to launch». Восемь новых
+> предложений оформлены как бирки **MP-1..MP-8** (secure-by-default launch guard;
+> shadow re-simulation из action-log; economy-conservation property-инвариант; подпись
+> game-data бандлов; Trusted Types-first клиент; anti-automation регистрации;
+> PII-firewall логов; refresh-token rotation с reuse-detection) — детали и статусы
+> живут в самом плане, раздаются как обычные кирпичи.
 
 ## Блок NET-A2 · Аудит клиент-серверного слоя (netcode, 2026-07-22) `[proto]` `[srv]` `[cli]`
 
