@@ -4,6 +4,38 @@
 // English in game.ts) need no entry here; `tData()` shows them as-is on this locale.
 // One language = one file.
 export const en: Record<string, string> = {
+  // --- STAFF-1 «Штаб героев» redesign -------------------------------------------
+  'У вас пока нет героев.': 'You have no heroes yet.',
+  'развёрнуто {a}/{c}': 'deployed {a}/{c}',
+  '⚓ развёрнут': '⚓ deployed',
+  резерв: 'reserve',
+  'не ваша ветвь': 'not your branch',
+  'чужая ветвь': 'other branch',
+  'нужен: {n}': 'needs: {n}',
+  Дерево: 'Tree',
+  'Дерево пусто.': 'The tree is empty.',
+  Общие: 'Common',
+  способность: 'ability',
+  пассивка: 'passive',
+  'Нет способностей.': 'No abilities.',
+  Фиттинги: 'Fittings',
+  'Слоты · {u}/{n}': 'Slots · {u}/{n}',
+  'У этого героя нет слотов фиттингов.': 'This hero has no fitting slots.',
+  способностей: 'abilities',
+  'узлов дерева': 'tree nodes',
+  фиттингов: 'fittings',
+  'Текущие бонусы': 'Current bonuses',
+  актив: 'active',
+  'Открывает способность': 'Unlocks an ability',
+  'Даёт пассивку': 'Grants a passive',
+  'Модификатор корпуса': 'Hull modifier',
+  'дальность {r}': 'range {r}',
+  'КД {h}ч': 'CD {h}h',
+  Требует: 'Requires',
+  Цена: 'Cost',
+  Изучить: 'Learn',
+  'Ставится навсегда — рефита нет': 'Installed for good — no refit',
+  'Необратимо — установить': 'Irreversible — install',
   // --- TT-3.1 technology tree screen --------------------------------------------
   'Ветку курирует': 'Branch curated by',
   'Без лидера ветки — узлы с условием «учёный» закрыты':

@@ -811,6 +811,80 @@ button.b:disabled{opacity:.32;cursor:not-allowed;color:var(--dim);border-color:v
 #herobody .hx-badge{font-size:9px;letter-spacing:1px;text-transform:uppercase;border:1px solid var(--line-hi);border-radius:5px;padding:2px 6px;color:var(--dim);white-space:nowrap;}
 #herobody .hx-badge.on{border-color:#7df0d0;color:#9ff0da;}
 #herobody .hx-badge.cd{border-color:#e2a15a;color:#e2a15a;}
+/* «Штаб героев» redesign (STAFF-1): chips · identity · tabs · real tree · dossier */
+#herobody{--hx-ps:#b98cff;}
+#herobody .hx-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;}
+#herobody .hx-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px 5px 6px;border-radius:999px;border:1px solid var(--line-hi);background:rgba(53,214,230,.05);color:var(--dim);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap;}
+#herobody .hx-chip .hx-cr{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;background:rgba(53,214,230,.14);color:var(--cyan);}
+#herobody .hx-chip.ps .hx-cr{background:rgba(185,140,255,.16);color:var(--hx-ps);}
+#herobody .hx-chip.sel{color:#eafffb;border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan);background:rgba(53,214,230,.12);}
+#herobody .hx-chip.ps.sel{border-color:var(--hx-ps);box-shadow:0 0 0 1px var(--hx-ps);}
+#herobody .hx-chip .hx-cst{font-size:9px;letter-spacing:.5px;color:var(--dim);}
+#herobody .hx-chip .hx-cst.on{color:#9ff0da;}
+#herobody .hx-cap{margin-left:auto;font-size:10px;color:var(--dim);letter-spacing:.5px;}
+#herobody .hx-ident{border:1px solid var(--line-hi);border-radius:10px;padding:11px 12px;margin-bottom:10px;background:linear-gradient(180deg,rgba(53,214,230,.07),rgba(53,214,230,.02));}
+#herobody .hx-ident.ps{background:linear-gradient(180deg,rgba(185,140,255,.08),rgba(185,140,255,.02));}
+#herobody .hx-irow{display:flex;align-items:center;gap:8px;}
+#herobody .hx-tag{font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:2px 7px;border-radius:5px;color:var(--cyan);background:rgba(53,214,230,.12);border:1px solid var(--cyan-dim);white-space:nowrap;}
+#herobody .hx-ident.ps .hx-tag{color:var(--hx-ps);background:rgba(185,140,255,.14);border-color:rgba(185,140,255,.4);}
+#herobody .hx-dstat{margin-left:auto;font-size:10px;}
+#herobody .hx-dep{color:#9ff0da;}
+#herobody .hx-dead{color:#e2a15a;}
+#herobody .hx-traits{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;}
+#herobody .hx-trait{font-size:10.5px;color:#cfeee8;border:1px solid var(--line);border-radius:5px;padding:3px 7px;}
+#herobody .hx-pips{letter-spacing:2px;color:var(--cyan);}
+#herobody .hx-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;}
+#herobody .hx-tab{flex:1;padding:8px 4px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--dim);font:inherit;font-size:11.5px;cursor:pointer;}
+#herobody .hx-tab.on{color:var(--cyan);border-bottom-color:var(--cyan);font-weight:700;}
+#herobody .hx-tree{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+#herobody .hx-rail.foreign{opacity:.5;}
+#herobody .hx-rhd{display:flex;align-items:center;gap:6px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan);margin-bottom:10px;}
+#herobody .hx-rail.ps .hx-rhd{color:var(--hx-ps);}
+#herobody .hx-rhd .hx-dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 7px currentColor;}
+#herobody .hx-rhd .hx-ftag{margin-left:auto;font-size:8px;color:var(--dim);}
+#herobody .hx-node{position:relative;border:1px solid var(--line-hi);border-radius:8px;padding:8px 9px;background:rgba(53,214,230,.03);}
+#herobody .hx-node+.hx-node{margin-top:22px;}
+#herobody .hx-node .hx-conn{position:absolute;top:-18px;left:16px;width:2px;height:16px;background:var(--line-hi);}
+#herobody .hx-node .hx-conn.lit{background:linear-gradient(#7df0d0,var(--line-hi));}
+#herobody .hx-node.owned{border-color:rgba(125,240,208,.5);background:rgba(125,240,208,.06);}
+#herobody .hx-node.avail{border-color:var(--cyan);box-shadow:0 0 0 1px rgba(53,214,230,.35);cursor:pointer;}
+#herobody .hx-rail.ps .hx-node.avail{border-color:var(--hx-ps);box-shadow:0 0 0 1px rgba(185,140,255,.35);}
+#herobody .hx-node.locked{opacity:.65;cursor:pointer;}
+#herobody .hx-node.foreignn{opacity:.55;}
+#herobody .hx-nn{display:flex;align-items:center;gap:6px;font-weight:600;font-size:11.5px;color:#eafffb;}
+#herobody .hx-crest{width:16px;height:16px;border-radius:50%;display:inline-grid;place-items:center;font-size:9px;flex:0 0 auto;border:1px solid var(--line-hi);color:var(--dim);}
+#herobody .hx-node.owned .hx-crest{background:#7df0d0;color:#04201a;border-color:#7df0d0;}
+#herobody .hx-node.avail .hx-crest{color:var(--cyan);border-color:var(--cyan);}
+#herobody .hx-nd{font-size:10px;color:var(--dim);line-height:1.4;margin:3px 0 6px;}
+#herobody .hx-nf{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+#herobody .hx-g{font-size:8.5px;letter-spacing:.5px;text-transform:uppercase;padding:2px 5px;border-radius:4px;}
+#herobody .hx-g.ab{color:var(--cyan);background:rgba(53,214,230,.12);}
+#herobody .hx-g.pa{color:#9ff0da;background:rgba(125,240,208,.12);}
+#herobody .hx-cost{margin-left:auto;font-size:10.5px;color:#ffb43a;border:1px solid rgba(255,180,58,.4);border-radius:5px;padding:2px 7px;white-space:nowrap;}
+#herobody .hx-st{margin-left:auto;font-size:9px;color:var(--dim);text-align:right;}
+#herobody .hx-st.on{color:#9ff0da;}
+#herobody .hx-ov{display:flex;gap:8px;margin-bottom:6px;}
+#herobody .hx-ovc{flex:1;text-align:center;border:1px solid var(--line);border-radius:8px;padding:9px 4px;}
+#herobody .hx-ovc b{display:block;font-size:16px;color:var(--cyan);}
+#herobody .hx-ovc span{font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);}
+#herobody .hx-row[data-hfitd]{cursor:pointer;}
+#herobody .hx-dossier{margin-top:12px;border:1px solid var(--cyan);border-radius:10px;padding:12px;background:var(--glass);}
+#herobody .hx-dh{display:flex;align-items:center;gap:8px;}
+#herobody .hx-dnm{font-weight:700;color:#eafffb;font-size:13px;}
+#herobody .hx-dx{margin-left:auto;width:24px;height:24px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer;}
+#herobody .hx-give{margin:10px 0;padding:9px 10px;border-radius:7px;background:rgba(53,214,230,.08);border:1px solid var(--cyan-dim);}
+#herobody .hx-dgl{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan);}
+#herobody .hx-dgv{font-weight:600;color:#eafffb;font-size:12px;margin-top:2px;}
+#herobody .hx-drow{display:flex;align-items:center;gap:8px;font-size:11px;padding:5px 0;border-top:1px solid var(--line);}
+#herobody .hx-dk{color:var(--dim);}
+#herobody .hx-dv{margin-left:auto;text-align:right;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+#herobody .hx-ok{color:#9ff0da;}
+#herobody .hx-no{color:#e2a15a;}
+#herobody .hx-warn{display:flex;align-items:center;gap:6px;margin:10px 0 0;font-size:10.5px;color:#ff5a4d;}
+#herobody .hx-warn:before{content:"⚠";}
+#herobody .hx-dbtn{display:block;width:100%;margin-top:10px;padding:10px;border-radius:7px;border:0;background:var(--cyan);color:#042026;font:inherit;font-weight:700;font-size:12px;cursor:pointer;}
+#herobody .hx-dbtn.danger{background:transparent;border:1px solid #ff5a4d;color:#ff5a4d;}
+#herobody .hx-dbtn:disabled{opacity:.4;cursor:not-allowed;}
 /* Steward («Хранитель») delegate panel */
 #stewardbody .st-status{padding:11px 13px;border:1px solid var(--cyan-dim);border-radius:9px;background:rgba(53,214,230,.08);font-size:12px;color:var(--cyan);line-height:1.55;}
 #stewardbody .st-status.locked{border-color:var(--line);background:rgba(255,255,255,.03);color:var(--dim);}
